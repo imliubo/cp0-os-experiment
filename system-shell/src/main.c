@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "cardputerzero-system-shell-client-protocol.h"
 #include "cp0_ui.h"
 #include "xdg-shell-client-protocol.h"
 
@@ -43,6 +44,7 @@ struct shell {
     struct wl_seat *seat;
     struct wl_keyboard *keyboard;
     struct xdg_wm_base *wm_base;
+    struct cp0_system_shell_v1 *system_control;
     struct wl_surface *surface;
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
@@ -257,6 +259,37 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
     shell_redraw(shell);
 }
 
+static void handle_system_action(void *data,
+                                 struct cp0_system_shell_v1 *system_control,
+                                 uint32_t action)
+{
+    struct shell *shell = data;
+    enum cp0_ui_action ui_action;
+    (void)system_control;
+
+    switch (action) {
+    case CP0_SYSTEM_SHELL_V1_ACTION_HOME:
+        ui_action = CP0_UI_GO_HOME;
+        break;
+    case CP0_SYSTEM_SHELL_V1_ACTION_BACK:
+        ui_action = CP0_UI_BACK;
+        break;
+    case CP0_SYSTEM_SHELL_V1_ACTION_TASKS:
+        ui_action = CP0_UI_SHOW_TASKS;
+        break;
+    case CP0_SYSTEM_SHELL_V1_ACTION_POWER:
+        ui_action = CP0_UI_SHOW_POWER;
+        break;
+    default:
+        return;
+    }
+    handle_ui_action(shell, ui_action);
+}
+
+static const struct cp0_system_shell_v1_listener system_control_listener = {
+    .action = handle_system_action,
+};
+
 static bool translate_key(struct shell *shell, uint32_t key,
                           uint32_t key_state, enum cp0_ui_action *action)
 {
@@ -456,6 +489,11 @@ static void handle_registry_global(void *data, struct wl_registry *registry,
         shell->wm_base = wl_registry_bind(registry, name,
                                           &xdg_wm_base_interface, 1);
         xdg_wm_base_add_listener(shell->wm_base, &wm_base_listener, shell);
+    } else if (strcmp(interface, cp0_system_shell_v1_interface.name) == 0) {
+        shell->system_control = wl_registry_bind(
+            registry, name, &cp0_system_shell_v1_interface, 1);
+        cp0_system_shell_v1_add_listener(shell->system_control,
+                                         &system_control_listener, shell);
     }
 }
 
@@ -531,7 +569,8 @@ static bool shell_connect(struct shell *shell)
         wl_display_roundtrip(shell->display) < 0)
         return false;
     if (shell->compositor == NULL || shell->shm == NULL ||
-        shell->wm_base == NULL || shell->seat == NULL || !shell->has_xrgb) {
+        shell->wm_base == NULL || shell->seat == NULL ||
+        shell->system_control == NULL || !shell->has_xrgb) {
         fprintf(stderr, "system-shell: required Wayland globals unavailable\n");
         return false;
     }
@@ -544,6 +583,8 @@ static bool shell_connect(struct shell *shell)
     xdg_toplevel_add_listener(shell->xdg_toplevel, &toplevel_listener, shell);
     xdg_toplevel_set_title(shell->xdg_toplevel, "CardputerZero System Shell");
     xdg_toplevel_set_app_id(shell->xdg_toplevel, "os.cardputerzero.shell");
+    cp0_system_shell_v1_register_surface(shell->system_control,
+                                         shell->surface);
     xdg_toplevel_set_fullscreen(shell->xdg_toplevel, NULL);
     wl_surface_commit(shell->surface);
 
@@ -583,6 +624,8 @@ static void shell_destroy(struct shell *shell)
         wl_seat_destroy(shell->seat);
     if (shell->wm_base != NULL)
         xdg_wm_base_destroy(shell->wm_base);
+    if (shell->system_control != NULL)
+        cp0_system_shell_v1_destroy(shell->system_control);
     if (shell->shm != NULL)
         wl_shm_destroy(shell->shm);
     if (shell->compositor != NULL)

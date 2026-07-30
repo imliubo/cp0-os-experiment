@@ -25,9 +25,10 @@ Home/Homepage/F1 or Meta+H for Home, F3 or Meta+Tab for Tasks, and Power/F4 for
 the power dialog. The mapping deliberately does not open evdev directly.
 
 The V0.6 hardware test confirmed that Weston/libinput attaches `tca8418c` to
-the internal output and gives the System Shell keyboard focus. Final Fn-layer
-product mappings remain pending until every physical key combination is
-recorded on hardware.
+the internal output and gives the System Shell keyboard focus. Physical
+validation confirmed directional navigation, Enter, Escape and Backspace.
+Phase 2B now handles Home, Back, Tasks and Power in the compositor; physical
+validation of the remaining Fn-layer product mappings is still pending.
 
 ## Process supervision
 

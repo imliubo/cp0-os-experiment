@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cardputerzero_system_shell_v1">
+  <copyright>
+    Copyright 2026 CardputerZero OS contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included
+    in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+  </copyright>
+
+  <interface name="cp0_system_shell_v1" version="1">
+    <description summary="trusted CardputerZero System Shell control">
+      This global is restricted by the compositor to the dedicated cp0-shell
+      Unix account. It registers the trusted system surface and carries global
+      system actions that must not depend on application keyboard focus.
+    </description>
+
+    <enum name="error">
+      <entry name="unauthorized" value="0" summary="client credentials are not trusted"/>
+      <entry name="already_registered" value="1" summary="a trusted surface is already registered"/>
+      <entry name="invalid_surface" value="2" summary="surface is not an eligible xdg desktop surface"/>
+      <entry name="invalid_visibility" value="3" summary="visibility value is invalid"/>
+    </enum>
+
+    <enum name="action">
+      <entry name="home" value="0"/>
+      <entry name="back" value="1"/>
+      <entry name="tasks" value="2"/>
+      <entry name="power" value="3"/>
+    </enum>
+
+    <request name="destroy" type="destructor"/>
+
+    <request name="register_surface">
+      <description summary="register the trusted System Shell surface">
+        The surface must belong to the authenticated client and use the
+        os.cardputerzero.shell app-id.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+
+    <request name="set_visible">
+      <description summary="show or hide the trusted system layer">
+        A hidden System Shell remains alive but cannot be covered by an
+        application when the compositor makes it visible for a system action.
+      </description>
+      <arg name="visible" type="uint" summary="zero hides, one shows"/>
+    </request>
+
+    <event name="action">
+      <description summary="compositor-owned global system action"/>
+      <arg name="action" type="uint" enum="action"/>
+    </event>
+  </interface>
+</protocol>

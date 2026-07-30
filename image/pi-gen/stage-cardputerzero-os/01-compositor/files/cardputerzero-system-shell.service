@@ -9,6 +9,7 @@ ConditionPathExists=/usr/bin/cardputerzero-system-shell
 Type=simple
 User=cp0-shell
 Group=cp0-shell
+SupplementaryGroups=cp0-wayland
 Environment=XDG_RUNTIME_DIR=/run/cardputerzero
 Environment=WAYLAND_DISPLAY=wayland-0
 ExecStartPre=/usr/libexec/cardputerzero/wait-wayland.sh
@@ -22,4 +23,3 @@ PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
 RestrictAddressFamilies=AF_UNIX
-

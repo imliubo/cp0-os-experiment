@@ -65,6 +65,10 @@ cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$repo_root/system-shell/src/ui.c" \
     "$repo_root/system-shell/src/main.c" \
     "$pi_gen_dir/stage-cardputerzero-os/01-compositor/system-shell/"
+mkdir -p "$pi_gen_dir/stage-cardputerzero-os/01-compositor/policy"
+cp "$repo_root/compositor-policy/cardputerzero-policy.c" \
+    "$repo_root/protocols/cardputerzero-system-shell-v1.xml" \
+    "$pi_gen_dir/stage-cardputerzero-os/01-compositor/policy/"
 # The stage1 user already exists. Installing userconf-pi after sizing the
 # image adds a large Raspberry Pi utility dependency set and can fill rootfs.
 touch "$pi_gen_dir/export-image/01-user-rename/SKIP"

@@ -39,8 +39,10 @@ LCD / keyboard / audio / battery / camera / LoRa / GPIO
 
 ## 4. 图形与窗口模型
 
-首个可运行版本使用 Weston kiosk shell 验证 DRM、Wayland 和应用生命周期。只有在
-Weston 无法满足产品交互时，才实现基于 wlroots 的专用 compositor。
+首个可运行版本使用 Weston kiosk shell 验证 DRM、Wayland 和应用生命周期。产品
+策略由小型 `cardputerzero-policy.so` 模块下沉到 compositor：该模块验证专用 Shell
+UID、保留可信系统层并持有全局快捷键。只有在这个受限模块无法满足产品交互时，才
+评估维护基于 wlroots 的专用 compositor。
 
 窗口策略固定如下：
 
@@ -49,6 +51,10 @@ Weston 无法满足产品交互时，才实现基于 wlroots 的专用 composito
 - 沉浸模式使用完整 320x170；
 - 权限、音量、通知和任务切换器由受信任的 System Shell 覆盖显示；
 - 渲染目标为 RGB565、最多 30 FPS，并使用 damage region 降低 SPI 刷屏量。
+
+Weston 与 System Shell 使用不同 UID。两者仅通过 `cp0-wayland` 组共享 Wayland
+socket；第三方应用不加入该组。可信 Shell 协议以 Wayland peer UID 认证，不能用
+客户端可伪造的 app-id 或 RPC 字符串代替。
 
 ## 5. 应用运行时
 

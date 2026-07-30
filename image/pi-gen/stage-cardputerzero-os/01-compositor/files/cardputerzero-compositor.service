@@ -12,12 +12,13 @@ ConditionPathExists=/dev/input/cardputer-zero-internal
 
 [Service]
 Type=simple
-User=cp0-shell
-Group=cp0-shell
+User=cp0-compositor
+Group=cp0-wayland
 SupplementaryGroups=video render input
 RuntimeDirectory=cardputerzero
-RuntimeDirectoryMode=0700
+RuntimeDirectoryMode=0770
 RuntimeDirectoryPreserve=yes
+UMask=0007
 Environment=XDG_RUNTIME_DIR=/run/cardputerzero
 Environment=LIBSEAT_BACKEND=seatd
 ExecStart=/usr/libexec/cardputerzero/start-compositor.sh

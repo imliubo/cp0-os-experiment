@@ -3,12 +3,19 @@
 source "${STAGE_DIR}/01-compositor/weston.env"
 
 shell_source="${ROOTFS_DIR}/tmp/cardputerzero-system-shell"
+policy_source="${ROOTFS_DIR}/tmp/cardputerzero-policy"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/cp0_ui.h" \
     "${shell_source}/cp0_ui.h"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/ui.c" \
     "${shell_source}/ui.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/main.c" \
     "${shell_source}/main.c"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/policy/cardputerzero-policy.c" \
+    "${policy_source}/cardputerzero-policy.c"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/policy/cardputerzero-system-shell-v1.xml" \
+    "${policy_source}/cardputerzero-system-shell-v1.xml"
 
 on_chroot <<CHROOT
 set -e
@@ -105,14 +112,37 @@ meson setup /tmp/cardputerzero-weston-build /tmp/cardputerzero-weston \
     -Ddoc=false
 meson compile -C /tmp/cardputerzero-weston-build
 
+wayland-scanner client-header \
+    /tmp/cardputerzero-policy/cardputerzero-system-shell-v1.xml \
+    /tmp/cardputerzero-policy/cardputerzero-system-shell-client-protocol.h
+wayland-scanner server-header \
+    /tmp/cardputerzero-policy/cardputerzero-system-shell-v1.xml \
+    /tmp/cardputerzero-policy/cardputerzero-system-shell-server-protocol.h
+wayland-scanner private-code \
+    /tmp/cardputerzero-policy/cardputerzero-system-shell-v1.xml \
+    /tmp/cardputerzero-policy/cardputerzero-system-shell-protocol.c
+
 cc -std=c11 -Os -Wall -Wextra -Werror \
     -I/tmp/cardputerzero-system-shell \
+    -I/tmp/cardputerzero-policy \
     -I/tmp/cardputerzero-weston-build/protocol \
     /tmp/cardputerzero-system-shell/main.c \
     /tmp/cardputerzero-system-shell/ui.c \
+    /tmp/cardputerzero-policy/cardputerzero-system-shell-protocol.c \
     /tmp/cardputerzero-weston-build/protocol/xdg-shell-protocol.c \
     \$(pkg-config --cflags --libs wayland-client) \
     -o /tmp/cardputerzero-system-shell/cardputerzero-system-shell
+
+cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \
+    -I/tmp/cardputerzero-policy \
+    -I/tmp/cardputerzero-weston \
+    -I/tmp/cardputerzero-weston/include \
+    -I/tmp/cardputerzero-weston-build \
+    /tmp/cardputerzero-policy/cardputerzero-policy.c \
+    /tmp/cardputerzero-policy/cardputerzero-system-shell-protocol.c \
+    -L/tmp/cardputerzero-weston-build/libweston -lweston-14 \
+    \$(pkg-config --cflags --libs pixman-1 wayland-server) \
+    -o /tmp/cardputerzero-policy/cardputerzero-policy.so
 
 DESTDIR=/tmp/cardputerzero-weston-install \
     meson install --strip -C /tmp/cardputerzero-weston-build
@@ -137,6 +167,8 @@ install -D -m 0755 \
 install -D -m 0755 \
     /tmp/cardputerzero-weston-install/usr/lib/aarch64-linux-gnu/weston/kiosk-shell.so \
     /usr/lib/aarch64-linux-gnu/weston/kiosk-shell.so
+install -D -m 0755 /tmp/cardputerzero-policy/cardputerzero-policy.so \
+    /usr/lib/aarch64-linux-gnu/weston/cardputerzero-policy.so
 install -D -m 0755 \
     /tmp/cardputerzero-weston-install/usr/lib/aarch64-linux-gnu/weston/libexec_weston.so.0.0.0 \
     /usr/lib/aarch64-linux-gnu/weston/libexec_weston.so.0.0.0
@@ -149,11 +181,17 @@ if ldd /usr/bin/weston | grep -q 'not found'; then
     echo 'Weston runtime dependency is missing' >&2
     exit 1
 fi
+if ldd /usr/lib/aarch64-linux-gnu/weston/cardputerzero-policy.so | \
+    grep -q 'not found'; then
+    echo 'CardputerZero policy runtime dependency is missing' >&2
+    exit 1
+fi
 
 rm -rf /tmp/cardputerzero-weston \
     /tmp/cardputerzero-weston-build \
     /tmp/cardputerzero-weston-install \
-    /tmp/cardputerzero-system-shell
+    /tmp/cardputerzero-system-shell \
+    /tmp/cardputerzero-policy
 apt-get purge -y \$build_deps \$toolchain_deps
 apt-get autoremove -y --purge
 apt-get clean
@@ -176,9 +214,20 @@ install -D -m 0755 "${STAGE_DIR}/01-compositor/files/unblank-display.sh" \
 
 on_chroot <<'CHROOT'
 set -e
+if ! getent group cp0-wayland >/dev/null 2>&1; then
+    groupadd --system cp0-wayland
+fi
+if ! id cp0-compositor >/dev/null 2>&1; then
+    useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin \
+        --groups video,render,input cp0-compositor
+else
+    usermod -G video,render,input cp0-compositor
+fi
 if ! id cp0-shell >/dev/null 2>&1; then
     useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin \
-        --groups video,render,input cp0-shell
+        --groups cp0-wayland cp0-shell
+else
+    usermod -G cp0-wayland cp0-shell
 fi
 systemctl enable seatd.service
 systemctl disable cardputerzero-compositor.service 2>/dev/null || true

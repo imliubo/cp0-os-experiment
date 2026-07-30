@@ -35,6 +35,8 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 - [x] 使用专用 seat 隔离内部 LCD/键盘，并建立 320x170 headless 测试后端。
 - [x] 实现 Phase 2A 原生 Wayland System Shell：首页、状态栏、系统电源弹窗骨架、
   双缓冲 renderer、定时状态刷新和崩溃自动返回首页。
+- [x] 实现 Phase 2B Weston policy 核心：独立 compositor/Shell UID、peer UID
+  认证、可信层和全局 Home/Back/Tasks/Power 动作通道。
 - [ ] 将 Launcher、状态栏和权限弹窗迁移到 compositor 侧可信覆盖层，并实现沉浸模式。
 - [ ] 在 compositor 统一键盘焦点、全局 Home/Back/任务切换快捷键和屏幕休眠。
 - [ ] 建立截图回归测试并完成两个客户端的可靠切换。
