@@ -77,6 +77,13 @@ typedef struct cp0_document {
     uint32_t length;
 } cp0_document_t;
 
+typedef enum cp0_gpio_line {
+    CP0_GPIO_GROVE_FUNCTION = 0,
+    CP0_GPIO_EXTERNAL_USB_FUNCTION = 1,
+    CP0_GPIO_GROVE_5V_POWER = 2,
+    CP0_GPIO_EXTERNAL_5V_POWER = 3,
+} cp0_gpio_line_t;
+
 CP0_IMPORT("cp0_monotonic_milliseconds")
 uint64_t cp0_monotonic_milliseconds(void);
 
@@ -124,6 +131,12 @@ int32_t cp0_audio_capture_pcm_s16le_raw(uint8_t *samples,
 CP0_IMPORT("cp0_camera_capture_rgb565")
 cp0_result_t cp0_camera_capture_rgb565_raw(uint8_t *pixels,
                                            uint32_t pixel_bytes);
+
+CP0_IMPORT("cp0_gpio_read")
+int32_t cp0_gpio_read_raw(uint32_t line);
+
+CP0_IMPORT("cp0_gpio_write")
+cp0_result_t cp0_gpio_write_raw(uint32_t line, uint32_t value);
 
 static inline cp0_result_t cp0_http_get(const uint8_t *url,
                                         uint32_t url_length, uint8_t *body,
@@ -248,6 +261,29 @@ static inline cp0_result_t cp0_camera_capture(uint16_t *pixels,
         return CP0_ERROR_INVALID_ARGUMENT;
     return cp0_camera_capture_rgb565_raw((uint8_t *)pixels,
                                          pixel_count * sizeof(uint16_t));
+}
+
+static inline cp0_result_t cp0_gpio_read(cp0_gpio_line_t line,
+                                         uint8_t *value) {
+    int32_t result;
+
+    if ((uint32_t)line > (uint32_t)CP0_GPIO_EXTERNAL_5V_POWER || value == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    result = cp0_gpio_read_raw((uint32_t)line);
+    if (result < 0)
+        return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
+                                           : CP0_ERROR_INTERNAL;
+    if (result > 1)
+        return CP0_ERROR_INTERNAL;
+    *value = (uint8_t)result;
+    return CP0_OK;
+}
+
+static inline cp0_result_t cp0_gpio_write(cp0_gpio_line_t line,
+                                          uint8_t value) {
+    if ((uint32_t)line > (uint32_t)CP0_GPIO_EXTERNAL_5V_POWER || value > 1U)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    return cp0_gpio_write_raw((uint32_t)line, value);
 }
 
 #ifdef __cplusplus

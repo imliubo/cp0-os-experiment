@@ -109,6 +109,18 @@ static int32_t cp0_capture_camera_rgb565(
     return cp0_camera_capture_rgb565(pixels, (size_t)pixel_bytes);
 }
 
+static int32_t cp0_gpio_read(wasm_exec_env_t execution_environment,
+                             uint32_t line) {
+    (void)execution_environment;
+    return cp0_broker_gpio_read(line);
+}
+
+static int32_t cp0_gpio_write(wasm_exec_env_t execution_environment,
+                              uint32_t line, uint32_t value) {
+    (void)execution_environment;
+    return cp0_broker_gpio_write(line, value);
+}
+
 static NativeSymbol symbols[] = {
     {"cp0_monotonic_milliseconds", (void *)cp0_monotonic_milliseconds, "()I",
      NULL},
@@ -128,6 +140,8 @@ static NativeSymbol symbols[] = {
      "(*~)i", NULL},
     {"cp0_camera_capture_rgb565", (void *)cp0_capture_camera_rgb565, "(*~)i",
      NULL},
+    {"cp0_gpio_read", (void *)cp0_gpio_read, "(i)i", NULL},
+    {"cp0_gpio_write", (void *)cp0_gpio_write, "(ii)i", NULL},
 };
 
 NativeSymbol *cp0_host_symbols(uint32_t *count) {

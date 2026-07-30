@@ -312,6 +312,32 @@ static bool json_u32_field(const char *response, const char *field,
     return true;
 }
 
+static bool json_bool_field(const char *response, const char *field,
+                            bool *value) {
+    char key[64];
+    const char *start;
+    const char *end;
+    int written;
+
+    written = snprintf(key, sizeof(key), "\"%s\":", field);
+    if (written <= 0 || (size_t)written >= sizeof(key))
+        return false;
+    start = strstr(response, key);
+    if (start == NULL)
+        return false;
+    start += (size_t)written;
+    if (strncmp(start, "true", 4U) == 0) {
+        *value = true;
+        end = start + 4U;
+    } else if (strncmp(start, "false", 5U) == 0) {
+        *value = false;
+        end = start + 5U;
+    } else {
+        return false;
+    }
+    return *end == ',' || *end == '}';
+}
+
 static int decode_base64_digit(char byte) {
     if (byte >= 'A' && byte <= 'Z')
         return byte - 'A';
@@ -642,4 +668,87 @@ int32_t cp0_broker_capture_camera(int *descriptor) {
         return result;
     return cp0_broker_decode_camera_response(response, received_descriptor,
                                              descriptor);
+}
+
+static const char *gpio_line_name(uint32_t line) {
+    switch (line) {
+    case 0:
+        return "grove-function";
+    case 1:
+        return "external-usb-function";
+    case 2:
+        return "grove-5v-power";
+    case 3:
+        return "external-5v-power";
+    default:
+        return NULL;
+    }
+}
+
+int32_t cp0_broker_decode_gpio_response(const char *response, uint32_t line,
+                                        int written, uint32_t expected_value) {
+    const char *line_name = gpio_line_name(line);
+    const char *returned_line;
+    size_t returned_line_length;
+    bool value;
+
+    if (response == NULL || line_name == NULL || expected_value > 1U)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    if ((written != 0 &&
+         strstr(response, "\"status\":\"gpio-written\"") == NULL) ||
+        (written == 0 && strstr(response, "\"status\":\"gpio-value\"") == NULL)) {
+        return decode_result(response);
+    }
+    returned_line = json_string_field(response, "line", &returned_line_length);
+    if (returned_line == NULL || returned_line_length != strlen(line_name) ||
+        memcmp(returned_line, line_name, returned_line_length) != 0 ||
+        !json_bool_field(response, "value", &value))
+        return CP0_BROKER_INTERNAL;
+    if (written != 0 && value != (expected_value != 0U))
+        return CP0_BROKER_INTERNAL;
+    return written != 0 ? CP0_BROKER_OK : (value ? 1 : 0);
+}
+
+int32_t cp0_broker_gpio_read(uint32_t line) {
+    const char *line_name = gpio_line_name(line);
+    char request[192];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int written;
+    int32_t result;
+
+    if (line_name == NULL)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    written = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":7,\"command\":{"
+        "\"name\":\"read-gpio\",\"line\":\"%s\"}}\n",
+        line_name);
+    if (written <= 0 || (size_t)written >= sizeof(request))
+        return CP0_BROKER_INTERNAL;
+    result = broker_exchange(request, (size_t)written, response, sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_gpio_response(response, line, 0, 0);
+}
+
+int32_t cp0_broker_gpio_write(uint32_t line, uint32_t value) {
+    const char *line_name = gpio_line_name(line);
+    char request[208];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int written;
+    int32_t result;
+
+    if (line_name == NULL || value > 1U)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    written = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":8,\"command\":{"
+        "\"name\":\"write-gpio\",\"line\":\"%s\",\"value\":%s}}\n",
+        line_name, value != 0U ? "true" : "false");
+    if (written <= 0 || (size_t)written >= sizeof(request))
+        return CP0_BROKER_INTERNAL;
+    result = broker_exchange(request, (size_t)written, response, sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_gpio_response(response, line, 1, value);
 }

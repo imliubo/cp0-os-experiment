@@ -4,6 +4,7 @@ pub mod audio;
 pub mod camera;
 pub mod display;
 pub mod documents;
+pub mod gpio;
 pub mod input;
 pub mod network;
 pub mod system;

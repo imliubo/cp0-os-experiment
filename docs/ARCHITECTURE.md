@@ -129,6 +129,12 @@ Shell 显示单前台选择器；应用请求不包含路径或文档 ID。选�
 108800 字节的密封 memfd；appd 验证只读访问、普通文件类型、精确长度和全部写入
 封印后才转发，Runtime 将内容复制进 WASM 线性内存，应用永远看不到原生 FD。
 
+GPIO 能力不暴露 `/dev/gpiochip*`、BCM 引脚编号、sysfs 路径或任意方向/复用设置。
+V0.6 首版只提供 overlay 明确定义的四个逻辑布尔输出：Grove 功能、外部 USB 功能、
+Grove 5V 电源和外部 5V 电源。`cp0-gpiod` 是唯一可写对应四个 LED-class 属性的
+账户；app-platform 阶段将 BSP 原有的全局 `0666` 模式覆盖为 `0660 root:cp0-gpio`。
+LCD、SPI 片选、音频、红外、键盘、耳机检测和系统电源相关 GPIO 永不进入 SDK。
+
 应用间调用通过 Intent Broker 路由，接收方必须显式声明 Intent，不提供任意应用间
 socket。
 

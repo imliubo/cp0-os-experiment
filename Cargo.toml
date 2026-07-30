@@ -7,6 +7,8 @@ members = [
     "crates/cp0-camerad",
     "crates/cp0-document-protocol",
     "crates/cp0-documentd",
+    "crates/cp0-gpio-protocol",
+    "crates/cp0-gpiod",
     "crates/cp0-manifest",
     "crates/cp0-network-protocol",
     "crates/cp0-networkd",

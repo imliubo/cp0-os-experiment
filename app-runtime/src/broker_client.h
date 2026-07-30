@@ -33,5 +33,9 @@ int32_t cp0_broker_capture_camera(int *descriptor);
 int32_t cp0_broker_decode_camera_response(const char *response,
                                           int received_descriptor,
                                           int *descriptor);
+int32_t cp0_broker_gpio_read(uint32_t line);
+int32_t cp0_broker_gpio_write(uint32_t line, uint32_t value);
+int32_t cp0_broker_decode_gpio_response(const char *response, uint32_t line,
+                                        int written, uint32_t expected_value);
 
 #endif

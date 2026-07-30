@@ -23,3 +23,7 @@ SDK exposes no ALSA device, mixer or format negotiation API.
 `cp0_camera_capture` fills exactly one caller-owned 320x170 RGB565 frame. It
 requires `camera.capture`; applications cannot select a sensor, access V4L2 or
 receive a native descriptor.
+
+`cp0_gpio_read` and `cp0_gpio_write` accept only `cp0_gpio_line_t`. The enum
+contains four V0.6 logical connector outputs; it deliberately cannot represent
+a BCM GPIO number, gpiochip, path, pin direction or pinmux mode.

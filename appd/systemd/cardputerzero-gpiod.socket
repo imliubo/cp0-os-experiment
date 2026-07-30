@@ -1,0 +1,15 @@
+[Unit]
+Description=CardputerZero privileged logical GPIO broker socket
+
+[Socket]
+ListenStream=/run/cardputerzero-gpiod/gpio.sock
+FileDescriptorName=gpio
+Service=cardputerzero-gpiod.service
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

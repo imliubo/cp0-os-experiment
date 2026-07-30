@@ -221,7 +221,9 @@ fn send_broker_command(command: BrokerCommand) -> Result<(), String> {
         | BrokerOutcome::DocumentOpened { .. }
         | BrokerOutcome::AudioPlayed { .. }
         | BrokerOutcome::AudioCaptured { .. }
-        | BrokerOutcome::CameraCaptured { .. } => {
+        | BrokerOutcome::CameraCaptured { .. }
+        | BrokerOutcome::GpioValue { .. }
+        | BrokerOutcome::GpioWritten { .. } => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&response)

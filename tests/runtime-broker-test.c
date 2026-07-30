@@ -84,5 +84,17 @@ int main(void) {
            CP0_BROKER_INTERNAL);
     assert(descriptor == -1);
     assert(fcntl(source, F_GETFD) < 0);
+
+    static const char gpio_value[] =
+        "{\"protocol_version\":1,\"request_id\":7,\"outcome\":{"
+        "\"status\":\"gpio-value\",\"line\":\"grove-function\","
+        "\"value\":true}}\n";
+    static const char wrong_gpio_line[] =
+        "{\"protocol_version\":1,\"request_id\":7,\"outcome\":{"
+        "\"status\":\"gpio-value\",\"line\":\"external-5v-power\","
+        "\"value\":true}}\n";
+    assert(cp0_broker_decode_gpio_response(gpio_value, 0, 0, 0) == 1);
+    assert(cp0_broker_decode_gpio_response(wrong_gpio_line, 0, 0, 0) ==
+           CP0_BROKER_INTERNAL);
     return 0;
 }

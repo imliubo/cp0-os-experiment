@@ -13,6 +13,8 @@ install -D -m 0755 "${payload}/cp0-audiod" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-audiod"
 install -D -m 0755 "${payload}/cp0-camerad" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-camerad"
+install -D -m 0755 "${payload}/cp0-gpiod" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-gpiod"
 install -D -m 0755 "${payload}/cp0ctl" \
     "${ROOTFS_DIR}/usr/bin/cp0ctl"
 install -D -m 0755 "${payload}/cardputerzero-app-runtime" \
@@ -39,6 +41,12 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-camerad.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-camerad.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-camerad.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-camerad.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-gpiod.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-gpiod.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-gpiod.socket" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-gpiod.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-gpio.conf" \
+    "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-gpio.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-appd.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-appd.conf"
 install -D -m 0755 "${payload}/diagnostics/device-core-recovery.sh" \
@@ -84,6 +92,13 @@ if ! id cp0-camera >/dev/null 2>&1; then
     useradd --system --gid cp0-camera --groups video --home-dir /nonexistent \
         --shell /usr/sbin/nologin cp0-camera
 fi
+if ! getent group cp0-gpio >/dev/null 2>&1; then
+    groupadd --system cp0-gpio
+fi
+if ! id cp0-gpio >/dev/null 2>&1; then
+    useradd --system --gid cp0-gpio --home-dir /nonexistent \
+        --shell /usr/sbin/nologin cp0-gpio
+fi
 if ! getent group cp0-app-20000 >/dev/null 2>&1; then
     groupadd --system --gid 20000 cp0-app-20000
 fi
@@ -115,7 +130,9 @@ chmod -R go-w /var/lib/cardputerzero/apps/dev.cardputerzero.hello
     dev.cardputerzero.hello 0.1.0
 
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-appd.conf
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-gpio.conf
 systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
-    cardputerzero-audiod.socket cardputerzero-camerad.socket
+    cardputerzero-audiod.socket cardputerzero-camerad.socket \
+    cardputerzero-gpiod.socket
 CHROOT

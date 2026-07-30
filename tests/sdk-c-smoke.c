@@ -18,6 +18,7 @@ int sdk_c_smoke(void) {
     int16_t audio_samples[8] = {0};
     uint32_t frames_captured = 0;
     static uint16_t camera_pixels[CP0_CAMERA_PIXEL_COUNT];
+    uint8_t gpio_value = 0;
     (void)cp0_poll_key_event(&event, sizeof(event), 0);
     (void)cp0_display_dimensions();
     (void)cp0_http_get(url, (uint32_t)(sizeof(url) - 1U), network_body,
@@ -30,6 +31,8 @@ int sdk_c_smoke(void) {
     (void)cp0_audio_play(audio_samples, 8U);
     (void)cp0_audio_capture(audio_samples, 8U, &frames_captured);
     (void)cp0_camera_capture(camera_pixels, CP0_CAMERA_PIXEL_COUNT);
+    (void)cp0_gpio_read(CP0_GPIO_GROVE_FUNCTION, &gpio_value);
+    (void)cp0_gpio_write(CP0_GPIO_GROVE_FUNCTION, gpio_value);
     return result == CP0_ERROR_UNAVAILABLE ? (int)cp0_monotonic_milliseconds()
                                            : (int)result;
 }

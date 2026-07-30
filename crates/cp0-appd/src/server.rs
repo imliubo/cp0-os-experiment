@@ -10,6 +10,7 @@ use std::time::Duration;
 use cp0_audio_protocol::AudioErrorCode as ServiceAudioErrorCode;
 use cp0_camera_protocol::CameraErrorCode as ServiceCameraErrorCode;
 use cp0_document_protocol::{DocumentErrorCode as ServiceDocumentErrorCode, send_frame_with_fd};
+use cp0_gpio_protocol::GpioErrorCode as ServiceGpioErrorCode;
 use cp0_manifest::Permission;
 use cp0_network_protocol::NetworkErrorCode as ServiceNetworkErrorCode;
 
@@ -18,10 +19,11 @@ use crate::{
     AppManager, AppManagerError, AppSummary, AppdCommand, AppdRequest, AppdResponse, AudioClient,
     AudioClientError, BrokerCommand, BrokerErrorCode, BrokerProtocolError, BrokerRequest,
     BrokerResponse, CameraClient, CameraClientError, DocumentClient, DocumentClientError,
-    DocumentCoordinator, DocumentPromptError, DocumentRequestResult, ErrorCode, NetworkClient,
-    NetworkClientError, NotificationQueue, PermissionChoice, PermissionCoordinator,
-    PermissionPromptError, PermissionRequestResult, ResponseData, encode_broker_response,
-    peer_credentials, read_broker_request, read_request, write_broker_response, write_response,
+    DocumentCoordinator, DocumentPromptError, DocumentRequestResult, ErrorCode, GpioClient,
+    GpioClientError, NetworkClient, NetworkClientError, NotificationQueue, PermissionChoice,
+    PermissionCoordinator, PermissionPromptError, PermissionRequestResult, ResponseData,
+    encode_broker_response, peer_credentials, read_broker_request, read_request,
+    write_broker_response, write_response,
 };
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -56,10 +58,16 @@ impl From<std::io::Error> for ServerError {
 pub struct AppdServer {
     state: Arc<Mutex<ServerState>>,
     trusted_uids: BTreeSet<u32>,
-    network: NetworkClient,
-    documents: DocumentClient,
-    audio: AudioClient,
-    camera: CameraClient,
+    capabilities: CapabilityServices,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CapabilityServices {
+    pub network: NetworkClient,
+    pub documents: DocumentClient,
+    pub audio: AudioClient,
+    pub camera: CameraClient,
+    pub gpio: GpioClient,
 }
 
 #[derive(Debug)]
@@ -111,10 +119,11 @@ impl AppdServer {
             manager,
             permissions,
             trusted_uids,
-            network,
-            documents,
-            AudioClient::default(),
-            CameraClient::default(),
+            CapabilityServices {
+                network,
+                documents,
+                ..CapabilityServices::default()
+            },
         )
     }
 
@@ -122,10 +131,7 @@ impl AppdServer {
         manager: AppManager,
         permissions: PermissionCoordinator,
         trusted_uids: impl IntoIterator<Item = u32>,
-        network: NetworkClient,
-        documents: DocumentClient,
-        audio: AudioClient,
-        camera: CameraClient,
+        capabilities: CapabilityServices,
     ) -> Self {
         Self {
             state: Arc::new(Mutex::new(ServerState {
@@ -135,10 +141,7 @@ impl AppdServer {
                 document_prompts: DocumentCoordinator::default(),
             })),
             trusted_uids: trusted_uids.into_iter().collect(),
-            network,
-            documents,
-            audio,
-            camera,
+            capabilities,
         }
     }
 
@@ -419,7 +422,7 @@ impl AppdServer {
                 {
                     return response;
                 }
-                match self.network.http_get(request_id, &url) {
+                match self.capabilities.network.http_get(request_id, &url) {
                     Ok(response) => BrokerResponse::http_response(
                         request_id,
                         response.status_code,
@@ -448,7 +451,7 @@ impl AppdServer {
                         );
                     }
                 };
-                match self.audio.play(request_id, &samples) {
+                match self.capabilities.audio.play(request_id, &samples) {
                     Ok(frames) => BrokerResponse::audio_played(request_id, frames),
                     Err(error) => {
                         eprintln!("cp0-appd: audio playback request failed: {error}");
@@ -462,7 +465,7 @@ impl AppdServer {
                 {
                     return response;
                 }
-                match self.audio.capture(request_id, frames) {
+                match self.capabilities.audio.capture(request_id, frames) {
                     Ok(samples) => BrokerResponse::audio_captured(
                         request_id,
                         cp0_audio_protocol::encode_base64(&samples),
@@ -476,6 +479,34 @@ impl AppdServer {
             BrokerCommand::CaptureCamera => {
                 unreachable!("camera requests carry descriptors")
             }
+            BrokerCommand::ReadGpio { line } => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::HardwareGpio)
+                {
+                    return response;
+                }
+                match self.capabilities.gpio.read(request_id, line) {
+                    Ok(value) => BrokerResponse::gpio_value(request_id, line, value),
+                    Err(error) => {
+                        eprintln!("cp0-appd: GPIO read request failed: {error}");
+                        gpio_error_response(request_id, &error)
+                    }
+                }
+            }
+            BrokerCommand::WriteGpio { line, value } => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::HardwareGpio)
+                {
+                    return response;
+                }
+                match self.capabilities.gpio.write(request_id, line, value) {
+                    Ok(()) => BrokerResponse::gpio_written(request_id, line, value),
+                    Err(error) => {
+                        eprintln!("cp0-appd: GPIO write request failed: {error}");
+                        gpio_error_response(request_id, &error)
+                    }
+                }
+            }
         }
     }
 
@@ -485,7 +516,7 @@ impl AppdServer {
         {
             return BrokerDispatch::response(response);
         }
-        match self.camera.capture(request_id) {
+        match self.capabilities.camera.capture(request_id) {
             Ok(frame) => BrokerDispatch {
                 response: BrokerResponse::camera_captured(request_id),
                 descriptor: Some(frame.descriptor),
@@ -515,7 +546,7 @@ impl AppdServer {
         };
         match state_result {
             Ok(DocumentRequestResult::Selected(document_id)) => {
-                match self.documents.open(request_id, &document_id) {
+                match self.capabilities.documents.open(request_id, &document_id) {
                     Ok(opened) => BrokerDispatch {
                         response: BrokerResponse::document_opened(
                             request_id,
@@ -554,7 +585,7 @@ impl AppdServer {
                 ))
             }
             Ok(DocumentRequestResult::NeedsDocuments) => {
-                let documents = match self.documents.list(request_id) {
+                let documents = match self.capabilities.documents.list(request_id) {
                     Ok(documents) => documents,
                     Err(error) => {
                         eprintln!("cp0-appd: document service list failed: {error}");
@@ -582,7 +613,7 @@ impl AppdServer {
                         BrokerResponse::document_selection_pending(request_id, prompt.prompt_id),
                     ),
                     Ok(DocumentRequestResult::Selected(document_id)) => {
-                        match self.documents.open(request_id, &document_id) {
+                        match self.capabilities.documents.open(request_id, &document_id) {
                             Ok(opened) => BrokerDispatch {
                                 response: BrokerResponse::document_opened(
                                     request_id,
@@ -998,6 +1029,29 @@ fn camera_error_response(request_id: u64, error: &CameraClientError) -> BrokerRe
         | CameraClientError::Service(ServiceCameraErrorCode::Internal) => (
             BrokerErrorCode::Internal,
             "camera service returned an invalid response",
+        ),
+    };
+    BrokerResponse::error(request_id, code, message)
+}
+
+fn gpio_error_response(request_id: u64, error: &GpioClientError) -> BrokerResponse {
+    let (code, message) = match error {
+        GpioClientError::Service(ServiceGpioErrorCode::InvalidRequest) => {
+            (BrokerErrorCode::InvalidRequest, "GPIO request is invalid")
+        }
+        GpioClientError::Service(ServiceGpioErrorCode::Unavailable)
+        | GpioClientError::Service(ServiceGpioErrorCode::Device)
+        | GpioClientError::Io(_)
+        | GpioClientError::EmptyResponse => {
+            (BrokerErrorCode::Unavailable, "GPIO service is unavailable")
+        }
+        GpioClientError::Protocol(_)
+        | GpioClientError::MismatchedRequestId
+        | GpioClientError::MismatchedOutcome
+        | GpioClientError::Service(ServiceGpioErrorCode::Unauthorized)
+        | GpioClientError::Service(ServiceGpioErrorCode::Internal) => (
+            BrokerErrorCode::Internal,
+            "GPIO service returned an invalid response",
         ),
     };
     BrokerResponse::error(request_id, code, message)

@@ -89,6 +89,20 @@ interface camera {
     capture-rgb565: func() -> result<list<u16>, error-code>;
 }
 
+interface gpio {
+    use types.{error-code};
+
+    enum line {
+        grove-function,
+        external-usb-function,
+        grove-5v-power,
+        external-5v-power,
+    }
+
+    read: func(line: line) -> result<bool, error-code>;
+    write: func(line: line, value: bool) -> result<_, error-code>;
+}
+
 interface application {
     use types.{app-event, error-code};
 
@@ -103,5 +117,6 @@ world cardputer-application {
     import documents;
     import audio;
     import camera;
+    import gpio;
     export application;
 }

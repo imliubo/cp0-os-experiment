@@ -35,6 +35,10 @@
     {
       "name": "camera.capture",
       "reason": "Capture a frame after the user presses the camera key"
+    },
+    {
+      "name": "hardware.gpio",
+      "reason": "Toggle the logical Grove function output after the user presses G"
     }
   ]
 }

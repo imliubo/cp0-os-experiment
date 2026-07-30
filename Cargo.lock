@@ -37,6 +37,7 @@ dependencies = [
  "cp0-audio-protocol",
  "cp0-camera-protocol",
  "cp0-document-protocol",
+ "cp0-gpio-protocol",
  "cp0-manifest",
  "cp0-network-protocol",
  "libc",
@@ -91,6 +92,22 @@ name = "cp0-documentd"
 version = "0.1.0"
 dependencies = [
  "cp0-document-protocol",
+ "libc",
+]
+
+[[package]]
+name = "cp0-gpio-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cp0-gpiod"
+version = "0.1.0"
+dependencies = [
+ "cp0-gpio-protocol",
  "libc",
 ]
 

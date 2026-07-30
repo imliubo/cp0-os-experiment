@@ -1,0 +1,43 @@
+[Unit]
+Description=CardputerZero restricted logical GPIO broker
+Requires=cardputerzero-gpiod.socket
+After=cardputerzero-gpiod.socket systemd-tmpfiles-setup.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/cardputerzero/cp0-gpiod serve
+User=cp0-gpio
+Group=cp0-gpio
+UMask=0077
+Restart=on-failure
+RestartSec=500ms
+TimeoutStopSec=3
+MemoryMax=8M
+MemorySwapMax=0
+TasksMax=8
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+ReadWritePaths=/sys/class/leds/grove_fun/brightness
+ReadWritePaths=/sys/class/leds/ext_usb_gpio_fun/brightness
+ReadWritePaths=/sys/class/leds/grove_5v_out/brightness
+ReadWritePaths=/sys/class/leds/ext_5v_out/brightness
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

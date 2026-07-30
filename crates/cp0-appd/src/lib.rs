@@ -9,6 +9,7 @@ mod broker;
 mod camera_client;
 mod document_client;
 mod document_prompt;
+mod gpio_client;
 mod lifecycle;
 mod network_client;
 mod permission_prompt;
@@ -33,6 +34,7 @@ pub use document_client::{
 pub use document_prompt::{
     DocumentCoordinator, DocumentPrompt, DocumentPromptError, DocumentRequestResult,
 };
+pub use gpio_client::{DEFAULT_GPIO_SOCKET, GpioClient, GpioClientError};
 pub use lifecycle::{AppManager, AppManagerError, InstalledApp, ManagerPaths, lookup_unix_account};
 pub use network_client::{
     DEFAULT_NETWORK_SOCKET, NetworkClient, NetworkClientError, NetworkHttpResponse,
@@ -53,7 +55,7 @@ pub use protocol::{
 pub use registry::{
     AppAccount, AppRegistry, FIRST_APP_ACCOUNT_ID, LAST_APP_ACCOUNT_ID, RegistryError,
 };
-pub use server::{AppdServer, ServerError};
+pub use server::{AppdServer, CapabilityServices, ServerError};
 
 pub const DEFAULT_APPS_ROOT: &str = "/var/lib/cardputerzero/apps";
 pub const DEFAULT_DATA_ROOT: &str = "/var/lib/cardputerzero/data";

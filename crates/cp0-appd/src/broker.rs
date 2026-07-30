@@ -21,12 +21,28 @@ pub struct BrokerRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum BrokerCommand {
-    PostNotification { title: String, body: String },
-    HttpGet { url: String },
+    PostNotification {
+        title: String,
+        body: String,
+    },
+    HttpGet {
+        url: String,
+    },
     OpenDocument,
-    PlayAudio { samples_base64: String },
-    CaptureAudio { frames: u16 },
+    PlayAudio {
+        samples_base64: String,
+    },
+    CaptureAudio {
+        frames: u16,
+    },
     CaptureCamera,
+    ReadGpio {
+        line: cp0_gpio_protocol::GpioLine,
+    },
+    WriteGpio {
+        line: cp0_gpio_protocol::GpioLine,
+        value: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +84,14 @@ pub enum BrokerOutcome {
         height: u16,
         pixel_format: cp0_camera_protocol::CameraPixelFormat,
         size_bytes: u32,
+    },
+    GpioValue {
+        line: cp0_gpio_protocol::GpioLine,
+        value: bool,
+    },
+    GpioWritten {
+        line: cp0_gpio_protocol::GpioLine,
+        value: bool,
     },
     Error {
         code: BrokerErrorCode,
@@ -269,6 +293,22 @@ impl BrokerResponse {
                 pixel_format: cp0_camera_protocol::CameraPixelFormat::Rgb565Le,
                 size_bytes: cp0_camera_protocol::CAMERA_FRAME_BYTES as u32,
             },
+        }
+    }
+
+    pub fn gpio_value(request_id: u64, line: cp0_gpio_protocol::GpioLine, value: bool) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::GpioValue { line, value },
+        }
+    }
+
+    pub fn gpio_written(request_id: u64, line: cp0_gpio_protocol::GpioLine, value: bool) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::GpioWritten { line, value },
         }
     }
 
@@ -663,5 +703,28 @@ mod tests {
             },
         };
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn round_trips_fixed_gpio_lines_without_paths_or_numbers() {
+        let request = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 7,
+            command: BrokerCommand::WriteGpio {
+                line: cp0_gpio_protocol::GpioLine::GroveFunction,
+                value: true,
+            },
+        };
+        let mut frame = Vec::new();
+        write_broker_request(&mut frame, &request).unwrap();
+        assert_eq!(
+            read_broker_request(&mut Cursor::new(frame)).unwrap(),
+            Some(request)
+        );
+        assert!(
+            BrokerResponse::gpio_value(7, cp0_gpio_protocol::GpioLine::External5vPower, false)
+                .validate()
+                .is_ok()
+        );
     }
 }

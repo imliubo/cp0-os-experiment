@@ -1,7 +1,7 @@
 #![no_std]
 
 use core::panic::PanicInfo;
-use cp0_sdk::{Error, audio, camera, display, documents, input, network, system};
+use cp0_sdk::{Error, audio, camera, display, documents, gpio, input, network, system};
 
 const FRAME_BYTES: usize =
     display::WIDTH as usize * display::STANDARD_HEIGHT as usize * 2;
@@ -15,6 +15,7 @@ const KEY_D: u16 = 32;
 const KEY_P: u16 = 25;
 const KEY_R: u16 = 19;
 const KEY_C: u16 = 46;
+const KEY_G: u16 = 34;
 
 fn prepare_frame() -> &'static mut [u8] {
     // The frame lives in the WASM data section rather than the 64 KiB call
@@ -164,6 +165,18 @@ fn request_camera(frame: &mut [u8]) {
     }
 }
 
+fn request_gpio(frame: &mut [u8]) {
+    let color = match gpio::read(gpio::Line::GroveFunction)
+        .and_then(|value| gpio::write(gpio::Line::GroveFunction, !value))
+    {
+        Ok(()) => 0x07e0,
+        Err(Error::Denied) => 0xf800,
+        Err(Error::Unavailable) => 0xffe0,
+        Err(_) => 0xf81f,
+    };
+    show_action_status(frame, color);
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
     const TITLE: &str = "Hello Card";
@@ -203,6 +216,9 @@ pub extern "C" fn main() -> i32 {
                 }
                 if event.code == KEY_C {
                     request_camera(frame);
+                }
+                if event.code == KEY_G {
+                    request_gpio(frame);
                 }
                 show_key(frame, event.code);
                 rendered = false;

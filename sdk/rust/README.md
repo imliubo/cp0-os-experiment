@@ -19,3 +19,7 @@ playback and capture separately.
 `camera::capture_rgb565` always fills one caller-owned 320x170 RGB565 frame.
 The application manifest must declare `camera.capture`; the SDK exposes no
 sensor selection, camera device, capture process or file path.
+
+`gpio::read` and `gpio::write` accept only the four `gpio::Line` variants
+defined for the V0.6 connector functions. They expose booleans rather than
+Linux gpiochip numbers, device paths, pin direction or pinmux configuration.
