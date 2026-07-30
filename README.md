@@ -42,6 +42,8 @@ Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真�
   socket 规则和 Hello WASM 真机通知闭环。
 - Phase 4A dependency-free `no_std` Rust SDK，封装时钟、事件等待、通知 capability
   和稳定错误类型；Hello 示例不再使用 Runtime 私有 FFI。
+- `cp0ctl new/build` SDK-only 项目脚手架、结构化 Cargo metadata 构建和规范应用
+  产物目录。
 
 ## 快速验证
 

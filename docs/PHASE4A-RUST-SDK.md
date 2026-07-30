@@ -40,3 +40,23 @@ while preserving the public Rust API.
   `d1830261bec651deb3cabc35f05e8bf524a97fd136c61b9cefc68da87d91eff6`.
 - On V0.6, Hello started through appd, posted notification ID 4 through the SDK,
   and stopped cleanly. Appd, compositor and System Shell remained active.
+
+## Project workflow
+
+The first host development commands are:
+
+```sh
+cp0ctl new <directory> <app-id> <display-name>
+cp0ctl build <directory>
+```
+
+`new` refuses to overwrite an existing path, validates the generated manifest
+before writing and creates a `no_std` cdylib with no private Runtime imports.
+Until SDK 0.1 is published to a developer registry, its Cargo dependency points
+to the canonical SDK path in the current checkout.
+
+`build` validates `app.json`, reads Cargo's structured metadata to find the
+actual cdylib target and target directory, builds `wasm32-unknown-unknown`, and
+stages a package-shaped tree below
+`target/cardputerzero/<app-id>/<version>`. Tests execute the complete generated
+project build rather than checking templates only.

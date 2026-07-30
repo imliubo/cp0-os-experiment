@@ -10,6 +10,8 @@ use cp0_appd::{
     read_response, write_broker_request, write_request,
 };
 
+mod project;
+
 const APPD_SOCKET: &str = "/run/cardputerzero-appd/control.sock";
 const BROKER_SOCKET: &str = "/run/cardputerzero-broker/runtime.sock";
 const REQUEST_ID: u64 = 1;
@@ -22,6 +24,10 @@ fn main() -> ExitCode {
         [manifest, validate, path] if manifest == "manifest" && validate == "validate" => {
             validate_manifest(path)
         }
+        [command, path, app_id, name] if command == "new" => {
+            project::new_project(path, app_id, name)
+        }
+        [command, path] if command == "build" => project::build_project(path).map(|_| ()),
         [app, command] if app == "app" && command == "ping" => send_app_command(AppdCommand::Ping),
         [app, command] if app == "app" && command == "list" => send_app_command(
             AppdCommand::List {
@@ -74,7 +80,7 @@ fn main() -> ExitCode {
             })
         }
         _ => Err(
-            "usage: cp0ctl manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | notification take | broker notify <title> <body>"
+            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | notification take | broker notify <title> <body>"
                 .into(),
         ),
     };
