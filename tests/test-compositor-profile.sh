@@ -8,6 +8,7 @@ service="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/card
 shell_service="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-system-shell.service"
 launcher="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/start-compositor.sh"
 waiter="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/wait-wayland.sh"
+unblanker="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/unblank-display.sh"
 config="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/weston.ini"
 version="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/weston.env"
 
@@ -21,6 +22,8 @@ grep -q -- '-Dbackend-vnc=false' "$stage"
 grep -q -- '-Dpipewire=false' "$stage"
 grep -q -- '-Dshell-kiosk=true' "$stage"
 grep -q '/usr/libexec/cardputerzero/start-compositor.sh' "$service"
+grep -q '^ExecStartPost=+/usr/libexec/cardputerzero/unblank-display.sh$' "$service"
+grep -q 'files/unblank-display.sh' "$stage"
 grep -q '^Wants=cardputerzero-system-shell.service$' "$service"
 grep -q '/usr/bin/cardputerzero-system-shell' "$shell_service"
 grep -q '^Restart=always$' "$shell_service"
@@ -36,6 +39,10 @@ grep -q '^mode=320x170@30$' "$config"
 grep -qx 'seatd' "$packages"
 sh -n "$launcher"
 sh -n "$waiter"
+sh -n "$unblanker"
+grep -q '/dev/fb_lcd' "$unblanker"
+grep -q '/sys/class/graphics/\$fb_device/blank' "$unblanker"
+grep -q "printf '0" "$unblanker"
 
 if grep -q -- '-- weston-simple-shm' "$launcher"; then
     echo "error: diagnostic SHM client remains in the production start path" >&2

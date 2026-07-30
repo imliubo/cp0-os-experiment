@@ -171,6 +171,8 @@ install -D -m 0755 "${STAGE_DIR}/01-compositor/files/start-compositor.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/start-compositor.sh"
 install -D -m 0755 "${STAGE_DIR}/01-compositor/files/wait-wayland.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/wait-wayland.sh"
+install -D -m 0755 "${STAGE_DIR}/01-compositor/files/unblank-display.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/unblank-display.sh"
 
 on_chroot <<'CHROOT'
 set -e

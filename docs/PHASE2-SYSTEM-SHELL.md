@@ -72,6 +72,21 @@ audio, battery and boot-time checks with no failures. The absent `/dev/i2c-1`
 and `/dev/video0` interfaces remain warnings from the Phase 1 hardware
 baseline rather than Phase 2 regressions.
 
+The first compositor activation also exposed a V0.6-specific handoff issue:
+the framebuffer console could remain in `FB_BLANK_POWERDOWN` even though the
+Weston DRM CRTC and primary plane were active. The panel was black while the
+backlight, connector and both processes appeared healthy. Restoring `tty1`
+and writing `0` to the LCD framebuffer blank control made the console visible;
+starting Weston after the same unblank made the System Shell visible. The
+compositor service now waits for its new Wayland socket and unblanks the LCD
+through a root-only post-start helper. Its unprivileged Weston process and
+device permissions are unchanged. The helper resolves `/dev/fb_lcd` instead
+of assuming a framebuffer number: the LCD was `fb1` before the validation
+reboot and `fb0` after it. A simulated non-zero blank state and a real reboot
+both recovered to `blank=0`, and camera inspection confirmed the Home screen
+after the compositor started. The recovery console remained visible while
+the compositor was disabled.
+
 ## Security boundary
 
 Weston kiosk shell is still a bring-up component. An ordinary xdg-toplevel

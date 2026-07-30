@@ -12,6 +12,8 @@ case "$drm_device" in
         ;;
 esac
 
+rm -f "$XDG_RUNTIME_DIR/wayland-0" "$XDG_RUNTIME_DIR/wayland-0.lock"
+
 exec /usr/bin/weston \
     --backend=drm \
     --drm-device="$drm_device" \
