@@ -18,7 +18,7 @@
     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
   </copyright>
 
-  <interface name="cp0_system_shell_v1" version="1">
+  <interface name="cp0_system_shell_v1" version="2">
     <description summary="trusted CardputerZero System Shell control">
       This global is restricted by the compositor to the dedicated cp0-shell
       Unix account. It registers the trusted system surface and carries global
@@ -60,6 +60,34 @@
     <event name="action">
       <description summary="compositor-owned global system action"/>
       <arg name="action" type="uint" enum="action"/>
+    </event>
+
+    <request name="activate_app" since="2">
+      <description summary="activate one compositor-discovered application">
+        The token is allocated by the compositor and is valid only for the
+        lifetime of the corresponding surface. Client-provided app-id strings
+        are never used as authorization credentials.
+      </description>
+      <arg name="token" type="uint" summary="opaque compositor app token"/>
+    </request>
+
+    <event name="app_added" since="2">
+      <description summary="an application surface became available"/>
+      <arg name="token" type="uint" summary="opaque compositor app token"/>
+      <arg name="app_id" type="string" summary="untrusted display identifier"/>
+    </event>
+
+    <event name="app_removed" since="2">
+      <description summary="an application surface is no longer available"/>
+      <arg name="token" type="uint" summary="expired compositor app token"/>
+    </event>
+
+    <event name="activation_failed" since="2">
+      <description summary="an application token expired before activation">
+        This is a normal lifecycle race, not a protocol violation. The Shell
+        should remove the stale entry and remain connected.
+      </description>
+      <arg name="token" type="uint" summary="expired compositor app token"/>
     </event>
   </interface>
 </protocol>

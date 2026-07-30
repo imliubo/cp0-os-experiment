@@ -233,11 +233,32 @@ static void draw_empty_page(struct canvas *canvas, const char *title,
     draw_text(canvas, 28, 91, detail, 1, COLOR_MUTED);
 }
 
+static void draw_apps_page(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    if (ui->app_count == 0) {
+        draw_empty_page(canvas, "APPS", "NO APPS INSTALLED", COLOR_GREEN);
+        return;
+    }
+
+    for (unsigned int index = 0; index < ui->app_count; index++) {
+        int y = 28 + (int)index * 32;
+        bool selected = index == ui->app_selected;
+        fill_rect(canvas, 8, y, 304, 28,
+                  selected ? COLOR_SELECTED : COLOR_SURFACE);
+        stroke_rect(canvas, 8, y, 304, 28, selected ? 2 : 1,
+                    selected ? COLOR_GREEN : COLOR_BAR);
+        fill_rect(canvas, 17, y + 9, 10, 10,
+                  selected ? COLOR_GREEN : COLOR_MUTED);
+        draw_text(canvas, 36, y + 10, ui->apps[index].app_id, 1,
+                  selected ? COLOR_TEXT : COLOR_MUTED);
+    }
+}
+
 static void draw_page(struct canvas *canvas, const struct cp0_ui *ui)
 {
     switch (ui->screen) {
     case CP0_UI_APPS:
-        draw_empty_page(canvas, "APPS", "NO APPS INSTALLED", COLOR_GREEN);
+        draw_apps_page(canvas, ui);
         break;
     case CP0_UI_DEVICE:
         draw_empty_page(canvas, "CARDPUTER ZERO", "V0.6  320 X 170  512 MB",
@@ -296,6 +317,60 @@ void cp0_ui_set_status(struct cp0_ui *ui, const char *clock_text,
     ui->battery_percent = battery_percent;
 }
 
+void cp0_ui_add_app(struct cp0_ui *ui, uint32_t token, const char *app_id)
+{
+    unsigned int index;
+    size_t length;
+
+    if (ui == NULL || token == 0 || app_id == NULL || app_id[0] == '\0')
+        return;
+    for (index = 0; index < ui->app_count; index++) {
+        if (ui->apps[index].token == token)
+            break;
+    }
+    if (index == ui->app_count) {
+        if (ui->app_count == CP0_UI_MAX_APPS)
+            return;
+        ui->app_count++;
+    }
+
+    length = strlen(app_id);
+    if (length > CP0_UI_APP_ID_MAX)
+        length = CP0_UI_APP_ID_MAX;
+    ui->apps[index].token = token;
+    memcpy(ui->apps[index].app_id, app_id, length);
+    ui->apps[index].app_id[length] = '\0';
+}
+
+void cp0_ui_remove_app(struct cp0_ui *ui, uint32_t token)
+{
+    unsigned int index;
+
+    if (ui == NULL)
+        return;
+    for (index = 0; index < ui->app_count; index++) {
+        if (ui->apps[index].token == token)
+            break;
+    }
+    if (index == ui->app_count)
+        return;
+
+    if (index + 1 < ui->app_count) {
+        memmove(&ui->apps[index], &ui->apps[index + 1],
+                (ui->app_count - index - 1) * sizeof(ui->apps[0]));
+    }
+    ui->app_count--;
+    if (ui->app_count == 0 || ui->app_selected >= ui->app_count)
+        ui->app_selected = ui->app_count == 0 ? 0 : ui->app_count - 1;
+}
+
+uint32_t cp0_ui_selected_app_token(const struct cp0_ui *ui)
+{
+    if (ui == NULL || ui->app_selected >= ui->app_count)
+        return 0;
+    return ui->apps[ui->app_selected].token;
+}
+
 enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                                         enum cp0_ui_action action)
 {
@@ -335,6 +410,17 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
 
     if (action == CP0_UI_BACK) {
         ui->screen = CP0_UI_HOME;
+        return CP0_UI_EVENT_NONE;
+    }
+
+    if (ui->screen == CP0_UI_APPS) {
+        if (action == CP0_UI_UP && ui->app_selected > 0)
+            ui->app_selected--;
+        else if (action == CP0_UI_DOWN &&
+                 ui->app_selected + 1 < ui->app_count)
+            ui->app_selected++;
+        else if (action == CP0_UI_ACCEPT && ui->app_count > 0)
+            return CP0_UI_EVENT_OPEN_APP;
         return CP0_UI_EVENT_NONE;
     }
 

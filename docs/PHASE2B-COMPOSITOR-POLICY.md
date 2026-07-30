@@ -56,10 +56,10 @@ This increment provides the protocol, policy module, credential checks,
 trusted layers, global action delivery, image integration and process-account
 split. The existing Home screen remains the only trusted foreground surface.
 
-The next increment will add a test application surface and exercise Shell
-hide/show, focus restoration and crash return. Permission prompts will then
-use an alpha-capable overlay state, followed by malicious-client and screenshot
-regression tests.
+Phase 2C adds application discovery, single-foreground switching, focus
+restoration and screenshot regression. Its design and V0.6 results are in
+`PHASE2C-WINDOW-SWITCHING.md`. Permission prompts and immersive mode remain
+later compositor increments.
 
 ## V0.6 hardware validation
 

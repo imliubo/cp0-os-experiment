@@ -256,6 +256,11 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         fprintf(stderr, "system-shell: sleep requested; broker unavailable\n");
     else if (event == CP0_UI_EVENT_RESTART)
         fprintf(stderr, "system-shell: restart requested; broker unavailable\n");
+    else if (event == CP0_UI_EVENT_OPEN_APP) {
+        uint32_t token = cp0_ui_selected_app_token(&shell->ui);
+        if (token != 0)
+            cp0_system_shell_v1_activate_app(shell->system_control, token);
+    }
     shell_redraw(shell);
 }
 
@@ -286,8 +291,43 @@ static void handle_system_action(void *data,
     handle_ui_action(shell, ui_action);
 }
 
+static void handle_app_added(void *data,
+                             struct cp0_system_shell_v1 *system_control,
+                             uint32_t token, const char *app_id)
+{
+    struct shell *shell = data;
+    (void)system_control;
+    cp0_ui_add_app(&shell->ui, token, app_id);
+    fprintf(stderr, "system-shell: app token=%u available\n", token);
+    shell_redraw(shell);
+}
+
+static void handle_app_removed(void *data,
+                               struct cp0_system_shell_v1 *system_control,
+                               uint32_t token)
+{
+    struct shell *shell = data;
+    (void)system_control;
+    cp0_ui_remove_app(&shell->ui, token);
+    fprintf(stderr, "system-shell: app token=%u removed\n", token);
+    shell_redraw(shell);
+}
+
+static void handle_activation_failed(
+    void *data, struct cp0_system_shell_v1 *system_control, uint32_t token)
+{
+    struct shell *shell = data;
+    (void)system_control;
+    cp0_ui_remove_app(&shell->ui, token);
+    fprintf(stderr, "system-shell: app token=%u activation failed\n", token);
+    shell_redraw(shell);
+}
+
 static const struct cp0_system_shell_v1_listener system_control_listener = {
     .action = handle_system_action,
+    .app_added = handle_app_added,
+    .app_removed = handle_app_removed,
+    .activation_failed = handle_activation_failed,
 };
 
 static bool translate_key(struct shell *shell, uint32_t key,
@@ -475,7 +515,6 @@ static void handle_registry_global(void *data, struct wl_registry *registry,
                                    uint32_t version)
 {
     struct shell *shell = data;
-    (void)version;
     if (strcmp(interface, wl_compositor_interface.name) == 0) {
         shell->compositor = wl_registry_bind(
             registry, name, &wl_compositor_interface, 1);
@@ -489,9 +528,10 @@ static void handle_registry_global(void *data, struct wl_registry *registry,
         shell->wm_base = wl_registry_bind(registry, name,
                                           &xdg_wm_base_interface, 1);
         xdg_wm_base_add_listener(shell->wm_base, &wm_base_listener, shell);
-    } else if (strcmp(interface, cp0_system_shell_v1_interface.name) == 0) {
+    } else if (strcmp(interface, cp0_system_shell_v1_interface.name) == 0 &&
+               version >= 2) {
         shell->system_control = wl_registry_bind(
-            registry, name, &cp0_system_shell_v1_interface, 1);
+            registry, name, &cp0_system_shell_v1_interface, 2);
         cp0_system_shell_v1_add_listener(shell->system_control,
                                          &system_control_listener, shell);
     }

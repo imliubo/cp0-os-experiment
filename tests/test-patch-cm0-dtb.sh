@@ -2,7 +2,8 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/cp0-dtb-test.XXXXXX")
+temp_dir="$repo_root/target/test-tmp/cp0-dtb-test.$$"
+mkdir -p "$temp_dir"
 cleanup() {
     rm -f "$temp_dir/input.dtb" "$temp_dir/output.dtb" \
         "$temp_dir/output-again.dtb"

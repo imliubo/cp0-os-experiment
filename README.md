@@ -27,6 +27,8 @@ Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真�
   电源弹窗状态机、双 SHM buffer 和独立自动重启服务。
 - Phase 2B Weston policy module：独立 compositor/Shell UID、peer credential 认证、
   compositor 可信层和全局 Home/Back/Tasks/Power 协议。
+- Phase 2C 单前台窗口策略：compositor surface token、应用发现/选择、可信层与应用层
+  切换、焦点恢复、四页面像素回归和双客户端真机压力测试。
 
 ## 快速验证
 
@@ -50,3 +52,5 @@ System Shell 原型的实现边界和真机结果见
 [System Shell Phase 2A](docs/PHASE2-SYSTEM-SHELL.md)。
 Phase 2B 的安全不变量与实现边界见
 [Trusted compositor policy](docs/PHASE2B-COMPOSITOR-POLICY.md)。
+Phase 2C 的单前台策略和真机切换结果见
+[Single-foreground window switching](docs/PHASE2C-WINDOW-SWITCHING.md)。
