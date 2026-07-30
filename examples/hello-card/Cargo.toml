@@ -15,3 +15,6 @@ panic = "abort"
 strip = true
 
 [workspace]
+
+[dependencies]
+cp0-sdk = { path = "../../sdk/rust" }

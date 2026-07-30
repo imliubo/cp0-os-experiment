@@ -5,6 +5,16 @@
 #include <stdint.h>
 #include <time.h>
 
+static int64_t cp0_monotonic_milliseconds(
+    wasm_exec_env_t execution_environment) {
+    struct timespec now;
+
+    (void)execution_environment;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+        return 0;
+    return (int64_t)now.tv_sec * 1000 + (int64_t)now.tv_nsec / 1000000;
+}
+
 static int32_t cp0_wait_event(wasm_exec_env_t execution_environment,
                               int32_t timeout_ms) {
     struct timespec timeout;
@@ -32,6 +42,8 @@ static int32_t cp0_post_notification(wasm_exec_env_t execution_environment,
 }
 
 static NativeSymbol symbols[] = {
+    {"cp0_monotonic_milliseconds", (void *)cp0_monotonic_milliseconds, "()I",
+     NULL},
     {"cp0_wait_event", (void *)cp0_wait_event, "(i)i", NULL},
     {"cp0_post_notification", (void *)cp0_post_notification, "(*~*~)i", NULL},
 };

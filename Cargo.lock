@@ -21,6 +21,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp0-sdk"
+version = "0.1.0"
+
+[[package]]
 name = "cp0ctl"
 version = "0.1.0"
 dependencies = [

@@ -40,6 +40,8 @@ Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真�
   broker socket 和固定 8 条上限的 Shell 通知队列。
 - Phase 3E 首个 WAMR SDK host call、WASM 线性内存参数校验、Unix-only seccomp
   socket 规则和 Hello WASM 真机通知闭环。
+- Phase 4A dependency-free `no_std` Rust SDK，封装时钟、事件等待、通知 capability
+  和稳定错误类型；Hello 示例不再使用 Runtime 私有 FFI。
 
 ## 快速验证
 
@@ -75,3 +77,5 @@ Phase 3A 的 runtime、沙箱契约和真机安全验证见
 [notification capability broker](docs/PHASE3D-NOTIFICATION-BROKER.md)。
 Runtime host call ABI 与真机结果见
 [Runtime capability host calls](docs/PHASE3E-RUNTIME-HOSTCALLS.md)。
+Rust SDK 公共 API 和真机迁移结果见
+[Rust SDK foundation](docs/PHASE4A-RUST-SDK.md)。

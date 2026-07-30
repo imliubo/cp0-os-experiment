@@ -3,6 +3,7 @@ members = [
     "crates/cp0-appd",
     "crates/cp0-manifest",
     "crates/cp0ctl",
+    "sdk/rust",
 ]
 resolver = "2"
 

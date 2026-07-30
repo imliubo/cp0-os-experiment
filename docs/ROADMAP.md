@@ -69,7 +69,9 @@ Shell 和其他应用数据。
 
 ## Phase 4：SDK 与开发体验
 
-- 发布 Rust 和 C/C++ SDK，封装 WIT bindings 与 LVGL 320x170 组件。
+- [x] 建立首个 `no_std` Rust SDK，封装系统时钟、事件等待、通知 capability 和
+  稳定错误类型；Hello 示例已移除私有 FFI。
+- [ ] 发布完整 Rust 和 C/C++ SDK，生成 WIT bindings 并提供 LVGL 320x170 组件。
 - 实现 `cp0ctl new/build/run/package/sign/install/logs`。
 - 建立 PC 模拟器、权限模拟、输入映射和性能分析工具。
 - 迁移 Calculator、Camera 等示例，不提供传统 Linux 应用兼容层。
