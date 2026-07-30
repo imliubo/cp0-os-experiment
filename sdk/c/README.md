@@ -14,3 +14,8 @@ boundary.
 caller-owned response buffer no larger than 2048 bytes, then returns a bounded
 HTTP status/body-length record. The SDK intentionally exposes no POSIX socket,
 DNS, TLS override or arbitrary-header API.
+
+`cp0_audio_play` and `cp0_audio_capture` exchange caller-owned signed 16-bit
+PCM buffers. The format is fixed to 16 kHz mono S16_LE and one call is limited
+to 1024 frames. Playback and capture require separate manifest permissions; the
+SDK exposes no ALSA device, mixer or format negotiation API.

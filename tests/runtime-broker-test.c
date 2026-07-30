@@ -50,5 +50,15 @@ int main(void) {
                                                &size_bytes) ==
            CP0_BROKER_UNAVAILABLE);
     assert(fcntl(source, F_GETFD) < 0);
+
+    static const char captured[] =
+        "{\"protocol_version\":1,\"request_id\":5,\"outcome\":{"
+        "\"status\":\"audio-captured\",\"samples_base64\":\"AID/fw==\"}}\n";
+    uint8_t audio[4] = {0};
+    assert(cp0_broker_decode_audio_capture_response(captured, audio,
+                                                    sizeof(audio)) == 4);
+    assert(memcmp(audio, "\x00\x80\xff\x7f", sizeof(audio)) == 0);
+    assert(cp0_broker_decode_audio_capture_response(captured, audio, 2U) ==
+           CP0_BROKER_INTERNAL);
     return 0;
 }

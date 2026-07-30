@@ -81,6 +81,7 @@ platform_payload="$pi_gen_dir/stage-cardputerzero-os/02-app-platform/payload"
 mkdir -p "$platform_payload/systemd" "$platform_payload/hello/bin" \
     "$platform_payload/diagnostics"
 cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
+    "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-audiod" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-documentd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-networkd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0ctl" \

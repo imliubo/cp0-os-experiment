@@ -21,6 +21,9 @@
 #define CP0_MAX_NETWORK_BODY_BYTES 2048U
 #define CP0_MAX_DOCUMENT_BYTES (16U * 1024U * 1024U)
 #define CP0_MAX_DOCUMENT_READ_BYTES 4096U
+#define CP0_AUDIO_SAMPLE_RATE_HZ 16000U
+#define CP0_AUDIO_CHANNELS 1U
+#define CP0_MAX_AUDIO_FRAMES 1024U
 
 #if !defined(__wasm32__)
 #error "CardputerZero applications must target wasm32"
@@ -107,6 +110,14 @@ int64_t cp0_document_read_raw(int32_t handle, uint64_t offset,
 CP0_IMPORT("cp0_document_close")
 cp0_result_t cp0_document_close_raw(int32_t handle);
 
+CP0_IMPORT("cp0_audio_play_pcm_s16le")
+cp0_result_t cp0_audio_play_pcm_s16le_raw(const uint8_t *samples,
+                                          uint32_t sample_bytes);
+
+CP0_IMPORT("cp0_audio_capture_pcm_s16le")
+int32_t cp0_audio_capture_pcm_s16le_raw(uint8_t *samples,
+                                       uint32_t sample_capacity);
+
 static inline cp0_result_t cp0_http_get(const uint8_t *url,
                                         uint32_t url_length, uint8_t *body,
                                         uint32_t body_capacity,
@@ -192,6 +203,36 @@ static inline cp0_result_t cp0_document_close(cp0_document_t *document) {
         document->length = 0;
     }
     return result;
+}
+
+static inline cp0_result_t cp0_audio_play(const int16_t *samples,
+                                          uint32_t frame_count) {
+    if (samples == NULL || frame_count == 0U ||
+        frame_count > CP0_MAX_AUDIO_FRAMES)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    return cp0_audio_play_pcm_s16le_raw((const uint8_t *)samples,
+                                        frame_count * sizeof(int16_t));
+}
+
+static inline cp0_result_t cp0_audio_capture(int16_t *samples,
+                                             uint32_t frame_capacity,
+                                             uint32_t *frames_captured) {
+    int32_t result;
+    uint32_t sample_capacity;
+
+    if (samples == NULL || frame_capacity == 0U ||
+        frame_capacity > CP0_MAX_AUDIO_FRAMES || frames_captured == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    sample_capacity = frame_capacity * sizeof(int16_t);
+    result = cp0_audio_capture_pcm_s16le_raw((uint8_t *)samples,
+                                             sample_capacity);
+    if (result < 0)
+        return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
+                                           : CP0_ERROR_INTERNAL;
+    if ((uint32_t)result != sample_capacity || result % (int32_t)sizeof(int16_t) != 0)
+        return CP0_ERROR_INTERNAL;
+    *frames_captured = (uint32_t)result / sizeof(int16_t);
+    return CP0_OK;
 }
 
 #ifdef __cplusplus

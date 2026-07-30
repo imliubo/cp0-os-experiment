@@ -15,6 +15,8 @@ int sdk_c_smoke(void) {
     static const uint8_t url[] = "https://example.com";
     cp0_document_t document = {0};
     uint32_t bytes_read = 0;
+    int16_t audio_samples[8] = {0};
+    uint32_t frames_captured = 0;
     (void)cp0_poll_key_event(&event, sizeof(event), 0);
     (void)cp0_display_dimensions();
     (void)cp0_http_get(url, (uint32_t)(sizeof(url) - 1U), network_body,
@@ -24,6 +26,8 @@ int sdk_c_smoke(void) {
                                 sizeof(network_body), &bytes_read);
         (void)cp0_document_close(&document);
     }
+    (void)cp0_audio_play(audio_samples, 8U);
+    (void)cp0_audio_capture(audio_samples, 8U, &frames_captured);
     return result == CP0_ERROR_UNAVAILABLE ? (int)cp0_monotonic_milliseconds()
                                            : (int)result;
 }

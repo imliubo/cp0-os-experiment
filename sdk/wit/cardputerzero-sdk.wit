@@ -76,6 +76,13 @@ interface documents {
     close: func(handle: u32) -> result<_, error-code>;
 }
 
+interface audio {
+    use types.{error-code};
+
+    play-pcm-s16le: func(samples: list<s16>) -> result<_, error-code>;
+    capture-pcm-s16le: func(frames: u16) -> result<list<s16>, error-code>;
+}
+
 interface application {
     use types.{app-event, error-code};
 
@@ -88,5 +95,6 @@ world cardputer-application {
     import display;
     import network;
     import documents;
+    import audio;
     export application;
 }

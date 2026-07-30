@@ -1,0 +1,42 @@
+[Unit]
+Description=CardputerZero restricted audio broker
+Requires=cardputerzero-audiod.socket
+After=cardputerzero-audiod.socket sound.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/cardputerzero/cp0-audiod serve
+User=cp0-audio
+Group=cp0-audio
+SupplementaryGroups=audio
+UMask=0077
+Restart=on-failure
+RestartSec=500ms
+TimeoutStopSec=5
+MemoryMax=16M
+MemorySwapMax=0
+TasksMax=8
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=char-alsa rw
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

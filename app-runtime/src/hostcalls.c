@@ -87,6 +87,20 @@ static int32_t cp0_close_document(wasm_exec_env_t execution_environment,
     return cp0_document_close(handle);
 }
 
+static int32_t cp0_audio_play_pcm_s16le(
+    wasm_exec_env_t execution_environment, const uint8_t *samples,
+    uint32_t sample_bytes) {
+    (void)execution_environment;
+    return cp0_broker_play_audio(samples, (size_t)sample_bytes);
+}
+
+static int32_t cp0_audio_capture_pcm_s16le(
+    wasm_exec_env_t execution_environment, uint8_t *samples,
+    uint32_t sample_capacity) {
+    (void)execution_environment;
+    return cp0_broker_capture_audio(samples, (size_t)sample_capacity);
+}
+
 static NativeSymbol symbols[] = {
     {"cp0_monotonic_milliseconds", (void *)cp0_monotonic_milliseconds, "()I",
      NULL},
@@ -100,6 +114,10 @@ static NativeSymbol symbols[] = {
     {"cp0_document_open", (void *)cp0_open_document, "()I", NULL},
     {"cp0_document_read", (void *)cp0_read_document, "(iI*~)I", NULL},
     {"cp0_document_close", (void *)cp0_close_document, "(i)i", NULL},
+    {"cp0_audio_play_pcm_s16le", (void *)cp0_audio_play_pcm_s16le, "(*~)i",
+     NULL},
+    {"cp0_audio_capture_pcm_s16le", (void *)cp0_audio_capture_pcm_s16le,
+     "(*~)i", NULL},
 };
 
 NativeSymbol *cp0_host_symbols(uint32_t *count) {

@@ -34,12 +34,29 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 name = "cp0-appd"
 version = "0.1.0"
 dependencies = [
+ "cp0-audio-protocol",
  "cp0-document-protocol",
  "cp0-manifest",
  "cp0-network-protocol",
  "libc",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cp0-audio-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cp0-audiod"
+version = "0.1.0"
+dependencies = [
+ "cp0-audio-protocol",
+ "libc",
 ]
 
 [[package]]

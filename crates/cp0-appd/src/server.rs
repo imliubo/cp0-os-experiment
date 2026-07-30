@@ -7,18 +7,19 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use cp0_audio_protocol::AudioErrorCode as ServiceAudioErrorCode;
 use cp0_document_protocol::{DocumentErrorCode as ServiceDocumentErrorCode, send_frame_with_fd};
 use cp0_manifest::Permission;
 use cp0_network_protocol::NetworkErrorCode as ServiceNetworkErrorCode;
 
 use crate::protocol::APPD_PROTOCOL_VERSION;
 use crate::{
-    AppManager, AppManagerError, AppSummary, AppdCommand, AppdRequest, AppdResponse, BrokerCommand,
-    BrokerErrorCode, BrokerProtocolError, BrokerRequest, BrokerResponse, DocumentClient,
-    DocumentClientError, DocumentCoordinator, DocumentPromptError, DocumentRequestResult,
-    ErrorCode, NetworkClient, NetworkClientError, NotificationQueue, PermissionChoice,
-    PermissionCoordinator, PermissionPromptError, PermissionRequestResult, ResponseData,
-    encode_broker_response, peer_credentials, read_broker_request, read_request,
+    AppManager, AppManagerError, AppSummary, AppdCommand, AppdRequest, AppdResponse, AudioClient,
+    AudioClientError, BrokerCommand, BrokerErrorCode, BrokerProtocolError, BrokerRequest,
+    BrokerResponse, DocumentClient, DocumentClientError, DocumentCoordinator, DocumentPromptError,
+    DocumentRequestResult, ErrorCode, NetworkClient, NetworkClientError, NotificationQueue,
+    PermissionChoice, PermissionCoordinator, PermissionPromptError, PermissionRequestResult,
+    ResponseData, encode_broker_response, peer_credentials, read_broker_request, read_request,
     write_broker_response, write_response,
 };
 
@@ -56,6 +57,7 @@ pub struct AppdServer {
     trusted_uids: BTreeSet<u32>,
     network: NetworkClient,
     documents: DocumentClient,
+    audio: AudioClient,
 }
 
 #[derive(Debug)]
@@ -103,6 +105,24 @@ impl AppdServer {
         network: NetworkClient,
         documents: DocumentClient,
     ) -> Self {
+        Self::new_with_capability_services(
+            manager,
+            permissions,
+            trusted_uids,
+            network,
+            documents,
+            AudioClient::default(),
+        )
+    }
+
+    pub fn new_with_capability_services(
+        manager: AppManager,
+        permissions: PermissionCoordinator,
+        trusted_uids: impl IntoIterator<Item = u32>,
+        network: NetworkClient,
+        documents: DocumentClient,
+        audio: AudioClient,
+    ) -> Self {
         Self {
             state: Arc::new(Mutex::new(ServerState {
                 manager,
@@ -113,6 +133,7 @@ impl AppdServer {
             trusted_uids: trusted_uids.into_iter().collect(),
             network,
             documents,
+            audio,
         }
     }
 
@@ -406,6 +427,47 @@ impl AppdServer {
                 }
             }
             BrokerCommand::OpenDocument => unreachable!("document requests carry descriptors"),
+            BrokerCommand::PlayAudio { samples_base64 } => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::AudioPlayback)
+                {
+                    return response;
+                }
+                let samples = match cp0_audio_protocol::decode_samples(&samples_base64) {
+                    Ok(samples) => samples,
+                    Err(_) => {
+                        return BrokerResponse::error(
+                            request_id,
+                            BrokerErrorCode::InvalidRequest,
+                            "invalid bounded playback samples",
+                        );
+                    }
+                };
+                match self.audio.play(request_id, &samples) {
+                    Ok(frames) => BrokerResponse::audio_played(request_id, frames),
+                    Err(error) => {
+                        eprintln!("cp0-appd: audio playback request failed: {error}");
+                        audio_error_response(request_id, &error)
+                    }
+                }
+            }
+            BrokerCommand::CaptureAudio { frames } => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::AudioCapture)
+                {
+                    return response;
+                }
+                match self.audio.capture(request_id, frames) {
+                    Ok(samples) => BrokerResponse::audio_captured(
+                        request_id,
+                        cp0_audio_protocol::encode_base64(&samples),
+                    ),
+                    Err(error) => {
+                        eprintln!("cp0-appd: audio capture request failed: {error}");
+                        audio_error_response(request_id, &error)
+                    }
+                }
+            }
         }
     }
 
@@ -856,6 +918,32 @@ fn document_error_response(request_id: u64, error: &DocumentClientError) -> Brok
         | DocumentClientError::Service(ServiceDocumentErrorCode::Internal) => (
             BrokerErrorCode::Internal,
             "document service returned an invalid response",
+        ),
+    };
+    BrokerResponse::error(request_id, code, message)
+}
+
+fn audio_error_response(request_id: u64, error: &AudioClientError) -> BrokerResponse {
+    let (code, message) = match error {
+        AudioClientError::Service(ServiceAudioErrorCode::InvalidRequest) => {
+            (BrokerErrorCode::InvalidRequest, "audio request is invalid")
+        }
+        AudioClientError::Service(ServiceAudioErrorCode::Busy) => {
+            (BrokerErrorCode::ResourceExhausted, "audio device is busy")
+        }
+        AudioClientError::Service(ServiceAudioErrorCode::Unavailable)
+        | AudioClientError::Service(ServiceAudioErrorCode::Device)
+        | AudioClientError::Io(_)
+        | AudioClientError::EmptyResponse => {
+            (BrokerErrorCode::Unavailable, "audio device is unavailable")
+        }
+        AudioClientError::Protocol(_)
+        | AudioClientError::MismatchedRequestId
+        | AudioClientError::MismatchedFrameCount
+        | AudioClientError::Service(ServiceAudioErrorCode::Unauthorized)
+        | AudioClientError::Service(ServiceAudioErrorCode::Internal) => (
+            BrokerErrorCode::Internal,
+            "audio service returned an invalid response",
         ),
     };
     BrokerResponse::error(request_id, code, message)

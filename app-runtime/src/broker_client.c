@@ -12,7 +12,7 @@
 #include <unistd.h>
 
 #define CP0_BROKER_SOCKET "/run/cardputerzero/broker.sock"
-#define CP0_BROKER_REQUEST_BYTES 2048U
+#define CP0_BROKER_REQUEST_BYTES 4096U
 #define CP0_BROKER_RESPONSE_BYTES 4096U
 #define CP0_NOTIFICATION_TITLE_BYTES 128U
 #define CP0_NOTIFICATION_BODY_BYTES 640U
@@ -20,6 +20,8 @@
 #define CP0_NETWORK_BODY_BYTES 2048U
 #define CP0_DOCUMENT_ID_BYTES 32U
 #define CP0_DOCUMENT_MAX_BYTES (16U * 1024U * 1024U)
+#define CP0_AUDIO_MAX_FRAMES 1024U
+#define CP0_AUDIO_MAX_BYTES (CP0_AUDIO_MAX_FRAMES * 2U)
 
 static bool append_bytes(char *output, size_t capacity, size_t *offset,
                          const char *value, size_t length) {
@@ -48,6 +50,30 @@ static bool append_json_string(char *output, size_t capacity, size_t *offset,
             return false;
     }
     return append_bytes(output, capacity, offset, "\"", 1U);
+}
+
+static bool append_base64(char *output, size_t capacity, size_t *offset,
+                          const uint8_t *input, size_t length) {
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    for (size_t index = 0; index < length; index += 3U) {
+        size_t remaining = length - index;
+        uint8_t first = input[index];
+        uint8_t second = remaining > 1U ? input[index + 1U] : 0U;
+        uint8_t third = remaining > 2U ? input[index + 2U] : 0U;
+        char encoded[4] = {
+            alphabet[first >> 2],
+            alphabet[((first & 0x03U) << 4) | (second >> 4)],
+            remaining > 1U
+                ? alphabet[((second & 0x0fU) << 2) | (third >> 6)]
+                : '=',
+            remaining > 2U ? alphabet[third & 0x3fU] : '=',
+        };
+        if (!append_bytes(output, capacity, offset, encoded, sizeof(encoded)))
+            return false;
+    }
+    return true;
 }
 
 static int write_all(int descriptor, const char *buffer, size_t length) {
@@ -481,4 +507,79 @@ int32_t cp0_broker_open_document(int *descriptor, uint32_t *size_bytes) {
         return result;
     return cp0_broker_decode_document_response(
         response, received_descriptor, descriptor, size_bytes);
+}
+
+int32_t cp0_broker_play_audio(const uint8_t *samples, size_t sample_bytes) {
+    static const char prefix[] =
+        "{\"protocol_version\":1,\"request_id\":4,\"command\":{"
+        "\"name\":\"play-audio\",\"samples_base64\":\"";
+    static const char suffix[] = "\"}}\n";
+    char request[CP0_BROKER_REQUEST_BYTES];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    size_t offset = 0;
+    uint16_t frames;
+    int32_t result;
+
+    if (samples == NULL || sample_bytes == 0U ||
+        sample_bytes > CP0_AUDIO_MAX_BYTES || sample_bytes % 2U != 0U)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    if (!append_bytes(request, sizeof(request), &offset, prefix,
+                      sizeof(prefix) - 1U) ||
+        !append_base64(request, sizeof(request), &offset, samples, sample_bytes) ||
+        !append_bytes(request, sizeof(request), &offset, suffix,
+                      sizeof(suffix) - 1U))
+        return CP0_BROKER_INVALID_ARGUMENT;
+    result = broker_exchange(request, offset, response, sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    if (strstr(response, "\"status\":\"audio-played\"") == NULL)
+        return decode_result(response);
+    if (!json_u16_field(response, "frames", &frames) || frames == 0U ||
+        (size_t)frames * 2U != sample_bytes)
+        return CP0_BROKER_INTERNAL;
+    return CP0_BROKER_OK;
+}
+
+int32_t cp0_broker_decode_audio_capture_response(const char *response,
+                                                 uint8_t *samples,
+                                                 size_t sample_capacity) {
+    const char *encoded;
+    size_t encoded_length;
+    size_t sample_bytes;
+
+    if (response == NULL || samples == NULL || sample_capacity == 0U ||
+        sample_capacity > CP0_AUDIO_MAX_BYTES || sample_capacity % 2U != 0U)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    if (strstr(response, "\"status\":\"audio-captured\"") == NULL)
+        return decode_result(response);
+    encoded = json_string_field(response, "samples_base64", &encoded_length);
+    if (encoded == NULL ||
+        !decode_base64(encoded, encoded_length, samples, sample_capacity,
+                       &sample_bytes) ||
+        sample_bytes != sample_capacity)
+        return CP0_BROKER_INTERNAL;
+    return (int32_t)sample_bytes;
+}
+
+int32_t cp0_broker_capture_audio(uint8_t *samples, size_t sample_capacity) {
+    char request[192];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int written;
+    int32_t result;
+
+    if (samples == NULL || sample_capacity == 0U ||
+        sample_capacity > CP0_AUDIO_MAX_BYTES || sample_capacity % 2U != 0U)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    written = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":5,\"command\":{"
+        "\"name\":\"capture-audio\",\"frames\":%zu}}\n",
+        sample_capacity / 2U);
+    if (written <= 0 || (size_t)written >= sizeof(request))
+        return CP0_BROKER_INTERNAL;
+    result = broker_exchange(request, (size_t)written, response, sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_audio_capture_response(response, samples,
+                                                    sample_capacity);
 }

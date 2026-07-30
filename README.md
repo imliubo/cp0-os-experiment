@@ -51,6 +51,8 @@ Phase 3 已贯通 WAMR 强隔离运行时、权限系统和首个 capability bro
   SSRF/DNS rebinding 防护、5 秒/2 次重定向/2 KiB 上限及三语言 SDK API。
 - Phase 3G `documents.open`：独立低权限 Document Portal、可信 Shell 文件选择器、
   无路径 API、`SCM_RIGHTS` 只读 FD、符号链接/替换防护及 4 KiB 有界读取。
+- Phase 3H 音频能力：独立 `cp0-audiod`、ES8389 专用 ALSA 端点、播放/录音分权、
+  16 kHz 单声道 S16_LE 格式、每次 1024 帧上限及三语言 SDK API。
 - Phase 4A dependency-free `no_std` Rust SDK，封装时钟、事件等待、通知 capability
   和稳定错误类型；Hello 示例不再使用 Runtime 私有 FFI。
 - `cp0ctl new/build` SDK-only 项目脚手架、结构化 Cargo metadata 构建和规范应用
@@ -105,5 +107,7 @@ Runtime host call ABI 与真机结果见
 [restricted HTTPS client broker](docs/PHASE3F-NETWORK-BROKER.md)。
 无路径文件选择、只读 FD 传递和 Runtime 读取边界见
 [restricted Document Portal](docs/PHASE3G-DOCUMENT-PORTAL.md)。
+有界 PCM 播放/录音、ALSA 设备隔离和服务加固见
+[restricted audio broker](docs/PHASE3H-AUDIO-BROKER.md)。
 Rust SDK 公共 API 和真机迁移结果见
 [Rust SDK foundation](docs/PHASE4A-RUST-SDK.md)。

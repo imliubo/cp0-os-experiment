@@ -218,7 +218,9 @@ fn send_broker_command(command: BrokerCommand) -> Result<(), String> {
         | BrokerOutcome::HttpResponse { .. }
         | BrokerOutcome::PermissionPending { .. }
         | BrokerOutcome::DocumentSelectionPending { .. }
-        | BrokerOutcome::DocumentOpened { .. } => {
+        | BrokerOutcome::DocumentOpened { .. }
+        | BrokerOutcome::AudioPlayed { .. }
+        | BrokerOutcome::AudioCaptured { .. } => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&response)

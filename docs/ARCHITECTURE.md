@@ -117,6 +117,12 @@ Shell 显示单前台选择器；应用请求不包含路径或文档 ID。选�
 只读 FD 通过两段 `SCM_RIGHTS` 传入 Runtime，WASM 只得到单个代际句柄、文件长度和
 每次最多 4096 字节的偏移读取 API。首版文档上限为 16 MiB。
 
+音频能力不暴露 ALSA 设备或 mixer。`cp0-audiod` 是唯一可访问 `char-alsa` 的服务，
+固定打开 ES8389 的 `hw:ES8389Audio,0`，只接受 16 kHz、单声道、S16_LE PCM。
+`audio.playback` 和 `audio.capture` 分别授权，每次最多 1024 帧（64 ms、2048 字节）；
+协议、appd broker、Runtime 线性内存和 SDK 四层都重复验证长度与偶数字节边界。
+服务使用专用账户、root-only Unix socket、空 capability 集和 systemd 设备白名单。
+
 应用间调用通过 Intent Broker 路由，接收方必须显式声明 Intent，不提供任意应用间
 socket。
 

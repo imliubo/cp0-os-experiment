@@ -9,6 +9,8 @@ install -D -m 0755 "${payload}/cp0-networkd" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-networkd"
 install -D -m 0755 "${payload}/cp0-documentd" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-documentd"
+install -D -m 0755 "${payload}/cp0-audiod" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-audiod"
 install -D -m 0755 "${payload}/cp0ctl" \
     "${ROOTFS_DIR}/usr/bin/cp0ctl"
 install -D -m 0755 "${payload}/cardputerzero-app-runtime" \
@@ -27,6 +29,10 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-documentd.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-documentd.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-documentd.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-documentd.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-audiod.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-audiod.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-audiod.socket" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-audiod.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-appd.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-appd.conf"
 install -D -m 0755 "${payload}/diagnostics/device-core-recovery.sh" \
@@ -57,6 +63,13 @@ fi
 if ! id cp0-document >/dev/null 2>&1; then
     useradd --system --gid cp0-document --home-dir /nonexistent \
         --shell /usr/sbin/nologin cp0-document
+fi
+if ! getent group cp0-audio >/dev/null 2>&1; then
+    groupadd --system cp0-audio
+fi
+if ! id cp0-audio >/dev/null 2>&1; then
+    useradd --system --gid cp0-audio --groups audio --home-dir /nonexistent \
+        --shell /usr/sbin/nologin cp0-audio
 fi
 if ! getent group cp0-app-20000 >/dev/null 2>&1; then
     groupadd --system --gid 20000 cp0-app-20000
@@ -90,5 +103,6 @@ chmod -R go-w /var/lib/cardputerzero/apps/dev.cardputerzero.hello
 
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-appd.conf
 systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
-    cardputerzero-networkd.socket cardputerzero-documentd.socket
+    cardputerzero-networkd.socket cardputerzero-documentd.socket \
+    cardputerzero-audiod.socket
 CHROOT

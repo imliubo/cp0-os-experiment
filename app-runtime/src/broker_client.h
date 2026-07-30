@@ -24,5 +24,10 @@ int32_t cp0_broker_decode_document_response(const char *response,
                                             int received_descriptor,
                                             int *descriptor,
                                             uint32_t *size_bytes);
+int32_t cp0_broker_play_audio(const uint8_t *samples, size_t sample_bytes);
+int32_t cp0_broker_capture_audio(uint8_t *samples, size_t sample_capacity);
+int32_t cp0_broker_decode_audio_capture_response(const char *response,
+                                                 uint8_t *samples,
+                                                 size_t sample_capacity);
 
 #endif

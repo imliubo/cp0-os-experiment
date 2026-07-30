@@ -24,6 +24,8 @@ pub enum BrokerCommand {
     PostNotification { title: String, body: String },
     HttpGet { url: String },
     OpenDocument,
+    PlayAudio { samples_base64: String },
+    CaptureAudio { frames: u16 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +55,12 @@ pub enum BrokerOutcome {
     DocumentOpened {
         document_id: String,
         size_bytes: u64,
+    },
+    AudioPlayed {
+        frames: u16,
+    },
+    AudioCaptured {
+        samples_base64: String,
     },
     Error {
         code: BrokerErrorCode,
@@ -99,6 +107,7 @@ pub enum BrokerProtocolError {
     InvalidUrl,
     InvalidNetworkResponse,
     InvalidDocumentResponse,
+    InvalidAudio,
 }
 
 impl fmt::Display for BrokerProtocolError {
@@ -124,6 +133,7 @@ impl fmt::Display for BrokerProtocolError {
             Self::InvalidDocumentResponse => {
                 formatter.write_str("invalid bounded document response")
             }
+            Self::InvalidAudio => formatter.write_str("invalid bounded audio samples"),
         }
     }
 }
@@ -159,6 +169,16 @@ impl BrokerRequest {
             }
             BrokerCommand::HttpGet { url } if !cp0_network_protocol::is_valid_https_url(url) => {
                 Err(BrokerProtocolError::InvalidUrl)
+            }
+            BrokerCommand::PlayAudio { samples_base64 }
+                if cp0_audio_protocol::decode_samples(samples_base64).is_err() =>
+            {
+                Err(BrokerProtocolError::InvalidAudio)
+            }
+            BrokerCommand::CaptureAudio { frames }
+                if *frames == 0 || usize::from(*frames) > cp0_audio_protocol::MAX_AUDIO_FRAMES =>
+            {
+                Err(BrokerProtocolError::InvalidAudio)
             }
             _ => Ok(()),
         }
@@ -212,6 +232,22 @@ impl BrokerResponse {
         }
     }
 
+    pub fn audio_played(request_id: u64, frames: u16) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::AudioPlayed { frames },
+        }
+    }
+
+    pub fn audio_captured(request_id: u64, samples_base64: String) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::AudioCaptured { samples_base64 },
+        }
+    }
+
     pub fn validate(&self) -> Result<(), BrokerProtocolError> {
         if self.protocol_version != BROKER_PROTOCOL_VERSION {
             return Err(BrokerProtocolError::UnsupportedVersion(
@@ -237,6 +273,19 @@ impl BrokerResponse {
                 || *size_bytes > cp0_document_protocol::MAX_DOCUMENT_BYTES)
         {
             return Err(BrokerProtocolError::InvalidDocumentResponse);
+        }
+        match &self.outcome {
+            BrokerOutcome::AudioPlayed { frames }
+                if *frames == 0 || usize::from(*frames) > cp0_audio_protocol::MAX_AUDIO_FRAMES =>
+            {
+                return Err(BrokerProtocolError::InvalidAudio);
+            }
+            BrokerOutcome::AudioCaptured { samples_base64 }
+                if cp0_audio_protocol::decode_samples(samples_base64).is_err() =>
+            {
+                return Err(BrokerProtocolError::InvalidAudio);
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -520,5 +569,36 @@ mod tests {
                 .validate()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn validates_bounded_audio_requests_and_responses() {
+        let samples = [0_u8, 0x80, 0xff, 0x7f];
+        let request = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 4,
+            command: BrokerCommand::PlayAudio {
+                samples_base64: cp0_audio_protocol::encode_base64(&samples),
+            },
+        };
+        let mut frame = Vec::new();
+        write_broker_request(&mut frame, &request).unwrap();
+        assert_eq!(
+            read_broker_request(&mut Cursor::new(frame)).unwrap(),
+            Some(request)
+        );
+        assert!(
+            BrokerRequest {
+                protocol_version: BROKER_PROTOCOL_VERSION,
+                request_id: 5,
+                command: BrokerCommand::CaptureAudio { frames: 0 },
+            }
+            .validate()
+            .is_err()
+        );
+        let response =
+            BrokerResponse::audio_captured(5, cp0_audio_protocol::encode_base64(&samples));
+        assert!(response.validate().is_ok());
+        assert!(BrokerResponse::audio_played(5, 0).validate().is_err());
     }
 }

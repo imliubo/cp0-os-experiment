@@ -1,15 +1,18 @@
 #![no_std]
 
 use core::panic::PanicInfo;
-use cp0_sdk::{Error, display, documents, input, network, system};
+use cp0_sdk::{Error, audio, display, documents, input, network, system};
 
 const FRAME_BYTES: usize =
     display::WIDTH as usize * display::STANDARD_HEIGHT as usize * 2;
 static mut FRAME: [u8; FRAME_BYTES] = [0; FRAME_BYTES];
 static mut NETWORK_BODY: [u8; network::MAX_RESPONSE_BODY_BYTES] =
     [0; network::MAX_RESPONSE_BODY_BYTES];
+static mut AUDIO_SAMPLES: [i16; audio::MAX_FRAMES] = [0; audio::MAX_FRAMES];
 const KEY_N: u16 = 49;
 const KEY_D: u16 = 32;
+const KEY_P: u16 = 25;
+const KEY_R: u16 = 19;
 
 fn prepare_frame() -> &'static mut [u8] {
     // The frame lives in the WASM data section rather than the 64 KiB call
@@ -54,7 +57,7 @@ fn show_key(frame: &mut [u8], code: u16) {
     }
 }
 
-fn show_network_status(frame: &mut [u8], color: u16) {
+fn show_action_status(frame: &mut [u8], color: u16) {
     for y in 126..142 {
         for x in 8..48 {
             let offset = (y * usize::from(display::WIDTH) + x) * 2;
@@ -73,12 +76,12 @@ fn request_network(frame: &mut [u8]) {
     };
     match network::http_get("https://example.com/", body) {
         Ok(response) if (200..=299).contains(&response.status_code) => {
-            show_network_status(frame, 0x07e0);
+            show_action_status(frame, 0x07e0);
             let _ = system::post_notification("Network ready", "HTTPS request completed");
         }
-        Ok(_) | Err(Error::Denied) => show_network_status(frame, 0xf800),
-        Err(Error::Unavailable) => show_network_status(frame, 0xffe0),
-        Err(_) => show_network_status(frame, 0xf81f),
+        Ok(_) | Err(Error::Denied) => show_action_status(frame, 0xf800),
+        Err(Error::Unavailable) => show_action_status(frame, 0xffe0),
+        Err(_) => show_action_status(frame, 0xf81f),
     }
 }
 
@@ -89,15 +92,49 @@ fn request_document(frame: &mut [u8]) {
             let result = document.read(0, &mut buffer);
             let _ = document.close();
             match result {
-                Ok(count) if count > 0 => show_network_status(frame, 0x07e0),
-                Ok(_) => show_network_status(frame, 0xffe0),
-                Err(_) => show_network_status(frame, 0xf81f),
+                Ok(count) if count > 0 => show_action_status(frame, 0x07e0),
+                Ok(_) => show_action_status(frame, 0xffe0),
+                Err(_) => show_action_status(frame, 0xf81f),
             }
         }
-        Err(Error::Denied) => show_network_status(frame, 0xf800),
-        Err(Error::Unavailable) => show_network_status(frame, 0xffe0),
-        Err(_) => show_network_status(frame, 0xf81f),
+        Err(Error::Denied) => show_action_status(frame, 0xf800),
+        Err(Error::Unavailable) => show_action_status(frame, 0xffe0),
+        Err(_) => show_action_status(frame, 0xf81f),
     }
+}
+
+fn audio_buffer() -> &'static mut [i16] {
+    unsafe {
+        core::slice::from_raw_parts_mut(
+            core::ptr::addr_of_mut!(AUDIO_SAMPLES).cast::<i16>(),
+            audio::MAX_FRAMES,
+        )
+    }
+}
+
+fn request_audio_playback(frame: &mut [u8]) {
+    let samples = audio_buffer();
+    for (index, sample) in samples.iter_mut().enumerate() {
+        *sample = if index % 36 < 18 { 8192 } else { -8192 };
+    }
+    let color = match audio::play_pcm_s16le(samples) {
+        Ok(()) => 0x07e0,
+        Err(Error::Denied) => 0xf800,
+        Err(Error::Unavailable) => 0xffe0,
+        Err(_) => 0xf81f,
+    };
+    show_action_status(frame, color);
+}
+
+fn request_audio_capture(frame: &mut [u8]) {
+    let color = match audio::capture_pcm_s16le(audio_buffer()) {
+        Ok(count) if count > 0 => 0x07e0,
+        Ok(_) => 0xffe0,
+        Err(Error::Denied) => 0xf800,
+        Err(Error::Unavailable) => 0xffe0,
+        Err(_) => 0xf81f,
+    };
+    show_action_status(frame, color);
 }
 
 #[unsafe(no_mangle)]
@@ -130,6 +167,12 @@ pub extern "C" fn main() -> i32 {
                 }
                 if event.code == KEY_D {
                     request_document(frame);
+                }
+                if event.code == KEY_P {
+                    request_audio_playback(frame);
+                }
+                if event.code == KEY_R {
+                    request_audio_capture(frame);
                 }
                 show_key(frame, event.code);
                 rendered = false;

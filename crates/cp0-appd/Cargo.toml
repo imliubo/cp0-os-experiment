@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cp0-audio-protocol = { path = "../cp0-audio-protocol" }
 cp0-document-protocol = { path = "../cp0-document-protocol" }
 cp0-manifest = { path = "../cp0-manifest" }
 cp0-network-protocol = { path = "../cp0-network-protocol" }

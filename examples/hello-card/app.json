@@ -23,6 +23,14 @@
     {
       "name": "documents.open",
       "reason": "Open a document selected in the trusted system picker"
+    },
+    {
+      "name": "audio.playback",
+      "reason": "Play the user-requested audio test tone"
+    },
+    {
+      "name": "audio.capture",
+      "reason": "Capture a short microphone sample when requested"
     }
   ]
 }

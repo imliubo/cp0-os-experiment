@@ -73,7 +73,9 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
   host call 和 Rust/C/C++ SDK 有界响应 API。
 - [x] 实现无路径 Document Portal、可信文件选择器、`SCM_RIGHTS` 只读 FD 传递和
   Rust/C/C++ SDK 有界读取 API。
-- [ ] 实现音频、相机和 LoRa/GPIO broker。
+- [x] 实现 ES8389 有界 PCM 音频 broker、播放/录音分权和 Rust/C/C++ SDK API。
+- [ ] 稳定性监控结束后完成音频播放、录音与拒绝权限的真机验收。
+- [ ] 实现相机和 LoRa/GPIO broker。
 - 定义 Intent Broker 和应用私有存储配额。
 - [ ] 建立恶意应用测试集，已覆盖 seccomp 旁路和 cgroup 资源耗尽；继续覆盖路径
   逃逸、设备访问和 IPC。

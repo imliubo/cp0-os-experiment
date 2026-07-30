@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use cp0_manifest::{AppManifest, DisplayMode};
 use serde::Serialize;
 
+mod audio_client;
 mod broker;
 mod document_client;
 mod document_prompt;
@@ -15,6 +16,7 @@ mod protocol;
 mod registry;
 mod server;
 
+pub use audio_client::{AudioClient, AudioClientError, DEFAULT_AUDIO_SOCKET};
 pub use broker::{
     BROKER_PROTOCOL_VERSION, BrokerCommand, BrokerErrorCode, BrokerOutcome, BrokerProtocolError,
     BrokerRequest, BrokerResponse, MAX_BROKER_FRAME_BYTES, MAX_PENDING_NOTIFICATIONS, Notification,
