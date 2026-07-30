@@ -135,8 +135,6 @@ pub fn build_sandbox_plan(
         "--die-with-parent".into(),
         "--new-session".into(),
         "--clearenv".into(),
-        "--keep-fd".into(),
-        "3".into(),
         "--dir".into(),
         "/runtime".into(),
         "--dir".into(),
@@ -330,11 +328,7 @@ mod tests {
                 "/var/lib/cardputerzero/data/dev.cardputerzero.hello",
                 "/data"
             ]));
-        assert!(
-            plan.arguments
-                .windows(2)
-                .any(|values| values == ["--keep-fd", "3"])
-        );
+        assert!(!plan.arguments.iter().any(|value| value == "--keep-fd"));
         assert!(
             plan.arguments
                 .windows(3)

@@ -46,8 +46,8 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 
 ## Phase 3：应用运行时与隔离
 
-- [ ] 集成 WAMR interpreter/AOT，App Runtime 成为受控 Wayland 客户端。
-- [ ] 实现 `appd` 生命周期、每应用 UID、namespace、seccomp 和 cgroup。
+- [x] 集成 WAMR interpreter/AOT，App Runtime 成为受控 Wayland 客户端。
+- [x] 实现 `appd` 生命周期、每应用 UID、namespace、seccomp 和 cgroup。
 - [x] 冻结首版 `appd` 沙箱启动契约：稳定应用账户、systemd cgroup、bubblewrap
   namespace、只读应用包和唯一可写私有数据目录。
 - [x] 固定并静态构建 WAMR 2.4.5，真机贯通每应用 UID、systemd cgroup、

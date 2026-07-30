@@ -8,6 +8,7 @@ Type=simple
 ExecStart=/usr/libexec/cardputerzero/cp0-appd serve
 User=root
 Group=root
+SupplementaryGroups=cp0-wayland
 UMask=0077
 Restart=on-failure
 RestartSec=500ms

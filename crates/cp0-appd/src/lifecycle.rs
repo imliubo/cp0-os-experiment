@@ -13,6 +13,7 @@ use crate::{AppLayout, AppRegistry, RegistryError, SandboxPlan, build_sandbox_pl
 pub const DEFAULT_REGISTRY_PATH: &str = "/var/lib/cardputerzero/registry/apps.json";
 const SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
 const SYSTEMCTL_PATH: &str = "/usr/bin/systemctl";
+const COMPOSITOR_USER: &str = "cp0-compositor";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagerPaths {
@@ -327,11 +328,12 @@ impl AppManager {
         let wayland_parent = wayland_path.parent().ok_or_else(|| {
             AppManagerError::InvalidHostIdentity("Wayland socket has no parent".into())
         })?;
-        require_root_controlled_directory(wayland_parent, "Wayland runtime directory")?;
+        let (compositor_uid, _) = lookup_unix_account(COMPOSITOR_USER)?;
+        require_controlled_directory(wayland_parent, compositor_uid, "Wayland runtime directory")?;
         let wayland = secure_metadata(wayland_path, "Wayland socket")?;
-        if !wayland.file_type().is_socket() {
+        if !wayland.file_type().is_socket() || wayland.uid() != compositor_uid {
             return Err(AppManagerError::InvalidHostIdentity(
-                "Wayland endpoint is not a Unix socket".into(),
+                "Wayland endpoint is not a compositor-owned Unix socket".into(),
             ));
         }
         let package = secure_metadata(Path::new(&plan.package_dir), "package directory")?;
@@ -397,14 +399,15 @@ fn require_root_directory(path: &Path, field: &'static str) -> Result<(), AppMan
     require_owner_mode(&metadata, 0, 0o022, field)
 }
 
-fn require_root_controlled_directory(
+fn require_controlled_directory(
     path: &Path,
+    expected_uid: u32,
     field: &'static str,
 ) -> Result<(), AppManagerError> {
     let metadata = secure_metadata(path, field)?;
-    if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o002 != 0 {
+    if !metadata.is_dir() || metadata.uid() != expected_uid || metadata.mode() & 0o002 != 0 {
         return Err(AppManagerError::InvalidHostIdentity(format!(
-            "{field} must be a root-owned directory that is not world-writable"
+            "{field} must be owned by UID {expected_uid} and not world-writable"
         )));
     }
     Ok(())
