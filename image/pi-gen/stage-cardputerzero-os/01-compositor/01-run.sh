@@ -230,5 +230,5 @@ else
     usermod -G cp0-wayland cp0-shell
 fi
 systemctl enable seatd.service
-systemctl disable cardputerzero-compositor.service 2>/dev/null || true
+systemctl enable cardputerzero-compositor.service
 CHROOT

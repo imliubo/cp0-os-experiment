@@ -69,6 +69,21 @@ mkdir -p "$pi_gen_dir/stage-cardputerzero-os/01-compositor/policy"
 cp "$repo_root/compositor-policy/cardputerzero-policy.c" \
     "$repo_root/protocols/cardputerzero-system-shell-v1.xml" \
     "$pi_gen_dir/stage-cardputerzero-os/01-compositor/policy/"
+
+"$repo_root/scripts/build-appd.sh"
+"$repo_root/scripts/build-app-runtime.sh"
+"$repo_root/scripts/build-example-app.sh"
+platform_payload="$pi_gen_dir/stage-cardputerzero-os/02-app-platform/payload"
+mkdir -p "$platform_payload/systemd" "$platform_payload/hello/bin"
+cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
+    "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0ctl" \
+    "$repo_root/target/app-runtime-aarch64/cardputerzero-app-runtime" \
+    "$platform_payload/"
+cp "$repo_root/appd/systemd/"* "$platform_payload/systemd/"
+cp "$repo_root/target/apps/dev.cardputerzero.hello/0.1.0/app.json" \
+    "$platform_payload/hello/"
+cp "$repo_root/target/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm" \
+    "$platform_payload/hello/bin/"
 # The stage1 user already exists. Installing userconf-pi after sizing the
 # image adds a large Raspberry Pi utility dependency set and can fill rootfs.
 touch "$pi_gen_dir/export-image/01-user-rename/SKIP"

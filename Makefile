@@ -5,11 +5,13 @@ check: fmt
 	bash -n scripts/*.sh tests/*.sh image/build-image.sh \
 		image/pi-gen/stage-cardputerzero-os/prerun.sh \
 		image/pi-gen/stage-cardputerzero-os/00-bsp/01-run.sh \
-		image/pi-gen/stage-cardputerzero-os/01-compositor/01-run.sh
+		image/pi-gen/stage-cardputerzero-os/01-compositor/01-run.sh \
+		image/pi-gen/stage-cardputerzero-os/02-app-platform/01-run.sh
 	./tests/test-image-profile.sh
 	./tests/test-compositor-profile.sh
 	./tests/test-system-shell-ui.sh
 	./tests/test-appd-profile.sh
+	./tests/test-app-platform-image.sh
 	./tests/test-patch-cm0-dtb.sh
 	cargo check --workspace --all-targets
 	cargo test --workspace

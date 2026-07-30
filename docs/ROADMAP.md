@@ -54,6 +54,8 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
   bubblewrap namespace、runtime seccomp 和 WASM 执行。
 - [x] 实现 socket-activated `appd` 核心生命周期：可信安装注册表、规范路径解析、
   root/Shell peer UID 认证、单运行槽、分页 list 及 start/stop 真机闭环。
+- [x] 将 appd、双 socket、静态 Runtime、稳定测试 UID/注册表和 SDK 示例集成到
+  `pi-gen`，新开发镜像默认启动 compositor/Shell。
 - [x] 实现 manifest 权限数据库、会话/持久决策和可信 Shell 提示控制协议。
 - [x] 实现首个 `notifications.post` typed capability broker、peer UID 身份绑定和
   有界 Shell 通知队列。

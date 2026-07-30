@@ -60,3 +60,17 @@ actual cdylib target and target directory, builds `wasm32-unknown-unknown`, and
 stages a package-shaped tree below
 `target/cardputerzero/<app-id>/<version>`. Tests execute the complete generated
 project build rather than checking templates only.
+
+## Image integration
+
+`image/build-image.sh` builds the pinned aarch64 appd, Runtime and Hello
+artifacts before invoking pi-gen. The `02-app-platform` stage installs only
+those release artifacts, not a compiler toolchain. It creates the reserved
+UID/GID 20000, private data directory, root-owned package, and then asks
+`cp0-appd register-installed` to create the canonical registry rather than
+hand-writing trusted state.
+
+Both socket units are enabled and the compositor now starts by default. The
+stage has offline profile tests; a complete image build and flash are deferred
+until the remaining boot/read-only-rootfs work is ready for one consolidated
+hardware validation cycle.
