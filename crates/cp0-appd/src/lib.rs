@@ -6,6 +6,7 @@ use serde::Serialize;
 
 mod broker;
 mod lifecycle;
+mod network_client;
 mod permission_prompt;
 mod permissions;
 mod protocol;
@@ -19,6 +20,9 @@ pub use broker::{
     write_broker_request, write_broker_response,
 };
 pub use lifecycle::{AppManager, AppManagerError, InstalledApp, ManagerPaths, lookup_unix_account};
+pub use network_client::{
+    DEFAULT_NETWORK_SOCKET, NetworkClient, NetworkClientError, NetworkHttpResponse,
+};
 pub use permission_prompt::{
     PermissionCoordinator, PermissionPrompt, PermissionPromptError, PermissionRequestResult,
 };

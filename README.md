@@ -47,6 +47,8 @@ Phase 3 已贯通 WAMR 强隔离运行时、权限系统和首个 capability bro
   broker socket 和固定 8 条上限的 Shell 通知队列。
 - Phase 3E 首个 WAMR SDK host call、WASM 线性内存参数校验、Unix-only seccomp
   socket 规则和 Hello WASM 真机通知闭环。
+- Phase 3F `network.client`：独立低权限 HTTPS broker、公共地址 resolver、
+  SSRF/DNS rebinding 防护、5 秒/2 次重定向/2 KiB 上限及三语言 SDK API。
 - Phase 4A dependency-free `no_std` Rust SDK，封装时钟、事件等待、通知 capability
   和稳定错误类型；Hello 示例不再使用 Runtime 私有 FFI。
 - `cp0ctl new/build` SDK-only 项目脚手架、结构化 Cargo metadata 构建和规范应用
@@ -97,5 +99,7 @@ Phase 3A 的 runtime、沙箱契约和真机安全验证见
 [notification capability broker](docs/PHASE3D-NOTIFICATION-BROKER.md)。
 Runtime host call ABI 与真机结果见
 [Runtime capability host calls](docs/PHASE3E-RUNTIME-HOSTCALLS.md)。
+受限 HTTPS API、独立 networkd 和 SSRF 防护见
+[restricted HTTPS client broker](docs/PHASE3F-NETWORK-BROKER.md)。
 Rust SDK 公共 API 和真机迁移结果见
 [Rust SDK foundation](docs/PHASE4A-RUST-SDK.md)。

@@ -57,6 +57,14 @@ static int32_t cp0_post_notification(wasm_exec_env_t execution_environment,
                                         (size_t)body_length);
 }
 
+static int64_t cp0_http_get(wasm_exec_env_t execution_environment,
+                            const uint8_t *url, uint32_t url_length,
+                            uint8_t *body, uint32_t body_capacity) {
+    (void)execution_environment;
+    return cp0_broker_http_get(url, (size_t)url_length, body,
+                               (size_t)body_capacity);
+}
+
 static NativeSymbol symbols[] = {
     {"cp0_monotonic_milliseconds", (void *)cp0_monotonic_milliseconds, "()I",
      NULL},
@@ -66,6 +74,7 @@ static NativeSymbol symbols[] = {
     {"cp0_present_rgb565", (void *)cp0_present_rgb565, "(*~*~)i", NULL},
     {"cp0_poll_key_event", (void *)cp0_poll_key_event, "(*~i)i", NULL},
     {"cp0_post_notification", (void *)cp0_post_notification, "(*~*~)i", NULL},
+    {"cp0_http_get", (void *)cp0_http_get, "(*~*~)I", NULL},
 };
 
 NativeSymbol *cp0_host_symbols(uint32_t *count) {

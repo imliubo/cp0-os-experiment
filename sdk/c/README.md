@@ -9,3 +9,8 @@ Strings are UTF-8 byte buffers with explicit lengths. Applications should keep
 notification titles at 32 Unicode characters and bodies at 160; the Runtime and
 broker enforce byte, encoding and character limits again across the trust
 boundary.
+
+`cp0_http_get` is the only network API. It accepts an HTTPS URL and a
+caller-owned response buffer no larger than 2048 bytes, then returns a bounded
+HTTP status/body-length record. The SDK intentionally exposes no POSIX socket,
+DNS, TLS override or arbitrary-header API.

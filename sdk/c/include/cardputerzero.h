@@ -17,6 +17,8 @@
 #define CP0_MAX_WAIT_MILLISECONDS 1000U
 #define CP0_MAX_NOTIFICATION_TITLE_CHARS 32U
 #define CP0_MAX_NOTIFICATION_BODY_CHARS 160U
+#define CP0_MAX_NETWORK_URL_BYTES 1024U
+#define CP0_MAX_NETWORK_BODY_BYTES 2048U
 
 #if !defined(__wasm32__)
 #error "CardputerZero applications must target wasm32"
@@ -57,6 +59,11 @@ typedef struct cp0_key_event {
     uint8_t reserved[3];
 } cp0_key_event_t;
 
+typedef struct cp0_http_response {
+    uint16_t status_code;
+    uint16_t body_length;
+} cp0_http_response_t;
+
 CP0_IMPORT("cp0_monotonic_milliseconds")
 uint64_t cp0_monotonic_milliseconds(void);
 
@@ -78,6 +85,43 @@ int32_t cp0_poll_key_event(cp0_key_event_t *event, uint32_t event_bytes,
 CP0_IMPORT("cp0_post_notification")
 cp0_result_t cp0_post_notification(const uint8_t *title, uint32_t title_length,
                                    const uint8_t *body, uint32_t body_length);
+
+CP0_IMPORT("cp0_http_get")
+int64_t cp0_http_get_raw(const uint8_t *url, uint32_t url_length,
+                         uint8_t *body, uint32_t body_capacity);
+
+static inline cp0_result_t cp0_http_get(const uint8_t *url,
+                                        uint32_t url_length, uint8_t *body,
+                                        uint32_t body_capacity,
+                                        cp0_http_response_t *response) {
+    int64_t packed;
+    uint32_t status_code;
+    uint32_t body_length;
+    uint32_t index;
+
+    if (url == NULL || body == NULL || response == NULL ||
+        url_length <= 8U || url_length > CP0_MAX_NETWORK_URL_BYTES ||
+        body_capacity == 0U || body_capacity > CP0_MAX_NETWORK_BODY_BYTES ||
+        url[0] != 'h' || url[1] != 't' || url[2] != 't' || url[3] != 'p' ||
+        url[4] != 's' || url[5] != ':' || url[6] != '/' || url[7] != '/')
+        return CP0_ERROR_INVALID_ARGUMENT;
+    for (index = 0; index < url_length; index++) {
+        if (url[index] < 0x20U || url[index] == 0x7fU)
+            return CP0_ERROR_INVALID_ARGUMENT;
+    }
+    packed = cp0_http_get_raw(url, url_length, body, body_capacity);
+    if (packed < 0)
+        return packed >= CP0_ERROR_INTERNAL ? (cp0_result_t)packed
+                                           : CP0_ERROR_INTERNAL;
+    status_code = (uint32_t)(((uint64_t)packed >> 32) & 0xffffU);
+    body_length = (uint32_t)((uint64_t)packed & UINT32_MAX);
+    if (status_code < 100U || status_code > 599U ||
+        body_length > body_capacity || body_length > UINT16_MAX)
+        return CP0_ERROR_INTERNAL;
+    response->status_code = (uint16_t)status_code;
+    response->body_length = (uint16_t)body_length;
+    return CP0_OK;
+}
 
 #ifdef __cplusplus
 }

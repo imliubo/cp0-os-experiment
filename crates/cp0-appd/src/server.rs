@@ -7,14 +7,15 @@ use std::thread;
 use std::time::Duration;
 
 use cp0_manifest::Permission;
+use cp0_network_protocol::NetworkErrorCode as ServiceNetworkErrorCode;
 
 use crate::protocol::APPD_PROTOCOL_VERSION;
 use crate::{
     AppManager, AppManagerError, AppSummary, AppdCommand, AppdRequest, AppdResponse, BrokerCommand,
-    BrokerErrorCode, BrokerProtocolError, BrokerRequest, BrokerResponse, ErrorCode,
-    NotificationQueue, PermissionChoice, PermissionCoordinator, PermissionPromptError,
-    PermissionRequestResult, ResponseData, peer_credentials, read_broker_request, read_request,
-    write_broker_response, write_response,
+    BrokerErrorCode, BrokerProtocolError, BrokerRequest, BrokerResponse, ErrorCode, NetworkClient,
+    NetworkClientError, NotificationQueue, PermissionChoice, PermissionCoordinator,
+    PermissionPromptError, PermissionRequestResult, ResponseData, peer_credentials,
+    read_broker_request, read_request, write_broker_response, write_response,
 };
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -49,6 +50,7 @@ impl From<std::io::Error> for ServerError {
 pub struct AppdServer {
     state: Arc<Mutex<ServerState>>,
     trusted_uids: BTreeSet<u32>,
+    network: NetworkClient,
 }
 
 #[derive(Debug)]
@@ -64,6 +66,15 @@ impl AppdServer {
         permissions: PermissionCoordinator,
         trusted_uids: impl IntoIterator<Item = u32>,
     ) -> Self {
+        Self::new_with_network(manager, permissions, trusted_uids, NetworkClient::default())
+    }
+
+    pub fn new_with_network(
+        manager: AppManager,
+        permissions: PermissionCoordinator,
+        trusted_uids: impl IntoIterator<Item = u32>,
+        network: NetworkClient,
+    ) -> Self {
         Self {
             state: Arc::new(Mutex::new(ServerState {
                 manager,
@@ -71,6 +82,7 @@ impl AppdServer {
                 notifications: NotificationQueue::default(),
             })),
             trusted_uids: trusted_uids.into_iter().collect(),
+            network,
         }
     }
 
@@ -287,132 +299,181 @@ impl AppdServer {
         request: BrokerRequest,
     ) -> BrokerResponse {
         let request_id = request.request_id;
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(_) => {
-                return BrokerResponse::error(
-                    request_id,
-                    BrokerErrorCode::Internal,
-                    "application service state is unavailable",
-                );
-            }
-        };
-        let Some(installed) = state.manager.installed_app_for_uid(peer.uid) else {
-            return BrokerResponse::error(
-                request_id,
-                BrokerErrorCode::Unauthorized,
-                "peer UID is not an installed application identity",
-            );
-        };
-        match state.manager.is_running(&installed.app_id) {
-            Ok(true) => {}
-            Ok(false) => {
-                return BrokerResponse::error(
-                    request_id,
-                    BrokerErrorCode::Unauthorized,
-                    "application is not running",
-                );
-            }
-            Err(error) => {
-                eprintln!("cp0-appd: cannot verify broker caller state: {error}");
-                return BrokerResponse::error(
-                    request_id,
-                    BrokerErrorCode::Internal,
-                    "application state could not be verified",
-                );
-            }
-        }
-        let unit = match state.manager.unit_for_app(&installed.app_id) {
-            Ok(unit) => unit,
-            Err(error) => {
-                eprintln!("cp0-appd: cannot derive broker caller unit: {error}");
-                return BrokerResponse::error(
-                    request_id,
-                    BrokerErrorCode::Internal,
-                    "application identity could not be verified",
-                );
-            }
-        };
-        match process_is_in_unit(peer.pid, &unit) {
-            Ok(true) => {}
-            Ok(false) => {
-                return BrokerResponse::error(
-                    request_id,
-                    BrokerErrorCode::Unauthorized,
-                    "peer process is outside the application runtime cgroup",
-                );
-            }
-            Err(error) => {
-                eprintln!("cp0-appd: cannot verify broker caller cgroup: {error}");
-                return BrokerResponse::error(
-                    request_id,
-                    BrokerErrorCode::Internal,
-                    "application process identity could not be verified",
-                );
-            }
-        }
-        let manifest = match state.manager.installed_manifest(&installed.app_id) {
-            Ok(manifest) => manifest,
-            Err(error) => {
-                eprintln!("cp0-appd: cannot load broker caller manifest: {error}");
-                return BrokerResponse::error(
-                    request_id,
-                    BrokerErrorCode::Internal,
-                    "installed application metadata is unavailable",
-                );
-            }
-        };
         match request.command {
             BrokerCommand::PostNotification { title, body } => {
-                match state
-                    .permissions
-                    .request(&manifest, Permission::NotificationsPost)
-                {
-                    Ok(PermissionRequestResult::Allow) => {
-                        match state
-                            .notifications
-                            .enqueue(&manifest.id, &manifest.name, title, body)
-                        {
-                            Ok(notification_id) => {
-                                BrokerResponse::success(request_id, notification_id)
-                            }
-                            Err(_) => BrokerResponse::error(
-                                request_id,
-                                BrokerErrorCode::ResourceExhausted,
-                                "notification queue is full",
-                            ),
-                        }
-                    }
-                    Ok(PermissionRequestResult::Prompt(prompt)) => {
-                        BrokerResponse::permission_pending(request_id, prompt.prompt_id)
-                    }
-                    Ok(PermissionRequestResult::Deny) => BrokerResponse::error(
-                        request_id,
-                        BrokerErrorCode::Denied,
-                        "notification permission was denied",
-                    ),
-                    Ok(PermissionRequestResult::Undeclared) => BrokerResponse::error(
-                        request_id,
-                        BrokerErrorCode::Undeclared,
-                        "application did not declare notification permission",
-                    ),
-                    Err(PermissionPromptError::Busy(_)) => BrokerResponse::error(
-                        request_id,
-                        BrokerErrorCode::ResourceExhausted,
-                        "another permission prompt is pending",
-                    ),
-                    Err(error) => {
-                        eprintln!("cp0-appd: notification permission request failed: {error}");
-                        BrokerResponse::error(
+                let app = match self.authorize_broker_caller(
+                    peer,
+                    request_id,
+                    Permission::NotificationsPost,
+                ) {
+                    Ok(app) => app,
+                    Err(response) => return response,
+                };
+                let mut state = match self.state.lock() {
+                    Ok(state) => state,
+                    Err(_) => {
+                        return BrokerResponse::error(
                             request_id,
                             BrokerErrorCode::Internal,
-                            "notification permission could not be evaluated",
-                        )
+                            "application service state is unavailable",
+                        );
+                    }
+                };
+                match state
+                    .notifications
+                    .enqueue(&app.app_id, &app.app_name, title, body)
+                {
+                    Ok(notification_id) => BrokerResponse::success(request_id, notification_id),
+                    Err(_) => BrokerResponse::error(
+                        request_id,
+                        BrokerErrorCode::ResourceExhausted,
+                        "notification queue is full",
+                    ),
+                }
+            }
+            BrokerCommand::HttpGet { url } => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::NetworkClient)
+                {
+                    return response;
+                }
+                match self.network.http_get(request_id, &url) {
+                    Ok(response) => BrokerResponse::http_response(
+                        request_id,
+                        response.status_code,
+                        response.body_base64,
+                    ),
+                    Err(error) => {
+                        eprintln!("cp0-appd: network service request failed: {error}");
+                        network_error_response(request_id, &error)
                     }
                 }
             }
         }
     }
+
+    fn authorize_broker_caller(
+        &self,
+        peer: crate::PeerCredentials,
+        request_id: u64,
+        permission: Permission,
+    ) -> Result<AuthorizedApp, BrokerResponse> {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                return Err(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "application service state is unavailable",
+                ));
+            }
+        };
+        let Some(installed) = state.manager.installed_app_for_uid(peer.uid) else {
+            return Err(BrokerResponse::error(
+                request_id,
+                BrokerErrorCode::Unauthorized,
+                "peer UID is not an installed application identity",
+            ));
+        };
+        let app_id = installed.app_id.clone();
+        match state.manager.is_running(&installed.app_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Unauthorized,
+                    "application is not running",
+                ));
+            }
+            Err(error) => {
+                eprintln!("cp0-appd: cannot verify broker caller state: {error}");
+                return Err(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "application state could not be verified",
+                ));
+            }
+        }
+        let unit = match state.manager.unit_for_app(&app_id) {
+            Ok(unit) => unit,
+            Err(error) => {
+                eprintln!("cp0-appd: cannot derive broker caller unit: {error}");
+                return Err(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "application identity could not be verified",
+                ));
+            }
+        };
+        match process_is_in_unit(peer.pid, &unit) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Unauthorized,
+                    "peer process is outside the application runtime cgroup",
+                ));
+            }
+            Err(error) => {
+                eprintln!("cp0-appd: cannot verify broker caller cgroup: {error}");
+                return Err(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "application process identity could not be verified",
+                ));
+            }
+        }
+        let manifest = match state.manager.installed_manifest(&app_id) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                eprintln!("cp0-appd: cannot load broker caller manifest: {error}");
+                return Err(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "installed application metadata is unavailable",
+                ));
+            }
+        };
+        match state.permissions.request(&manifest, permission) {
+            Ok(PermissionRequestResult::Allow) => Ok(AuthorizedApp {
+                app_id: manifest.id,
+                app_name: manifest.name,
+            }),
+            Ok(PermissionRequestResult::Prompt(prompt)) => Err(BrokerResponse::permission_pending(
+                request_id,
+                prompt.prompt_id,
+            )),
+            Ok(PermissionRequestResult::Deny) => Err(BrokerResponse::error(
+                request_id,
+                BrokerErrorCode::Denied,
+                "capability permission was denied",
+            )),
+            Ok(PermissionRequestResult::Undeclared) => Err(BrokerResponse::error(
+                request_id,
+                BrokerErrorCode::Undeclared,
+                "application did not declare the requested capability",
+            )),
+            Err(PermissionPromptError::Busy(_)) => Err(BrokerResponse::error(
+                request_id,
+                BrokerErrorCode::ResourceExhausted,
+                "another permission prompt is pending",
+            )),
+            Err(error) => {
+                eprintln!("cp0-appd: capability permission request failed: {error}");
+                Err(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "capability permission could not be evaluated",
+                ))
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AuthorizedApp {
+    app_id: String,
+    app_name: String,
 }
 
 #[derive(Debug)]
@@ -492,6 +553,49 @@ fn manager_error_response(request_id: u64, error: &AppManagerError) -> AppdRespo
         ),
     };
     AppdResponse::error(request_id, code, message)
+}
+
+fn network_error_response(request_id: u64, error: &NetworkClientError) -> BrokerResponse {
+    let (code, message) = match error {
+        NetworkClientError::Service(ServiceNetworkErrorCode::InvalidRequest) => {
+            (BrokerErrorCode::InvalidRequest, "invalid or non-HTTPS URL")
+        }
+        NetworkClientError::Service(ServiceNetworkErrorCode::BlockedAddress) => (
+            BrokerErrorCode::BlockedAddress,
+            "destination resolved to a non-public address",
+        ),
+        NetworkClientError::Service(ServiceNetworkErrorCode::Unavailable) => (
+            BrokerErrorCode::UpstreamUnavailable,
+            "HTTPS destination is unavailable",
+        ),
+        NetworkClientError::Service(ServiceNetworkErrorCode::Timeout) => {
+            (BrokerErrorCode::Timeout, "HTTPS request timed out")
+        }
+        NetworkClientError::Service(ServiceNetworkErrorCode::Tls) => (
+            BrokerErrorCode::Tls,
+            "HTTPS certificate or TLS validation failed",
+        ),
+        NetworkClientError::Service(ServiceNetworkErrorCode::TooManyRedirects) => (
+            BrokerErrorCode::TooManyRedirects,
+            "HTTPS redirect limit was exceeded",
+        ),
+        NetworkClientError::Service(ServiceNetworkErrorCode::ResponseTooLarge) => (
+            BrokerErrorCode::ResponseTooLarge,
+            "HTTPS response body exceeds 2048 bytes",
+        ),
+        NetworkClientError::Io(_) | NetworkClientError::EmptyResponse => (
+            BrokerErrorCode::UpstreamUnavailable,
+            "network service is unavailable",
+        ),
+        NetworkClientError::Protocol(_)
+        | NetworkClientError::MismatchedRequestId
+        | NetworkClientError::Service(ServiceNetworkErrorCode::Unauthorized)
+        | NetworkClientError::Service(ServiceNetworkErrorCode::Internal) => (
+            BrokerErrorCode::Internal,
+            "network service returned an invalid response",
+        ),
+    };
+    BrokerResponse::error(request_id, code, message)
 }
 
 fn protocol_io(error: crate::ProtocolError) -> ServerError {

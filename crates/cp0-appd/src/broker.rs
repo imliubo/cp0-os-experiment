@@ -22,6 +22,7 @@ pub struct BrokerRequest {
 #[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum BrokerCommand {
     PostNotification { title: String, body: String },
+    HttpGet { url: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +38,10 @@ pub struct BrokerResponse {
 pub enum BrokerOutcome {
     Ok {
         notification_id: u64,
+    },
+    HttpResponse {
+        status_code: u16,
+        body_base64: String,
     },
     PermissionPending {
         prompt_id: u64,
@@ -55,6 +60,12 @@ pub enum BrokerErrorCode {
     Undeclared,
     Denied,
     ResourceExhausted,
+    BlockedAddress,
+    UpstreamUnavailable,
+    Timeout,
+    Tls,
+    TooManyRedirects,
+    ResponseTooLarge,
     Internal,
 }
 
@@ -76,6 +87,8 @@ pub enum BrokerProtocolError {
     UnterminatedFrame,
     UnsupportedVersion(u32),
     InvalidNotification,
+    InvalidUrl,
+    InvalidNetworkResponse,
 }
 
 impl fmt::Display for BrokerProtocolError {
@@ -96,6 +109,8 @@ impl fmt::Display for BrokerProtocolError {
             Self::InvalidNotification => formatter.write_str(
                 "notification title/body is empty, too long or contains control characters",
             ),
+            Self::InvalidUrl => formatter.write_str("invalid or oversized HTTPS URL"),
+            Self::InvalidNetworkResponse => formatter.write_str("invalid bounded HTTPS response"),
         }
     }
 }
@@ -129,6 +144,9 @@ impl BrokerRequest {
             {
                 Err(BrokerProtocolError::InvalidNotification)
             }
+            BrokerCommand::HttpGet { url } if !cp0_network_protocol::is_valid_https_url(url) => {
+                Err(BrokerProtocolError::InvalidUrl)
+            }
             _ => Ok(()),
         }
     }
@@ -149,6 +167,37 @@ impl BrokerResponse {
             request_id,
             outcome: BrokerOutcome::PermissionPending { prompt_id },
         }
+    }
+
+    pub fn http_response(request_id: u64, status_code: u16, body_base64: String) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::HttpResponse {
+                status_code,
+                body_base64,
+            },
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), BrokerProtocolError> {
+        if self.protocol_version != BROKER_PROTOCOL_VERSION {
+            return Err(BrokerProtocolError::UnsupportedVersion(
+                self.protocol_version,
+            ));
+        }
+        if let BrokerOutcome::HttpResponse {
+            status_code,
+            body_base64,
+        } = &self.outcome
+        {
+            if !(100..=599).contains(status_code)
+                || cp0_network_protocol::decode_base64(body_base64).is_err()
+            {
+                return Err(BrokerProtocolError::InvalidNetworkResponse);
+            }
+        }
+        Ok(())
     }
 
     pub fn error(request_id: u64, code: BrokerErrorCode, message: impl Into<String>) -> Self {
@@ -181,11 +230,7 @@ pub fn read_broker_response(
         return Ok(None);
     };
     let response: BrokerResponse = serde_json::from_slice(&frame)?;
-    if response.protocol_version != BROKER_PROTOCOL_VERSION {
-        return Err(BrokerProtocolError::UnsupportedVersion(
-            response.protocol_version,
-        ));
-    }
+    response.validate()?;
     Ok(Some(response))
 }
 
@@ -201,6 +246,7 @@ pub fn write_broker_response(
     writer: &mut impl Write,
     response: &BrokerResponse,
 ) -> Result<(), BrokerProtocolError> {
+    response.validate()?;
     write_value(writer, response)
 }
 
@@ -303,6 +349,14 @@ mod tests {
         }
     }
 
+    fn http_request(url: &str) -> BrokerRequest {
+        BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 2,
+            command: BrokerCommand::HttpGet { url: url.into() },
+        }
+    }
+
     #[test]
     fn parses_strict_bounded_notification_request() {
         let encoded = serde_json::to_vec(&request("Ready", "Build complete")).unwrap();
@@ -362,5 +416,33 @@ mod tests {
         assert_eq!(notification.notification_id, 1);
         assert_eq!(notification.app_id, "dev.cardputerzero.hello");
         assert_eq!(notification.app_name, "Hello");
+    }
+
+    #[test]
+    fn validates_https_requests_and_bounded_http_responses() {
+        assert!(http_request("https://example.com/data").validate().is_ok());
+        assert!(matches!(
+            http_request("http://example.com").validate(),
+            Err(BrokerProtocolError::InvalidUrl)
+        ));
+        let response =
+            BrokerResponse::http_response(2, 200, cp0_network_protocol::encode_base64(b"body"));
+        let mut frame = Vec::new();
+        write_broker_response(&mut frame, &response).unwrap();
+        assert_eq!(
+            read_broker_response(&mut Cursor::new(frame)).unwrap(),
+            Some(response)
+        );
+        let maximum = BrokerResponse::http_response(
+            3,
+            200,
+            cp0_network_protocol::encode_base64(&vec![
+                0;
+                cp0_network_protocol::MAX_NETWORK_BODY_BYTES
+            ]),
+        );
+        let mut maximum_frame = Vec::new();
+        write_broker_response(&mut maximum_frame, &maximum).unwrap();
+        assert!(maximum_frame.len() <= MAX_BROKER_FRAME_BYTES);
     }
 }

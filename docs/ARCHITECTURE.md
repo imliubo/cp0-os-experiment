@@ -104,6 +104,13 @@ Weston 的 XRGB8888 SHM buffer。标准应用只能提交 320x150，沉浸应用
 向可信 Shell 返回规范应用名称和有界内容；Shell 决定横幅布局与四秒显示周期。
 权限提示优先于通知，Home、Tasks、Power 和应用退出会撤销当前横幅。
 
+网络能力不向应用暴露裸 socket。Runtime 和 appd 仅允许 `AF_UNIX`，独立的
+`cp0-networkd` 是唯一允许 `AF_INET/AF_INET6` 的组件。首版 SDK 只提供 1024 字节
+URL、5 秒总超时、2 次重定向和 2048 字节响应体的同步 HTTPS GET。networkd 禁用
+环境代理，并在每次连接和重定向解析时过滤环回、私网、链路本地、多播、保留地址、
+NAT64/Teredo 等非公网目标，TLS 证书校验不可关闭。appd 在网络 I/O 前完成调用者
+UID/cgroup、manifest 和权限验证并释放共享状态锁。
+
 文件共享不暴露路径，通过 Document Portal 返回受限文件描述符。应用间调用通过
 Intent Broker 路由，接收方必须显式声明 Intent，不提供任意应用间 socket。
 

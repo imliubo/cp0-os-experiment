@@ -9,9 +9,10 @@ cargo build \
     --target "$target" \
     --release \
     -p cp0-appd \
+    -p cp0-networkd \
     -p cp0ctl
 
-for binary in cp0-appd cp0ctl; do
+for binary in cp0-appd cp0-networkd cp0ctl; do
     path="$repo_root/target/$target/release/$binary"
     test -x "$path"
     file "$path" | grep -q 'ELF 64-bit LSB.*ARM aarch64'

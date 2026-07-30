@@ -214,7 +214,9 @@ fn send_broker_command(command: BrokerCommand) -> Result<(), String> {
         return Err("broker response request ID does not match".into());
     }
     match &response.outcome {
-        BrokerOutcome::Ok { .. } | BrokerOutcome::PermissionPending { .. } => {
+        BrokerOutcome::Ok { .. }
+        | BrokerOutcome::HttpResponse { .. }
+        | BrokerOutcome::PermissionPending { .. } => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&response)

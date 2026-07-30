@@ -1,28 +1,26 @@
 [Unit]
-Description=CardputerZero application lifecycle daemon
-Requires=cardputerzero-appd.socket cardputerzero-broker.socket cardputerzero-networkd.socket
-After=cardputerzero-appd.socket cardputerzero-broker.socket cardputerzero-networkd.socket
+Description=CardputerZero restricted HTTPS broker
+Requires=cardputerzero-networkd.socket
+After=cardputerzero-networkd.socket
 
 [Service]
 Type=simple
-ExecStart=/usr/libexec/cardputerzero/cp0-appd serve
-User=root
-Group=root
-SupplementaryGroups=cp0-wayland
+ExecStart=/usr/libexec/cardputerzero/cp0-networkd serve
+User=cp0-network
+Group=cp0-network
 UMask=0077
 Restart=on-failure
 RestartSec=500ms
 TimeoutStopSec=5
 MemoryMax=24M
 MemorySwapMax=0
-TasksMax=16
+TasksMax=8
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
 PrivateDevices=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/cardputerzero/registry
 ProtectHome=yes
 ProtectHostname=yes
 ProtectClock=yes
@@ -32,7 +30,7 @@ ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectProc=invisible
 ProcSubset=pid
-RestrictAddressFamilies=AF_UNIX
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

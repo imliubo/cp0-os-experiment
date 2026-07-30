@@ -1,0 +1,15 @@
+[Unit]
+Description=CardputerZero privileged HTTPS broker socket
+
+[Socket]
+ListenStream=/run/cardputerzero-networkd/network.sock
+FileDescriptorName=network
+Service=cardputerzero-networkd.service
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

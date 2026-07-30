@@ -69,7 +69,9 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
   seccomp 和真机 WASM 调用闭环。
 - [x] 将通知队列接入可信 System Shell，在标准/沉浸应用上显示有界横幅且不窃取
   应用键盘焦点。
-- [ ] 实现网络、文档、音频、相机和 LoRa/GPIO broker。
+- [x] 实现 `network.client` HTTPS-only broker、SSRF/DNS rebinding 防护、WAMR
+  host call 和 Rust/C/C++ SDK 有界响应 API。
+- [ ] 实现文档、音频、相机和 LoRa/GPIO broker。
 - 定义 Intent Broker 和应用私有存储配额。
 - [ ] 建立恶意应用测试集，已覆盖 seccomp 旁路和 cgroup 资源耗尽；继续覆盖路径
   逃逸、设备访问和 IPC。

@@ -2,6 +2,7 @@
 
 pub mod display;
 pub mod input;
+pub mod network;
 pub mod system;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,7 +15,7 @@ pub enum Error {
 }
 
 impl Error {
-    const fn from_host(value: i32) -> Result<(), Self> {
+    pub(crate) const fn from_host(value: i32) -> Result<(), Self> {
         match value {
             0 => Ok(()),
             -1 => Err(Self::Denied),

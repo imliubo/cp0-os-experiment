@@ -15,7 +15,10 @@
     {
       "name": "notifications.post",
       "reason": "Show the result of the Hello Card action"
+    },
+    {
+      "name": "network.client",
+      "reason": "Run the user-requested HTTPS connectivity check"
     }
   ]
 }
-

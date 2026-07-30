@@ -5,6 +5,8 @@ hello_root="${ROOTFS_DIR}/var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1
 
 install -D -m 0755 "${payload}/cp0-appd" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-appd"
+install -D -m 0755 "${payload}/cp0-networkd" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-networkd"
 install -D -m 0755 "${payload}/cp0ctl" \
     "${ROOTFS_DIR}/usr/bin/cp0ctl"
 install -D -m 0755 "${payload}/cardputerzero-app-runtime" \
@@ -15,6 +17,10 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-appd.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-appd.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-broker.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-broker.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-networkd.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-networkd.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-networkd.socket" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-networkd.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-appd.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-appd.conf"
 install -D -m 0755 "${payload}/diagnostics/device-core-recovery.sh" \
@@ -32,6 +38,13 @@ if ! getent group cp0-control >/dev/null 2>&1; then
     groupadd --system cp0-control
 fi
 usermod -a -G cp0-control cp0-shell
+if ! getent group cp0-network >/dev/null 2>&1; then
+    groupadd --system cp0-network
+fi
+if ! id cp0-network >/dev/null 2>&1; then
+    useradd --system --gid cp0-network --home-dir /nonexistent \
+        --shell /usr/sbin/nologin cp0-network
+fi
 if ! getent group cp0-app-20000 >/dev/null 2>&1; then
     groupadd --system --gid 20000 cp0-app-20000
 fi
@@ -56,5 +69,6 @@ chmod -R go-w /var/lib/cardputerzero/apps/dev.cardputerzero.hello
     dev.cardputerzero.hello 0.1.0
 
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-appd.conf
-systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket
+systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
+    cardputerzero-networkd.socket
 CHROOT

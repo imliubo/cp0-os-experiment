@@ -1,11 +1,14 @@
 #![no_std]
 
 use core::panic::PanicInfo;
-use cp0_sdk::{Error, display, input, system};
+use cp0_sdk::{Error, display, input, network, system};
 
 const FRAME_BYTES: usize =
     display::WIDTH as usize * display::STANDARD_HEIGHT as usize * 2;
 static mut FRAME: [u8; FRAME_BYTES] = [0; FRAME_BYTES];
+static mut NETWORK_BODY: [u8; network::MAX_RESPONSE_BODY_BYTES] =
+    [0; network::MAX_RESPONSE_BODY_BYTES];
+const KEY_N: u16 = 49;
 
 fn prepare_frame() -> &'static mut [u8] {
     // The frame lives in the WASM data section rather than the 64 KiB call
@@ -50,6 +53,34 @@ fn show_key(frame: &mut [u8], code: u16) {
     }
 }
 
+fn show_network_status(frame: &mut [u8], color: u16) {
+    for y in 126..142 {
+        for x in 8..48 {
+            let offset = (y * usize::from(display::WIDTH) + x) * 2;
+            frame[offset] = color as u8;
+            frame[offset + 1] = (color >> 8) as u8;
+        }
+    }
+}
+
+fn request_network(frame: &mut [u8]) {
+    let body = unsafe {
+        core::slice::from_raw_parts_mut(
+            core::ptr::addr_of_mut!(NETWORK_BODY).cast::<u8>(),
+            network::MAX_RESPONSE_BODY_BYTES,
+        )
+    };
+    match network::http_get("https://example.com/", body) {
+        Ok(response) if (200..=299).contains(&response.status_code) => {
+            show_network_status(frame, 0x07e0);
+            let _ = system::post_notification("Network ready", "HTTPS request completed");
+        }
+        Ok(_) | Err(Error::Denied) => show_network_status(frame, 0xf800),
+        Err(Error::Unavailable) => show_network_status(frame, 0xffe0),
+        Err(_) => show_network_status(frame, 0xf81f),
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
     const TITLE: &str = "Hello Card";
@@ -75,6 +106,9 @@ pub extern "C" fn main() -> i32 {
         }
         match input::poll_key_event(250) {
             Ok(Some(event)) if event.pressed => {
+                if event.code == KEY_N {
+                    request_network(frame);
+                }
                 show_key(frame, event.code);
                 rendered = false;
             }

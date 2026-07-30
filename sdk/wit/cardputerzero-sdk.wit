@@ -52,6 +52,17 @@ interface display {
     present-rgb565: func(pixels: list<u8>, damage: list<rect>) -> result<_, error-code>;
 }
 
+interface network {
+    use types.{error-code};
+
+    record http-response {
+        status-code: u16,
+        body: list<u8>,
+    }
+
+    http-get: func(url: string) -> result<http-response, error-code>;
+}
+
 interface application {
     use types.{app-event, error-code};
 
@@ -62,6 +73,6 @@ interface application {
 world cardputer-application {
     import system;
     import display;
+    import network;
     export application;
 }
-
