@@ -142,6 +142,24 @@ impl PermissionCoordinator {
         }
     }
 
+    pub fn reset(
+        &mut self,
+        manifest: &AppManifest,
+        permission: Permission,
+    ) -> Result<(), PermissionPromptError> {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|prompt| prompt.app_id == manifest.id && prompt.permission == permission)
+        {
+            return Err(PermissionPromptError::Busy(
+                self.pending.clone().expect("pending prompt was checked"),
+            ));
+        }
+        self.engine.reset(manifest, permission)?;
+        Ok(())
+    }
+
     fn allocate_prompt_id(&mut self) -> u64 {
         let prompt_id = self.next_prompt_id;
         self.next_prompt_id = self.next_prompt_id.wrapping_add(1).max(1);

@@ -9,6 +9,7 @@ use cp0_appd::{
     BrokerOutcome, BrokerRequest, PermissionChoice, ResponseOutcome, read_broker_response,
     read_response, write_broker_request, write_request,
 };
+use cp0_manifest::Permission;
 
 mod project;
 
@@ -70,6 +71,16 @@ fn main() -> ExitCode {
                 })
             })
         }
+        [permission, command, app_id, capability]
+            if permission == "permission" && command == "reset" =>
+        {
+            parse_permission(capability).and_then(|permission| {
+                send_app_command(AppdCommand::ResetPermission {
+                    app_id: app_id.clone(),
+                    permission,
+                })
+            })
+        }
         [notification, command] if notification == "notification" && command == "take" => {
             send_app_command(AppdCommand::TakeNotification)
         }
@@ -80,7 +91,7 @@ fn main() -> ExitCode {
             })
         }
         _ => Err(
-            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | notification take | broker notify <title> <body>"
+            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
                 .into(),
         ),
     };
@@ -108,6 +119,21 @@ fn parse_permission_choice(value: &str) -> Result<PermissionChoice, String> {
         "always" => Ok(PermissionChoice::AllowAlways),
         "deny" => Ok(PermissionChoice::Deny),
         _ => Err("permission choice must be once, always or deny".into()),
+    }
+}
+
+fn parse_permission(value: &str) -> Result<Permission, String> {
+    match value {
+        "network.client" => Ok(Permission::NetworkClient),
+        "documents.open" => Ok(Permission::DocumentsOpen),
+        "audio.playback" => Ok(Permission::AudioPlayback),
+        "audio.capture" => Ok(Permission::AudioCapture),
+        "camera.capture" => Ok(Permission::CameraCapture),
+        "radio.lora" => Ok(Permission::RadioLora),
+        "hardware.gpio" => Ok(Permission::HardwareGpio),
+        "clipboard.read" => Ok(Permission::ClipboardRead),
+        "notifications.post" => Ok(Permission::NotificationsPost),
+        _ => Err("unknown CardputerZero capability".into()),
     }
 }
 

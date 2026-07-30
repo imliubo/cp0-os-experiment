@@ -8,6 +8,9 @@
 #define CP0_UI_HEIGHT 170
 #define CP0_UI_MAX_APPS 4
 #define CP0_UI_APP_ID_MAX 47
+#define CP0_UI_PROMPT_APP_NAME_MAX 32
+#define CP0_UI_PROMPT_PERMISSION_MAX 31
+#define CP0_UI_PROMPT_REASON_MAX 160
 
 enum cp0_ui_screen {
     CP0_UI_HOME,
@@ -34,10 +37,14 @@ enum cp0_ui_event {
     CP0_UI_EVENT_SLEEP,
     CP0_UI_EVENT_RESTART,
     CP0_UI_EVENT_OPEN_APP,
+    CP0_UI_EVENT_PERMISSION_ONCE,
+    CP0_UI_EVENT_PERMISSION_ALWAYS,
+    CP0_UI_EVENT_PERMISSION_DENY,
 };
 
 struct cp0_ui_app {
     uint32_t token;
+    bool immersive;
     char app_id[CP0_UI_APP_ID_MAX + 1];
 };
 
@@ -48,9 +55,15 @@ struct cp0_ui {
     unsigned int app_count;
     unsigned int dialog_selected;
     bool power_dialog;
+    bool permission_prompt;
     bool network_online;
     int battery_percent;
     char clock_text[6];
+    uint64_t prompt_id;
+    unsigned int prompt_selected;
+    char prompt_app_name[CP0_UI_PROMPT_APP_NAME_MAX + 1];
+    char prompt_permission[CP0_UI_PROMPT_PERMISSION_MAX + 1];
+    char prompt_reason[CP0_UI_PROMPT_REASON_MAX + 1];
     struct cp0_ui_app apps[CP0_UI_MAX_APPS];
 };
 
@@ -58,8 +71,15 @@ void cp0_ui_init(struct cp0_ui *ui);
 void cp0_ui_set_status(struct cp0_ui *ui, const char *clock_text,
                        bool network_online, int battery_percent);
 void cp0_ui_add_app(struct cp0_ui *ui, uint32_t token, const char *app_id);
+void cp0_ui_set_app_display_mode(struct cp0_ui *ui, uint32_t token,
+                                 bool immersive);
 void cp0_ui_remove_app(struct cp0_ui *ui, uint32_t token);
 uint32_t cp0_ui_selected_app_token(const struct cp0_ui *ui);
+bool cp0_ui_selected_app_is_immersive(const struct cp0_ui *ui);
+bool cp0_ui_show_permission(struct cp0_ui *ui, uint64_t prompt_id,
+                            const char *app_name, const char *permission,
+                            const char *reason);
+void cp0_ui_clear_permission(struct cp0_ui *ui);
 enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                                         enum cp0_ui_action action);
 void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,

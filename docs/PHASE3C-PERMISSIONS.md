@@ -49,7 +49,13 @@ and `cp0-shell`. Diagnostic equivalents are:
 ```sh
 cp0ctl permission pending
 cp0ctl permission resolve <prompt-id> once|always|deny
+cp0ctl permission reset <app-id> <capability>
 ```
+
+`reset` is restricted to the authenticated control socket. It removes both a
+session grant and a stored decision through the same atomic persistence path,
+so the next capability use prompts again. It refuses to race a matching
+pending prompt.
 
 This phase does not expose a generic application permission socket. Capability
 requests enter through typed brokers. The notification broker is the first

@@ -38,6 +38,10 @@ pub enum AppdCommand {
         prompt_id: u64,
         choice: PermissionChoice,
     },
+    ResetPermission {
+        app_id: String,
+        permission: cp0_manifest::Permission,
+    },
     TakeNotification,
 }
 
@@ -79,6 +83,10 @@ pub enum ResponseData {
         app_id: String,
         permission: cp0_manifest::Permission,
         choice: PermissionChoice,
+    },
+    PermissionReset {
+        app_id: String,
+        permission: cp0_manifest::Permission,
     },
     NextNotification {
         notification: Option<Notification>,
@@ -177,6 +185,11 @@ impl AppdRequest {
                 Err(ProtocolError::InvalidPagination)
             }
             AppdCommand::Start { app_id } | AppdCommand::Stop { app_id }
+                if !cp0_manifest::is_valid_app_id(app_id) =>
+            {
+                Err(ProtocolError::InvalidAppId)
+            }
+            AppdCommand::ResetPermission { app_id, .. }
                 if !cp0_manifest::is_valid_app_id(app_id) =>
             {
                 Err(ProtocolError::InvalidAppId)

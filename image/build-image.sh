@@ -62,7 +62,11 @@ cp -R "$repo_root/image/pi-gen/stage-cardputerzero-os" \
     "$pi_gen_dir/stage-cardputerzero-os"
 mkdir -p "$pi_gen_dir/stage-cardputerzero-os/01-compositor/system-shell"
 cp "$repo_root/system-shell/include/cp0_ui.h" \
+    "$repo_root/system-shell/include/cp0_json.h" \
+    "$repo_root/system-shell/include/cp0_appd_client.h" \
     "$repo_root/system-shell/src/ui.c" \
+    "$repo_root/system-shell/src/json.c" \
+    "$repo_root/system-shell/src/appd_client.c" \
     "$repo_root/system-shell/src/main.c" \
     "$pi_gen_dir/stage-cardputerzero-os/01-compositor/system-shell/"
 mkdir -p "$pi_gen_dir/stage-cardputerzero-os/01-compositor/policy"

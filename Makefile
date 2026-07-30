@@ -1,4 +1,4 @@
-.PHONY: check test fmt app-runtime appd example-app malicious-apps image verify-image
+.PHONY: check test fmt compositor app-runtime appd example-app malicious-apps image verify-image
 
 check: fmt
 	jq empty schemas/app-manifest-v1.schema.json examples/hello-card/app.json
@@ -23,6 +23,13 @@ test:
 
 fmt:
 	cargo fmt --all -- --check
+
+compositor:
+	docker run --rm \
+		-v "$(CURDIR):/work" \
+		-w /work \
+		cp0-phase2b-builder:weston-14 \
+		./scripts/build-compositor.sh
 
 app-runtime:
 	./scripts/build-app-runtime.sh

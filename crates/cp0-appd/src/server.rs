@@ -182,6 +182,19 @@ impl AppdServer {
             AppdCommand::ResolvePermission { prompt_id, choice } => {
                 Self::resolve_permission(&mut state, prompt_id, choice)
             }
+            AppdCommand::ResetPermission { app_id, permission } => {
+                let result = state
+                    .manager
+                    .installed_manifest(&app_id)
+                    .map_err(CommandError::Manager)
+                    .and_then(|manifest| {
+                        state
+                            .permissions
+                            .reset(&manifest, permission)
+                            .map_err(CommandError::Permission)
+                    });
+                result.map(|()| ResponseData::PermissionReset { app_id, permission })
+            }
             AppdCommand::TakeNotification => Ok(ResponseData::NextNotification {
                 notification: state.notifications.take(),
             }),

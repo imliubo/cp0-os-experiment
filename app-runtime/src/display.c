@@ -430,6 +430,7 @@ static bool create_buffers(struct cp0_display_state *display) {
 }
 
 bool cp0_display_initialize(int socket_fd, const char *app_id, bool immersive) {
+    const char *display_title;
     int socket_type = 0;
     socklen_t socket_type_bytes = sizeof(socket_type);
     unsigned int roundtrip;
@@ -479,7 +480,9 @@ bool cp0_display_initialize(int socket_fd, const char *app_id, bool immersive) {
         goto failure;
     xdg_toplevel_add_listener(state.toplevel, &toplevel_listener, &state);
     xdg_toplevel_set_app_id(state.toplevel, app_id);
-    xdg_toplevel_set_title(state.toplevel, app_id);
+    display_title = immersive ? "cardputerzero:immersive"
+                              : "cardputerzero:standard";
+    xdg_toplevel_set_title(state.toplevel, display_title);
     xdg_toplevel_set_fullscreen(state.toplevel, NULL);
     wl_surface_commit(state.surface);
 

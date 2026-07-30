@@ -37,9 +37,10 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
   双缓冲 renderer、定时状态刷新和崩溃自动返回首页。
 - [x] 实现 Phase 2B Weston policy 核心：独立 compositor/Shell UID、peer UID
   认证、可信层和全局 Home/Back/Tasks/Power 动作通道。
-- [ ] 将 Launcher、状态栏和权限弹窗迁移到 compositor 侧可信覆盖层，并实现沉浸模式。
-- [ ] 在 compositor 统一键盘焦点、全局 Home/Back/任务切换快捷键和屏幕休眠。
+- [x] 将 Launcher、状态栏和权限弹窗迁移到 compositor 侧可信覆盖层，并实现沉浸模式。
+- [x] 在 compositor 统一键盘焦点、全局 Home/Back/任务切换快捷键和屏幕休眠。
 - [x] 建立像素级截图回归测试并完成两个客户端的可靠切换与 200 轮压力测试。
+- [ ] 完成 24 小时 compositor/Shell/appd 真机稳定性与内存泄漏验收。
 
 完成条件：两个测试 Wayland 客户端可可靠切换，应用无法读取非焦点输入或覆盖系统
 权限弹窗，连续运行 24 小时无 compositor 泄漏。

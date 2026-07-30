@@ -25,6 +25,7 @@ struct cp0_surface_watch {
     struct weston_surface *surface;
     uint32_t app_token;
     bool announced;
+    bool immersive;
     struct wl_listener commit_listener;
     struct wl_listener destroy_listener;
     struct wl_list link;
@@ -41,11 +42,12 @@ struct cp0_policy {
     struct weston_layer app_layer;
     struct weston_layer hidden_layer;
     struct wl_listener compositor_destroy_listener;
+    struct wl_listener compositor_wake_listener;
     struct wl_listener create_surface_listener;
     struct wl_list surface_watches;
     struct wl_event_source *reassert_idle;
     uint32_t next_app_token;
-    bool visible;
+    uint32_t overlay_mode;
 };
 
 static void announce_apps(struct cp0_policy *policy);
@@ -117,11 +119,15 @@ reassert_layers(struct cp0_policy *policy)
             continue;
         if (root == policy->trusted_surface) {
             weston_view_move_to_layer(
-                view, policy->visible ? &policy->trusted_layer.view_list
-                                      : &policy->hidden_layer.view_list);
+                view, policy->overlay_mode !=
+                              CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN
+                          ? &policy->trusted_layer.view_list
+                          : &policy->hidden_layer.view_list);
         } else {
             weston_view_move_to_layer(
-                view, !policy->visible && root == policy->active_surface
+                view, policy->overlay_mode !=
+                                  CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL &&
+                              root == policy->active_surface
                           ? &policy->app_layer.view_list
                           : &policy->hidden_layer.view_list);
         }
@@ -150,15 +156,15 @@ schedule_reassert(struct cp0_policy *policy)
 }
 
 static void
-set_visible(struct cp0_policy *policy, bool visible,
-            struct weston_keyboard *keyboard)
+set_overlay_mode(struct cp0_policy *policy, uint32_t mode,
+                 struct weston_keyboard *keyboard)
 {
     struct weston_view *view;
 
-    policy->visible = visible;
+    policy->overlay_mode = mode;
     reassert_layers(policy);
 
-    if (visible) {
+    if (mode == CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL) {
         view = first_mapped_view(policy->trusted_surface);
         if (view != NULL && keyboard != NULL)
             weston_view_activate_input(view, keyboard->seat,
@@ -170,6 +176,16 @@ set_visible(struct cp0_policy *policy, bool visible,
     if (view != NULL && keyboard != NULL)
         weston_view_activate_input(view, keyboard->seat,
                                    WESTON_ACTIVATE_FLAG_NONE);
+}
+
+static void
+set_visible(struct cp0_policy *policy, bool visible,
+            struct weston_keyboard *keyboard)
+{
+    set_overlay_mode(policy,
+                     visible ? CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL
+                             : CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN,
+                     keyboard);
 }
 
 static uint32_t
@@ -220,6 +236,7 @@ announce_app(struct cp0_surface_watch *watch)
     struct weston_desktop_surface *desktop_surface;
     char safe_app_id[CP0_APP_ID_MAX + 1];
     const char *app_id;
+    const char *title;
 
     if (watch->announced || policy->shell_resource == NULL ||
         wl_resource_get_version(policy->shell_resource) < 2 ||
@@ -230,11 +247,20 @@ announce_app(struct cp0_surface_watch *watch)
 
     desktop_surface = weston_surface_get_desktop_surface(watch->surface);
     app_id = weston_desktop_surface_get_app_id(desktop_surface);
+    title = weston_desktop_surface_get_title(desktop_surface);
+    watch->immersive = title == NULL ||
+                       strcmp(title, "cardputerzero:standard") != 0;
     sanitize_app_id(app_id, safe_app_id);
     if (watch->app_token == 0)
         watch->app_token = allocate_app_token(policy);
     cp0_system_shell_v1_send_app_added(policy->shell_resource,
                                        watch->app_token, safe_app_id);
+    if (wl_resource_get_version(policy->shell_resource) >= 3) {
+        cp0_system_shell_v1_send_app_display_mode(
+            policy->shell_resource, watch->app_token,
+            watch->immersive ? CP0_SYSTEM_SHELL_V1_DISPLAY_MODE_IMMERSIVE
+                             : CP0_SYSTEM_SHELL_V1_DISPLAY_MODE_STANDARD);
+    }
     watch->announced = true;
     weston_log("cardputerzero-policy: app token=%u available\n",
                watch->app_token);
@@ -281,8 +307,9 @@ surface_committed(struct wl_listener *listener, void *data)
         } else if (watch->announced) {
             if (watch->policy->active_surface == watch->surface) {
                 watch->policy->active_surface = NULL;
-                set_visible(watch->policy, true,
-                            first_keyboard(watch->policy->compositor));
+                set_overlay_mode(
+                    watch->policy, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL,
+                    first_keyboard(watch->policy->compositor));
                 if (watch->policy->shell_resource != NULL) {
                     cp0_system_shell_v1_send_action(
                         watch->policy->shell_resource,
@@ -307,7 +334,7 @@ surface_destroyed(struct wl_listener *listener, void *data)
     withdraw_app(watch);
     if (policy->trusted_surface == watch->surface) {
         policy->trusted_surface = NULL;
-        policy->visible = true;
+        policy->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     }
     if (active_lost)
         policy->active_surface = NULL;
@@ -318,7 +345,8 @@ surface_destroyed(struct wl_listener *listener, void *data)
     free(watch);
 
     if (active_lost) {
-        set_visible(policy, true, first_keyboard(policy->compositor));
+        set_overlay_mode(policy, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL,
+                         first_keyboard(policy->compositor));
         if (policy->shell_resource != NULL) {
             cp0_system_shell_v1_send_action(
                 policy->shell_resource, CP0_SYSTEM_SHELL_V1_ACTION_HOME);
@@ -358,7 +386,7 @@ shell_resource_destroyed(struct wl_resource *resource)
     if (policy == NULL || policy->shell_resource != resource)
         return;
     policy->shell_resource = NULL;
-    policy->visible = true;
+    policy->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     wl_list_for_each(watch, &policy->surface_watches, link)
         watch->announced = false;
     schedule_reassert(policy);
@@ -411,7 +439,7 @@ shell_register_surface(struct wl_client *client, struct wl_resource *resource,
     }
 
     policy->trusted_surface = surface;
-    policy->visible = true;
+    policy->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     watch = watch_for_surface(policy, surface);
     if (watch != NULL)
         withdraw_app(watch);
@@ -437,6 +465,36 @@ shell_set_visible(struct wl_client *client, struct wl_resource *resource,
 }
 
 static void
+shell_set_overlay_mode(struct wl_client *client, struct wl_resource *resource,
+                       uint32_t mode)
+{
+    struct cp0_policy *policy = wl_resource_get_user_data(resource);
+    (void)client;
+
+    if (mode > CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN ||
+        (mode != CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL &&
+         policy->active_surface == NULL)) {
+        wl_resource_post_error(resource,
+                               CP0_SYSTEM_SHELL_V1_ERROR_INVALID_VISIBILITY,
+                               "overlay mode is invalid for current state");
+        return;
+    }
+    set_overlay_mode(policy, mode, first_keyboard(policy->compositor));
+}
+
+static void
+shell_sleep_display(struct wl_client *client, struct wl_resource *resource)
+{
+    struct cp0_policy *policy = wl_resource_get_user_data(resource);
+    (void)client;
+
+    set_overlay_mode(policy, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL,
+                     first_keyboard(policy->compositor));
+    weston_compositor_sleep(policy->compositor);
+    weston_log("cardputerzero-policy: display sleeping\n");
+}
+
+static void
 shell_activate_app(struct wl_client *client, struct wl_resource *resource,
                    uint32_t token)
 {
@@ -448,9 +506,13 @@ shell_activate_app(struct wl_client *client, struct wl_resource *resource,
         if (watch->announced && watch->app_token == token &&
             first_mapped_view(watch->surface) != NULL) {
             policy->active_surface = watch->surface;
-            set_visible(policy, false, first_keyboard(policy->compositor));
-            weston_log("cardputerzero-policy: app token=%u activated\n",
-                       token);
+            set_overlay_mode(
+                policy,
+                watch->immersive ? CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN
+                                 : CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS,
+                first_keyboard(policy->compositor));
+            weston_log("cardputerzero-policy: app token=%u activated mode=%s\n",
+                       token, watch->immersive ? "immersive" : "standard");
             return;
         }
     }
@@ -465,6 +527,8 @@ static const struct cp0_system_shell_v1_interface shell_implementation = {
     .register_surface = shell_register_surface,
     .set_visible = shell_set_visible,
     .activate_app = shell_activate_app,
+    .set_overlay_mode = shell_set_overlay_mode,
+    .sleep_display = shell_sleep_display,
 };
 
 static void
@@ -488,7 +552,7 @@ bind_system_shell(struct wl_client *client, void *data, uint32_t version,
     }
 
     resource = wl_resource_create(client, &cp0_system_shell_v1_interface,
-                                  version < 2 ? version : 2, id);
+                                  version < 3 ? version : 3, id);
     if (resource == NULL) {
         wl_client_post_no_memory(client);
         return;
@@ -531,7 +595,7 @@ system_key_binding(struct weston_keyboard *keyboard,
     if (action == UINT32_MAX || policy->shell_resource == NULL ||
         policy->trusted_surface == NULL)
         return;
-    set_visible(policy, true, keyboard);
+    set_overlay_mode(policy, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL, keyboard);
     cp0_system_shell_v1_send_action(policy->shell_resource, action);
 }
 
@@ -540,6 +604,22 @@ add_system_binding(struct cp0_policy *policy, uint32_t key)
 {
     weston_compositor_add_key_binding(policy->compositor, key, 0,
                                       system_key_binding, policy);
+}
+
+static void
+compositor_woke(struct wl_listener *listener, void *data)
+{
+    struct cp0_policy *policy =
+        wl_container_of(listener, policy, compositor_wake_listener);
+    (void)data;
+
+    set_overlay_mode(policy, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL,
+                     first_keyboard(policy->compositor));
+    if (policy->shell_resource != NULL) {
+        cp0_system_shell_v1_send_action(policy->shell_resource,
+                                        CP0_SYSTEM_SHELL_V1_ACTION_HOME);
+    }
+    weston_log("cardputerzero-policy: display awake\n");
 }
 
 static void
@@ -559,6 +639,7 @@ policy_destroyed(struct wl_listener *listener, void *data)
         free(watch);
     }
     wl_list_remove(&policy->create_surface_listener.link);
+    wl_list_remove(&policy->compositor_wake_listener.link);
     wl_list_remove(&policy->compositor_destroy_listener.link);
     if (policy->global != NULL)
         wl_global_destroy(policy->global);
@@ -588,7 +669,7 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
         return -1;
     policy->compositor = compositor;
     policy->trusted_uid = shell_user->pw_uid;
-    policy->visible = false;
+    policy->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     wl_list_init(&policy->surface_watches);
 
     weston_layer_init(&policy->trusted_layer, compositor);
@@ -607,12 +688,16 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
     policy->compositor_destroy_listener.notify = policy_destroyed;
     wl_signal_add(&compositor->destroy_signal,
                   &policy->compositor_destroy_listener);
+    policy->compositor_wake_listener.notify = compositor_woke;
+    wl_signal_add(&compositor->wake_signal,
+                  &policy->compositor_wake_listener);
 
     policy->global = wl_global_create(
-        compositor->wl_display, &cp0_system_shell_v1_interface, 2, policy,
+        compositor->wl_display, &cp0_system_shell_v1_interface, 3, policy,
         bind_system_shell);
     if (policy->global == NULL) {
         wl_list_remove(&policy->create_surface_listener.link);
+        wl_list_remove(&policy->compositor_wake_listener.link);
         wl_list_remove(&policy->compositor_destroy_listener.link);
         weston_layer_fini(&policy->trusted_layer);
         weston_layer_fini(&policy->app_layer);

@@ -114,9 +114,11 @@ static void draw_text(struct canvas *canvas, int x, int y, const char *text,
     }
 }
 
-static const char *screen_title(enum cp0_ui_screen screen)
+static const char *screen_title(const struct cp0_ui *ui)
 {
-    switch (screen) {
+    if (ui->permission_prompt)
+        return "PERMISSION";
+    switch (ui->screen) {
     case CP0_UI_HOME:
         return "HOME";
     case CP0_UI_APPS:
@@ -155,7 +157,7 @@ static void draw_status_bar(struct canvas *canvas, const struct cp0_ui *ui)
 {
     fill_rect(canvas, 0, 0, CP0_UI_WIDTH, 21, COLOR_BAR);
     fill_rect(canvas, 0, 20, CP0_UI_WIDTH, 1, COLOR_GREEN);
-    draw_text(canvas, 8, 7, screen_title(ui->screen), 1, COLOR_TEXT);
+    draw_text(canvas, 8, 7, screen_title(ui), 1, COLOR_TEXT);
     draw_text(canvas, 145, 7, ui->clock_text, 1, COLOR_MUTED);
     draw_network_icon(canvas, ui->network_online);
     draw_battery(canvas, ui->battery_percent);
@@ -298,6 +300,46 @@ static void draw_power_dialog(struct canvas *canvas, const struct cp0_ui *ui)
     }
 }
 
+static void draw_prompt_line(struct canvas *canvas, int y, const char *text,
+                             size_t start, size_t maximum)
+{
+    char line[47];
+    size_t length = strlen(text);
+    size_t output = 0;
+
+    while (start < length && output < maximum && output + 1 < sizeof(line)) {
+        unsigned char byte = (unsigned char)text[start++];
+        line[output++] = byte >= 0x20U && byte < 0x7fU ? (char)byte : ' ';
+    }
+    line[output] = '\0';
+    draw_text(canvas, 20, y, line, 1, COLOR_TEXT);
+}
+
+static void draw_permission_dialog(struct canvas *canvas,
+                                   const struct cp0_ui *ui)
+{
+    static const char *labels[] = {"ONCE", "ALWAYS", "DENY"};
+    fill_rect(canvas, 0, 21, CP0_UI_WIDTH, CP0_UI_HEIGHT - 21, 0x00090b0cu);
+    fill_rect(canvas, 8, 27, 304, 136, COLOR_SURFACE);
+    stroke_rect(canvas, 8, 27, 304, 136, 2, COLOR_GREEN);
+    draw_prompt_line(canvas, 38, ui->prompt_app_name, 0, 46);
+    draw_prompt_line(canvas, 53, ui->prompt_permission, 0, 46);
+    draw_prompt_line(canvas, 74, ui->prompt_reason, 0, 46);
+    draw_prompt_line(canvas, 87, ui->prompt_reason, 46, 46);
+    draw_prompt_line(canvas, 100, ui->prompt_reason, 92, 46);
+
+    for (unsigned int index = 0; index < 3; index++) {
+        int x = 20 + (int)index * 96;
+        bool selected = index == ui->prompt_selected;
+        fill_rect(canvas, x, 132, 88, 24,
+                  selected ? COLOR_SELECTED : COLOR_BAR);
+        stroke_rect(canvas, x, 132, 88, 24, selected ? 2 : 1,
+                    selected ? COLOR_GREEN : COLOR_MUTED);
+        draw_text(canvas, x + 16, 141, labels[index], 1,
+                  selected ? COLOR_TEXT : COLOR_MUTED);
+    }
+}
+
 void cp0_ui_init(struct cp0_ui *ui)
 {
     memset(ui, 0, sizeof(*ui));
@@ -342,6 +384,19 @@ void cp0_ui_add_app(struct cp0_ui *ui, uint32_t token, const char *app_id)
     ui->apps[index].app_id[length] = '\0';
 }
 
+void cp0_ui_set_app_display_mode(struct cp0_ui *ui, uint32_t token,
+                                 bool immersive)
+{
+    if (ui == NULL || token == 0)
+        return;
+    for (unsigned int index = 0; index < ui->app_count; index++) {
+        if (ui->apps[index].token == token) {
+            ui->apps[index].immersive = immersive;
+            return;
+        }
+    }
+}
+
 void cp0_ui_remove_app(struct cp0_ui *ui, uint32_t token)
 {
     unsigned int index;
@@ -371,9 +426,75 @@ uint32_t cp0_ui_selected_app_token(const struct cp0_ui *ui)
     return ui->apps[ui->app_selected].token;
 }
 
+bool cp0_ui_selected_app_is_immersive(const struct cp0_ui *ui)
+{
+    if (ui == NULL || ui->app_selected >= ui->app_count)
+        return false;
+    return ui->apps[ui->app_selected].immersive;
+}
+
+static bool copy_prompt_text(char *output, size_t capacity, const char *input)
+{
+    if (input == NULL || input[0] == '\0')
+        return false;
+    size_t length = strlen(input);
+    if (length >= capacity)
+        length = capacity - 1;
+    memcpy(output, input, length);
+    output[length] = '\0';
+    return true;
+}
+
+bool cp0_ui_show_permission(struct cp0_ui *ui, uint64_t prompt_id,
+                            const char *app_name, const char *permission,
+                            const char *reason)
+{
+    if (ui == NULL || prompt_id == 0 ||
+        !copy_prompt_text(ui->prompt_app_name, sizeof(ui->prompt_app_name),
+                          app_name) ||
+        !copy_prompt_text(ui->prompt_permission, sizeof(ui->prompt_permission),
+                          permission) ||
+        !copy_prompt_text(ui->prompt_reason, sizeof(ui->prompt_reason), reason))
+        return false;
+    ui->prompt_id = prompt_id;
+    ui->prompt_selected = 0;
+    ui->permission_prompt = true;
+    ui->power_dialog = false;
+    return true;
+}
+
+void cp0_ui_clear_permission(struct cp0_ui *ui)
+{
+    if (ui == NULL)
+        return;
+    ui->permission_prompt = false;
+    ui->prompt_id = 0;
+    ui->prompt_selected = 0;
+    memset(ui->prompt_app_name, 0, sizeof(ui->prompt_app_name));
+    memset(ui->prompt_permission, 0, sizeof(ui->prompt_permission));
+    memset(ui->prompt_reason, 0, sizeof(ui->prompt_reason));
+}
+
 enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                                         enum cp0_ui_action action)
 {
+    if (ui->permission_prompt) {
+        if (action == CP0_UI_LEFT && ui->prompt_selected > 0)
+            ui->prompt_selected--;
+        else if (action == CP0_UI_RIGHT && ui->prompt_selected < 2)
+            ui->prompt_selected++;
+        else if (action == CP0_UI_BACK)
+            return CP0_UI_EVENT_PERMISSION_DENY;
+        else if (action == CP0_UI_ACCEPT) {
+            static const enum cp0_ui_event choices[] = {
+                CP0_UI_EVENT_PERMISSION_ONCE,
+                CP0_UI_EVENT_PERMISSION_ALWAYS,
+                CP0_UI_EVENT_PERMISSION_DENY,
+            };
+            return choices[ui->prompt_selected];
+        }
+        return CP0_UI_EVENT_NONE;
+    }
     if (action == CP0_UI_GO_HOME) {
         ui->power_dialog = false;
         ui->screen = CP0_UI_HOME;
@@ -474,4 +595,6 @@ void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
     draw_page(&canvas, ui);
     if (ui->power_dialog)
         draw_power_dialog(&canvas, ui);
+    if (ui->permission_prompt)
+        draw_permission_dialog(&canvas, ui);
 }

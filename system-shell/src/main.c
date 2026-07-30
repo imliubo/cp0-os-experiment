@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "cardputerzero-system-shell-client-protocol.h"
+#include "cp0_appd_client.h"
 #include "cp0_ui.h"
 #include "xdg-shell-client-protocol.h"
 
@@ -50,11 +51,13 @@ struct shell {
     struct xdg_toplevel *xdg_toplevel;
     struct shell_buffer buffers[BUFFER_COUNT];
     struct cp0_ui ui;
+    uint32_t overlay_mode;
+    uint32_t interrupted_overlay_mode;
     int timer_fd;
     int width;
     int height;
     bool configured;
-    bool has_xrgb;
+    bool has_argb;
     bool meta_pressed;
     bool redraw_pending;
 };
@@ -63,6 +66,37 @@ static volatile sig_atomic_t stop_requested;
 static unsigned int shm_serial;
 
 static void shell_redraw(struct shell *shell);
+
+static void poll_permission_prompt(struct shell *shell)
+{
+    struct cp0_permission_prompt prompt;
+    int result;
+
+    result = cp0_appd_get_permission_prompt(&prompt);
+    if (shell->ui.permission_prompt && result == 0) {
+        cp0_ui_clear_permission(&shell->ui);
+        shell->overlay_mode = shell->interrupted_overlay_mode;
+        cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                              shell->overlay_mode);
+        shell_redraw(shell);
+        return;
+    }
+    if (shell->ui.permission_prompt && result == 1 &&
+        prompt.prompt_id == shell->ui.prompt_id)
+        return;
+    if (result != 1)
+        return;
+    shell->interrupted_overlay_mode = shell->overlay_mode;
+    shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+    if (!cp0_ui_show_permission(&shell->ui, prompt.prompt_id, prompt.app_name,
+                                prompt.permission, prompt.reason))
+        return;
+    cp0_system_shell_v1_set_overlay_mode(
+        shell->system_control, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL);
+    fprintf(stderr, "system-shell: permission prompt=%llu visible\n",
+            (unsigned long long)prompt.prompt_id);
+    shell_redraw(shell);
+}
 
 static int create_anonymous_file(size_t size)
 {
@@ -138,7 +172,7 @@ static bool create_buffer(struct shell *shell, struct shell_buffer *buffer,
 
     struct wl_shm_pool *pool = wl_shm_create_pool(shell->shm, fd, (int)size);
     struct wl_buffer *wl_buffer = wl_shm_pool_create_buffer(
-        pool, 0, width, height, stride, WL_SHM_FORMAT_XRGB8888);
+        pool, 0, width, height, stride, WL_SHM_FORMAT_ARGB8888);
     wl_shm_pool_destroy(pool);
     close(fd);
 
@@ -242,6 +276,30 @@ static void shell_redraw(struct shell *shell)
     update_status(shell);
     cp0_ui_render(&shell->ui, buffer->pixels, shell->width, shell->height,
                   shell->width);
+    for (int y = 0; y < shell->height; y++) {
+        for (int x = 0; x < shell->width; x++) {
+            uint32_t *pixel = &buffer->pixels[y * shell->width + x];
+            if (shell->overlay_mode ==
+                    CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS &&
+                y >= 21) {
+                *pixel = 0;
+            } else {
+                *pixel |= 0xff000000u;
+            }
+        }
+    }
+
+    struct wl_region *input_region =
+        wl_compositor_create_region(shell->compositor);
+    if (input_region != NULL) {
+        if (shell->overlay_mode == CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL)
+            wl_region_add(input_region, 0, 0, shell->width, shell->height);
+        else if (shell->overlay_mode ==
+                 CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS)
+            wl_region_add(input_region, 0, 0, shell->width, 21);
+        wl_surface_set_input_region(shell->surface, input_region);
+        wl_region_destroy(input_region);
+    }
     wl_surface_attach(shell->surface, buffer->wl_buffer, 0, 0);
     wl_surface_damage(shell->surface, 0, 0, shell->width, shell->height);
     wl_surface_commit(shell->surface);
@@ -252,14 +310,44 @@ static void shell_redraw(struct shell *shell)
 static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
 {
     enum cp0_ui_event event = cp0_ui_handle_action(&shell->ui, action);
-    if (event == CP0_UI_EVENT_SLEEP)
-        fprintf(stderr, "system-shell: sleep requested; broker unavailable\n");
-    else if (event == CP0_UI_EVENT_RESTART)
+    if (event == CP0_UI_EVENT_PERMISSION_ONCE ||
+        event == CP0_UI_EVENT_PERMISSION_ALWAYS ||
+        event == CP0_UI_EVENT_PERMISSION_DENY) {
+        static const enum cp0_permission_choice choices[] = {
+            CP0_PERMISSION_ALLOW_ONCE,
+            CP0_PERMISSION_ALLOW_ALWAYS,
+            CP0_PERMISSION_DENY,
+        };
+        unsigned int choice =
+            event == CP0_UI_EVENT_PERMISSION_ONCE
+                ? 0
+                : (event == CP0_UI_EVENT_PERMISSION_ALWAYS ? 1 : 2);
+        uint64_t prompt_id = shell->ui.prompt_id;
+        if (cp0_appd_resolve_permission(prompt_id, choices[choice]) == 0) {
+            cp0_ui_clear_permission(&shell->ui);
+            shell->overlay_mode = shell->interrupted_overlay_mode;
+            cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                                  shell->overlay_mode);
+            fprintf(stderr, "system-shell: permission prompt=%llu resolved\n",
+                    (unsigned long long)prompt_id);
+        } else {
+            fprintf(stderr,
+                    "system-shell: permission prompt=%llu resolution failed\n",
+                    (unsigned long long)prompt_id);
+        }
+    } else if (event == CP0_UI_EVENT_SLEEP) {
+        shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+        cp0_system_shell_v1_sleep_display(shell->system_control);
+    } else if (event == CP0_UI_EVENT_RESTART) {
         fprintf(stderr, "system-shell: restart requested; broker unavailable\n");
-    else if (event == CP0_UI_EVENT_OPEN_APP) {
+    } else if (event == CP0_UI_EVENT_OPEN_APP) {
         uint32_t token = cp0_ui_selected_app_token(&shell->ui);
-        if (token != 0)
+        if (token != 0) {
+            shell->overlay_mode = cp0_ui_selected_app_is_immersive(&shell->ui)
+                                      ? CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN
+                                      : CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS;
             cp0_system_shell_v1_activate_app(shell->system_control, token);
+        }
     }
     shell_redraw(shell);
 }
@@ -288,6 +376,7 @@ static void handle_system_action(void *data,
     default:
         return;
     }
+    shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     handle_ui_action(shell, ui_action);
 }
 
@@ -319,8 +408,20 @@ static void handle_activation_failed(
     struct shell *shell = data;
     (void)system_control;
     cp0_ui_remove_app(&shell->ui, token);
+    shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     fprintf(stderr, "system-shell: app token=%u activation failed\n", token);
     shell_redraw(shell);
+}
+
+static void handle_app_display_mode(
+    void *data, struct cp0_system_shell_v1 *system_control, uint32_t token,
+    uint32_t mode)
+{
+    struct shell *shell = data;
+    (void)system_control;
+    cp0_ui_set_app_display_mode(
+        &shell->ui, token,
+        mode == CP0_SYSTEM_SHELL_V1_DISPLAY_MODE_IMMERSIVE);
 }
 
 static const struct cp0_system_shell_v1_listener system_control_listener = {
@@ -328,6 +429,7 @@ static const struct cp0_system_shell_v1_listener system_control_listener = {
     .app_added = handle_app_added,
     .app_removed = handle_app_removed,
     .activation_failed = handle_activation_failed,
+    .app_display_mode = handle_app_display_mode,
 };
 
 static bool translate_key(struct shell *shell, uint32_t key,
@@ -491,8 +593,8 @@ static void handle_shm_format(void *data, struct wl_shm *shm, uint32_t format)
 {
     struct shell *shell = data;
     (void)shm;
-    if (format == WL_SHM_FORMAT_XRGB8888)
-        shell->has_xrgb = true;
+    if (format == WL_SHM_FORMAT_ARGB8888)
+        shell->has_argb = true;
 }
 
 static const struct wl_shm_listener shm_listener = {
@@ -529,9 +631,9 @@ static void handle_registry_global(void *data, struct wl_registry *registry,
                                           &xdg_wm_base_interface, 1);
         xdg_wm_base_add_listener(shell->wm_base, &wm_base_listener, shell);
     } else if (strcmp(interface, cp0_system_shell_v1_interface.name) == 0 &&
-               version >= 2) {
+               version >= 3) {
         shell->system_control = wl_registry_bind(
-            registry, name, &cp0_system_shell_v1_interface, 2);
+            registry, name, &cp0_system_shell_v1_interface, 3);
         cp0_system_shell_v1_add_listener(shell->system_control,
                                          &system_control_listener, shell);
     }
@@ -597,6 +699,7 @@ static bool shell_connect(struct shell *shell)
     shell->width = CP0_UI_WIDTH;
     shell->height = CP0_UI_HEIGHT;
     cp0_ui_init(&shell->ui);
+    shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     shell->display = wl_display_connect(NULL);
     if (shell->display == NULL) {
         fprintf(stderr, "system-shell: cannot connect to Wayland display\n");
@@ -610,7 +713,7 @@ static bool shell_connect(struct shell *shell)
         return false;
     if (shell->compositor == NULL || shell->shm == NULL ||
         shell->wm_base == NULL || shell->seat == NULL ||
-        shell->system_control == NULL || !shell->has_xrgb) {
+        shell->system_control == NULL || !shell->has_argb) {
         fprintf(stderr, "system-shell: required Wayland globals unavailable\n");
         return false;
     }
@@ -635,8 +738,8 @@ static bool shell_connect(struct shell *shell)
         return false;
     }
     const struct itimerspec timer = {
-        .it_value = {.tv_sec = 30},
-        .it_interval = {.tv_sec = 30},
+        .it_value = {.tv_sec = 1},
+        .it_interval = {.tv_sec = 1},
     };
     if (timerfd_settime(shell->timer_fd, 0, &timer, NULL) < 0) {
         fprintf(stderr, "system-shell: cannot arm status timer: %s\n",
@@ -727,8 +830,10 @@ static int shell_dispatch(struct shell *shell)
 
         if ((descriptors[1].revents & POLLIN) != 0) {
             uint64_t expirations;
-            if (read(shell->timer_fd, &expirations, sizeof(expirations)) > 0)
+            if (read(shell->timer_fd, &expirations, sizeof(expirations)) > 0) {
+                poll_permission_prompt(shell);
                 shell_redraw(shell);
+            }
         }
     }
     return 0;

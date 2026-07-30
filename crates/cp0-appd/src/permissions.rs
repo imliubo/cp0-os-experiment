@@ -172,6 +172,16 @@ impl PermissionStore {
             .insert(permission, decision);
     }
 
+    fn reset(&mut self, app_id: &str, permission: Permission) {
+        let remove_app = self.apps.get_mut(app_id).is_some_and(|app| {
+            app.decisions.remove(&permission);
+            app.decisions.is_empty()
+        });
+        if remove_app {
+            self.apps.remove(app_id);
+        }
+    }
+
     fn validate(&self) -> Result<(), PermissionError> {
         if self.schema_version != PERMISSION_SCHEMA_VERSION {
             return Err(PermissionError::Invalid(format!(
@@ -250,6 +260,19 @@ impl PermissionEngine {
 
     pub fn clear_session(&mut self, app_id: &str) {
         self.allow_once.retain(|(id, _)| id != app_id);
+    }
+
+    pub fn reset(
+        &mut self,
+        manifest: &AppManifest,
+        permission: Permission,
+    ) -> Result<(), PermissionError> {
+        if !declares(manifest, permission) {
+            return Err(PermissionError::Undeclared);
+        }
+        self.allow_once.remove(&(manifest.id.clone(), permission));
+        self.store.reset(&manifest.id, permission);
+        self.store.save_atomic(&self.path)
     }
 }
 
@@ -366,6 +389,32 @@ mod tests {
         assert_eq!(
             reloaded.authorize(&manifest, Permission::NotificationsPost),
             Authorization::Allow
+        );
+    }
+
+    #[test]
+    fn reset_restores_prompt_and_persists_empty_store() {
+        let path = fixture("reset");
+        let manifest = crate::tests::manifest();
+        let mut engine = PermissionEngine::new(&path, PermissionStore::default()).unwrap();
+        engine
+            .resolve(
+                &manifest,
+                Permission::NotificationsPost,
+                PermissionChoice::AllowAlways,
+            )
+            .unwrap();
+        engine
+            .reset(&manifest, Permission::NotificationsPost)
+            .unwrap();
+        assert_eq!(
+            engine.authorize(&manifest, Permission::NotificationsPost),
+            Authorization::Prompt
+        );
+        let reloaded = PermissionEngine::new(&path, PermissionStore::load(&path).unwrap()).unwrap();
+        assert_eq!(
+            reloaded.authorize(&manifest, Permission::NotificationsPost),
+            Authorization::Prompt
         );
     }
 

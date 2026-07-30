@@ -72,6 +72,11 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     cp0_ui_handle_action(ui, CP0_UI_SHOW_POWER);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     write_snapshot(directory, "power", ui, frame);
+
+    cp0_ui_show_permission(ui, 9, "Hello Card", "notifications.post",
+                           "Notify when background work is complete and ready");
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "permission", ui, frame);
 }
 
 int main(int argc, char **argv)
@@ -115,10 +120,15 @@ int main(int argc, char **argv)
     cp0_ui_add_app(&ui, 42, "dev.cardputerzero.updated");
     assert(ui.app_count == 2);
     assert(cp0_ui_selected_app_token(&ui) == 41);
+    assert(!cp0_ui_selected_app_is_immersive(&ui));
+    cp0_ui_set_app_display_mode(&ui, 41, true);
+    assert(cp0_ui_selected_app_is_immersive(&ui));
     cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
     assert(ui.screen == CP0_UI_APPS);
     cp0_ui_handle_action(&ui, CP0_UI_DOWN);
     assert(cp0_ui_selected_app_token(&ui) == 42);
+    cp0_ui_set_app_display_mode(&ui, 42, false);
+    assert(!cp0_ui_selected_app_is_immersive(&ui));
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_OPEN_APP);
     render(&ui, frame);
@@ -128,6 +138,25 @@ int main(int argc, char **argv)
     assert(cp0_ui_selected_app_token(&ui) == 41);
     cp0_ui_remove_app(&ui, 99);
     assert(ui.app_count == 1);
+
+    assert(cp0_ui_show_permission(
+        &ui, 77, "Hello Card", "camera.capture",
+        "Capture a photograph selected by the user"));
+    assert(ui.permission_prompt);
+    assert(ui.prompt_id == 77);
+    cp0_ui_handle_action(&ui, CP0_UI_GO_HOME);
+    assert(ui.permission_prompt);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_PERMISSION_ALWAYS);
+    cp0_ui_clear_permission(&ui);
+    assert(!ui.permission_prompt);
+    assert(ui.prompt_id == 0);
+    assert(cp0_ui_show_permission(&ui, 78, "Hello Card", "camera.capture",
+                                  "Capture a photograph"));
+    assert(cp0_ui_handle_action(&ui, CP0_UI_BACK) ==
+           CP0_UI_EVENT_PERMISSION_DENY);
+    cp0_ui_clear_permission(&ui);
 
     render(&ui, frame);
     if (argc == 2)
