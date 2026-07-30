@@ -4,8 +4,13 @@ use std::path::{Component, Path, PathBuf};
 use cp0_manifest::AppManifest;
 use serde::Serialize;
 
+mod protocol;
 mod registry;
 
+pub use protocol::{
+    AppSummary, AppdCommand, AppdRequest, AppdResponse, ErrorCode, PeerCredentials, ProtocolError,
+    ResponseData, peer_credentials, read_request, write_response,
+};
 pub use registry::{
     AppAccount, AppRegistry, FIRST_APP_ACCOUNT_ID, LAST_APP_ACCOUNT_ID, RegistryError,
 };

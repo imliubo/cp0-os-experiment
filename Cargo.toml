@@ -11,6 +11,7 @@ edition = "2024"
 rust-version = "1.85"
 
 [workspace.dependencies]
+libc = "0.2.177"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 
