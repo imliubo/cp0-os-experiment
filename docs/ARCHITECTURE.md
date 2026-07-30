@@ -69,6 +69,7 @@ socket；第三方应用不加入该组。可信 Shell 协议以 Wayland peer UI
 - 只读应用包、一个带配额的私有数据目录、空的设备目录；
 - 不暴露 system D-Bus、Wayland socket 路径、evdev、DRM、ALSA 和 GPIO；
 - PID 1 只把预连接的 Wayland FD 3 交给受信任的 App Runtime，由它代理 SDK 调用。
+- Runtime 仅在 `wl_keyboard.enter/leave` 焦点区间向有界 SDK 队列写入按键事件。
 
 App Runtime 在应用线性内存与 Wayland surface 之间传递 RGB565 帧，并转换到
 Weston 的 XRGB8888 SHM buffer。标准应用只能提交 320x150，沉浸应用可提交

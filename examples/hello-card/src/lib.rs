@@ -1,7 +1,7 @@
 #![no_std]
 
 use core::panic::PanicInfo;
-use cp0_sdk::{Error, display, system};
+use cp0_sdk::{Error, display, input, system};
 
 const FRAME_BYTES: usize =
     display::WIDTH as usize * display::STANDARD_HEIGHT as usize * 2;
@@ -39,6 +39,17 @@ fn prepare_frame() -> &'static mut [u8] {
     frame
 }
 
+fn show_key(frame: &mut [u8], code: u16) {
+    let color = 0x001fu16 | ((code & 0x1f) << 11) | ((code & 0x3f) << 5);
+    for y in 126..142 {
+        for x in 280..312 {
+            let offset = (y * usize::from(display::WIDTH) + x) * 2;
+            frame[offset] = color as u8;
+            frame[offset + 1] = (color >> 8) as u8;
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
     const TITLE: &str = "Hello Card";
@@ -62,8 +73,14 @@ pub extern "C" fn main() -> i32 {
                 Err(_) => return 1,
             }
         }
-        if system::wait_event(250).is_err() {
-            return 1;
+        match input::poll_key_event(250) {
+            Ok(Some(event)) if event.pressed => {
+                show_key(frame, event.code);
+                rendered = false;
+            }
+            Ok(_) => {}
+            Err(Error::ResourceLimit) => {}
+            Err(_) => return 1,
         }
     }
 }

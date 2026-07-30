@@ -76,6 +76,7 @@ add_executable(cardputerzero-app-runtime
   src/broker_client.c
   src/display.c
   src/hostcalls.c
+  src/input_queue.c
   src/main.c
   src/pixels.c
   src/seccomp.c

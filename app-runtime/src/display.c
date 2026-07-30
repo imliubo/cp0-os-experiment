@@ -1,9 +1,11 @@
 #include "display.h"
+#include "input_queue.h"
 #include "pixels.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/memfd.h>
+#include <linux/input-event-codes.h>
 #include <poll.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -33,6 +35,8 @@ struct cp0_display_state {
     struct wl_registry *registry;
     struct wl_compositor *compositor;
     struct wl_shm *shm;
+    struct wl_seat *seat;
+    struct wl_keyboard *keyboard;
     struct xdg_wm_base *wm_base;
     struct wl_surface *surface;
     struct xdg_surface *xdg_surface;
@@ -43,10 +47,13 @@ struct cp0_display_state {
     uint32_t *shadow;
     uint16_t content_height;
     uint16_t content_offset_y;
+    struct cp0_input_queue input_queue;
+    uint8_t held_modifiers;
     bool has_xrgb8888;
     bool configured;
     bool failed;
     bool first_frame;
+    bool keyboard_focused;
 };
 
 static struct cp0_display_state state;
@@ -83,6 +90,10 @@ static void handle_registry_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
         display->wm_base =
             wl_registry_bind(registry, name, &xdg_wm_base_interface, 1);
+    } else if (strcmp(interface, wl_seat_interface.name) == 0) {
+        uint32_t bind_version = version < 5U ? version : 5U;
+        display->seat =
+            wl_registry_bind(registry, name, &wl_seat_interface, bind_version);
     }
 }
 
@@ -110,6 +121,200 @@ static void handle_shm_format(void *data, struct wl_shm *shm,
 
 static const struct wl_shm_listener shm_listener = {
     .format = handle_shm_format,
+};
+
+enum cp0_modifier {
+    CP0_MODIFIER_SHIFT = 1U << 0,
+    CP0_MODIFIER_CONTROL = 1U << 1,
+    CP0_MODIFIER_ALT = 1U << 2,
+    CP0_MODIFIER_SUPER = 1U << 3,
+};
+
+enum cp0_held_modifier {
+    CP0_HELD_LEFT_SHIFT = 1U << 0,
+    CP0_HELD_RIGHT_SHIFT = 1U << 1,
+    CP0_HELD_LEFT_CONTROL = 1U << 2,
+    CP0_HELD_RIGHT_CONTROL = 1U << 3,
+    CP0_HELD_LEFT_ALT = 1U << 4,
+    CP0_HELD_RIGHT_ALT = 1U << 5,
+    CP0_HELD_LEFT_SUPER = 1U << 6,
+    CP0_HELD_RIGHT_SUPER = 1U << 7,
+};
+
+static void set_modifier_key(struct cp0_display_state *display, uint32_t key,
+                             bool pressed) {
+    uint8_t bit = 0;
+
+    switch (key) {
+    case KEY_LEFTSHIFT:
+        bit = CP0_HELD_LEFT_SHIFT;
+        break;
+    case KEY_RIGHTSHIFT:
+        bit = CP0_HELD_RIGHT_SHIFT;
+        break;
+    case KEY_LEFTCTRL:
+        bit = CP0_HELD_LEFT_CONTROL;
+        break;
+    case KEY_RIGHTCTRL:
+        bit = CP0_HELD_RIGHT_CONTROL;
+        break;
+    case KEY_LEFTALT:
+        bit = CP0_HELD_LEFT_ALT;
+        break;
+    case KEY_RIGHTALT:
+        bit = CP0_HELD_RIGHT_ALT;
+        break;
+    case KEY_LEFTMETA:
+        bit = CP0_HELD_LEFT_SUPER;
+        break;
+    case KEY_RIGHTMETA:
+        bit = CP0_HELD_RIGHT_SUPER;
+        break;
+    default:
+        return;
+    }
+    if (pressed)
+        display->held_modifiers |= bit;
+    else
+        display->held_modifiers &= (uint8_t)~bit;
+}
+
+static uint8_t modifier_mask(const struct cp0_display_state *display) {
+    uint8_t modifiers = 0;
+
+    if ((display->held_modifiers &
+         (CP0_HELD_LEFT_SHIFT | CP0_HELD_RIGHT_SHIFT)) != 0U)
+        modifiers |= CP0_MODIFIER_SHIFT;
+    if ((display->held_modifiers &
+         (CP0_HELD_LEFT_CONTROL | CP0_HELD_RIGHT_CONTROL)) != 0U)
+        modifiers |= CP0_MODIFIER_CONTROL;
+    if ((display->held_modifiers &
+         (CP0_HELD_LEFT_ALT | CP0_HELD_RIGHT_ALT)) != 0U)
+        modifiers |= CP0_MODIFIER_ALT;
+    if ((display->held_modifiers &
+         (CP0_HELD_LEFT_SUPER | CP0_HELD_RIGHT_SUPER)) != 0U)
+        modifiers |= CP0_MODIFIER_SUPER;
+    return modifiers;
+}
+
+static void handle_keyboard_keymap(void *data, struct wl_keyboard *keyboard,
+                                   uint32_t format, int32_t descriptor,
+                                   uint32_t size) {
+    (void)data;
+    (void)keyboard;
+    (void)format;
+    (void)size;
+    if (descriptor >= 0)
+        close(descriptor);
+}
+
+static void handle_keyboard_enter(void *data, struct wl_keyboard *keyboard,
+                                  uint32_t serial, struct wl_surface *surface,
+                                  struct wl_array *keys) {
+    struct cp0_display_state *display = data;
+    uint32_t *key;
+    (void)keyboard;
+    (void)serial;
+
+    if (surface != display->surface)
+        return;
+    cp0_input_queue_reset(&display->input_queue);
+    display->held_modifiers = 0;
+    wl_array_for_each(key, keys)
+        set_modifier_key(display, *key, true);
+    display->keyboard_focused = true;
+}
+
+static void handle_keyboard_leave(void *data, struct wl_keyboard *keyboard,
+                                  uint32_t serial,
+                                  struct wl_surface *surface) {
+    struct cp0_display_state *display = data;
+    (void)keyboard;
+    (void)serial;
+    (void)surface;
+
+    display->keyboard_focused = false;
+    display->held_modifiers = 0;
+    cp0_input_queue_reset(&display->input_queue);
+}
+
+static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
+                                uint32_t serial, uint32_t time, uint32_t key,
+                                uint32_t key_state) {
+    struct cp0_display_state *display = data;
+    bool pressed = key_state == WL_KEYBOARD_KEY_STATE_PRESSED;
+    (void)keyboard;
+    (void)serial;
+    (void)time;
+
+    if (!display->keyboard_focused || key > UINT16_MAX)
+        return;
+    set_modifier_key(display, key, pressed);
+    (void)cp0_input_queue_push(&display->input_queue, (uint16_t)key, pressed,
+                               false, modifier_mask(display));
+}
+
+static void handle_keyboard_modifiers(void *data,
+                                      struct wl_keyboard *keyboard,
+                                      uint32_t serial, uint32_t depressed,
+                                      uint32_t latched, uint32_t locked,
+                                      uint32_t group) {
+    (void)data;
+    (void)keyboard;
+    (void)serial;
+    (void)depressed;
+    (void)latched;
+    (void)locked;
+    (void)group;
+}
+
+static void handle_keyboard_repeat_info(void *data,
+                                        struct wl_keyboard *keyboard,
+                                        int32_t rate, int32_t delay) {
+    (void)data;
+    (void)keyboard;
+    (void)rate;
+    (void)delay;
+}
+
+static const struct wl_keyboard_listener keyboard_listener = {
+    .keymap = handle_keyboard_keymap,
+    .enter = handle_keyboard_enter,
+    .leave = handle_keyboard_leave,
+    .key = handle_keyboard_key,
+    .modifiers = handle_keyboard_modifiers,
+    .repeat_info = handle_keyboard_repeat_info,
+};
+
+static void handle_seat_capabilities(void *data, struct wl_seat *seat,
+                                     uint32_t capabilities) {
+    struct cp0_display_state *display = data;
+
+    if ((capabilities & WL_SEAT_CAPABILITY_KEYBOARD) != 0U &&
+        display->keyboard == NULL) {
+        display->keyboard = wl_seat_get_keyboard(seat);
+        wl_keyboard_add_listener(display->keyboard, &keyboard_listener,
+                                 display);
+    } else if ((capabilities & WL_SEAT_CAPABILITY_KEYBOARD) == 0U &&
+               display->keyboard != NULL) {
+        wl_keyboard_destroy(display->keyboard);
+        display->keyboard = NULL;
+        display->keyboard_focused = false;
+        display->held_modifiers = 0;
+        cp0_input_queue_reset(&display->input_queue);
+    }
+}
+
+static void handle_seat_name(void *data, struct wl_seat *seat,
+                             const char *name) {
+    (void)data;
+    (void)seat;
+    (void)name;
+}
+
+static const struct wl_seat_listener seat_listener = {
+    .capabilities = handle_seat_capabilities,
+    .name = handle_seat_name,
 };
 
 static void handle_wm_base_ping(void *data, struct xdg_wm_base *wm_base,
@@ -239,6 +444,7 @@ bool cp0_display_initialize(int socket_fd, const char *app_id, bool immersive) {
         immersive ? CP0_DISPLAY_HEIGHT : CP0_STANDARD_CONTENT_HEIGHT;
     state.content_offset_y = immersive ? 0U : CP0_STANDARD_CONTENT_OFFSET_Y;
     state.first_frame = true;
+    cp0_input_queue_reset(&state.input_queue);
     state.shadow = calloc(CP0_FRAME_PIXELS, sizeof(uint32_t));
     if (state.shadow == NULL)
         return false;
@@ -251,12 +457,13 @@ bool cp0_display_initialize(int socket_fd, const char *app_id, bool immersive) {
         goto failure;
     wl_registry_add_listener(state.registry, &registry_listener, &state);
     if (wl_display_roundtrip(state.display) < 0 || state.compositor == NULL ||
-        state.shm == NULL || state.wm_base == NULL)
+        state.shm == NULL || state.wm_base == NULL || state.seat == NULL)
         goto failure;
     wl_shm_add_listener(state.shm, &shm_listener, &state);
+    wl_seat_add_listener(state.seat, &seat_listener, &state);
     xdg_wm_base_add_listener(state.wm_base, &wm_base_listener, &state);
     if (wl_display_roundtrip(state.display) < 0 || !state.has_xrgb8888 ||
-        !create_buffers(&state))
+        state.keyboard == NULL || !create_buffers(&state))
         goto failure;
 
     state.surface = wl_compositor_create_surface(state.compositor);
@@ -304,6 +511,10 @@ void cp0_display_destroy(void) {
         wl_surface_destroy(state.surface);
     if (state.wm_base != NULL)
         xdg_wm_base_destroy(state.wm_base);
+    if (state.keyboard != NULL)
+        wl_keyboard_destroy(state.keyboard);
+    if (state.seat != NULL)
+        wl_seat_destroy(state.seat);
     if (state.shm != NULL)
         wl_shm_destroy(state.shm);
     if (state.compositor != NULL)
@@ -450,4 +661,29 @@ int cp0_display_wait(int timeout_milliseconds) {
     if (wl_display_dispatch_pending(state.display) < 0)
         return -1;
     return state.failed ? -1 : 0;
+}
+
+int cp0_display_poll_key_event(uint8_t *event_bytes, size_t event_byte_count,
+                               int timeout_milliseconds) {
+    struct cp0_key_event event;
+
+    if (event_bytes == NULL || event_byte_count != sizeof(event) ||
+        timeout_milliseconds < 0 || timeout_milliseconds > 1000)
+        return -3;
+    if (state.display == NULL || state.failed)
+        return -2;
+    if (cp0_input_queue_take_overflow(&state.input_queue))
+        return -4;
+    if (cp0_input_queue_pop(&state.input_queue, &event)) {
+        memcpy(event_bytes, &event, sizeof(event));
+        return 1;
+    }
+    if (cp0_display_wait(timeout_milliseconds) != 0)
+        return -2;
+    if (cp0_input_queue_take_overflow(&state.input_queue))
+        return -4;
+    if (!cp0_input_queue_pop(&state.input_queue, &event))
+        return 0;
+    memcpy(event_bytes, &event, sizeof(event));
+    return 1;
 }

@@ -10,6 +10,10 @@
 #define CP0_DISPLAY_HEIGHT 170U
 #define CP0_STANDARD_DISPLAY_HEIGHT 150U
 #define CP0_MAX_DAMAGE_RECTS 32U
+#define CP0_MODIFIER_SHIFT (1U << 0)
+#define CP0_MODIFIER_CONTROL (1U << 1)
+#define CP0_MODIFIER_ALT (1U << 2)
+#define CP0_MODIFIER_SUPER (1U << 3)
 #define CP0_MAX_WAIT_MILLISECONDS 1000U
 #define CP0_MAX_NOTIFICATION_TITLE_CHARS 32U
 #define CP0_MAX_NOTIFICATION_BODY_CHARS 160U
@@ -45,6 +49,14 @@ typedef struct cp0_rect {
     uint16_t height;
 } cp0_rect_t;
 
+typedef struct cp0_key_event {
+    uint16_t code;
+    uint8_t pressed;
+    uint8_t repeated;
+    uint8_t modifiers;
+    uint8_t reserved[3];
+} cp0_key_event_t;
+
 CP0_IMPORT("cp0_monotonic_milliseconds")
 uint64_t cp0_monotonic_milliseconds(void);
 
@@ -58,6 +70,10 @@ CP0_IMPORT("cp0_present_rgb565")
 cp0_result_t cp0_present_rgb565(const uint8_t *pixels, uint32_t pixel_bytes,
                                 const cp0_rect_t *damage,
                                 uint32_t damage_bytes);
+
+CP0_IMPORT("cp0_poll_key_event")
+int32_t cp0_poll_key_event(cp0_key_event_t *event, uint32_t event_bytes,
+                           int32_t timeout_milliseconds);
 
 CP0_IMPORT("cp0_post_notification")
 cp0_result_t cp0_post_notification(const uint8_t *title, uint32_t title_length,

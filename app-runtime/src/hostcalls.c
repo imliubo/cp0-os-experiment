@@ -40,6 +40,13 @@ static int32_t cp0_present_rgb565(wasm_exec_env_t execution_environment,
                                       (size_t)damage_bytes);
 }
 
+static int32_t cp0_poll_key_event(wasm_exec_env_t execution_environment,
+                                  uint8_t *event, uint32_t event_bytes,
+                                  int32_t timeout_ms) {
+    (void)execution_environment;
+    return cp0_display_poll_key_event(event, (size_t)event_bytes, timeout_ms);
+}
+
 static int32_t cp0_post_notification(wasm_exec_env_t execution_environment,
                                      const uint8_t *title,
                                      uint32_t title_length,
@@ -57,6 +64,7 @@ static NativeSymbol symbols[] = {
     {"cp0_display_dimensions", (void *)cp0_get_display_dimensions, "()i",
      NULL},
     {"cp0_present_rgb565", (void *)cp0_present_rgb565, "(*~*~)i", NULL},
+    {"cp0_poll_key_event", (void *)cp0_poll_key_event, "(*~i)i", NULL},
     {"cp0_post_notification", (void *)cp0_post_notification, "(*~*~)i", NULL},
 };
 

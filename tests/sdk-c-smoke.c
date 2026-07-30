@@ -1,11 +1,17 @@
 #include "cardputerzero.h"
 
+_Static_assert(sizeof(cp0_key_event_t) == 8U, "key event ABI changed");
+_Static_assert(sizeof(cp0_rect_t) == 8U, "damage rectangle ABI changed");
+
 int sdk_c_smoke(void) {
     static const uint8_t title[] = "C SDK";
     static const uint8_t body[] = "ready";
     cp0_result_t result = cp0_post_notification(
         title, (uint32_t)(sizeof(title) - 1U), body,
         (uint32_t)(sizeof(body) - 1U));
+    cp0_key_event_t event = {0};
+    (void)cp0_poll_key_event(&event, sizeof(event), 0);
+    (void)cp0_display_dimensions();
     return result == CP0_ERROR_UNAVAILABLE ? (int)cp0_monotonic_milliseconds()
                                            : (int)result;
 }
