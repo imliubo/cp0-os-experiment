@@ -1,7 +1,7 @@
 /target/
+/deploy/
 /.idea/
 /.vscode/
 .DS_Store
 *.swp
 *.swo
-

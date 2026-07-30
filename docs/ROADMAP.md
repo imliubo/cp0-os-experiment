@@ -21,8 +21,9 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 - [x] 固定 BSP 源码提交、V0.6 overlay、kernel module 构建入口和启动参数。
 - [x] 建立最小 Debian arm64 `pi-gen` 外部阶段和服务裁剪策略。
 - [x] 建立可回滚启动配置安装器与真机 smoke test。
-- [ ] 在真机验证 64 MB GPU/CMA、memory cgroup、AppArmor 和全部设备接口。
-- [ ] 构建并烧录首个最小镜像，测量启动时间、空闲内存和 SD 写入。
+- [x] 在现有系统真机验证 memory cgroup、AppArmor 和全部设备接口。
+- [x] 构建首个无 Launcher/桌面环境的精简镜像并完成离线内容验收。
+- [ ] 烧录精简镜像，验证 64 MB GPU/CMA，并测量启动时间、空闲内存和 SD 写入。
 - [ ] 加入只读根文件系统原型。
 
 完成条件：冷启动进入 DRM 测试画面，所有输入输出设备通过自动化 smoke test，系统

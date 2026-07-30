@@ -2,21 +2,43 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-pi_gen_dir=${PI_GEN_DIR:-}
-password=${CP0_FIRST_USER_PASSWORD:-}
+source "$repo_root/image/pi-gen/upstream.env"
 
-if [[ $(uname -s) != Linux ]]; then
-    echo "error: pi-gen must run on Linux or in a Linux VM/container" >&2
-    exit 1
+pi_gen_dir=${PI_GEN_DIR:-$repo_root/target/pi-gen}
+password=${CP0_FIRST_USER_PASSWORD:-}
+container_name=${CP0_BUILD_CONTAINER:-cardputerzero-pigen}
+container_image="cardputerzero-pigen:${PI_GEN_COMMIT:0:12}"
+deploy_dir="$repo_root/deploy"
+apt_proxy=${CP0_APT_PROXY:-${http_proxy:-}}
+resume_build=${CP0_RESUME_BUILD:-0}
+
+if [[ $(uname -s) == Darwin && -n "$apt_proxy" ]]; then
+    apt_proxy=${apt_proxy/127.0.0.1/host.docker.internal}
+    apt_proxy=${apt_proxy/localhost/host.docker.internal}
 fi
-if [[ -z "$pi_gen_dir" || ! -x "$pi_gen_dir/build.sh" ]]; then
-    echo "error: PI_GEN_DIR must point to a pi-gen checkout" >&2
-    exit 1
-fi
+
 if [[ -z "$password" ]]; then
     echo "error: CP0_FIRST_USER_PASSWORD is required for the development image" >&2
     exit 1
 fi
+
+if [[ ! -d "$pi_gen_dir/.git" ]]; then
+    mkdir -p "$(dirname "$pi_gen_dir")"
+    git clone --filter=blob:none --branch "$PI_GEN_BRANCH" \
+        "$PI_GEN_REPOSITORY" "$pi_gen_dir"
+fi
+if ! git -C "$pi_gen_dir" cat-file -e "$PI_GEN_COMMIT^{commit}" 2>/dev/null; then
+    git -C "$pi_gen_dir" fetch origin "$PI_GEN_BRANCH"
+fi
+git -C "$pi_gen_dir" checkout --detach "$PI_GEN_COMMIT"
+test "$(git -C "$pi_gen_dir" rev-parse HEAD)" = "$PI_GEN_COMMIT"
+
+rm -rf "$pi_gen_dir/stage-cardputerzero-os"
+cp -R "$repo_root/image/pi-gen/stage-cardputerzero-os" \
+    "$pi_gen_dir/stage-cardputerzero-os"
+# The stage1 user already exists. Installing userconf-pi after sizing the
+# image adds a large Raspberry Pi utility dependency set and can fill rootfs.
+touch "$pi_gen_dir/export-image/01-user-rename/SKIP"
 
 config_file=$(mktemp "${TMPDIR:-/tmp}/cp0-pigen-config.XXXXXX")
 cleanup() {
@@ -33,8 +55,93 @@ if [[ -n ${CP0_SSH_PUBLIC_KEY:-} ]]; then
 fi
 
 printf 'STAGE_LIST=%q\n' \
-    "$pi_gen_dir/stage0 $pi_gen_dir/stage1 $pi_gen_dir/stage2 $repo_root/image/pi-gen/stage-cardputerzero-os" \
+    "/pi-gen/stage0 /pi-gen/stage1 /pi-gen/stage-cardputerzero-os" \
     >>"$config_file"
+printf 'CONTAINER_NAME=%q\n' "$container_name" >>"$config_file"
+if [[ -n "$apt_proxy" ]]; then
+    printf 'APT_PROXY=%q\n' "$apt_proxy" >>"$config_file"
+fi
 
-echo "Building CardputerZero OS with pi-gen at $pi_gen_dir"
-"$pi_gen_dir/build.sh" -c "$config_file"
+if [[ $(uname -s) == Linux && ${CP0_USE_DOCKER:-1} == 0 ]]; then
+    sed -i \
+        "s|^STAGE_LIST=.*|STAGE_LIST=$(printf %q "$pi_gen_dir/stage0 $pi_gen_dir/stage1 $pi_gen_dir/stage-cardputerzero-os")|" \
+        "$config_file"
+    echo "Building CardputerZero OS natively with pi-gen $PI_GEN_COMMIT"
+    "$pi_gen_dir/build.sh" -c "$config_file"
+    exit 0
+fi
+
+command -v docker >/dev/null
+docker info >/dev/null
+container_exists=0
+if docker container inspect "$container_name" >/dev/null 2>&1; then
+    container_exists=1
+fi
+if ((container_exists == 1)) && [[ "$resume_build" != 1 ]]; then
+    echo "error: Docker container $container_name already exists" >&2
+    echo "retry with CP0_RESUME_BUILD=1 or remove it after preserving logs" >&2
+    exit 1
+fi
+if ((container_exists == 0)) && [[ "$resume_build" == 1 ]]; then
+    echo "error: no failed Docker build named $container_name to resume" >&2
+    exit 1
+fi
+
+echo "Building CardputerZero OS in Docker with pi-gen $PI_GEN_COMMIT"
+docker build --build-arg BASE_IMAGE=debian:trixie \
+    -t "$container_image" "$pi_gen_dir"
+
+run_container_name=$container_name
+docker_run_args=(--name "$run_container_name")
+if [[ "$resume_build" == 1 ]]; then
+    run_container_name="${container_name}-continue"
+    if docker container inspect "$run_container_name" >/dev/null 2>&1; then
+        echo "error: previous continuation container $run_container_name exists" >&2
+        exit 1
+    fi
+    docker_run_args=(
+        --name "$run_container_name"
+        --volumes-from "$container_name"
+    )
+    echo "Resuming build from volumes owned by $container_name"
+fi
+
+set +e
+docker run "${docker_run_args[@]}" --privileged \
+    --volume "$config_file:/config:ro" \
+    -e "GIT_HASH=$PI_GEN_COMMIT" \
+    "$container_image" \
+    bash -e -o pipefail -c \
+    'dpkg-reconfigure qemu-user-binfmt &&
+     (mount binfmt_misc -t binfmt_misc /proc/sys/fs/binfmt_misc || true) &&
+     cd /pi-gen && ./build.sh -c /config &&
+     rsync -av work/*/build.log deploy/'
+build_status=$?
+set -e
+
+mkdir -p "$deploy_dir"
+{
+    docker logs --timestamps "$container_name" 2>&1 || true
+    if [[ "$run_container_name" != "$container_name" ]]; then
+        docker logs --timestamps "$run_container_name" 2>&1 || true
+    fi
+} >"$deploy_dir/build-docker.log"
+docker cp "$run_container_name:/pi-gen/deploy/." "$deploy_dir/" || true
+
+if ((build_status != 0)); then
+    echo "error: image build failed; build containers were preserved" >&2
+    exit "$build_status"
+fi
+
+if [[ ${CP0_KEEP_BUILD_CONTAINER:-0} != 1 ]]; then
+    docker rm -v "$run_container_name" >/dev/null
+    if [[ "$run_container_name" != "$container_name" ]]; then
+        docker rm -v "$container_name" >/dev/null
+    fi
+fi
+
+(
+    cd "$deploy_dir"
+    shasum -a 256 -- *.img.xz >SHA256SUMS
+)
+ls -lh "$deploy_dir"

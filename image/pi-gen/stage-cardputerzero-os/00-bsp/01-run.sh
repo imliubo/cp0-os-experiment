@@ -12,7 +12,8 @@ apt-get install -y --no-install-recommends \
     git \
     linux-headers-rpi-v8
 
-git clone --no-checkout "${BSP_REPOSITORY}" /tmp/cardputerzero-bsp
+http_proxy="$APT_PROXY" https_proxy="$APT_PROXY" \
+    git clone --no-checkout "${BSP_REPOSITORY}" /tmp/cardputerzero-bsp
 git -C /tmp/cardputerzero-bsp checkout "${BSP_COMMIT}"
 test "\$(git -C /tmp/cardputerzero-bsp rev-parse HEAD)" = "${BSP_COMMIT}"
 
@@ -43,7 +44,8 @@ fdtput -t s "\$CM0_DTB" /chosen bootargs "\$FILTERED"
 fdtget -t s "\$CM0_DTB" /chosen bootargs | grep -qv cgroup_disable=memory
 
 rm -rf /tmp/cardputerzero-bsp
-apt-get purge -y build-essential device-tree-compiler git linux-headers-rpi-v8
+apt-get purge -y build-essential device-tree-compiler git \
+    linux-headers-rpi-v8 linux-headers-rpi-2712
 apt-get autoremove -y --purge
 apt-get clean
 CHROOT
@@ -51,22 +53,17 @@ CHROOT
 boot_config="${ROOTFS_DIR}/boot/firmware/config.txt"
 cmdline="${ROOTFS_DIR}/boot/firmware/cmdline.txt"
 
-sed -i -E \
-    's/^dtoverlay=vc4-kms-v3d(,cma-[0-9]+)?[[:space:]]*$/dtoverlay=vc4-kms-v3d,cma-64/' \
-    "$boot_config"
-if ! grep -q '^dtoverlay=vc4-kms-v3d,cma-64$' "$boot_config"; then
-    sed -i '/^\[all\]$/i dtoverlay=vc4-kms-v3d,cma-64' "$boot_config"
-fi
-
+sed -i -E '/^dtoverlay=vc4-kms-v3d(,cma-[0-9]+)?[[:space:]]*$/d' "$boot_config"
 sed -i '/^gpu_mem=/d' "$boot_config"
 sed -i '/^gpu_mem_512=/d' "$boot_config"
-sed -i '/^\[all\]$/i gpu_mem=64' "$boot_config"
-sed -i '/^\[all\]$/i gpu_mem_512=64' "$boot_config"
 
 cat >>"$boot_config" <<'CONFIG'
 
 # CardputerZero OS CM0 V0.6 BSP
 [all]
+gpu_mem=64
+gpu_mem_512=64
+dtoverlay=vc4-kms-v3d,cma-64
 enable_uart=1
 dtoverlay=dwc2
 dtoverlay=cardputerzero-v5-overlay
@@ -85,6 +82,14 @@ done
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/device-smoke.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-smoke.sh"
 
+if [[ -n ${PUBKEY_SSH_FIRST_USER:-} ]]; then
+    install -d -m 0700 \
+        "${ROOTFS_DIR}/home/${FIRST_USER_NAME}/.ssh"
+    printf '%s\n' "$PUBKEY_SSH_FIRST_USER" \
+        >"${ROOTFS_DIR}/home/${FIRST_USER_NAME}/.ssh/authorized_keys"
+    chmod 0600 "${ROOTFS_DIR}/home/${FIRST_USER_NAME}/.ssh/authorized_keys"
+fi
+
 mkdir -p "${ROOTFS_DIR}/etc/rpi/swap.conf.d"
 cat >"${ROOTFS_DIR}/etc/rpi/swap.conf.d/90-cardputerzero-os.conf" <<'ZRAM'
 [Main]
@@ -96,7 +101,51 @@ ZRAM
 
 on_chroot <<'CHROOT'
 set -e
-apt-get purge -y cloud-init rpi-cloud-init-mods || true
+purge_packages=
+for package in \
+    cloud-init rpi-cloud-init-mods \
+    binutils binutils-aarch64-linux-gnu binutils-common \
+    cpp cpp-14 cpp-14-aarch64-linux-gnu cpp-aarch64-linux-gnu \
+    gcc gcc-14 gcc-14-aarch64-linux-gnu gcc-aarch64-linux-gnu \
+    dpkg-dev libdpkg-perl libc-dev-bin libc6-dev linux-libc-dev make \
+    lightdm wayfire wf-panel-pi pcmanfm pcmanfm-qt \
+    packagekit pipewire pipewire-pulse wireplumber libinput-tools \
+    avahi-daemon bluez bluez-firmware modemmanager udisks2 \
+    rpi-connect rpi-connect-lite rpi-connect-wayvnc \
+    rpicam-apps-lite mkvtoolnix cifs-utils ntfs-3g libmtp-runtime \
+    wolfram-engine gdb htop man-db manpages-dev ncdu strace; do
+    if dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null | grep -q '^ii '; then
+        purge_packages="$purge_packages $package"
+    fi
+done
+for package in $(dpkg-query -W -f='${binary:Package}\n' \
+    'linux-base-*rpi-2712' 'linux-image-*rpi-2712' \
+    'linux-headers-*' 'linux-kbuild-*' 2>/dev/null || true); do
+    purge_packages="$purge_packages $package"
+done
+if [ -n "$purge_packages" ]; then
+    apt-get purge -y $purge_packages
+fi
+apt-get autoremove -y --purge
+
+for group in input spi i2c gpio; do
+    groupadd -f -r "$group"
+done
+for group in adm dialout audio users sudo video input gpio spi i2c netdev render; do
+    adduser "$FIRST_USER_NAME" "$group"
+done
+if [ -n "${PUBKEY_SSH_FIRST_USER:-}" ]; then
+    chown -R "$FIRST_USER_NAME:$FIRST_USER_NAME" \
+        "/home/$FIRST_USER_NAME/.ssh"
+fi
+usermod --lock root
+
+printf '%s\n' "$TIMEZONE_DEFAULT" >/etc/timezone
+ln -sf "/usr/share/zoneinfo/$TIMEZONE_DEFAULT" /etc/localtime
+if [ -n "${WPA_COUNTRY:-}" ]; then
+    SUDO_USER="$FIRST_USER_NAME" raspi-config nonint do_wifi_country "$WPA_COUNTRY"
+fi
+
 systemctl disable \
     apt-daily.timer \
     apt-daily-upgrade.timer \
@@ -110,7 +159,23 @@ systemctl disable \
     rpi-connect-wayvnc.service \
     rpi-zram-writeback.service \
     rpi-zram-writeback.timer 2>/dev/null || true
+systemctl mask apt-daily.service apt-daily.timer \
+    apt-daily-upgrade.service apt-daily-upgrade.timer 2>/dev/null || true
 systemctl enable NetworkManager.service ssh.service apparmor.service
+systemctl enable rpi-resize.service 2>/dev/null || true
+systemctl set-default multi-user.target
+mkdir -p /etc/systemd/journald.conf.d
+cat >/etc/systemd/journald.conf.d/10-cardputerzero-os.conf <<'JOURNALD'
+[Journal]
+Storage=volatile
+RuntimeMaxUse=16M
+JOURNALD
+cat >/etc/sysctl.d/90-cardputerzero-os.conf <<'SYSCTL'
+vm.swappiness=100
+vm.dirty_background_ratio=5
+vm.dirty_ratio=10
+SYSCTL
 rm -f /var/lib/systemd/random-seed
+rm -f /etc/ssh/ssh_host_*_key*
 apt-get clean
 CHROOT

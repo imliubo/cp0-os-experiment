@@ -36,20 +36,50 @@ profile:    CONFIG_CARDPUTERO_V0_5=y
 
 ## 构建最小镜像
 
-构建需要 arm64 Linux 或 x86_64 Linux + Docker。macOS 只负责开发，不能直接执行
-`pi-gen` chroot 构建。
+构建默认使用 Docker，因此支持 macOS 和 Linux。Docker daemon 必须提供 Linux arm64
+容器支持；Linux arm64 也可设置 `CP0_USE_DOCKER=0` 原生构建。
 
 ```sh
-export PI_GEN_DIR=/path/to/pi-gen
 export CP0_FIRST_USER_PASSWORD='development-password'
 ./image/build-image.sh
+make verify-image
 ```
 
 也可设置 `CP0_SSH_PUBLIC_KEY`，生成只允许公钥登录的开发镜像。正式镜像不得设置
 默认密码或启用 SSH。
 
-自定义阶段在官方 `stage2` 后执行，生成 `-cp0-os-dev` 镜像。它会编译固定 BSP、
-删除构建依赖和 cloud-init、关闭桌面无关服务并安装真机诊断脚本。
+构建固定使用 `pi-gen` arm64 分支提交
+`ca8aeed0ae300c2a89f55ce9617d5f96a27e99e5`，只执行官方 `stage0`、`stage1`
+和 CardputerZero 自定义阶段，不包含 `stage2`。自定义阶段生成 `-cp0-os-dev`
+镜像，编译固定 BSP 后删除编译器、内核头文件、2712 内核及桌面无关组件，并安装
+真机诊断脚本。构建代理只存在于构建 chroot，导出的系统中不得残留代理地址。
+
+若下载或构建临时失败，构建容器会保留 `work/` 和 apt 缓存。恢复网络后续建：
+
+```sh
+CP0_FIRST_USER_PASSWORD='development-password' \
+CP0_RESUME_BUILD=1 ./image/build-image.sh
+```
+
+设置 `CP0_KEEP_BUILD_CONTAINER=1` 可在成功后保留构建容器用于诊断。默认成功后自动
+清理容器，失败时保留。产物写入 `deploy/`，包括压缩镜像、包清单、构建日志和
+`SHA256SUMS`。
+
+## 首个精简镜像候选（2026-07-30）
+
+首个可烧录候选已在 macOS + Docker Linux/arm64 环境完整构建：
+
+- 压缩镜像 215 MB，解压后 1.5 GB，根文件系统实际内容约 695 MB；
+- 只保留 `6.18.34+rpt-rpi-v8` 内核和 16 个 CardputerZero BSP 模块；
+- 不含 Launcher、LightDM、Wayfire、PCManFM、PipeWire、PackageKit、GTK 输入工具、
+  编译器、内核头文件或 2712 内核；
+- 默认启动到 `multi-user.target`，启用 NetworkManager、SSH 和 AppArmor；
+- CM0 DTB 不再包含 `cgroup_disable=memory`；启动配置固定 64 MB GPU、64 MB CMA、
+  memory cgroup 和 AppArmor；
+- journald 使用最大 16 MB 的易失日志，zram 固定 192 MB，不启用写回。
+
+离线检查已通过，但 RAM 是否恢复为至少 400 MB、显示/输入/音频等驱动是否在干净
+系统上正常加载，仍必须烧录后由真机确认。
 
 ## 在现有真机验证启动参数
 
@@ -79,8 +109,9 @@ cp cardputerzero-os-backup/20260730T075924Z/cmdline.txt ./cmdline.txt
 
 ## 最小化策略
 
-开发镜像保留 NetworkManager 和 SSH。LightDM、X11、Cloud Init、Avahi、RPC/NFS、
-UDisks、ModemManager、Raspberry Pi Connect 和自动 apt 定时任务均不属于基础系统。
-Bluetooth 暂时关闭但不删除，后续由权限 broker 接管时再启用。
+开发镜像保留 NetworkManager 和 SSH。Launcher、LightDM、Wayfire、PCManFM、
+PipeWire、PackageKit、Cloud Init、Avahi、RPC/NFS、UDisks、ModemManager、
+Raspberry Pi Connect 和自动 apt 定时任务均不属于基础系统。Bluetooth 服务和工具
+暂不安装，后续由权限 broker 接管时再加入。
 
 设备使用 192 MB zram，禁止 zram writeback 和磁盘 swap，避免持续写 SD 卡。
