@@ -57,6 +57,8 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 - [x] 实现 manifest 权限数据库、会话/持久决策和可信 Shell 提示控制协议。
 - [x] 实现首个 `notifications.post` typed capability broker、peer UID 身份绑定和
   有界 Shell 通知队列。
+- [x] 将 `notifications.post` 接入 WAMR host call，包含线性内存边界、Unix-only
+  seccomp 和真机 WASM 调用闭环。
 - [ ] 实现网络、文档、音频、相机和 LoRa/GPIO broker。
 - 定义 Intent Broker 和应用私有存储配额。
 - [ ] 建立恶意应用测试集，已覆盖 seccomp 旁路和 cgroup 资源耗尽；继续覆盖路径

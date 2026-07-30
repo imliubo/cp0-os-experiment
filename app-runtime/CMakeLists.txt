@@ -40,6 +40,7 @@ target_include_directories(cp0-wamr PUBLIC
 target_compile_options(cp0-wamr PRIVATE -Os -fstack-protector-strong)
 
 add_executable(cardputerzero-app-runtime
+  src/broker_client.c
   src/hostcalls.c
   src/main.c
   src/seccomp.c

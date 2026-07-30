@@ -17,6 +17,7 @@ static int expect_denied(const char *operation, long result) {
 
 int main(void) {
     int failed = 0;
+    int unix_socket;
 
     if (cp0_install_runtime_seccomp() != 0) {
         fprintf(stderr, "seccomp-probe: cannot install filter\n");
@@ -27,6 +28,13 @@ int main(void) {
         "openat", syscall(SYS_openat, AT_FDCWD, "/etc/passwd", O_RDONLY, 0));
     errno = 0;
     failed |= expect_denied("socket", syscall(SYS_socket, AF_INET, SOCK_STREAM, 0));
+    unix_socket = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (unix_socket < 0) {
+        fprintf(stderr, "seccomp-probe: AF_UNIX socket was denied\n");
+        failed = 1;
+    } else {
+        close(unix_socket);
+    }
     errno = 0;
     failed |= expect_denied(
         "mount", syscall(SYS_mount, "none", "/tmp", "tmpfs", 0, NULL));

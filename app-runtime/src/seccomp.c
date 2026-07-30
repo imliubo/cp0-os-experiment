@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/prctl.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -27,9 +28,20 @@ int cp0_install_runtime_seccomp(void) {
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
                  (uint32_t)offsetof(struct seccomp_data, nr)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_socket, 0, 4),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+                 (uint32_t)offsetof(struct seccomp_data, args[0])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AF_UNIX, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+        BPF_STMT(BPF_RET | BPF_K,
+                 SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+                 (uint32_t)offsetof(struct seccomp_data, nr)),
         CP0_ALLOW_SYSCALL(read),
         CP0_ALLOW_SYSCALL(write),
         CP0_ALLOW_SYSCALL(close),
+        CP0_ALLOW_SYSCALL(connect),
+        CP0_ALLOW_SYSCALL(setsockopt),
         CP0_ALLOW_SYSCALL(fstat),
         CP0_ALLOW_SYSCALL(newfstatat),
         CP0_ALLOW_SYSCALL(lseek),

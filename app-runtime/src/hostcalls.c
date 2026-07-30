@@ -1,4 +1,5 @@
 #include "hostcalls.h"
+#include "broker_client.h"
 
 #include <errno.h>
 #include <stdint.h>
@@ -20,8 +21,19 @@ static int32_t cp0_wait_event(wasm_exec_env_t execution_environment,
     return 0;
 }
 
+static int32_t cp0_post_notification(wasm_exec_env_t execution_environment,
+                                     const uint8_t *title,
+                                     uint32_t title_length,
+                                     const uint8_t *body,
+                                     uint32_t body_length) {
+    (void)execution_environment;
+    return cp0_broker_post_notification(title, (size_t)title_length, body,
+                                        (size_t)body_length);
+}
+
 static NativeSymbol symbols[] = {
     {"cp0_wait_event", (void *)cp0_wait_event, "(i)i", NULL},
+    {"cp0_post_notification", (void *)cp0_post_notification, "(*~*~)i", NULL},
 };
 
 NativeSymbol *cp0_host_symbols(uint32_t *count) {

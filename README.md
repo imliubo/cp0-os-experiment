@@ -38,6 +38,8 @@ Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真�
   以及经过 peer UID 认证的 Shell 查询与决策协议。
 - Phase 3D `notifications.post` typed broker、运行中应用 peer UID 认证、沙箱内唯一
   broker socket 和固定 8 条上限的 Shell 通知队列。
+- Phase 3E 首个 WAMR SDK host call、WASM 线性内存参数校验、Unix-only seccomp
+  socket 规则和 Hello WASM 真机通知闭环。
 
 ## 快速验证
 
@@ -71,3 +73,5 @@ Phase 3A 的 runtime、沙箱契约和真机安全验证见
 [permission decisions and trusted prompts](docs/PHASE3C-PERMISSIONS.md)。
 首个应用能力调用链及资源边界见
 [notification capability broker](docs/PHASE3D-NOTIFICATION-BROKER.md)。
+Runtime host call ABI 与真机结果见
+[Runtime capability host calls](docs/PHASE3E-RUNTIME-HOSTCALLS.md)。
