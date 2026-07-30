@@ -48,6 +48,26 @@ int main(void)
         decoded, sizeof(decoded)));
     assert(strcmp(decoded, "Say \"done\"") == 0);
 
+    static const char array[] = "{\"items\":[true,false,{\"id\":9}]}";
+    count = cp0_json_parse(array, strlen(array), tokens, TOKEN_COUNT);
+    assert(count == 8);
+    int items = member(array, tokens, (size_t)count, 0, "items");
+    bool boolean;
+    assert(cp0_json_get_bool(
+        array, &tokens[cp0_json_array_get(tokens, (size_t)count, items, 0)],
+        &boolean));
+    assert(boolean);
+    assert(cp0_json_get_bool(
+        array, &tokens[cp0_json_array_get(tokens, (size_t)count, items, 1)],
+        &boolean));
+    assert(!boolean);
+    int object = cp0_json_array_get(tokens, (size_t)count, items, 2);
+    assert(object >= 0 && tokens[object].type == CP0_JSON_OBJECT);
+    assert(cp0_json_array_get(tokens, (size_t)count, items, 3) < 0);
+    assert(!cp0_json_get_bool(
+        array, &tokens[member(array, tokens, (size_t)count, object, "id")],
+        &boolean));
+
     static const char with_null[] = "{\"value\":null}";
     count = cp0_json_parse(with_null, strlen(with_null), tokens, TOKEN_COUNT);
     assert(count == 3);

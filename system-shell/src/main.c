@@ -60,6 +60,8 @@ struct shell {
     bool has_argb;
     bool meta_pressed;
     bool redraw_pending;
+    unsigned int catalog_ticks;
+    char pending_activation[CP0_APP_ID_BYTES];
 };
 
 static volatile sig_atomic_t stop_requested;
@@ -96,6 +98,24 @@ static void poll_permission_prompt(struct shell *shell)
     fprintf(stderr, "system-shell: permission prompt=%llu visible\n",
             (unsigned long long)prompt.prompt_id);
     shell_redraw(shell);
+}
+
+static void poll_app_catalog(struct shell *shell)
+{
+    struct cp0_app_list list;
+    struct cp0_ui_catalog_app catalog[CP0_APPD_MAX_APPS];
+
+    if (cp0_appd_list_apps(&list) != 0)
+        return;
+    for (size_t index = 0; index < list.count; index++) {
+        catalog[index] = (struct cp0_ui_catalog_app){
+            .running = list.apps[index].running,
+            .immersive = list.apps[index].immersive,
+            .app_id = list.apps[index].app_id,
+            .name = list.apps[index].name,
+        };
+    }
+    cp0_ui_sync_app_catalog(&shell->ui, catalog, list.count, list.truncated);
 }
 
 static int create_anonymous_file(size_t size)
@@ -341,12 +361,64 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
     } else if (event == CP0_UI_EVENT_RESTART) {
         fprintf(stderr, "system-shell: restart requested; broker unavailable\n");
     } else if (event == CP0_UI_EVENT_OPEN_APP) {
+        char app_id[CP0_APP_ID_BYTES];
+        const char *selected_id = cp0_ui_selected_app_id(&shell->ui);
         uint32_t token = cp0_ui_selected_app_token(&shell->ui);
         if (token != 0) {
             shell->overlay_mode = cp0_ui_selected_app_is_immersive(&shell->ui)
                                       ? CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN
                                       : CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS;
             cp0_system_shell_v1_activate_app(shell->system_control, token);
+        } else if (selected_id != NULL &&
+                   snprintf(app_id, sizeof(app_id), "%s", selected_id) > 0) {
+            if (cp0_ui_selected_app_state(&shell->ui) == CP0_UI_APP_RUNNING ||
+                cp0_ui_selected_app_state(&shell->ui) == CP0_UI_APP_STARTING) {
+                cp0_ui_set_app_state(&shell->ui, app_id,
+                                     CP0_UI_APP_STARTING);
+                snprintf(shell->pending_activation,
+                         sizeof(shell->pending_activation), "%s", app_id);
+            } else {
+                cp0_ui_set_app_state(&shell->ui, app_id,
+                                     CP0_UI_APP_STARTING);
+                snprintf(shell->pending_activation,
+                         sizeof(shell->pending_activation), "%s", app_id);
+                shell_redraw(shell);
+                wl_display_flush(shell->display);
+                if (cp0_appd_start_app(app_id) != 0) {
+                    shell->pending_activation[0] = '\0';
+                    cp0_ui_set_app_state(&shell->ui, app_id,
+                                         CP0_UI_APP_FAILED);
+                    fprintf(stderr,
+                            "system-shell: application %s start failed\n",
+                            app_id);
+                } else {
+                    fprintf(stderr,
+                            "system-shell: application %s start requested\n",
+                            app_id);
+                }
+            }
+        }
+    } else if (event == CP0_UI_EVENT_STOP_APP) {
+        char app_id[CP0_APP_ID_BYTES];
+        const char *selected_id = cp0_ui_selected_app_id(&shell->ui);
+        if (selected_id != NULL &&
+            snprintf(app_id, sizeof(app_id), "%s", selected_id) > 0) {
+            if (cp0_appd_stop_app(app_id) == 0) {
+                if (strcmp(shell->pending_activation, app_id) == 0)
+                    shell->pending_activation[0] = '\0';
+                cp0_ui_set_app_state(&shell->ui, app_id,
+                                     CP0_UI_APP_STOPPED);
+                shell->overlay_mode =
+                    CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+                cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                                      shell->overlay_mode);
+                fprintf(stderr,
+                        "system-shell: application %s stop requested\n",
+                        app_id);
+            } else {
+                fprintf(stderr,
+                        "system-shell: application %s stop failed\n", app_id);
+            }
         }
     }
     shell_redraw(shell);
@@ -388,6 +460,14 @@ static void handle_app_added(void *data,
     (void)system_control;
     cp0_ui_add_app(&shell->ui, token, app_id);
     fprintf(stderr, "system-shell: app token=%u available\n", token);
+    if (strcmp(shell->pending_activation, app_id) == 0) {
+        shell->pending_activation[0] = '\0';
+        shell->overlay_mode = cp0_ui_app_is_immersive(&shell->ui, token)
+                                  ? CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN
+                                  : CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS;
+        cp0_system_shell_v1_activate_app(shell->system_control, token);
+        fprintf(stderr, "system-shell: app token=%u auto-activated\n", token);
+    }
     shell_redraw(shell);
 }
 
@@ -408,6 +488,7 @@ static void handle_activation_failed(
     struct shell *shell = data;
     (void)system_control;
     cp0_ui_remove_app(&shell->ui, token);
+    shell->pending_activation[0] = '\0';
     shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     fprintf(stderr, "system-shell: app token=%u activation failed\n", token);
     shell_redraw(shell);
@@ -785,6 +866,9 @@ static int shell_dispatch(struct shell *shell)
 {
     int display_fd = wl_display_get_fd(shell->display);
 
+    poll_app_catalog(shell);
+    shell_redraw(shell);
+
     while (!stop_requested) {
         while (wl_display_prepare_read(shell->display) != 0) {
             if (wl_display_dispatch_pending(shell->display) < 0)
@@ -832,6 +916,11 @@ static int shell_dispatch(struct shell *shell)
             uint64_t expirations;
             if (read(shell->timer_fd, &expirations, sizeof(expirations)) > 0) {
                 poll_permission_prompt(shell);
+                shell->catalog_ticks++;
+                if (shell->catalog_ticks >= 5) {
+                    poll_app_catalog(shell);
+                    shell->catalog_ticks = 0;
+                }
                 shell_redraw(shell);
             }
         }

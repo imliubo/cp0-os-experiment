@@ -39,7 +39,9 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
   认证、可信层和全局 Home/Back/Tasks/Power 动作通道。
 - [x] 将 Launcher、状态栏和权限弹窗迁移到 compositor 侧可信覆盖层，并实现沉浸模式。
 - [x] 在 compositor 统一键盘焦点、全局 Home/Back/任务切换快捷键和屏幕休眠。
+- [x] Launcher 从 appd 枚举已安装应用，支持启动后自动前台化，以及 Tasks 恢复/停止。
 - [x] 建立像素级截图回归测试并完成两个客户端的可靠切换与 200 轮压力测试。
+- [ ] 完成 Launcher 启动与 Tasks 停止的最终物理按键验收。
 - [ ] 完成 24 小时 compositor/Shell/appd 真机稳定性与内存泄漏验收。
 
 完成条件：两个测试 Wayland 客户端可可靠切换，应用无法读取非焦点输入或覆盖系统

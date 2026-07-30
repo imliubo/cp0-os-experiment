@@ -76,6 +76,12 @@ socket；第三方应用不加入该组。可信 Shell 协议以 Wayland peer UI
 - PID 1 只把预连接的 Wayland FD 3 交给受信任的 App Runtime，由它代理 SDK 调用。
 - Runtime 仅在 `wl_keyboard.enter/leave` 焦点区间向有界 SDK 队列写入按键事件。
 
+System Shell 通过认证后的 appd 控制 socket 获取已安装 manifest 摘要，不从 Wayland
+surface 推断安装状态。Launcher 的 app ID、显示名称和标准/沉浸策略来自 root 控制
+的 manifest；compositor token 只表示一个临时映射 surface。启动由 appd 完成，Shell
+等待两种身份在可信事件中匹配后才激活 token。Home 只隐藏单运行槽，Tasks 可恢复
+或通过 appd 停止它。
+
 App Runtime 在应用线性内存与 Wayland surface 之间传递 RGB565 帧，并转换到
 Weston 的 XRGB8888 SHM buffer。标准应用只能提交 320x150，沉浸应用可提交
 320x170；可信 shadow frame 和两个 compositor buffer 的总量仍低于 700 KiB。

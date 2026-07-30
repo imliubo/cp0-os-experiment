@@ -25,6 +25,8 @@ int cp0_json_parse(const char *document, size_t length,
 int cp0_json_object_get(const char *document,
                         const struct cp0_json_token *tokens, size_t token_count,
                         int object, const char *key);
+int cp0_json_array_get(const struct cp0_json_token *tokens, size_t token_count,
+                       int array, unsigned int item);
 bool cp0_json_string_equals(const char *document,
                             const struct cp0_json_token *token,
                             const char *expected);
@@ -33,6 +35,8 @@ bool cp0_json_copy_string(const char *document,
                           size_t output_capacity);
 bool cp0_json_get_u64(const char *document,
                       const struct cp0_json_token *token, uint64_t *value);
+bool cp0_json_get_bool(const char *document,
+                       const struct cp0_json_token *token, bool *value);
 bool cp0_json_is_null(const char *document,
                       const struct cp0_json_token *token);
 

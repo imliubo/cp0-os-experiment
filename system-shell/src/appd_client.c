@@ -1,7 +1,10 @@
+#define _GNU_SOURCE
+
 #include "cp0_appd_client.h"
 #include "cp0_json.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,9 +13,12 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#ifndef CP0_APPD_SOCKET
 #define CP0_APPD_SOCKET "/run/cardputerzero-appd/control.sock"
+#endif
 #define CP0_APPD_FRAME_BYTES 8192U
-#define CP0_APPD_JSON_TOKENS 128U
+#define CP0_APPD_JSON_TOKENS 192U
+#define CP0_APPD_PAGE_SIZE 8U
 
 static uint64_t next_request_id = 1;
 
@@ -31,26 +37,37 @@ static int write_all(int descriptor, const char *buffer, size_t length)
 }
 
 static int exchange(const char *request, size_t request_length, char *response,
-                    size_t response_capacity, size_t *response_length)
+                    size_t response_capacity, size_t *response_length,
+                    unsigned int timeout_ms)
 {
-    const struct timeval timeout = {.tv_sec = 0, .tv_usec = 250000};
+    const struct timeval timeout = {
+        .tv_sec = (time_t)(timeout_ms / 1000U),
+        .tv_usec = (suseconds_t)((timeout_ms % 1000U) * 1000U),
+    };
     struct sockaddr_un address = {.sun_family = AF_UNIX};
-    int descriptor = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    socklen_t address_length =
+        (socklen_t)(offsetof(struct sockaddr_un, sun_path) +
+                    strlen(CP0_APPD_SOCKET) + 1U);
+    int descriptor = socket(AF_UNIX, SOCK_STREAM, 0);
     size_t length = 0;
     int result = -1;
 
     if (descriptor < 0 || request == NULL || response == NULL ||
         response_capacity < 2)
         goto cleanup;
-    if (setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+    if (fcntl(descriptor, F_SETFD, FD_CLOEXEC) != 0 ||
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout,
                    sizeof(timeout)) != 0 ||
         setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout,
                    sizeof(timeout)) != 0 ||
         strlen(CP0_APPD_SOCKET) >= sizeof(address.sun_path))
         goto cleanup;
-    memcpy(address.sun_path, CP0_APPD_SOCKET, sizeof(CP0_APPD_SOCKET));
+    memcpy(address.sun_path, CP0_APPD_SOCKET, strlen(CP0_APPD_SOCKET) + 1U);
+#ifdef __APPLE__
+    address.sun_len = (uint8_t)address_length;
+#endif
     if (connect(descriptor, (const struct sockaddr *)&address,
-                sizeof(address)) != 0 ||
+                address_length) != 0 ||
         write_all(descriptor, request, request_length) != 0)
         goto cleanup;
 
@@ -124,6 +141,241 @@ static bool copy_member(const char *document,
                                                output_capacity);
 }
 
+static bool valid_app_id(const char *app_id)
+{
+    unsigned int parts = 1;
+    size_t part_length = 0;
+    size_t length;
+
+    if (app_id == NULL || (length = strlen(app_id)) == 0 || length > 128)
+        return false;
+    for (size_t index = 0; index < length; index++) {
+        unsigned char byte = (unsigned char)app_id[index];
+        if (byte == '.') {
+            if (part_length == 0 || part_length > 32 ||
+                app_id[index - 1] == '-')
+                return false;
+            parts++;
+            part_length = 0;
+            continue;
+        }
+        if (part_length == 0 && (byte < 'a' || byte > 'z'))
+            return false;
+        if (!((byte >= 'a' && byte <= 'z') ||
+              (byte >= '0' && byte <= '9') || byte == '-'))
+            return false;
+        part_length++;
+    }
+    return parts >= 3 && part_length > 0 && part_length <= 32 &&
+           app_id[length - 1] != '-';
+}
+
+static int parse_app_page(const char *response, size_t response_length,
+                          uint64_t request_id, uint16_t offset,
+                          struct cp0_app_summary *apps, size_t capacity,
+                          size_t *app_count, bool *has_next,
+                          uint16_t *next_offset)
+{
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    size_t token_count;
+    int data;
+
+    if (apps == NULL || app_count == NULL || has_next == NULL ||
+        next_offset == NULL ||
+        parse_success(response, response_length, request_id, tokens,
+                      &token_count, &data) != 0)
+        return -1;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int array = cp0_json_object_get(response, tokens, token_count, data, "apps");
+    int next = cp0_json_object_get(response, tokens, token_count, data,
+                                   "next_offset");
+    if (kind < 0 || array < 0 || next < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind], "applications") ||
+        tokens[array].type != CP0_JSON_ARRAY ||
+        tokens[array].children > CP0_APPD_PAGE_SIZE ||
+        tokens[array].children > capacity)
+        return -1;
+
+    for (unsigned int index = 0; index < tokens[array].children; index++) {
+        int item = cp0_json_array_get(tokens, token_count, array, index);
+        struct cp0_app_summary decoded = {0};
+        int running;
+        int display;
+        if (item < 0 || tokens[item].type != CP0_JSON_OBJECT ||
+            !copy_member(response, tokens, token_count, item, "app_id",
+                         decoded.app_id, sizeof(decoded.app_id)) ||
+            !valid_app_id(decoded.app_id) ||
+            !copy_member(response, tokens, token_count, item, "name",
+                         decoded.name, sizeof(decoded.name)) ||
+            decoded.name[0] == '\0' ||
+            !copy_member(response, tokens, token_count, item, "version",
+                         decoded.version, sizeof(decoded.version)))
+            return -1;
+        running = cp0_json_object_get(response, tokens, token_count, item,
+                                      "running");
+        display = cp0_json_object_get(response, tokens, token_count, item,
+                                      "display");
+        if (running < 0 || display < 0 ||
+            !cp0_json_get_bool(response, &tokens[running], &decoded.running))
+            return -1;
+        if (cp0_json_string_equals(response, &tokens[display], "immersive")) {
+            decoded.immersive = true;
+        } else if (!cp0_json_string_equals(response, &tokens[display],
+                                           "standard")) {
+            return -1;
+        }
+        apps[index] = decoded;
+    }
+    *app_count = tokens[array].children;
+    if (cp0_json_is_null(response, &tokens[next])) {
+        *has_next = false;
+        *next_offset = 0;
+    } else {
+        uint64_t decoded_offset;
+        if (!cp0_json_get_u64(response, &tokens[next], &decoded_offset) ||
+            decoded_offset > UINT16_MAX || decoded_offset <= offset)
+            return -1;
+        *has_next = true;
+        *next_offset = (uint16_t)decoded_offset;
+    }
+    return 0;
+}
+
+static int list_page(uint16_t offset, struct cp0_app_summary *apps,
+                     size_t capacity, size_t *app_count, bool *has_next,
+                     uint16_t *next_offset)
+{
+    char request[256];
+    char response[CP0_APPD_FRAME_BYTES];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"list\",\"offset\":%u,\"limit\":%u}}\n",
+        (unsigned long long)request_id, (unsigned int)offset,
+        CP0_APPD_PAGE_SIZE);
+
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 500) != 0)
+        return -1;
+    return parse_app_page(response, response_length, request_id, offset, apps,
+                          capacity, app_count, has_next, next_offset);
+}
+
+int cp0_appd_list_apps(struct cp0_app_list *list)
+{
+    uint16_t offset = 0;
+    struct cp0_app_list decoded = {0};
+
+    if (list == NULL)
+        return -1;
+    while (decoded.count < CP0_APPD_MAX_APPS) {
+        size_t count;
+        bool has_next;
+        uint16_t next_offset;
+        if (list_page(offset, &decoded.apps[decoded.count],
+                      CP0_APPD_MAX_APPS - decoded.count, &count, &has_next,
+                      &next_offset) != 0)
+            return -1;
+        decoded.count += count;
+        if (!has_next) {
+            *list = decoded;
+            return 0;
+        }
+        if (count == 0)
+            return -1;
+        offset = next_offset;
+    }
+    decoded.truncated = true;
+    *list = decoded;
+    return 0;
+}
+
+static int parse_lifecycle_response(const char *response,
+                                    size_t response_length,
+                                    uint64_t request_id,
+                                    const char *expected_kind,
+                                    const char *app_id)
+{
+    char response_app_id[CP0_APP_ID_BYTES];
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    size_t token_count;
+    int data;
+
+    if (!valid_app_id(app_id) ||
+        parse_success(response, response_length, request_id, tokens,
+                      &token_count, &data) != 0)
+        return -1;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    return kind >= 0 &&
+                   cp0_json_string_equals(response, &tokens[kind],
+                                          expected_kind) &&
+                   copy_member(response, tokens, token_count, data, "app_id",
+                               response_app_id, sizeof(response_app_id)) &&
+                   strcmp(response_app_id, app_id) == 0
+               ? 0
+               : -1;
+}
+
+static int app_lifecycle_command(const char *command, const char *expected_kind,
+                                 const char *app_id)
+{
+    char request[384];
+    char response[CP0_APPD_FRAME_BYTES];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+
+    if (!valid_app_id(app_id))
+        return -1;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"%s\",\"app_id\":\"%s\"}}\n",
+        (unsigned long long)request_id, command, app_id);
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 3000) != 0)
+        return -1;
+    return parse_lifecycle_response(response, response_length, request_id,
+                                    expected_kind, app_id);
+}
+
+#ifdef CP0_APPD_CLIENT_TEST
+int cp0_appd_test_parse_app_page(
+    const char *response, size_t response_length, uint64_t request_id,
+    uint16_t offset, struct cp0_app_summary *apps, size_t capacity,
+    size_t *app_count, bool *has_next, uint16_t *next_offset)
+{
+    return parse_app_page(response, response_length, request_id, offset, apps,
+                          capacity, app_count, has_next, next_offset);
+}
+
+int cp0_appd_test_parse_lifecycle_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *expected_kind, const char *app_id)
+{
+    return parse_lifecycle_response(response, response_length, request_id,
+                                    expected_kind, app_id);
+}
+
+bool cp0_appd_test_valid_app_id(const char *app_id)
+{
+    return valid_app_id(app_id);
+}
+#endif
+
+int cp0_appd_start_app(const char *app_id)
+{
+    return app_lifecycle_command("start", "started", app_id);
+}
+
+int cp0_appd_stop_app(const char *app_id)
+{
+    return app_lifecycle_command("stop", "stopped", app_id);
+}
+
 int cp0_appd_get_permission_prompt(struct cp0_permission_prompt *prompt)
 {
     char request[256];
@@ -143,7 +395,7 @@ int cp0_appd_get_permission_prompt(struct cp0_permission_prompt *prompt)
     if (prompt == NULL || request_length <= 0 ||
         (size_t)request_length >= sizeof(request) ||
         exchange(request, (size_t)request_length, response, sizeof(response),
-                 &response_length) != 0 ||
+                 &response_length, 250) != 0 ||
         parse_success(response, response_length, request_id, tokens,
                       &token_count, &data) != 0)
         return -1;
@@ -200,7 +452,7 @@ int cp0_appd_resolve_permission(uint64_t prompt_id,
         choices[choice]);
     if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
         exchange(request, (size_t)request_length, response, sizeof(response),
-                 &response_length) != 0 ||
+                 &response_length, 250) != 0 ||
         parse_success(response, response_length, request_id, tokens,
                       &token_count, &data) != 0)
         return -1;

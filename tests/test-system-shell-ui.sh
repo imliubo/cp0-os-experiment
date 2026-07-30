@@ -23,6 +23,15 @@ mkdir -p "$snapshot_dir"
     -o "$work_dir/system-shell-json-test"
 "$work_dir/system-shell-json-test"
 
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -DCP0_APPD_CLIENT_TEST \
+    -I"$repo_root/system-shell/include" \
+    "$repo_root/system-shell/src/json.c" \
+    "$repo_root/system-shell/src/appd_client.c" \
+    "$repo_root/tests/system-shell-appd-client.c" \
+    -o "$work_dir/system-shell-appd-client-test"
+"$work_dir/system-shell-appd-client-test"
+
 if command -v sha256sum >/dev/null 2>&1; then
     actual=$(cd "$snapshot_dir" && \
         sha256sum apps.ppm home.ppm permission.ppm power.ppm tasks.ppm)
@@ -31,11 +40,11 @@ else
         shasum -a 256 apps.ppm home.ppm permission.ppm power.ppm tasks.ppm)
 fi
 
-expected='c6af580b7e821c08eb0fa72edff1ef2fdeaaeb36d3ee49597e5b5b359ff0cf71  apps.ppm
+expected='895d13c55341090c408fa658ef89aca771dc4ae32a8d741d8cefe2194cb71e70  apps.ppm
 4e5d5f4cef0235b44e87e9f40e00aef57ebf21f35bc7b6b897cc674cc04d8d81  home.ppm
 3c9f90a8bcc0c5d5ffaad46d31748dd831fface44e7615083e1e8357b63256a6  permission.ppm
 a6e5f954c77d1512c6abdd25d2b28a836983423a3ceb0990d014282915eff406  power.ppm
-b382c359864c04060e4676c13c50e9578d241f132009a2840a3a9ed8324cfae2  tasks.ppm'
+3b71571633eb8db0f5bb38373a5fa98dc497d17a425587aec58d09966a0fc173  tasks.ppm'
 
 if [ "$actual" != "$expected" ]; then
     echo "System Shell screenshot regression:" >&2

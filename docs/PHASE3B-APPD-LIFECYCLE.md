@@ -34,9 +34,15 @@ parent as `root:cp0-control 0750`; the socket is `root:cp0-control 0660`. Only
 
 Protocol v1 uses one newline-terminated JSON request per connection. Both
 directions are bounded to 8 KiB, reject unknown fields and use request IDs.
-Supported commands are `ping`, paged `list` (at most 32 records), `start` and
+Supported commands are `ping`, paged `list` (at most 8 records), `start` and
 `stop`. Internal filesystem and command errors are logged but are not exposed to
 clients.
+
+Launcher list records additionally expose only canonical manifest name and
+standard/immersive display policy. The trusted Shell requests pages of eight,
+starts a selected stopped application, then waits for the compositor's
+ephemeral surface token before activation. Stopping from Tasks preserves the
+installed registry entry.
 
 `cp0ctl app ping|list|start|stop` is the diagnostic client. The System Shell will
 use the same contract after permission prompts and application launch UI are

@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define GUARD 0x5aa55aa5u
 #define GREEN 0x0035d07fu
@@ -56,11 +57,21 @@ static void write_snapshot(const char *directory, const char *name,
 static void write_snapshots(const char *directory, struct cp0_ui *ui,
                             struct guarded_frame *frame)
 {
+    static const struct cp0_ui_catalog_app apps[] = {
+        {.running = false,
+         .immersive = false,
+         .app_id = "dev.cardputerzero.first",
+         .name = "First Card"},
+        {.running = true,
+         .immersive = true,
+         .app_id = "dev.cardputerzero.second",
+         .name = "Second Card"},
+    };
     cp0_ui_init(ui);
     cp0_ui_set_status(ui, "12:34", true, 73);
     write_snapshot(directory, "home", ui, frame);
 
-    cp0_ui_add_app(ui, 41, "dev.cardputerzero.first");
+    cp0_ui_sync_app_catalog(ui, apps, 2, false);
     cp0_ui_add_app(ui, 42, "dev.cardputerzero.second");
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
     cp0_ui_handle_action(ui, CP0_UI_DOWN);
@@ -115,17 +126,32 @@ int main(int argc, char **argv)
     assert(ui.screen == CP0_UI_HOME);
 
     cp0_ui_init(&ui);
+    static const struct cp0_ui_catalog_app catalog[] = {
+        {.running = false,
+         .immersive = false,
+         .app_id = "dev.cardputerzero.first",
+         .name = "First Card"},
+        {.running = true,
+         .immersive = true,
+         .app_id = "dev.cardputerzero.second",
+         .name = "Second Card"},
+    };
+    cp0_ui_sync_app_catalog(&ui, catalog, 2, false);
+    assert(ui.app_count == 2);
+    assert(strcmp(cp0_ui_selected_app_id(&ui),
+                  "dev.cardputerzero.first") == 0);
+    assert(cp0_ui_selected_app_token(&ui) == 0);
+    assert(cp0_ui_selected_app_state(&ui) == CP0_UI_APP_STOPPED);
+    assert(!cp0_ui_selected_app_is_immersive(&ui));
     cp0_ui_add_app(&ui, 41, "dev.cardputerzero.first");
-    cp0_ui_add_app(&ui, 42, "dev.cardputerzero.second");
-    cp0_ui_add_app(&ui, 42, "dev.cardputerzero.updated");
     assert(ui.app_count == 2);
     assert(cp0_ui_selected_app_token(&ui) == 41);
-    assert(!cp0_ui_selected_app_is_immersive(&ui));
     cp0_ui_set_app_display_mode(&ui, 41, true);
     assert(cp0_ui_selected_app_is_immersive(&ui));
     cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
     assert(ui.screen == CP0_UI_APPS);
     cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    cp0_ui_add_app(&ui, 42, "dev.cardputerzero.second");
     assert(cp0_ui_selected_app_token(&ui) == 42);
     cp0_ui_set_app_display_mode(&ui, 42, false);
     assert(!cp0_ui_selected_app_is_immersive(&ui));
@@ -134,10 +160,44 @@ int main(int argc, char **argv)
     render(&ui, frame);
     assert(pixel(frame, 8, 60) == GREEN);
     cp0_ui_remove_app(&ui, 42);
-    assert(ui.app_count == 1);
-    assert(cp0_ui_selected_app_token(&ui) == 41);
+    assert(ui.app_count == 2);
+    assert(cp0_ui_selected_app_token(&ui) == 0);
+    assert(cp0_ui_selected_app_state(&ui) == CP0_UI_APP_STOPPED);
     cp0_ui_remove_app(&ui, 99);
-    assert(ui.app_count == 1);
+    assert(ui.app_count == 2);
+
+    cp0_ui_set_app_state(&ui, "dev.cardputerzero.second",
+                         CP0_UI_APP_STARTING);
+    assert(cp0_ui_selected_app_state(&ui) == CP0_UI_APP_STARTING);
+    cp0_ui_handle_action(&ui, CP0_UI_SHOW_TASKS);
+    assert(strcmp(cp0_ui_selected_app_id(&ui),
+                  "dev.cardputerzero.first") == 0);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_OPEN_APP);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STOP_APP);
+    cp0_ui_set_app_state(&ui, "dev.cardputerzero.first",
+                         CP0_UI_APP_STOPPED);
+    cp0_ui_set_app_state(&ui, "dev.cardputerzero.second", CP0_UI_APP_FAILED);
+    assert(cp0_ui_selected_app_id(&ui) == NULL);
+
+    static const struct cp0_ui_catalog_app many[] = {
+        {.app_id = "dev.cardputerzero.a", .name = "A"},
+        {.app_id = "dev.cardputerzero.b", .name = "B"},
+        {.app_id = "dev.cardputerzero.c", .name = "C"},
+        {.app_id = "dev.cardputerzero.d", .name = "D"},
+        {.app_id = "dev.cardputerzero.e", .name = "E"},
+        {.app_id = "dev.cardputerzero.f", .name = "F"},
+    };
+    cp0_ui_sync_app_catalog(&ui, many, 6, true);
+    cp0_ui_handle_action(&ui, CP0_UI_GO_HOME);
+    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    for (unsigned int index = 0; index < 5; index++)
+        cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(ui.app_selected == 5);
+    assert(ui.app_list_truncated);
+    render(&ui, frame);
 
     assert(cp0_ui_show_permission(
         &ui, 77, "Hello Card", "camera.capture",

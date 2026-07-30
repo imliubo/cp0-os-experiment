@@ -224,10 +224,13 @@ impl AppdServer {
             .skip(usize::from(offset))
             .take(usize::from(limit))
         {
+            let manifest = state.manager.installed_manifest(&installed.app_id)?;
             apps.push(AppSummary {
                 running: state.manager.is_running(&installed.app_id)?,
                 app_id: installed.app_id.clone(),
+                name: manifest.name,
                 version: installed.version.clone(),
+                display: manifest.display,
             });
         }
         let consumed = usize::from(offset) + apps.len();

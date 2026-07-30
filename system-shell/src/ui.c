@@ -237,21 +237,74 @@ static void draw_empty_page(struct canvas *canvas, const char *title,
 
 static void draw_apps_page(struct canvas *canvas, const struct cp0_ui *ui)
 {
+    static const char *states[] = {"READY", "STARTING", "RUNNING", "FAILED"};
     if (ui->app_count == 0) {
         draw_empty_page(canvas, "APPS", "NO APPS INSTALLED", COLOR_GREEN);
         return;
     }
 
-    for (unsigned int index = 0; index < ui->app_count; index++) {
-        int y = 28 + (int)index * 32;
+    unsigned int first = ui->app_selected > 3 ? ui->app_selected - 3 : 0;
+    unsigned int visible = ui->app_count - first;
+    if (visible > 4)
+        visible = 4;
+    for (unsigned int row = 0; row < visible; row++) {
+        unsigned int index = first + row;
+        int y = 28 + (int)row * 32;
         bool selected = index == ui->app_selected;
         fill_rect(canvas, 8, y, 304, 28,
                   selected ? COLOR_SELECTED : COLOR_SURFACE);
         stroke_rect(canvas, 8, y, 304, 28, selected ? 2 : 1,
                     selected ? COLOR_GREEN : COLOR_BAR);
         fill_rect(canvas, 17, y + 9, 10, 10,
-                  selected ? COLOR_GREEN : COLOR_MUTED);
-        draw_text(canvas, 36, y + 10, ui->apps[index].app_id, 1,
+                  ui->apps[index].state == CP0_UI_APP_RUNNING
+                      ? COLOR_GREEN
+                      : (selected ? COLOR_YELLOW : COLOR_MUTED));
+        draw_text(canvas, 36, y + 6, ui->apps[index].name, 1,
+                  selected ? COLOR_TEXT : COLOR_MUTED);
+        draw_text(canvas, 218, y + 17, states[ui->apps[index].state], 1,
+                  ui->apps[index].state == CP0_UI_APP_FAILED
+                      ? COLOR_RED
+                      : COLOR_MUTED);
+    }
+    if (ui->app_list_truncated)
+        draw_text(canvas, 284, 159, "32+", 1, COLOR_YELLOW);
+}
+
+static int running_app_index(const struct cp0_ui *ui)
+{
+    for (unsigned int index = 0; index < ui->app_count; index++) {
+        if (ui->apps[index].state == CP0_UI_APP_RUNNING ||
+            ui->apps[index].state == CP0_UI_APP_STARTING)
+            return (int)index;
+    }
+    return -1;
+}
+
+static void draw_tasks_page(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    static const char *labels[] = {"RESUME", "STOP"};
+    int index = running_app_index(ui);
+    if (index < 0) {
+        draw_empty_page(canvas, "TASKS", "NO RUNNING APPS", COLOR_YELLOW);
+        return;
+    }
+
+    fill_rect(canvas, 8, 31, 304, 126, COLOR_SURFACE);
+    fill_rect(canvas, 8, 31, 4, 126, COLOR_YELLOW);
+    draw_text(canvas, 28, 49, "TASKS", 2, COLOR_TEXT);
+    draw_text(canvas, 28, 78, ui->apps[index].name, 1, COLOR_TEXT);
+    draw_text(canvas, 28, 94,
+              ui->apps[index].state == CP0_UI_APP_STARTING ? "STARTING"
+                                                           : "RUNNING",
+              1, COLOR_GREEN);
+    for (unsigned int action = 0; action < 2; action++) {
+        int x = 28 + (int)action * 116;
+        bool selected = action == ui->task_action_selected;
+        fill_rect(canvas, x, 121, 104, 25,
+                  selected ? COLOR_SELECTED : COLOR_BAR);
+        stroke_rect(canvas, x, 121, 104, 25, selected ? 2 : 1,
+                    selected ? COLOR_GREEN : COLOR_MUTED);
+        draw_text(canvas, x + 23, 130, labels[action], 1,
                   selected ? COLOR_TEXT : COLOR_MUTED);
     }
 }
@@ -272,7 +325,7 @@ static void draw_page(struct canvas *canvas, const struct cp0_ui *ui)
                         ui->network_online ? COLOR_GREEN : COLOR_RED);
         break;
     case CP0_UI_TASKS:
-        draw_empty_page(canvas, "TASKS", "NO RUNNING APPS", COLOR_YELLOW);
+        draw_tasks_page(canvas, ui);
         break;
     case CP0_UI_HOME:
         draw_home(canvas, ui);
@@ -359,29 +412,123 @@ void cp0_ui_set_status(struct cp0_ui *ui, const char *clock_text,
     ui->battery_percent = battery_percent;
 }
 
+static bool copy_text(char *output, size_t capacity, const char *input)
+{
+    size_t length;
+
+    if (output == NULL || capacity == 0 || input == NULL || input[0] == '\0')
+        return false;
+    length = strlen(input);
+    if (length >= capacity)
+        length = capacity - 1;
+    memcpy(output, input, length);
+    output[length] = '\0';
+    return true;
+}
+
+static int app_index_by_id(const struct cp0_ui *ui, const char *app_id)
+{
+    if (ui == NULL || app_id == NULL)
+        return -1;
+    for (unsigned int index = 0; index < ui->app_count; index++) {
+        if (strcmp(ui->apps[index].app_id, app_id) == 0)
+            return (int)index;
+    }
+    return -1;
+}
+
 void cp0_ui_add_app(struct cp0_ui *ui, uint32_t token, const char *app_id)
 {
+    int found;
     unsigned int index;
-    size_t length;
 
     if (ui == NULL || token == 0 || app_id == NULL || app_id[0] == '\0')
         return;
-    for (index = 0; index < ui->app_count; index++) {
-        if (ui->apps[index].token == token)
-            break;
+    found = app_index_by_id(ui, app_id);
+    if (found >= 0) {
+        index = (unsigned int)found;
+    } else {
+        for (index = 0; index < ui->app_count; index++) {
+            if (ui->apps[index].token == token)
+                break;
+        }
     }
     if (index == ui->app_count) {
         if (ui->app_count == CP0_UI_MAX_APPS)
             return;
+        memset(&ui->apps[index], 0, sizeof(ui->apps[index]));
+        if (!copy_text(ui->apps[index].app_id,
+                       sizeof(ui->apps[index].app_id), app_id) ||
+            !copy_text(ui->apps[index].name, sizeof(ui->apps[index].name),
+                       app_id))
+            return;
         ui->app_count++;
+    } else if (ui->apps[index].app_id[0] == '\0') {
+        if (!copy_text(ui->apps[index].app_id,
+                       sizeof(ui->apps[index].app_id), app_id) ||
+            !copy_text(ui->apps[index].name, sizeof(ui->apps[index].name),
+                       app_id))
+            return;
+    }
+    ui->apps[index].token = token;
+    ui->apps[index].state = CP0_UI_APP_RUNNING;
+}
+
+void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
+                             const struct cp0_ui_catalog_app *apps,
+                             size_t app_count, bool truncated)
+{
+    struct cp0_ui_app previous[CP0_UI_MAX_APPS];
+    char selected_id[CP0_UI_APP_ID_MAX + 1] = {0};
+    unsigned int previous_count;
+
+    if (ui == NULL || (apps == NULL && app_count != 0))
+        return;
+    if (app_count > CP0_UI_MAX_APPS)
+        app_count = CP0_UI_MAX_APPS;
+    previous_count = ui->app_count;
+    memcpy(previous, ui->apps, sizeof(previous));
+    if (ui->app_selected < ui->app_count)
+        copy_text(selected_id, sizeof(selected_id),
+                  ui->apps[ui->app_selected].app_id);
+    memset(ui->apps, 0, sizeof(ui->apps));
+    ui->app_count = 0;
+    ui->app_list_truncated = truncated;
+
+    for (size_t source = 0; source < app_count; source++) {
+        struct cp0_ui_app app = {
+            .installed = true,
+            .immersive = apps[source].immersive,
+            .state = apps[source].running ? CP0_UI_APP_RUNNING
+                                          : CP0_UI_APP_STOPPED,
+        };
+        if (!copy_text(app.app_id, sizeof(app.app_id), apps[source].app_id) ||
+            !copy_text(app.name, sizeof(app.name), apps[source].name))
+            continue;
+        for (unsigned int old = 0; old < previous_count; old++) {
+            if (strcmp(previous[old].app_id, app.app_id) != 0)
+                continue;
+            app.token = previous[old].token;
+            if (app.token != 0)
+                app.state = CP0_UI_APP_RUNNING;
+            else if (previous[old].state == CP0_UI_APP_STARTING &&
+                     apps[source].running)
+                app.state = CP0_UI_APP_STARTING;
+            else if (previous[old].state == CP0_UI_APP_FAILED &&
+                     !apps[source].running)
+                app.state = CP0_UI_APP_FAILED;
+            break;
+        }
+        ui->apps[ui->app_count++] = app;
     }
 
-    length = strlen(app_id);
-    if (length > CP0_UI_APP_ID_MAX)
-        length = CP0_UI_APP_ID_MAX;
-    ui->apps[index].token = token;
-    memcpy(ui->apps[index].app_id, app_id, length);
-    ui->apps[index].app_id[length] = '\0';
+    ui->app_selected = 0;
+    for (unsigned int index = 0; index < ui->app_count; index++) {
+        if (strcmp(ui->apps[index].app_id, selected_id) == 0) {
+            ui->app_selected = index;
+            break;
+        }
+    }
 }
 
 void cp0_ui_set_app_display_mode(struct cp0_ui *ui, uint32_t token,
@@ -410,6 +557,12 @@ void cp0_ui_remove_app(struct cp0_ui *ui, uint32_t token)
     if (index == ui->app_count)
         return;
 
+    if (ui->apps[index].installed) {
+        ui->apps[index].token = 0;
+        ui->apps[index].state = CP0_UI_APP_STOPPED;
+        return;
+    }
+
     if (index + 1 < ui->app_count) {
         memmove(&ui->apps[index], &ui->apps[index + 1],
                 (ui->app_count - index - 1) * sizeof(ui->apps[0]));
@@ -419,30 +572,59 @@ void cp0_ui_remove_app(struct cp0_ui *ui, uint32_t token)
         ui->app_selected = ui->app_count == 0 ? 0 : ui->app_count - 1;
 }
 
+void cp0_ui_set_app_state(struct cp0_ui *ui, const char *app_id,
+                          enum cp0_ui_app_state state)
+{
+    int index = app_index_by_id(ui, app_id);
+    if (index < 0 || state > CP0_UI_APP_FAILED)
+        return;
+    ui->apps[index].state = state;
+    if (state == CP0_UI_APP_STOPPED || state == CP0_UI_APP_FAILED)
+        ui->apps[index].token = 0;
+}
+
+static int selected_app_index(const struct cp0_ui *ui)
+{
+    if (ui == NULL)
+        return -1;
+    if (ui->screen == CP0_UI_TASKS)
+        return running_app_index(ui);
+    return ui->app_selected < ui->app_count ? (int)ui->app_selected : -1;
+}
+
+const char *cp0_ui_selected_app_id(const struct cp0_ui *ui)
+{
+    int index = selected_app_index(ui);
+    return index < 0 ? NULL : ui->apps[index].app_id;
+}
+
+enum cp0_ui_app_state cp0_ui_selected_app_state(const struct cp0_ui *ui)
+{
+    int index = selected_app_index(ui);
+    return index < 0 ? CP0_UI_APP_STOPPED : ui->apps[index].state;
+}
+
 uint32_t cp0_ui_selected_app_token(const struct cp0_ui *ui)
 {
-    if (ui == NULL || ui->app_selected >= ui->app_count)
-        return 0;
-    return ui->apps[ui->app_selected].token;
+    int index = selected_app_index(ui);
+    return index < 0 ? 0 : ui->apps[index].token;
 }
 
 bool cp0_ui_selected_app_is_immersive(const struct cp0_ui *ui)
 {
-    if (ui == NULL || ui->app_selected >= ui->app_count)
-        return false;
-    return ui->apps[ui->app_selected].immersive;
+    int index = selected_app_index(ui);
+    return index >= 0 && ui->apps[index].immersive;
 }
 
-static bool copy_prompt_text(char *output, size_t capacity, const char *input)
+bool cp0_ui_app_is_immersive(const struct cp0_ui *ui, uint32_t token)
 {
-    if (input == NULL || input[0] == '\0')
+    if (ui == NULL || token == 0)
         return false;
-    size_t length = strlen(input);
-    if (length >= capacity)
-        length = capacity - 1;
-    memcpy(output, input, length);
-    output[length] = '\0';
-    return true;
+    for (unsigned int index = 0; index < ui->app_count; index++) {
+        if (ui->apps[index].token == token)
+            return ui->apps[index].immersive;
+    }
+    return false;
 }
 
 bool cp0_ui_show_permission(struct cp0_ui *ui, uint64_t prompt_id,
@@ -450,11 +632,10 @@ bool cp0_ui_show_permission(struct cp0_ui *ui, uint64_t prompt_id,
                             const char *reason)
 {
     if (ui == NULL || prompt_id == 0 ||
-        !copy_prompt_text(ui->prompt_app_name, sizeof(ui->prompt_app_name),
-                          app_name) ||
-        !copy_prompt_text(ui->prompt_permission, sizeof(ui->prompt_permission),
-                          permission) ||
-        !copy_prompt_text(ui->prompt_reason, sizeof(ui->prompt_reason), reason))
+        !copy_text(ui->prompt_app_name, sizeof(ui->prompt_app_name), app_name) ||
+        !copy_text(ui->prompt_permission, sizeof(ui->prompt_permission),
+                   permission) ||
+        !copy_text(ui->prompt_reason, sizeof(ui->prompt_reason), reason))
         return false;
     ui->prompt_id = prompt_id;
     ui->prompt_selected = 0;
@@ -503,6 +684,7 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     if (action == CP0_UI_SHOW_TASKS) {
         ui->power_dialog = false;
         ui->screen = CP0_UI_TASKS;
+        ui->task_action_selected = 0;
         return CP0_UI_EVENT_NONE;
     }
     if (action == CP0_UI_SHOW_POWER) {
@@ -531,6 +713,17 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
 
     if (action == CP0_UI_BACK) {
         ui->screen = CP0_UI_HOME;
+        return CP0_UI_EVENT_NONE;
+    }
+
+    if (ui->screen == CP0_UI_TASKS) {
+        if (action == CP0_UI_LEFT)
+            ui->task_action_selected = 0;
+        else if (action == CP0_UI_RIGHT)
+            ui->task_action_selected = 1;
+        else if (action == CP0_UI_ACCEPT && running_app_index(ui) >= 0)
+            return ui->task_action_selected == 0 ? CP0_UI_EVENT_OPEN_APP
+                                                 : CP0_UI_EVENT_STOP_APP;
         return CP0_UI_EVENT_NONE;
     }
 

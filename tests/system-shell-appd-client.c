@@ -1,0 +1,79 @@
+#include "cp0_appd_client.h"
+
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
+
+int cp0_appd_test_parse_app_page(
+    const char *response, size_t response_length, uint64_t request_id,
+    uint16_t offset, struct cp0_app_summary *apps, size_t capacity,
+    size_t *app_count, bool *has_next, uint16_t *next_offset);
+int cp0_appd_test_parse_lifecycle_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *expected_kind, const char *app_id);
+bool cp0_appd_test_valid_app_id(const char *app_id);
+
+int main(void)
+{
+    static const char page[] =
+        "{\"protocol_version\":1,\"request_id\":7,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"applications\","
+        "\"apps\":[{\"app_id\":\"dev.cardputerzero.first\","
+        "\"name\":\"First Card\",\"version\":\"1.0.0\","
+        "\"display\":\"standard\",\"running\":false},{"
+        "\"app_id\":\"dev.cardputerzero.second\","
+        "\"name\":\"Second Card\",\"version\":\"2.1.0\","
+        "\"display\":\"immersive\",\"running\":true}],"
+        "\"next_offset\":10}}}";
+    struct cp0_app_summary apps[2];
+    size_t count;
+    bool has_next;
+    uint16_t next_offset;
+    assert(cp0_appd_test_parse_app_page(
+               page, strlen(page), 7, 8, apps, 2, &count, &has_next,
+               &next_offset) == 0);
+    assert(count == 2 && has_next && next_offset == 10);
+    assert(strcmp(apps[0].name, "First Card") == 0);
+    assert(!apps[0].running && !apps[0].immersive);
+    assert(strcmp(apps[1].version, "2.1.0") == 0);
+    assert(apps[1].running && apps[1].immersive);
+    assert(cp0_appd_test_parse_app_page(
+               page, strlen(page), 8, 8, apps, 2, &count, &has_next,
+               &next_offset) < 0);
+    assert(cp0_appd_test_parse_app_page(
+               page, strlen(page), 7, 8, apps, 1, &count, &has_next,
+               &next_offset) < 0);
+
+    static const char bad_display[] =
+        "{\"protocol_version\":1,\"request_id\":9,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"applications\","
+        "\"apps\":[{\"app_id\":\"dev.cardputerzero.bad\","
+        "\"name\":\"Bad\",\"version\":\"1.0.0\","
+        "\"display\":\"overlay\",\"running\":true}],"
+        "\"next_offset\":null}}}";
+    assert(cp0_appd_test_parse_app_page(
+               bad_display, strlen(bad_display), 9, 0, apps, 2, &count,
+               &has_next, &next_offset) < 0);
+
+    static const char started[] =
+        "{\"protocol_version\":1,\"request_id\":11,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"started\","
+        "\"app_id\":\"dev.cardputerzero.first\","
+        "\"unit\":\"cardputerzero-app-20000.service\"}}}";
+    assert(cp0_appd_test_parse_lifecycle_response(
+               started, strlen(started), 11, "started",
+               "dev.cardputerzero.first") == 0);
+    assert(cp0_appd_test_parse_lifecycle_response(
+               started, strlen(started), 11, "stopped",
+               "dev.cardputerzero.first") < 0);
+    assert(cp0_appd_test_parse_lifecycle_response(
+               started, strlen(started), 11, "started",
+               "dev.cardputerzero.second") < 0);
+
+    assert(cp0_appd_test_valid_app_id("dev.cardputerzero.first"));
+    assert(!cp0_appd_test_valid_app_id("../../etc"));
+    assert(!cp0_appd_test_valid_app_id("Dev.cardputerzero.first"));
+    assert(!cp0_appd_test_valid_app_id("dev..first"));
+    return 0;
+}

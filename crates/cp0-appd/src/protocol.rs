@@ -10,6 +10,7 @@ use crate::{Notification, PermissionChoice, PermissionPrompt};
 
 pub const APPD_PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024;
+pub const MAX_APP_LIST_PAGE: u8 = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -97,7 +98,9 @@ pub enum ResponseData {
 #[serde(deny_unknown_fields)]
 pub struct AppSummary {
     pub app_id: String,
+    pub name: String,
     pub version: String,
+    pub display: cp0_manifest::DisplayMode,
     pub running: bool,
 }
 
@@ -147,7 +150,7 @@ impl fmt::Display for ProtocolError {
             }
             Self::InvalidAppId => formatter.write_str("invalid application ID"),
             Self::InvalidPagination => {
-                formatter.write_str("application list limit must be between 1 and 32")
+                formatter.write_str("application list limit must be between 1 and 8")
             }
             Self::InvalidPromptId => formatter.write_str("permission prompt ID must be non-zero"),
         }
@@ -181,7 +184,7 @@ impl AppdRequest {
             return Err(ProtocolError::UnsupportedVersion(self.protocol_version));
         }
         match &self.command {
-            AppdCommand::List { limit, .. } if !(1..=32).contains(limit) => {
+            AppdCommand::List { limit, .. } if !(1..=MAX_APP_LIST_PAGE).contains(limit) => {
                 Err(ProtocolError::InvalidPagination)
             }
             AppdCommand::Start { app_id } | AppdCommand::Stop { app_id }
@@ -422,6 +425,29 @@ mod tests {
     }
 
     #[test]
+    fn round_trips_launcher_metadata() {
+        let response = AppdResponse::success(
+            81,
+            ResponseData::Applications {
+                apps: vec![AppSummary {
+                    app_id: "dev.cardputerzero.hello".into(),
+                    name: "Hello Card".into(),
+                    version: "0.1.0".into(),
+                    display: cp0_manifest::DisplayMode::Standard,
+                    running: true,
+                }],
+                next_offset: None,
+            },
+        );
+        let mut encoded = Vec::new();
+        write_response(&mut encoded, &response).unwrap();
+        assert_eq!(
+            read_response(&mut Cursor::new(encoded)).unwrap(),
+            Some(response)
+        );
+    }
+
+    #[test]
     fn rejects_unknown_fields_version_and_invalid_app_id() {
         let mut unknown = Cursor::new(
             b"{\"protocol_version\":1,\"request_id\":1,\"command\":{\"name\":\"ping\"},\"extra\":true}\n",
@@ -459,6 +485,18 @@ mod tests {
             invalid_page.validate(),
             Err(ProtocolError::InvalidPagination)
         ));
+        let oversized_page = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 4,
+            command: AppdCommand::List {
+                offset: 0,
+                limit: MAX_APP_LIST_PAGE + 1,
+            },
+        };
+        assert!(matches!(
+            oversized_page.validate(),
+            Err(ProtocolError::InvalidPagination)
+        ));
     }
 
     #[test]
@@ -481,5 +519,31 @@ mod tests {
             write_response(&mut Vec::new(), &response),
             Err(ProtocolError::FrameTooLarge)
         ));
+    }
+
+    #[test]
+    fn maximum_launcher_page_fits_the_bounded_frame() {
+        let part = "a".repeat(31);
+        let app_id = format!("{part}.{part}.{part}.{part}");
+        let version = format!("1.0.0+{}", "a".repeat(58));
+        assert_eq!(app_id.len(), 127);
+        assert_eq!(version.len(), 64);
+        let app = AppSummary {
+            app_id,
+            name: "\u{1}".repeat(32),
+            version,
+            display: cp0_manifest::DisplayMode::Immersive,
+            running: true,
+        };
+        let response = AppdResponse::success(
+            91,
+            ResponseData::Applications {
+                apps: vec![app; usize::from(MAX_APP_LIST_PAGE)],
+                next_offset: Some(u16::from(MAX_APP_LIST_PAGE)),
+            },
+        );
+        let mut encoded = Vec::new();
+        write_response(&mut encoded, &response).unwrap();
+        assert!(encoded.len() <= MAX_FRAME_BYTES);
     }
 }

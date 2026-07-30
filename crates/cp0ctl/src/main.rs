@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use cp0_appd::{
     APPD_PROTOCOL_VERSION, AppdCommand, AppdRequest, BROKER_PROTOCOL_VERSION, BrokerCommand,
-    BrokerOutcome, BrokerRequest, PermissionChoice, ResponseOutcome, read_broker_response,
-    read_response, write_broker_request, write_request,
+    BrokerOutcome, BrokerRequest, MAX_APP_LIST_PAGE, PermissionChoice, ResponseOutcome,
+    read_broker_response, read_response, write_broker_request, write_request,
 };
 use cp0_manifest::Permission;
 
@@ -33,7 +33,7 @@ fn main() -> ExitCode {
         [app, command] if app == "app" && command == "list" => send_app_command(
             AppdCommand::List {
                 offset: 0,
-                limit: 32,
+                limit: MAX_APP_LIST_PAGE,
             },
         ),
         [app, command, offset, limit] if app == "app" && command == "list" => {
@@ -42,7 +42,7 @@ fn main() -> ExitCode {
                 .map_err(|_| "list offset must be an unsigned 16-bit integer".to_owned());
             let limit = limit
                 .parse::<u8>()
-                .map_err(|_| "list limit must be an integer between 1 and 32".to_owned());
+                .map_err(|_| "list limit must be an integer between 1 and 8".to_owned());
             offset.and_then(|offset| {
                 limit.and_then(|limit| {
                     send_app_command(AppdCommand::List { offset, limit })

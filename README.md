@@ -31,6 +31,8 @@ Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真�
 - Phase 2C/2D 单前台窗口策略：compositor surface token、应用发现/选择、可信层与
   应用层切换、焦点恢复、标准/沉浸显示、ARGB 状态栏、权限弹窗、屏幕休眠、像素
   回归和双客户端真机压力测试。
+- Phase 2E 已安装应用 Launcher：appd 规范目录、启动后 surface 自动前台化、32 项
+  滚动列表、启动状态，以及 Tasks 的 Resume/Stop 单运行槽控制。
 - Phase 3A 静态 WAMR App Runtime、每应用稳定 UID、bubblewrap namespace、runtime
   seccomp、systemd cgroup 硬限制及资源耗尽真机负向测试。
 - Phase 3B socket-activated `appd`、可信安装注册表、Shell peer UID 认证、单运行槽
@@ -75,6 +77,8 @@ Phase 2C 的单前台策略和真机切换结果见
 [Single-foreground window switching](docs/PHASE2C-WINDOW-SWITCHING.md)。
 可信状态栏、权限覆盖层、沉浸模式和屏幕休眠见
 [Trusted overlays and display policy](docs/PHASE2D-TRUSTED-OVERLAYS.md)。
+已安装应用枚举、启动和 Tasks 生命周期见
+[Installed application Launcher](docs/PHASE2E-LAUNCHER-LIFECYCLE.md)。
 Phase 3A 的 runtime、沙箱契约和真机安全验证见
 [App Runtime and Linux sandbox](docs/PHASE3A-APP-RUNTIME.md)。
 `appd` 的控制协议、启动前校验与真机生命周期证据见

@@ -29,8 +29,8 @@ pub use permissions::{
 
 pub use protocol::{
     APPD_PROTOCOL_VERSION, AppSummary, AppdCommand, AppdRequest, AppdResponse, ErrorCode,
-    PeerCredentials, ProtocolError, ResponseData, ResponseOutcome, peer_credentials, read_request,
-    read_response, write_request, write_response,
+    MAX_APP_LIST_PAGE, PeerCredentials, ProtocolError, ResponseData, ResponseOutcome,
+    peer_credentials, read_request, read_response, write_request, write_response,
 };
 pub use registry::{
     AppAccount, AppRegistry, FIRST_APP_ACCOUNT_ID, LAST_APP_ACCOUNT_ID, RegistryError,

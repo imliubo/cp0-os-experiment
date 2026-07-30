@@ -199,6 +199,27 @@ int cp0_json_object_get(const char *document,
     return -1;
 }
 
+int cp0_json_array_get(const struct cp0_json_token *tokens, size_t token_count,
+                       int array, unsigned int item)
+{
+    unsigned int current = 0;
+    int index;
+
+    if (tokens == NULL || array < 0 || (size_t)array >= token_count ||
+        tokens[array].type != CP0_JSON_ARRAY)
+        return -1;
+    index = array + 1;
+    while ((size_t)index < token_count &&
+           tokens[index].start < tokens[array].end) {
+        if (tokens[index].parent != array)
+            return -1;
+        if (current++ == item)
+            return index;
+        index = after_subtree(tokens, token_count, index);
+    }
+    return -1;
+}
+
 bool cp0_json_string_equals(const char *document,
                             const struct cp0_json_token *token,
                             const char *expected)
@@ -316,6 +337,25 @@ bool cp0_json_get_u64(const char *document,
     }
     *value = result;
     return true;
+}
+
+bool cp0_json_get_bool(const char *document,
+                       const struct cp0_json_token *token, bool *value)
+{
+    if (document == NULL || token == NULL || value == NULL ||
+        token->type != CP0_JSON_PRIMITIVE)
+        return false;
+    if (token->end - token->start == 4 &&
+        memcmp(document + token->start, "true", 4) == 0) {
+        *value = true;
+        return true;
+    }
+    if (token->end - token->start == 5 &&
+        memcmp(document + token->start, "false", 5) == 0) {
+        *value = false;
+        return true;
+    }
+    return false;
 }
 
 bool cp0_json_is_null(const char *document,
