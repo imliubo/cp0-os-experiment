@@ -16,7 +16,7 @@
 
 #define CP0_SHELL_APP_ID "os.cardputerzero.shell"
 #define CP0_SHELL_USER "cp0-shell"
-#define CP0_APP_ID_MAX 47
+#define CP0_APP_ID_MAX 128
 
 struct cp0_policy;
 
@@ -471,7 +471,7 @@ shell_set_overlay_mode(struct wl_client *client, struct wl_resource *resource,
     struct cp0_policy *policy = wl_resource_get_user_data(resource);
     (void)client;
 
-    if (mode > CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN ||
+    if (mode > CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION ||
         (mode != CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL &&
          policy->active_surface == NULL)) {
         wl_resource_post_error(resource,
@@ -552,7 +552,7 @@ bind_system_shell(struct wl_client *client, void *data, uint32_t version,
     }
 
     resource = wl_resource_create(client, &cp0_system_shell_v1_interface,
-                                  version < 3 ? version : 3, id);
+                                  version < 4 ? version : 4, id);
     if (resource == NULL) {
         wl_client_post_no_memory(client);
         return;
@@ -693,7 +693,7 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
                   &policy->compositor_wake_listener);
 
     policy->global = wl_global_create(
-        compositor->wl_display, &cp0_system_shell_v1_interface, 3, policy,
+        compositor->wl_display, &cp0_system_shell_v1_interface, 4, policy,
         bind_system_shell);
     if (policy->global == NULL) {
         wl_list_remove(&policy->create_surface_listener.link);

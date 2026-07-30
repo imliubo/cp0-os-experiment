@@ -9,8 +9,8 @@ WebAssembly；应用不能直接访问 Linux 设备节点、系统总线或其�
 ## 当前状态
 
 Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真机验收，Phase 2
-已完成最小 compositor 基线、Phase 2A System Shell、Phase 2B/2C 可信单前台策略，
-并进入 Phase 3 应用运行时与隔离实现。
+已完成 compositor、System Shell、可信单前台策略、Launcher 与通知覆盖层，
+Phase 3 已贯通 WAMR 强隔离运行时、权限系统和首个 capability broker。
 当前仓库包含：
 
 - 系统架构与资源预算；
@@ -33,6 +33,8 @@ Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真�
   回归和双客户端真机压力测试。
 - Phase 2E 已安装应用 Launcher：appd 规范目录、启动后 surface 自动前台化、32 项
   滚动列表、启动状态，以及 Tasks 的 Resume/Stop 单运行槽控制。
+- Phase 2F 可信通知横幅：私有协议 v4、顶部 88 px compositor 强制可信层、应用
+  键盘焦点保持、权限提示优先级、四秒生命周期和 320x170 像素回归。
 - Phase 3A 静态 WAMR App Runtime、每应用稳定 UID、bubblewrap namespace、runtime
   seccomp、systemd cgroup 硬限制及资源耗尽真机负向测试。
 - Phase 3B socket-activated `appd`、可信安装注册表、Shell peer UID 认证、单运行槽
@@ -79,6 +81,8 @@ Phase 2C 的单前台策略和真机切换结果见
 [Trusted overlays and display policy](docs/PHASE2D-TRUSTED-OVERLAYS.md)。
 已安装应用枚举、启动和 Tasks 生命周期见
 [Installed application Launcher](docs/PHASE2E-LAUNCHER-LIFECYCLE.md)。
+通知可信呈现、焦点和生命周期策略见
+[Trusted notification banners](docs/PHASE2F-TRUSTED-NOTIFICATIONS.md)。
 Phase 3A 的 runtime、沙箱契约和真机安全验证见
 [App Runtime and Linux sandbox](docs/PHASE3A-APP-RUNTIME.md)。
 `appd` 的控制协议、启动前校验与真机生命周期证据见

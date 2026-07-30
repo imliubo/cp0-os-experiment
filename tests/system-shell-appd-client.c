@@ -13,6 +13,9 @@ int cp0_appd_test_parse_lifecycle_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *expected_kind, const char *app_id);
 bool cp0_appd_test_valid_app_id(const char *app_id);
+int cp0_appd_test_parse_notification_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    struct cp0_notification *notification);
 
 int main(void)
 {
@@ -70,6 +73,32 @@ int main(void)
     assert(cp0_appd_test_parse_lifecycle_response(
                started, strlen(started), 11, "started",
                "dev.cardputerzero.second") < 0);
+
+    static const char notification_response[] =
+        "{\"protocol_version\":1,\"request_id\":12,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"next-notification\","
+        "\"notification\":{\"notification_id\":4,"
+        "\"app_id\":\"dev.cardputerzero.first\","
+        "\"app_name\":\"First Card\",\"title\":\"Complete\","
+        "\"body\":\"The operation completed\"}}}}";
+    struct cp0_notification notification;
+    assert(cp0_appd_test_parse_notification_response(
+               notification_response, strlen(notification_response), 12,
+               &notification) == 1);
+    assert(notification.notification_id == 4);
+    assert(strcmp(notification.app_name, "First Card") == 0);
+    assert(strcmp(notification.title, "Complete") == 0);
+    assert(strcmp(notification.body, "The operation completed") == 0);
+
+    static const char empty_queue[] =
+        "{\"protocol_version\":1,\"request_id\":13,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"next-notification\","
+        "\"notification\":null}}}";
+    assert(cp0_appd_test_parse_notification_response(
+               empty_queue, strlen(empty_queue), 13, &notification) == 0);
+    assert(cp0_appd_test_parse_notification_response(
+               notification_response, strlen(notification_response), 13,
+               &notification) < 0);
 
     assert(cp0_appd_test_valid_app_id("dev.cardputerzero.first"));
     assert(!cp0_appd_test_valid_app_id("../../etc"));

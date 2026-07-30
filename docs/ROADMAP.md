@@ -40,6 +40,7 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 - [x] 将 Launcher、状态栏和权限弹窗迁移到 compositor 侧可信覆盖层，并实现沉浸模式。
 - [x] 在 compositor 统一键盘焦点、全局 Home/Back/任务切换快捷键和屏幕休眠。
 - [x] Launcher 从 appd 枚举已安装应用，支持启动后自动前台化，以及 Tasks 恢复/停止。
+- [x] 实现可信通知横幅、应用焦点保持、权限弹窗优先级和通知像素回归。
 - [x] 建立像素级截图回归测试并完成两个客户端的可靠切换与 200 轮压力测试。
 - [ ] 完成 Launcher 启动与 Tasks 停止的最终物理按键验收。
 - [ ] 完成 24 小时 compositor/Shell/appd 真机稳定性与内存泄漏验收。
@@ -64,6 +65,8 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
   有界 Shell 通知队列。
 - [x] 将 `notifications.post` 接入 WAMR host call，包含线性内存边界、Unix-only
   seccomp 和真机 WASM 调用闭环。
+- [x] 将通知队列接入可信 System Shell，在标准/沉浸应用上显示有界横幅且不窃取
+  应用键盘焦点。
 - [ ] 实现网络、文档、音频、相机和 LoRa/GPIO broker。
 - 定义 Intent Broker 和应用私有存储配额。
 - [ ] 建立恶意应用测试集，已覆盖 seccomp 旁路和 cgroup 资源耗尽；继续覆盖路径

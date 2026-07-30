@@ -53,6 +53,7 @@ struct shell {
     struct cp0_ui ui;
     uint32_t overlay_mode;
     uint32_t interrupted_overlay_mode;
+    uint32_t notification_restore_mode;
     int timer_fd;
     int width;
     int height;
@@ -61,6 +62,7 @@ struct shell {
     bool meta_pressed;
     bool redraw_pending;
     unsigned int catalog_ticks;
+    unsigned int notification_ticks;
     char pending_activation[CP0_APP_ID_BYTES];
 };
 
@@ -68,6 +70,21 @@ static volatile sig_atomic_t stop_requested;
 static unsigned int shm_serial;
 
 static void shell_redraw(struct shell *shell);
+
+static void cancel_notification(struct shell *shell, bool restore_mode)
+{
+    if (!shell->ui.notification_banner)
+        return;
+    cp0_ui_clear_notification(&shell->ui);
+    shell->notification_ticks = 0;
+    if (restore_mode &&
+        shell->overlay_mode ==
+            CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION) {
+        shell->overlay_mode = shell->notification_restore_mode;
+        cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                              shell->overlay_mode);
+    }
+}
 
 static void poll_permission_prompt(struct shell *shell)
 {
@@ -88,6 +105,7 @@ static void poll_permission_prompt(struct shell *shell)
         return;
     if (result != 1)
         return;
+    cancel_notification(shell, true);
     shell->interrupted_overlay_mode = shell->overlay_mode;
     shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     if (!cp0_ui_show_permission(&shell->ui, prompt.prompt_id, prompt.app_name,
@@ -116,6 +134,45 @@ static void poll_app_catalog(struct shell *shell)
         };
     }
     cp0_ui_sync_app_catalog(&shell->ui, catalog, list.count, list.truncated);
+}
+
+static void poll_notification(struct shell *shell)
+{
+    struct cp0_notification notification;
+
+    if (shell->ui.permission_prompt || shell->ui.power_dialog ||
+        shell->ui.notification_banner ||
+        cp0_appd_take_notification(&notification) != 1)
+        return;
+    if (!cp0_ui_show_notification(&shell->ui, notification.notification_id,
+                                  notification.app_name, notification.title,
+                                  notification.body))
+        return;
+    shell->notification_restore_mode = shell->overlay_mode;
+    shell->notification_ticks = 4;
+    if (shell->overlay_mode == CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS ||
+        shell->overlay_mode == CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN) {
+        shell->overlay_mode =
+            CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION;
+        cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                              shell->overlay_mode);
+    }
+    fprintf(stderr, "system-shell: notification=%llu visible\n",
+            (unsigned long long)notification.notification_id);
+    shell_redraw(shell);
+}
+
+static void update_notification_timer(struct shell *shell)
+{
+    if (!shell->ui.notification_banner || shell->notification_ticks == 0)
+        return;
+    shell->notification_ticks--;
+    if (shell->notification_ticks == 0) {
+        uint64_t notification_id = shell->ui.notification_id;
+        cancel_notification(shell, true);
+        fprintf(stderr, "system-shell: notification=%llu expired\n",
+                (unsigned long long)notification_id);
+    }
 }
 
 static int create_anonymous_file(size_t size)
@@ -303,6 +360,10 @@ static void shell_redraw(struct shell *shell)
                     CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS &&
                 y >= 21) {
                 *pixel = 0;
+            } else if (shell->overlay_mode ==
+                           CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION &&
+                       y >= CP0_UI_NOTIFICATION_BOTTOM) {
+                *pixel = 0;
             } else {
                 *pixel |= 0xff000000u;
             }
@@ -448,6 +509,7 @@ static void handle_system_action(void *data,
     default:
         return;
     }
+    cancel_notification(shell, false);
     shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     handle_ui_action(shell, ui_action);
 }
@@ -477,6 +539,10 @@ static void handle_app_removed(void *data,
 {
     struct shell *shell = data;
     (void)system_control;
+    if (shell->ui.notification_banner) {
+        cancel_notification(shell, false);
+        shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+    }
     cp0_ui_remove_app(&shell->ui, token);
     fprintf(stderr, "system-shell: app token=%u removed\n", token);
     shell_redraw(shell);
@@ -712,9 +778,9 @@ static void handle_registry_global(void *data, struct wl_registry *registry,
                                           &xdg_wm_base_interface, 1);
         xdg_wm_base_add_listener(shell->wm_base, &wm_base_listener, shell);
     } else if (strcmp(interface, cp0_system_shell_v1_interface.name) == 0 &&
-               version >= 3) {
+               version >= 4) {
         shell->system_control = wl_registry_bind(
-            registry, name, &cp0_system_shell_v1_interface, 3);
+            registry, name, &cp0_system_shell_v1_interface, 4);
         cp0_system_shell_v1_add_listener(shell->system_control,
                                          &system_control_listener, shell);
     }
@@ -915,7 +981,9 @@ static int shell_dispatch(struct shell *shell)
         if ((descriptors[1].revents & POLLIN) != 0) {
             uint64_t expirations;
             if (read(shell->timer_fd, &expirations, sizeof(expirations)) > 0) {
+                update_notification_timer(shell);
                 poll_permission_prompt(shell);
+                poll_notification(shell);
                 shell->catalog_ticks++;
                 if (shell->catalog_ticks >= 5) {
                     poll_app_catalog(shell);

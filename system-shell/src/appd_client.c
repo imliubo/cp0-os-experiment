@@ -366,6 +366,63 @@ bool cp0_appd_test_valid_app_id(const char *app_id)
 }
 #endif
 
+static int parse_notification_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    struct cp0_notification *notification)
+{
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    size_t token_count;
+    int data;
+
+    if (notification == NULL ||
+        parse_success(response, response_length, request_id, tokens,
+                      &token_count, &data) != 0)
+        return -1;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int item = cp0_json_object_get(response, tokens, token_count, data,
+                                   "notification");
+    if (kind < 0 || item < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind],
+                                "next-notification"))
+        return -1;
+    if (cp0_json_is_null(response, &tokens[item]))
+        return 0;
+    if (tokens[item].type != CP0_JSON_OBJECT)
+        return -1;
+
+    struct cp0_notification decoded = {0};
+    int notification_id = cp0_json_object_get(
+        response, tokens, token_count, item, "notification_id");
+    if (notification_id < 0 ||
+        !cp0_json_get_u64(response, &tokens[notification_id],
+                          &decoded.notification_id) ||
+        decoded.notification_id == 0 ||
+        !copy_member(response, tokens, token_count, item, "app_id",
+                     decoded.app_id, sizeof(decoded.app_id)) ||
+        !valid_app_id(decoded.app_id) ||
+        !copy_member(response, tokens, token_count, item, "app_name",
+                     decoded.app_name, sizeof(decoded.app_name)) ||
+        decoded.app_name[0] == '\0' ||
+        !copy_member(response, tokens, token_count, item, "title",
+                     decoded.title, sizeof(decoded.title)) ||
+        decoded.title[0] == '\0' ||
+        !copy_member(response, tokens, token_count, item, "body",
+                     decoded.body, sizeof(decoded.body)))
+        return -1;
+    *notification = decoded;
+    return 1;
+}
+
+#ifdef CP0_APPD_CLIENT_TEST
+int cp0_appd_test_parse_notification_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    struct cp0_notification *notification)
+{
+    return parse_notification_response(response, response_length, request_id,
+                                       notification);
+}
+#endif
+
 int cp0_appd_start_app(const char *app_id)
 {
     return app_lifecycle_command("start", "started", app_id);
@@ -374,6 +431,27 @@ int cp0_appd_start_app(const char *app_id)
 int cp0_appd_stop_app(const char *app_id)
 {
     return app_lifecycle_command("stop", "stopped", app_id);
+}
+
+int cp0_appd_take_notification(struct cp0_notification *notification)
+{
+    char request[256];
+    char response[CP0_APPD_FRAME_BYTES];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"take-notification\"}}\n",
+        (unsigned long long)request_id);
+
+    if (notification == NULL || request_length <= 0 ||
+        (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 250) != 0)
+        return -1;
+    return parse_notification_response(response, response_length, request_id,
+                                       notification);
 }
 
 int cp0_appd_get_permission_prompt(struct cp0_permission_prompt *prompt)

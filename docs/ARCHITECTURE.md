@@ -52,9 +52,10 @@ UID、保留可信系统层并持有全局快捷键。只有在这个受限模�
 - 权限、音量、通知和任务切换器由受信任的 System Shell 覆盖显示；
 - 渲染目标为 RGB565、最多 30 FPS，并使用 damage region 降低 SPI 刷屏量。
 
-私有 Shell 协议 v3 将覆盖策略固定为 `full`、`status` 和 `hidden`。标准应用在
-可信 21 px ARGB 状态栏下保持焦点；权限提示会强制切回不透明 `full` 模式，沉浸
-应用只在没有系统覆盖层时使用完整屏幕。全局系统键和显示休眠/唤醒始终由
+私有 Shell 协议 v4 将覆盖策略固定为 `full`、`status`、`hidden` 和
+`notification`。标准应用在可信 21 px ARGB 状态栏下保持焦点；通知模式显示顶部
+88 px 可信横幅但不转移应用键盘焦点；权限提示会强制切回不透明 `full` 模式。
+沉浸应用只在没有系统覆盖层时使用完整屏幕。全局系统键和显示休眠/唤醒始终由
 compositor 掌握，应用无法拦截或伪造这些状态转换。
 
 Weston 与 System Shell 使用不同 UID。两者仅通过 `cp0-wayland` 组共享 Wayland
@@ -98,6 +99,10 @@ Weston 的 XRGB8888 SHM buffer。标准应用只能提交 320x150，沉浸应用
 当前实现由 `appd` 内部权限协调器承担 permissiond 职责。System Shell 只能通过
 经过 `SO_PEERCRED` 认证的控制 socket 读取和解决单个待处理提示；诊断控制器可将
 持久决策原子重置为“下次询问”，第三方应用没有此管理接口。
+
+通知 broker 同样从 `SO_PEERCRED` 和当前 systemd cgroup 绑定应用身份。`appd` 只
+向可信 Shell 返回规范应用名称和有界内容；Shell 决定横幅布局与四秒显示周期。
+权限提示优先于通知，Home、Tasks、Power 和应用退出会撤销当前横幅。
 
 文件共享不暴露路径，通过 Document Portal 返回受限文件描述符。应用间调用通过
 Intent Broker 路由，接收方必须显式声明 Intent，不提供任意应用间 socket。

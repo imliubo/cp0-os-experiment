@@ -18,7 +18,7 @@
     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
   </copyright>
 
-  <interface name="cp0_system_shell_v1" version="3">
+  <interface name="cp0_system_shell_v1" version="4">
     <description summary="trusted CardputerZero System Shell control">
       This global is restricted by the compositor to the dedicated cp0-shell
       Unix account. It registers the trusted system surface and carries global
@@ -43,6 +43,7 @@
       <entry name="full" value="0" summary="opaque trusted Shell with keyboard focus"/>
       <entry name="status" value="1" summary="trusted status strip above a standard application"/>
       <entry name="hidden" value="2" summary="immersive application with no Shell pixels"/>
+      <entry name="notification" value="3" since="4" summary="trusted notification banner without stealing application focus"/>
     </enum>
 
     <enum name="display_mode" since="3">
@@ -106,7 +107,8 @@
         Full mode hides all applications and focuses the Shell. Status mode
         leaves the active standard application focused while keeping the
         trusted Shell surface above it. Hidden mode is reserved for an active
-        immersive application.
+        immersive application. Notification mode keeps the active application
+        focused while rendering the trusted Shell banner above it.
       </description>
       <arg name="mode" type="uint" enum="overlay_mode"/>
     </request>

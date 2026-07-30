@@ -80,6 +80,11 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     cp0_ui_handle_action(ui, CP0_UI_SHOW_TASKS);
     write_snapshot(directory, "tasks", ui, frame);
 
+    cp0_ui_show_notification(ui, 7, "Hello Card", "Operation complete",
+                             "The requested work finished successfully");
+    write_snapshot(directory, "notification", ui, frame);
+    cp0_ui_clear_notification(ui);
+
     cp0_ui_handle_action(ui, CP0_UI_SHOW_POWER);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     write_snapshot(directory, "power", ui, frame);
@@ -217,6 +222,27 @@ int main(int argc, char **argv)
     assert(cp0_ui_handle_action(&ui, CP0_UI_BACK) ==
            CP0_UI_EVENT_PERMISSION_DENY);
     cp0_ui_clear_permission(&ui);
+
+    assert(cp0_ui_show_notification(
+        &ui, 91, "Hello Card", "Operation complete",
+        "The requested work finished successfully"));
+    assert(ui.notification_banner && ui.notification_id == 91);
+    render(&ui, frame);
+    assert(pixel(frame, 5, 24) == GREEN);
+    assert(cp0_ui_show_permission(&ui, 92, "Hello Card", "camera.capture",
+                                  "Capture a photograph"));
+    render(&ui, frame);
+    assert(pixel(frame, 5, 24) != GREEN);
+    cp0_ui_clear_permission(&ui);
+    cp0_ui_clear_notification(&ui);
+    assert(!ui.notification_banner && ui.notification_id == 0);
+    assert(ui.notification_app_name[0] == '\0');
+    assert(ui.notification_title[0] == '\0');
+    assert(ui.notification_body[0] == '\0');
+    assert(cp0_ui_show_notification(&ui, 93, "Hello", "Title", ""));
+    assert(ui.notification_body[0] == '\0');
+    cp0_ui_clear_notification(&ui);
+    assert(!cp0_ui_show_notification(&ui, 0, "Hello", "Title", "Body"));
 
     render(&ui, frame);
     if (argc == 2)

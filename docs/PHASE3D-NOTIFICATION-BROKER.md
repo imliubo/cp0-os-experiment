@@ -43,6 +43,13 @@ cp0ctl notification take
 `cp0ctl broker notify` does not bypass identity checks. It is useful only when
 run as the registered UID of the foreground test application.
 
+System Shell protocol v4 presents each dequeued item as a compositor-enforced
+trusted banner for four seconds. The application remains the keyboard focus
+while the Shell occupies the top 88 pixels. Permission prompts take priority
+and switch to the full trusted surface; Home, Tasks, Power and application
+withdrawal clear a visible banner. The application cannot control this policy
+or draw into the trusted layer.
+
 ## Deployment invariants
 
 The appd service has no capabilities, only `AF_UNIX`, and a 24 MB cgroup limit.

@@ -368,6 +368,18 @@ static void draw_prompt_line(struct canvas *canvas, int y, const char *text,
     draw_text(canvas, 20, y, line, 1, COLOR_TEXT);
 }
 
+static void draw_notification_banner(struct canvas *canvas,
+                                     const struct cp0_ui *ui)
+{
+    fill_rect(canvas, 5, 24, 310, 64, COLOR_SURFACE);
+    fill_rect(canvas, 5, 24, 4, 64, COLOR_GREEN);
+    stroke_rect(canvas, 5, 24, 310, 64, 1, COLOR_GREEN);
+    draw_prompt_line(canvas, 32, ui->notification_app_name, 0, 46);
+    draw_prompt_line(canvas, 46, ui->notification_title, 0, 46);
+    draw_prompt_line(canvas, 62, ui->notification_body, 0, 46);
+    draw_prompt_line(canvas, 75, ui->notification_body, 46, 46);
+}
+
 static void draw_permission_dialog(struct canvas *canvas,
                                    const struct cp0_ui *ui)
 {
@@ -417,6 +429,21 @@ static bool copy_text(char *output, size_t capacity, const char *input)
     size_t length;
 
     if (output == NULL || capacity == 0 || input == NULL || input[0] == '\0')
+        return false;
+    length = strlen(input);
+    if (length >= capacity)
+        length = capacity - 1;
+    memcpy(output, input, length);
+    output[length] = '\0';
+    return true;
+}
+
+static bool copy_optional_text(char *output, size_t capacity,
+                               const char *input)
+{
+    size_t length;
+
+    if (output == NULL || capacity == 0 || input == NULL)
         return false;
     length = strlen(input);
     if (length >= capacity)
@@ -656,6 +683,35 @@ void cp0_ui_clear_permission(struct cp0_ui *ui)
     memset(ui->prompt_reason, 0, sizeof(ui->prompt_reason));
 }
 
+bool cp0_ui_show_notification(struct cp0_ui *ui, uint64_t notification_id,
+                              const char *app_name, const char *title,
+                              const char *body)
+{
+    if (ui == NULL || notification_id == 0 ||
+        !copy_text(ui->notification_app_name,
+                   sizeof(ui->notification_app_name), app_name) ||
+        !copy_text(ui->notification_title, sizeof(ui->notification_title),
+                   title) ||
+        !copy_optional_text(ui->notification_body,
+                            sizeof(ui->notification_body), body))
+        return false;
+    ui->notification_id = notification_id;
+    ui->notification_banner = true;
+    return true;
+}
+
+void cp0_ui_clear_notification(struct cp0_ui *ui)
+{
+    if (ui == NULL)
+        return;
+    ui->notification_banner = false;
+    ui->notification_id = 0;
+    memset(ui->notification_app_name, 0,
+           sizeof(ui->notification_app_name));
+    memset(ui->notification_title, 0, sizeof(ui->notification_title));
+    memset(ui->notification_body, 0, sizeof(ui->notification_body));
+}
+
 enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                                         enum cp0_ui_action action)
 {
@@ -786,6 +842,9 @@ void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
     fill_rect(&canvas, 0, 0, width, height, COLOR_BG);
     draw_status_bar(&canvas, ui);
     draw_page(&canvas, ui);
+    if (ui->notification_banner && !ui->power_dialog &&
+        !ui->permission_prompt)
+        draw_notification_banner(&canvas, ui);
     if (ui->power_dialog)
         draw_power_dialog(&canvas, ui);
     if (ui->permission_prompt)
