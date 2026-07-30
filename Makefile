@@ -12,6 +12,7 @@ check: fmt
 	./tests/test-system-shell-ui.sh
 	./tests/test-appd-profile.sh
 	./tests/test-app-platform-image.sh
+	./tests/test-sdk-c.sh
 	./tests/test-patch-cm0-dtb.sh
 	cargo check --workspace --all-targets
 	cargo test --workspace

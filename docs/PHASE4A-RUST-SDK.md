@@ -74,3 +74,16 @@ Both socket units are enabled and the compositor now starts by default. The
 stage has offline profile tests; a complete image build and flash are deferred
 until the remaining boot/read-only-rootfs work is ready for one consolidated
 hardware validation cycle.
+
+## C and C++ ABI
+
+`sdk/c/include/cardputerzero.h` exposes the same Runtime imports to freestanding
+C11 and C++17 applications. It defines SDK/display constants and stable result
+codes but no WASI or Linux interfaces. Clang import attributes bind symbols to
+the `cardputerzero` module, and explicit UTF-8 pointers and lengths match WAMR's
+checked `*~` parameters.
+
+Emscripten smoke tests compile both C and C++ translation units to WebAssembly
+objects with warnings as errors. Its generated cache remains under the ignored
+repository `target/` directory. Packaging a pinned standalone C/C++ toolchain
+is still required before the full SDK can be called released.

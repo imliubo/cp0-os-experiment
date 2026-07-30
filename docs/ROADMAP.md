@@ -73,6 +73,7 @@ Shell 和其他应用数据。
 
 - [x] 建立首个 `no_std` Rust SDK，封装系统时钟、事件等待、通知 capability 和
   稳定错误类型；Hello 示例已移除私有 FFI。
+- [x] 建立 freestanding C11/C++17 SDK 头文件并加入 wasm32 双语言编译测试。
 - [ ] 发布完整 Rust 和 C/C++ SDK，生成 WIT bindings 并提供 LVGL 320x170 组件。
 - [x] 实现 `cp0ctl new/build` 的 SDK-only 项目生成、Cargo metadata 解析和规范产物树。
 - [ ] 实现 `cp0ctl run/package/sign/install/logs`。

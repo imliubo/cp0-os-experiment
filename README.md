@@ -46,6 +46,7 @@ Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真�
   产物目录。
 - `pi-gen` app platform stage：构建并安装 appd、broker sockets、静态 Runtime、
   稳定测试身份与 SDK 版 Hello，开发镜像默认进入 System Shell。
+- Freestanding C11/C++17 SDK 0.1 头文件与 wasm32 编译检查，不暴露 WASI/Linux ABI。
 
 ## 快速验证
 
