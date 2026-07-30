@@ -3,8 +3,8 @@
 ## Scope
 
 Phase 3A establishes the executable isolation boundary below the SDK. It does
-not yet expose display or capability host calls and is not a complete `appd`
-lifecycle implementation.
+does not yet expose display or capability host calls beyond the bounded
+`cp0_wait_event` lifecycle primitive.
 
 The trusted App Runtime embeds WAMR 2.4.5 at commit
 `25bd7eb63e828e4bd242cc9b38d260b4b31c6605`. The target build is a static

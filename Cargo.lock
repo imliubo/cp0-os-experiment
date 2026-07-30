@@ -24,7 +24,9 @@ dependencies = [
 name = "cp0ctl"
 version = "0.1.0"
 dependencies = [
+ "cp0-appd",
  "cp0-manifest",
+ "serde_json",
 ]
 
 [[package]]

@@ -21,7 +21,7 @@ pub struct AppdRequest {
 #[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum AppdCommand {
     Ping,
-    List,
+    List { offset: u16, limit: u8 },
     Start { app_id: String },
     Stop { app_id: String },
 }
@@ -45,9 +45,17 @@ pub enum ResponseOutcome {
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ResponseData {
     Pong,
-    Applications { apps: Vec<AppSummary> },
-    Started { app_id: String, unit: String },
-    Stopped { app_id: String },
+    Applications {
+        apps: Vec<AppSummary>,
+        next_offset: Option<u16>,
+    },
+    Started {
+        app_id: String,
+        unit: String,
+    },
+    Stopped {
+        app_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +86,7 @@ pub enum ProtocolError {
     InvalidJson(serde_json::Error),
     UnsupportedVersion(u32),
     InvalidAppId,
+    InvalidPagination,
 }
 
 impl fmt::Display for ProtocolError {
@@ -101,6 +110,9 @@ impl fmt::Display for ProtocolError {
                 )
             }
             Self::InvalidAppId => formatter.write_str("invalid application ID"),
+            Self::InvalidPagination => {
+                formatter.write_str("application list limit must be between 1 and 32")
+            }
         }
     }
 }
@@ -132,6 +144,9 @@ impl AppdRequest {
             return Err(ProtocolError::UnsupportedVersion(self.protocol_version));
         }
         match &self.command {
+            AppdCommand::List { limit, .. } if !(1..=32).contains(limit) => {
+                Err(ProtocolError::InvalidPagination)
+            }
             AppdCommand::Start { app_id } | AppdCommand::Stop { app_id }
                 if !cp0_manifest::is_valid_app_id(app_id) =>
             {
@@ -164,6 +179,38 @@ impl AppdResponse {
 }
 
 pub fn read_request(reader: &mut impl BufRead) -> Result<Option<AppdRequest>, ProtocolError> {
+    let Some(frame) = read_frame(reader)? else {
+        return Ok(None);
+    };
+    let request: AppdRequest = serde_json::from_slice(&frame)?;
+    request.validate()?;
+    Ok(Some(request))
+}
+
+pub fn read_response(reader: &mut impl BufRead) -> Result<Option<AppdResponse>, ProtocolError> {
+    let Some(frame) = read_frame(reader)? else {
+        return Ok(None);
+    };
+    let response: AppdResponse = serde_json::from_slice(&frame)?;
+    if response.protocol_version != APPD_PROTOCOL_VERSION {
+        return Err(ProtocolError::UnsupportedVersion(response.protocol_version));
+    }
+    Ok(Some(response))
+}
+
+pub fn write_request(writer: &mut impl Write, request: &AppdRequest) -> Result<(), ProtocolError> {
+    request.validate()?;
+    write_frame(writer, request)
+}
+
+pub fn write_response(
+    writer: &mut impl Write,
+    response: &AppdResponse,
+) -> Result<(), ProtocolError> {
+    write_frame(writer, response)
+}
+
+fn read_frame(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, ProtocolError> {
     let mut frame = Vec::with_capacity(256);
     let mut terminated = false;
     loop {
@@ -192,16 +239,15 @@ pub fn read_request(reader: &mut impl BufRead) -> Result<Option<AppdRequest>, Pr
         return Err(ProtocolError::UnterminatedFrame);
     }
     frame.pop();
-    let request: AppdRequest = serde_json::from_slice(&frame)?;
-    request.validate()?;
-    Ok(Some(request))
+    Ok(Some(frame))
 }
 
-pub fn write_response(
-    writer: &mut impl Write,
-    response: &AppdResponse,
-) -> Result<(), ProtocolError> {
-    serde_json::to_writer(&mut *writer, response)?;
+fn write_frame(writer: &mut impl Write, value: &impl Serialize) -> Result<(), ProtocolError> {
+    let encoded = serde_json::to_vec(value)?;
+    if encoded.len() + 1 > MAX_FRAME_BYTES {
+        return Err(ProtocolError::FrameTooLarge);
+    }
+    writer.write_all(&encoded)?;
     writer.write_all(b"\n")?;
     writer.flush()?;
     Ok(())
@@ -287,6 +333,16 @@ mod tests {
         assert_eq!(encoded.last(), Some(&b'\n'));
         let decoded: AppdResponse = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, response);
+
+        let mut encoded_request = Vec::new();
+        write_request(&mut encoded_request, &start_request()).unwrap();
+        let mut request_reader = Cursor::new(encoded_request);
+        assert_eq!(
+            read_request(&mut request_reader).unwrap(),
+            Some(start_request())
+        );
+        let mut response_reader = Cursor::new(encoded);
+        assert_eq!(read_response(&mut response_reader).unwrap(), Some(response));
     }
 
     #[test]
@@ -314,6 +370,19 @@ mod tests {
             invalid_app.validate(),
             Err(ProtocolError::InvalidAppId)
         ));
+
+        let invalid_page = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 3,
+            command: AppdCommand::List {
+                offset: 0,
+                limit: 0,
+            },
+        };
+        assert!(matches!(
+            invalid_page.validate(),
+            Err(ProtocolError::InvalidPagination)
+        ));
     }
 
     #[test]
@@ -329,6 +398,12 @@ mod tests {
         assert!(matches!(
             read_request(&mut unterminated),
             Err(ProtocolError::UnterminatedFrame)
+        ));
+
+        let response = AppdResponse::error(1, ErrorCode::Internal, "x".repeat(MAX_FRAME_BYTES));
+        assert!(matches!(
+            write_response(&mut Vec::new(), &response),
+            Err(ProtocolError::FrameTooLarge)
         ));
     }
 }

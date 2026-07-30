@@ -1,0 +1,15 @@
+[Unit]
+Description=CardputerZero application lifecycle control socket
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/cardputerzero-appd/control.sock
+FileDescriptorName=control
+SocketUser=root
+SocketGroup=cp0-control
+SocketMode=0660
+DirectoryMode=0750
+Accept=no
+
+[Install]
+WantedBy=sockets.target

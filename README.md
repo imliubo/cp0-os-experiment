@@ -32,6 +32,8 @@ Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真�
   切换、焦点恢复、四页面像素回归和双客户端真机压力测试。
 - Phase 3A 静态 WAMR App Runtime、每应用稳定 UID、bubblewrap namespace、runtime
   seccomp、systemd cgroup 硬限制及资源耗尽真机负向测试。
+- Phase 3B socket-activated `appd`、可信安装注册表、Shell peer UID 认证、单运行槽
+  和 `cp0ctl app list/start/stop` 真机生命周期闭环。
 
 ## 快速验证
 
@@ -59,3 +61,5 @@ Phase 2C 的单前台策略和真机切换结果见
 [Single-foreground window switching](docs/PHASE2C-WINDOW-SWITCHING.md)。
 Phase 3A 的 runtime、沙箱契约和真机安全验证见
 [App Runtime and Linux sandbox](docs/PHASE3A-APP-RUNTIME.md)。
+`appd` 的控制协议、启动前校验与真机生命周期证据见
+[appd lifecycle service](docs/PHASE3B-APPD-LIFECYCLE.md)。

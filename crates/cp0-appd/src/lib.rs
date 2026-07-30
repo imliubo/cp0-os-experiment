@@ -7,16 +7,19 @@ use serde::Serialize;
 mod lifecycle;
 mod protocol;
 mod registry;
+mod server;
 
-pub use lifecycle::{AppManager, AppManagerError, InstalledApp, ManagerPaths};
+pub use lifecycle::{AppManager, AppManagerError, InstalledApp, ManagerPaths, lookup_unix_account};
 
 pub use protocol::{
-    AppSummary, AppdCommand, AppdRequest, AppdResponse, ErrorCode, PeerCredentials, ProtocolError,
-    ResponseData, peer_credentials, read_request, write_response,
+    APPD_PROTOCOL_VERSION, AppSummary, AppdCommand, AppdRequest, AppdResponse, ErrorCode,
+    PeerCredentials, ProtocolError, ResponseData, ResponseOutcome, peer_credentials, read_request,
+    read_response, write_request, write_response,
 };
 pub use registry::{
     AppAccount, AppRegistry, FIRST_APP_ACCOUNT_ID, LAST_APP_ACCOUNT_ID, RegistryError,
 };
+pub use server::{AppdServer, ServerError};
 
 pub const DEFAULT_APPS_ROOT: &str = "/var/lib/cardputerzero/apps";
 pub const DEFAULT_DATA_ROOT: &str = "/var/lib/cardputerzero/data";
@@ -180,6 +183,7 @@ pub fn systemd_run_arguments(plan: &SandboxPlan) -> Vec<String> {
     let mut arguments = vec![
         "--quiet".into(),
         "--collect".into(),
+        "--service-type=exec".into(),
         format!("--unit={}", plan.unit),
     ];
     for property in &plan.systemd_properties {
@@ -306,6 +310,7 @@ mod tests {
         let arguments = systemd_run_arguments(&plan);
 
         assert_eq!(arguments[0], "--quiet");
+        assert!(arguments.contains(&"--service-type=exec".into()));
         assert!(arguments.contains(&"--unit=cardputerzero-app-42.service".into()));
         assert!(arguments.contains(&"--property=MemoryMax=25165824".into()));
         assert!(arguments.contains(&BWRAP_PATH.into()));

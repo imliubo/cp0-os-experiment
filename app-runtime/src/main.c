@@ -1,3 +1,4 @@
+#include "hostcalls.h"
 #include "seccomp.h"
 
 #include <errno.h>
@@ -88,6 +89,8 @@ int main(int argc, char **argv) {
 
     memset(&init_args, 0, sizeof(init_args));
     init_args.mem_alloc_type = Alloc_With_System_Allocator;
+    init_args.native_module_name = "cardputerzero";
+    init_args.native_symbols = cp0_host_symbols(&init_args.n_native_symbols);
     if (!wasm_runtime_full_init(&init_args)) {
         fprintf(stderr, "app-runtime: WAMR initialization failed\n");
         goto cleanup;

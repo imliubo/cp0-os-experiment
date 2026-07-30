@@ -179,6 +179,9 @@ pub fn is_valid_app_id(id: &str) -> bool {
 }
 
 pub fn is_valid_app_version(version: &str) -> bool {
+    if version.is_empty() || version.len() > 64 {
+        return false;
+    }
     let (without_build, build) = version
         .split_once('+')
         .map_or((version, None), |(left, right)| (left, Some(right)));
@@ -295,6 +298,13 @@ mod tests {
                 .iter()
                 .any(|error| error.contains("semantic version"))
         );
+    }
+
+    #[test]
+    fn rejects_excessively_long_version() {
+        let mut app = valid_manifest();
+        app.version = format!("1.0.0+{}", "a".repeat(64));
+        assert!(validate(&app).is_err());
     }
 
     #[test]

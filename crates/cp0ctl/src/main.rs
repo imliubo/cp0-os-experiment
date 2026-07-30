@@ -1,28 +1,117 @@
 use std::env;
+use std::io::BufReader;
+use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
+use std::time::Duration;
+
+use cp0_appd::{
+    APPD_PROTOCOL_VERSION, AppdCommand, AppdRequest, ResponseOutcome, read_response, write_request,
+};
+
+const APPD_SOCKET: &str = "/run/cardputerzero-appd/control.sock";
+const REQUEST_ID: u64 = 1;
+const TIMEOUT: Duration = Duration::from_secs(5);
 
 fn main() -> ExitCode {
-    let args: Vec<String> = env::args().skip(1).collect();
+    let arguments: Vec<String> = env::args().skip(1).collect();
 
-    match args.as_slice() {
+    let result = match arguments.as_slice() {
         [manifest, validate, path] if manifest == "manifest" && validate == "validate" => {
-            match cp0_manifest::load_and_validate(path) {
-                Ok(app) => {
-                    println!(
-                        "valid CardputerZero app manifest: {} {}",
-                        app.id, app.version
-                    );
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    eprintln!("manifest validation failed:\n{error}");
-                    ExitCode::FAILURE
-                }
-            }
+            validate_manifest(path)
         }
-        _ => {
-            eprintln!("usage: cp0ctl manifest validate <app.json>");
-            ExitCode::from(2)
+        [app, command] if app == "app" && command == "ping" => send_app_command(AppdCommand::Ping),
+        [app, command] if app == "app" && command == "list" => send_app_command(
+            AppdCommand::List {
+                offset: 0,
+                limit: 32,
+            },
+        ),
+        [app, command, offset, limit] if app == "app" && command == "list" => {
+            let offset = offset
+                .parse::<u16>()
+                .map_err(|_| "list offset must be an unsigned 16-bit integer".to_owned());
+            let limit = limit
+                .parse::<u8>()
+                .map_err(|_| "list limit must be an integer between 1 and 32".to_owned());
+            offset.and_then(|offset| {
+                limit.and_then(|limit| {
+                    send_app_command(AppdCommand::List { offset, limit })
+                })
+            })
+        }
+        [app, command, app_id] if app == "app" && command == "start" => {
+            send_app_command(AppdCommand::Start {
+                app_id: app_id.clone(),
+            })
+        }
+        [app, command, app_id] if app == "app" && command == "stop" => {
+            send_app_command(AppdCommand::Stop {
+                app_id: app_id.clone(),
+            })
+        }
+        _ => Err(
+            "usage: cp0ctl manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id>"
+                .into(),
+        ),
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("cp0ctl: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn validate_manifest(path: &str) -> Result<(), String> {
+    match cp0_manifest::load_and_validate(path) {
+        Ok(app) => {
+            println!(
+                "valid CardputerZero app manifest: {} {}",
+                app.id, app.version
+            );
+            Ok(())
+        }
+        Err(error) => Err(format!("manifest validation failed:\n{error}")),
+    }
+}
+
+fn send_app_command(command: AppdCommand) -> Result<(), String> {
+    let socket = env::var("CP0_APPD_SOCKET").unwrap_or_else(|_| APPD_SOCKET.into());
+    let mut stream = UnixStream::connect(&socket)
+        .map_err(|error| format!("cannot connect to appd at {socket}: {error}"))?;
+    stream
+        .set_read_timeout(Some(TIMEOUT))
+        .map_err(|error| format!("cannot set appd timeout: {error}"))?;
+    stream
+        .set_write_timeout(Some(TIMEOUT))
+        .map_err(|error| format!("cannot set appd timeout: {error}"))?;
+    let request = AppdRequest {
+        protocol_version: APPD_PROTOCOL_VERSION,
+        request_id: REQUEST_ID,
+        command,
+    };
+    write_request(&mut stream, &request)
+        .map_err(|error| format!("cannot send appd request: {error}"))?;
+    let mut reader = BufReader::new(stream);
+    let response = read_response(&mut reader)
+        .map_err(|error| format!("cannot read appd response: {error}"))?
+        .ok_or_else(|| "appd closed the connection without a response".to_owned())?;
+    if response.request_id != REQUEST_ID {
+        return Err("appd response request ID does not match".into());
+    }
+    match &response.outcome {
+        ResponseOutcome::Ok { .. } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&response)
+                    .map_err(|error| format!("cannot encode appd response: {error}"))?
+            );
+            Ok(())
+        }
+        ResponseOutcome::Error { code, message } => {
+            Err(format!("appd returned {code:?}: {message}"))
         }
     }
 }
