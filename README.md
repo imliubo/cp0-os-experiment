@@ -35,6 +35,8 @@ Phase 3 已贯通 WAMR 强隔离运行时、权限系统和首个 capability bro
   滚动列表、启动状态，以及 Tasks 的 Resume/Stop 单运行槽控制。
 - Phase 2F 可信通知横幅：私有协议 v4、顶部 88 px compositor 强制可信层、应用
   键盘焦点保持、权限提示优先级、四秒生命周期和 320x170 像素回归。
+- Phase 2G 核心恢复与稳定性工具：固定单元 SIGKILL/PID/重绑验证、RAM-backed
+  24 小时状态与内存采样、appd ping 和 socket 健康检查。
 - Phase 3A 静态 WAMR App Runtime、每应用稳定 UID、bubblewrap namespace、runtime
   seccomp、systemd cgroup 硬限制及资源耗尽真机负向测试。
 - Phase 3B socket-activated `appd`、可信安装注册表、Shell peer UID 认证、单运行槽
@@ -83,6 +85,8 @@ Phase 2C 的单前台策略和真机切换结果见
 [Installed application Launcher](docs/PHASE2E-LAUNCHER-LIFECYCLE.md)。
 通知可信呈现、焦点和生命周期策略见
 [Trusted notification banners](docs/PHASE2F-TRUSTED-NOTIFICATIONS.md)。
+核心服务故障恢复与 24 小时验收方法见
+[Core recovery and stability acceptance](docs/PHASE2G-RECOVERY-STABILITY.md)。
 Phase 3A 的 runtime、沙箱契约和真机安全验证见
 [App Runtime and Linux sandbox](docs/PHASE3A-APP-RUNTIME.md)。
 `appd` 的控制协议、启动前校验与真机生命周期证据见

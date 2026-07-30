@@ -17,6 +17,10 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-broker.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-broker.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-appd.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-appd.conf"
+install -D -m 0755 "${payload}/diagnostics/device-core-recovery.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-core-recovery"
+install -D -m 0755 "${payload}/diagnostics/device-stability-monitor.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-stability-monitor"
 install -D -m 0644 "${payload}/hello/app.json" "${hello_root}/app.json"
 install -D -m 0644 "${payload}/hello/bin/hello-card.wasm" \
     "${hello_root}/bin/hello-card.wasm"

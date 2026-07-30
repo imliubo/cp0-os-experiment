@@ -137,3 +137,14 @@ memory cgroup 必须启用，否则 `appd` 无法执行 manifest 内存上限。
 内核、compositor、System Shell、App Runtime、appd 和能力服务属于可信计算基。
 第三方 WASM、应用资源、网络响应和应用商店内容均视为不可信输入。原生第三方
 可执行文件不属于支持范围；开发模式也只安装未上架的 WASM 应用。
+
+## 10. 故障恢复与稳定性
+
+appd 和 compositor 使用 `Restart=on-failure`，System Shell 使用
+`Restart=always` 并通过 `BindsTo` 跟随 compositor 生命周期。恢复验收必须同时确认
+新 PID、预期重启计数、Shell 对新 Wayland socket 的重绑以及 appd 控制路径，不能只
+检查 systemd 的 `active` 字符串。
+
+24 小时验收按分钟将核心服务状态、重启数、cgroup 内存和 socket/ping 健康写入
+`/run` 的独立结果目录，避免持续写入 SD 卡。监控工具有固定的 32/32/24 MiB 内存
+上限和结束增长阈值，但不会在产品启动时常驻；量产遥测策略留到 Phase 6。

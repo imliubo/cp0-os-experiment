@@ -78,12 +78,16 @@ cp "$repo_root/compositor-policy/cardputerzero-policy.c" \
 "$repo_root/scripts/build-app-runtime.sh"
 "$repo_root/scripts/build-example-app.sh"
 platform_payload="$pi_gen_dir/stage-cardputerzero-os/02-app-platform/payload"
-mkdir -p "$platform_payload/systemd" "$platform_payload/hello/bin"
+mkdir -p "$platform_payload/systemd" "$platform_payload/hello/bin" \
+    "$platform_payload/diagnostics"
 cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0ctl" \
     "$repo_root/target/app-runtime-aarch64/cardputerzero-app-runtime" \
     "$platform_payload/"
 cp "$repo_root/appd/systemd/"* "$platform_payload/systemd/"
+cp "$repo_root/scripts/device-core-recovery.sh" \
+    "$repo_root/scripts/device-stability-monitor.sh" \
+    "$platform_payload/diagnostics/"
 cp "$repo_root/target/apps/dev.cardputerzero.hello/0.1.0/app.json" \
     "$platform_payload/hello/"
 cp "$repo_root/target/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm" \
