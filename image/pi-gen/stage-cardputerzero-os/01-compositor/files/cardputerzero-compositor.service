@@ -1,0 +1,32 @@
+[Unit]
+Description=CardputerZero single-foreground Wayland compositor
+Documentation=man:weston(1)
+Requires=seatd.service
+After=seatd.service systemd-user-sessions.service
+Conflicts=getty@tty1.service
+OnFailure=getty@tty1.service
+ConditionPathExists=/dev/dri/cardputer-zero-internal
+ConditionPathExists=/dev/input/cardputer-zero-internal
+
+[Service]
+Type=simple
+User=cp0-shell
+Group=cp0-shell
+SupplementaryGroups=video render input
+RuntimeDirectory=cardputerzero
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+Environment=XDG_RUNTIME_DIR=/run/cardputerzero
+Environment=LIBSEAT_BACKEND=seatd
+ExecStart=/usr/libexec/cardputerzero/start-compositor.sh
+Restart=on-failure
+RestartSec=1
+TimeoutStopSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run/cardputerzero
+
+[Install]
+WantedBy=multi-user.target

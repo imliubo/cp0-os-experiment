@@ -33,6 +33,29 @@ fi
 git -C "$pi_gen_dir" checkout --detach "$PI_GEN_COMMIT"
 test "$(git -C "$pi_gen_dir" rev-parse HEAD)" = "$PI_GEN_COMMIT"
 
+# CM0 uses only the arm64 rpi-v8 kernel. Avoid installing the Pi 5 kernel and
+# headers in stage0 merely to purge them again in the board-specific stage.
+firmware_packages="$pi_gen_dir/stage0/02-firmware/01-packages"
+for package in linux-image-rpi-2712 linux-headers-rpi-2712; do
+    sed -i.bak "/^${package}$/d" "$firmware_packages"
+    rm -f "${firmware_packages}.bak"
+done
+if grep -q -- '-rpi-2712$' "$firmware_packages"; then
+    echo "error: Pi 5 kernel package remains in stage0" >&2
+    exit 1
+fi
+
+for apt_source in \
+    "$pi_gen_dir/stage0/prerun.sh" \
+    "$pi_gen_dir/stage0/00-configure-apt/files/debian.sources"; do
+    sed -i.bak 's|http://deb.debian.org|https://deb.debian.org|g' "$apt_source"
+    rm -f "${apt_source}.bak"
+done
+printf '%s\n' \
+    'Acquire::http { Proxy "APT_PROXY"; };' \
+    'Acquire::https { Proxy "APT_PROXY"; };' \
+    >"$pi_gen_dir/stage0/00-configure-apt/files/51cache"
+
 rm -rf "$pi_gen_dir/stage-cardputerzero-os"
 cp -R "$repo_root/image/pi-gen/stage-cardputerzero-os" \
     "$pi_gen_dir/stage-cardputerzero-os"

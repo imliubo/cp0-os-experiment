@@ -8,8 +8,8 @@ WebAssembly；应用不能直接访问 Linux 设备节点、系统总线或其�
 
 ## 当前状态
 
-Phase 0 的基础契约已经建立，Phase 1 的首个精简镜像候选已经构建并通过离线验收，
-等待烧录真机。当前仓库包含：
+Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真机验收，Phase 2
+已完成最小 compositor 基线。当前仓库包含：
 
 - 系统架构与资源预算；
 - 分阶段 Roadmap 和初始 ADR；
@@ -18,8 +18,10 @@ Phase 0 的基础契约已经建立，Phase 1 的首个精简镜像候选已经�
 - `cp0ctl manifest validate` 开发工具。
 - 固定版本的 CM0 V0.6 BSP 和 `pi-gen` 外部构建阶段；
 - 真机启动内存配置、可回滚部署脚本和硬件 smoke test。
-- 不含 Launcher/桌面环境的 218 MB 压缩开发镜像构建配置。
+- 不含 Launcher 和高级桌面环境的 224 MB 压缩开发镜像构建配置。
 - 面向无调试接口首次启动的 LCD 日志、IP/硬件状态摘要和本地键盘登录控制台。
+- 裁剪构建的 Weston 14.0.2 DRM/Pixman kiosk 基线和内部硬件专用 seat；开发镜像
+  默认保留恢复控制台，System Shell 完成后再默认启用 compositor。
 
 ## 快速验证
 
@@ -37,4 +39,5 @@ make verify-image
 
 详细设计见 [系统架构](docs/ARCHITECTURE.md) 和 [Roadmap](docs/ROADMAP.md)。
 
-Phase 1 构建和真机验证方法见 [BSP 与镜像说明](docs/PHASE1-BSP.md)。
+Phase 1 构建和真机验证方法见 [BSP 与镜像说明](docs/PHASE1-BSP.md)，Phase 2
+compositor 基线见 [Compositor bring-up](docs/PHASE2-COMPOSITOR.md)。

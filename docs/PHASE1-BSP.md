@@ -50,9 +50,11 @@ make verify-image
 
 构建固定使用 `pi-gen` arm64 分支提交
 `ca8aeed0ae300c2a89f55ce9617d5f96a27e99e5`，只执行官方 `stage0`、`stage1`
-和 CardputerZero 自定义阶段，不包含 `stage2`。自定义阶段生成 `-cp0-os-dev`
-镜像，编译固定 BSP 后删除编译器、内核头文件、2712 内核及桌面无关组件，并安装
-真机诊断脚本。构建代理只存在于构建 chroot，导出的系统中不得残留代理地址。
+和 CardputerZero 自定义阶段，不包含 `stage2`。构建入口将 Debian 源固定为 HTTPS，
+并在 `stage0` 只安装 CM0 所需的 `rpi-v8` 内核，不安装 Pi 5 的 2712 内核与头文件。
+自定义阶段生成 `-cp0-os-dev` 镜像，编译固定 BSP 后删除编译器、内核头文件及桌面
+无关组件，并安装真机诊断脚本。构建代理只存在于构建 chroot，导出的系统中不得残留
+代理地址。
 
 若下载或构建临时失败，构建容器会保留 `work/` 和 apt 缓存。恢复网络后续建：
 
@@ -65,23 +67,36 @@ CP0_RESUME_BUILD=1 ./image/build-image.sh
 清理容器，失败时保留。产物写入 `deploy/`，包括压缩镜像、包清单、构建日志和
 `SHA256SUMS`。
 
-## 首个精简镜像候选（2026-07-30）
+## 当前精简镜像候选（2026-07-30）
 
-首个可烧录候选已在 macOS + Docker Linux/arm64 环境完整构建：
+当前可烧录候选已在 macOS + Docker Linux/arm64 环境完整构建并通过只读挂载验收：
 
-- 压缩镜像 215 MB，解压后 1.5 GB，根文件系统实际内容约 695 MB；
+- 压缩镜像 224 MB，解压后 1.5 GB，根文件系统使用 724 MB，bootfs 使用 49 MB；
 - 只保留 `6.18.34+rpt-rpi-v8` 内核和 16 个 CardputerZero BSP 模块；
 - 不含 Launcher、LightDM、Wayfire、PCManFM、PipeWire、PackageKit、GTK 输入工具、
   编译器、内核头文件或 2712 内核；
+- 包含裁剪的 Weston 14.0.2 DRM/Pixman kiosk 基线，compositor 默认关闭，继续保留
+  `tty1` 恢复控制台；
 - 默认启动到 `multi-user.target`，启用 NetworkManager、SSH 和 AppArmor；
 - 屏蔽上游等待原厂 Launcher 的 `fb_load.service`，由 `tty1` framebuffer console
   接管 LCD；显示启动日志、硬件摘要、IPv4 和本地登录提示；
+- V0.6 真机在 HDMI 接入时将 HDMI 枚举为 `fb0`、LCD 枚举为 `fb1`，因此使用
+  `fbcon=map:1`；smoke test 按 `panel-mipi-dbid` 驱动名查找 LCD，不依赖编号；
 - CM0 DTB 不再包含 `cgroup_disable=memory`；启动配置固定 64 MB GPU、64 MB CMA、
   memory cgroup 和 AppArmor；
 - journald 使用最大 16 MB 的易失日志，zram 固定 192 MB，不启用写回。
+- 安装并强制启用 `raspberrypi-sys-mods` 提供的 `rpi-resize.service`，首次启动将
+  根分区扩展到 SD 卡剩余空间；构建时服务缺失会直接失败。
 
-离线检查已通过，但 RAM 是否恢复为至少 400 MB、显示/输入/音频等驱动是否在干净
-系统上正常加载，仍必须烧录后由真机确认。
+2026-07-30 的 V0.6 精简镜像真机验收结果：
+
+- `MemTotal` 为 424756 KiB，空闲系统约使用 96 MiB，zram 为 192 MiB；
+- 启动到 `multi-user.target` 为 17.8 秒；
+- LCD、RGB565 framebuffer、TCA8418 键盘、ES8389 音频、电池、memory cgroup
+  和 AppArmor smoke test 全部通过；
+- 启动后采样的 SD 写入量约 0.86 MiB，journald 保持 volatile；
+- 安装 `raspberrypi-sys-mods` 后，32 GB 卡的根分区和 ext4 从 976 MiB 自动扩展到
+  28.6 GiB。
 
 ## 无调试接口时的首次启动
 
@@ -116,8 +131,9 @@ sudo nmcli device wifi connect 'SSID' password 'PASSWORD'
 ```
 
 键盘使用 BSP 的 `tca8418_keypad_m5stack.ko` 和 `tca8418_m5stack.dtbo`。驱动与 LCD
-模块被显式加入 initramfs，按键通过 Linux input 子系统输入到 `tty1`；登录后可直接
-执行 shell 命令。V0.6 的 Fn 层及全部组合键仍需在新镜像真机验收。
+模块被显式加入 initramfs；专用 hook 同时复制面板初始化固件
+`cardputerzero,st7789v_lcd.bin`。按键通过 Linux input 子系统输入到 `tty1`；登录后
+可直接执行 shell 命令。V0.6 的 Fn 层及全部组合键仍需在新镜像真机验收。
 
 ## 在现有真机验证启动参数
 

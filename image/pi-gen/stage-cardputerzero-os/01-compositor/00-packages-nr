@@ -1,0 +1,13 @@
+libcairo2
+libdisplay-info2
+libdrm2
+libevdev2
+libinput10
+libpixman-1-0
+libpng16-16t64
+libseat1
+libwayland-client0
+libwayland-server0
+libxkbcommon0
+seatd
+xkb-data

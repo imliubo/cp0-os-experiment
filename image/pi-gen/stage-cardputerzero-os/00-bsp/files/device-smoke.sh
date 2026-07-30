@@ -54,13 +54,20 @@ else
     fail display "SPI DRM connector or 320x170 mode missing"
 fi
 
-fb_name=$(cat /sys/class/graphics/fb0/name 2>/dev/null || true)
-fb_mode=$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null || true)
-fb_bpp=$(cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null || true)
+lcd_fb=
+for candidate in /sys/class/graphics/fb*; do
+    if [[ $(cat "$candidate/name" 2>/dev/null || true) == panel-mipi-dbid ]]; then
+        lcd_fb=$candidate
+        break
+    fi
+done
+fb_name=$(cat "$lcd_fb/name" 2>/dev/null || true)
+fb_mode=$(cat "$lcd_fb/virtual_size" 2>/dev/null || true)
+fb_bpp=$(cat "$lcd_fb/bits_per_pixel" 2>/dev/null || true)
 if [[ "$fb_name" == panel-mipi-dbid && "$fb_mode" == 320,170 && "$fb_bpp" == 16 ]]; then
-    pass framebuffer "$fb_name ${fb_mode} RGB565"
+    pass framebuffer "$(basename "$lcd_fb") $fb_name ${fb_mode} RGB565"
 else
-    fail framebuffer "name=$fb_name mode=$fb_mode bpp=$fb_bpp"
+    fail framebuffer "device=${lcd_fb:-missing} name=$fb_name mode=$fb_mode bpp=$fb_bpp"
 fi
 
 if grep -q 'Name="tca8418c"' /proc/bus/input/devices; then

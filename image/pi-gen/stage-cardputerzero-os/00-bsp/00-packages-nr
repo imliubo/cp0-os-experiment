@@ -9,6 +9,7 @@ libseccomp2
 network-manager
 openssh-server
 rfkill
+raspberrypi-sys-mods
 rpi-swap
 sudo
 systemd-timesyncd

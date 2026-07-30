@@ -73,12 +73,12 @@ dtoverlay=gpio-ir,gpio_pin=13,gpio_pull=up
 dtoverlay=gpio-ir-tx,gpio_pin=12
 CONFIG
 
-for token in quiet splash fbcon=map:off; do
+for token in quiet splash fbcon=map:off fbcon=map:0; do
     sed -i -E "s/(^|[[:space:]])${token}([[:space:]]|$)/ /g" "$cmdline"
 done
 sed -i -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' "$cmdline"
 
-for token in cgroup_memory=1 cgroup_enable=memory apparmor=1 security=apparmor loglevel=6 consoleblank=0 fbcon=map:0; do
+for token in cgroup_memory=1 cgroup_enable=memory apparmor=1 security=apparmor loglevel=6 consoleblank=0 fbcon=map:1; do
     if ! grep -qw "$token" "$cmdline"; then
         sed -i "s|$| $token|" "$cmdline"
     fi
@@ -90,6 +90,8 @@ install -D -m 0755 "${STAGE_DIR}/00-bsp/files/console-banner.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/console-banner.sh"
 install -D -m 0644 "${STAGE_DIR}/00-bsp/files/cardputerzero-console-banner.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-console-banner.service"
+install -D -m 0755 "${STAGE_DIR}/00-bsp/files/cardputerzero-firmware.initramfs-hook" \
+    "${ROOTFS_DIR}/etc/initramfs-tools/hooks/cardputerzero-firmware"
 
 if [[ -n ${PUBKEY_SSH_FIRST_USER:-} ]]; then
     install -d -m 0700 \
@@ -174,8 +176,8 @@ systemctl mask apt-daily.service apt-daily.timer \
     apt-daily-upgrade.service apt-daily-upgrade.timer \
     fb_load.service 2>/dev/null || true
 systemctl enable NetworkManager.service ssh.service apparmor.service \
-    getty@tty1.service cardputerzero-console-banner.service
-systemctl enable rpi-resize.service 2>/dev/null || true
+    getty@tty1.service cardputerzero-console-banner.service \
+    rpi-resize.service
 systemctl set-default multi-user.target
 for module in \
     gpio-forwarder panel-mipi-dbi-m pwm_bl_m5stack st7789v_m5stack \

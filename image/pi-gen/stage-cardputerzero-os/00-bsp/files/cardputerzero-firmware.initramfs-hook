@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+prereqs() {
+    :
+}
+
+case "${1:-}" in
+    prereqs)
+        prereqs
+        exit 0
+        ;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+copy_file firmware /lib/firmware/cardputerzero,st7789v_lcd.bin
