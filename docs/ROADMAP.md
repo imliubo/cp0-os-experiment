@@ -46,8 +46,10 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 
 ## Phase 3：应用运行时与隔离
 
-- 集成 WAMR interpreter/AOT，App Runtime 成为受控 Wayland 客户端。
-- 实现 `appd` 生命周期、每应用 UID、namespace、seccomp 和 cgroup。
+- [ ] 集成 WAMR interpreter/AOT，App Runtime 成为受控 Wayland 客户端。
+- [ ] 实现 `appd` 生命周期、每应用 UID、namespace、seccomp 和 cgroup。
+- [x] 冻结首版 `appd` 沙箱启动契约：稳定应用账户、systemd cgroup、bubblewrap
+  namespace、只读应用包和唯一可写私有数据目录。
 - 实现 manifest 权限数据库及网络、文档、音频、相机和 LoRa/GPIO broker。
 - 定义 Intent Broker 和应用私有存储配额。
 - 建立恶意应用测试集，覆盖路径逃逸、设备访问、IPC 和资源耗尽。

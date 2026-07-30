@@ -3,6 +3,15 @@
 version = 4
 
 [[package]]
+name = "cp0-appd"
+version = "0.1.0"
+dependencies = [
+ "cp0-manifest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cp0-manifest"
 version = "0.1.0"
 dependencies = [
