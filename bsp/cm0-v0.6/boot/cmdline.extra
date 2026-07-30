@@ -1,2 +1,1 @@
-cgroup_memory=1 cgroup_enable=memory apparmor=1 security=apparmor quiet fbcon=map:off
-
+cgroup_memory=1 cgroup_enable=memory apparmor=1 security=apparmor loglevel=6 consoleblank=0 fbcon=map:0

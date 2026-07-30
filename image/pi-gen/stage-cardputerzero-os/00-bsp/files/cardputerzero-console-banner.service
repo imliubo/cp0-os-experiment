@@ -1,0 +1,20 @@
+[Unit]
+Description=Show CardputerZero boot status on the LCD console
+Wants=network-online.target
+After=network-online.target systemd-user-sessions.service
+Before=getty@tty1.service
+ConditionPathExists=/dev/tty1
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/cardputerzero/console-banner.sh
+StandardInput=null
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=no
+TTYVHangup=no
+TTYVTDisallocate=no
+
+[Install]
+WantedBy=multi-user.target

@@ -11,6 +11,13 @@ grep -Eq '^PI_GEN_COMMIT=[0-9a-f]{40}$' "$repo_root/image/pi-gen/upstream.env"
 grep -q '^dtoverlay=vc4-kms-v3d,cma-64$' "$stage"
 grep -q '^gpu_mem=64$' "$stage"
 grep -q '^gpu_mem_512=64$' "$stage"
+grep -q 'consoleblank=0' "$stage"
+grep -q 'fbcon=map:0' "$stage"
+grep -q 'for token in quiet splash fbcon=map:off' "$stage"
+grep -q 'fb_load.service' "$stage"
+grep -q 'rm -f /etc/systemd/system/fb_load.service' "$stage"
+grep -q 'getty@tty1.service cardputerzero-console-banner.service' "$stage"
+grep -q 'tca8418_keypad_m5stack' "$stage"
 grep -q 'systemctl set-default multi-user.target' "$stage"
 grep -q '/pi-gen/stage0 /pi-gen/stage1 /pi-gen/stage-cardputerzero-os' "$build_script"
 grep -q 'export-image/01-user-rename/SKIP' "$build_script"
@@ -20,7 +27,6 @@ if grep -q '/pi-gen/stage2' "$build_script"; then
     echo "error: stage2 must not be part of the minimal image" >&2
     exit 1
 fi
-
 for package in lightdm wayfire wf-panel-pi pcmanfm packagekit pipewire; do
     if grep -qx "$package" "$packages"; then
         echo "error: prohibited GUI package in minimal image: $package" >&2

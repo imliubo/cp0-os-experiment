@@ -74,12 +74,50 @@ CP0_RESUME_BUILD=1 ./image/build-image.sh
 - 不含 Launcher、LightDM、Wayfire、PCManFM、PipeWire、PackageKit、GTK 输入工具、
   编译器、内核头文件或 2712 内核；
 - 默认启动到 `multi-user.target`，启用 NetworkManager、SSH 和 AppArmor；
+- 屏蔽上游等待原厂 Launcher 的 `fb_load.service`，由 `tty1` framebuffer console
+  接管 LCD；显示启动日志、硬件摘要、IPv4 和本地登录提示；
 - CM0 DTB 不再包含 `cgroup_disable=memory`；启动配置固定 64 MB GPU、64 MB CMA、
   memory cgroup 和 AppArmor；
 - journald 使用最大 16 MB 的易失日志，zram 固定 192 MB，不启用写回。
 
 离线检查已通过，但 RAM 是否恢复为至少 400 MB、显示/输入/音频等驱动是否在干净
 系统上正常加载，仍必须烧录后由真机确认。
+
+## 无调试接口时的首次启动
+
+开发镜像不使用静默启动。LCD 驱动加载后会接管 `tty1` 并显示内核与 systemd 日志；
+系统进入 multi-user target 后，屏幕显示不超过 8 行的启动摘要：
+
+```text
+CardputerZero OS DEV
+Boot:     READY
+LCD:      OK 320x170
+Keyboard: OK
+IPv4:     192.168.x.x
+Login:    pi
+```
+
+随后出现 `CardputerZero login:`。出现摘要和登录提示代表内核、根文件系统、systemd、
+LCD 及键盘输入路径已经工作。LCD 驱动本身加载前无法显示 Linux 日志，因此完全黑屏
+仍需结合路由器 DHCP 租约或网络扫描判断设备是否已启动。
+
+IPv4 会直接显示在摘要中。登录后也可查看所有接口：
+
+```sh
+ip -br -4 address
+nmcli device status
+```
+
+如果首次烧录时没有注入 Wi-Fi 配置，可使用设备键盘在本地控制台连接：
+
+```sh
+sudo nmcli device wifi list
+sudo nmcli device wifi connect 'SSID' password 'PASSWORD'
+```
+
+键盘使用 BSP 的 `tca8418_keypad_m5stack.ko` 和 `tca8418_m5stack.dtbo`。驱动与 LCD
+模块被显式加入 initramfs，按键通过 Linux input 子系统输入到 `tty1`；登录后可直接
+执行 shell 命令。V0.6 的 Fn 层及全部组合键仍需在新镜像真机验收。
 
 ## 在现有真机验证启动参数
 
