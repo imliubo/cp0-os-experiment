@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cardputerzero.dev/schemas/app-manifest-v1.schema.json",
+  "title": "CardputerZero application manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "version",
+    "sdk_version",
+    "runtime",
+    "entrypoint",
+    "display",
+    "resources",
+    "permissions"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*){2,}$"
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)([-+][0-9A-Za-z.-]+)*$"
+    },
+    "sdk_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "runtime": { "const": "wamr" },
+    "entrypoint": { "type": "string", "pattern": "^[^/].*\\.(wasm|aot)$" },
+    "display": { "enum": ["standard", "immersive"] },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["memory_mb", "storage_mb"],
+      "properties": {
+        "memory_mb": { "type": "integer", "minimum": 8, "maximum": 96 },
+        "storage_mb": { "type": "integer", "minimum": 1, "maximum": 512 }
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "reason"],
+        "properties": {
+          "name": {
+            "enum": [
+              "network.client",
+              "documents.open",
+              "audio.playback",
+              "audio.capture",
+              "camera.capture",
+              "radio.lora",
+              "hardware.gpio",
+              "clipboard.read",
+              "notifications.post"
+            ]
+          },
+          "reason": { "type": "string", "minLength": 5, "maxLength": 160 }
+        }
+      }
+    }
+  }
+}
+

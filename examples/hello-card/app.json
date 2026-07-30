@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "dev.cardputerzero.hello",
+  "name": "Hello Card",
+  "version": "0.1.0",
+  "sdk_version": "0.1",
+  "runtime": "wamr",
+  "entrypoint": "bin/hello-card.wasm",
+  "display": "standard",
+  "resources": {
+    "memory_mb": 24,
+    "storage_mb": 8
+  },
+  "permissions": [
+    {
+      "name": "notifications.post",
+      "reason": "Show the result of the Hello Card action"
+    }
+  ]
+}
+

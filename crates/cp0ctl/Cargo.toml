@@ -1,0 +1,9 @@
+[package]
+name = "cp0ctl"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+cp0-manifest = { path = "../cp0-manifest" }

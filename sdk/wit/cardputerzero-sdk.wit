@@ -1,0 +1,67 @@
+package cardputerzero:sdk@0.1.0;
+
+interface types {
+    enum lifecycle-state {
+        foreground,
+        background,
+        suspended,
+        terminating,
+    }
+
+    record rect {
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+    }
+
+    record key-event {
+        code: u16,
+        pressed: bool,
+        repeated: bool,
+        modifiers: u8,
+    }
+
+    variant app-event {
+        key(key-event),
+        lifecycle(lifecycle-state),
+        render,
+    }
+
+    enum error-code {
+        denied,
+        unavailable,
+        invalid-argument,
+        resource-limit,
+        internal,
+    }
+}
+
+interface system {
+    use types.{error-code};
+
+    monotonic-milliseconds: func() -> u64;
+    log: func(level: u8, message: string);
+    post-notification: func(title: string, body: string) -> result<_, error-code>;
+}
+
+interface display {
+    use types.{error-code, rect};
+
+    dimensions: func() -> tuple<u16, u16>;
+    present-rgb565: func(pixels: list<u8>, damage: list<rect>) -> result<_, error-code>;
+}
+
+interface application {
+    use types.{app-event, error-code};
+
+    initialize: func() -> result<_, error-code>;
+    handle-event: func(event: app-event) -> result<_, error-code>;
+}
+
+world cardputer-application {
+    import system;
+    import display;
+    export application;
+}
+
