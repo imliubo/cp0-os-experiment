@@ -36,11 +36,9 @@ Weston and the System Shell are separate systemd services. Starting
 Wayland socket, uses a 32 MiB cgroup limit and restarts after failure. Stopping
 the compositor stops the Shell through `BindsTo` and `PartOf`.
 
-On V0.6 hardware the Shell used about 0.9 MiB according to its systemd cgroup
-and 2.0 MiB RSS. A forced SIGKILL changed the PID from 1107 to 1121 with
+On the final V0.6 image the Shell used about 1.2 MiB according to its systemd
+cgroup and 2.0 MiB RSS. A forced SIGKILL changed the PID from 988 to 1082 with
 `NRestarts=1`; the new process returned to Home while Weston stayed active.
-The timer-enabled build then ran through its first idle refresh with zero
-restarts.
 
 ## Image candidate
 
@@ -56,6 +54,23 @@ package manifests, the arm64 Shell executable, compositor/Shell units, the
 32 MiB Shell limit, exactly one managed BSP block and the compositor's default
 disabled state. A transient repository 502 also exercised the resumed build;
 the BSP and DTB patch paths are now safe to run more than once.
+
+## Final flashed-image validation
+
+The image above was flashed to V0.6 hardware and booted the
+`6.18.34+rpt-rpi-v8` kernel. It reached `multi-user.target` in 24.060 seconds,
+expanded the root filesystem to the 28.2 GiB SD partition and reported
+424756 KiB RAM. The recovery console and `seatd` were active while the
+compositor remained disabled by default, as intended.
+
+Starting `cardputerzero-compositor.service` stopped `getty@tty1` and brought
+up both Weston and the System Shell with zero initial restarts. Weston used
+the Pixman renderer, selected `320x170@30`, and attached the `tca8418c`
+keyboard through libinput. Its cgroup used about 9.8 MiB. The device smoke
+test passed the model, memory, cgroup, AppArmor, LCD, framebuffer, keyboard,
+audio, battery and boot-time checks with no failures. The absent `/dev/i2c-1`
+and `/dev/video0` interfaces remain warnings from the Phase 1 hardware
+baseline rather than Phase 2 regressions.
 
 ## Security boundary
 
