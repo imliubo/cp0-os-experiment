@@ -1,0 +1,10 @@
+/dts-v1/;
+
+/ {
+    model = "Raspberry Pi Compute Module 0 Rev 1.0";
+
+    chosen {
+        bootargs = "coherent_pool=1M cgroup_disable=memory snd_bcm2835.enable_hdmi=0";
+    };
+};
+

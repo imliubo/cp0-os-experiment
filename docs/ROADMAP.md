@@ -3,7 +3,7 @@
 Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日期在完成 CM0 基准测试后
 再估算，当前只冻结依赖关系和完成条件。
 
-## Phase 0：架构与开发基线（进行中）
+## Phase 0：架构与开发基线（基础完成）
 
 - [x] 建立独立 Git 仓库和 Rust workspace。
 - [x] 冻结硬件约束、信任边界和内存预算。
@@ -16,14 +16,17 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 
 ## Phase 1：Board Support Package 与镜像
 
-- 建立最小 Debian arm64 镜像，只包含 systemd、SSH 调试入口和硬件服务。
-- 固化 CM0 V0.6 的 kernel config、device tree overlay 和模块版本。
-- 将 ST7789V 迁移到 DRM/KMS，并验证 320x170 RGB565、damage update 和背光。
-- 验证键盘、电池、音频、摄像头、LoRa/GPIO 的内核接口。
-- 加入 zram、只读根文件系统原型和启动/内存基准采集。
+- [x] 采集 CM0 V0.6 当前镜像、内存、DRM、输入、音频、电池和服务基线。
+- [x] 确认 ST7789V 已使用 DRM/KMS MIPI-DBI，验证 320x170 RGB565 connector。
+- [x] 固定 BSP 源码提交、V0.6 overlay、kernel module 构建入口和启动参数。
+- [x] 建立最小 Debian arm64 `pi-gen` 外部阶段和服务裁剪策略。
+- [x] 建立可回滚启动配置安装器与真机 smoke test。
+- [ ] 在真机验证 64 MB GPU/CMA、memory cgroup、AppArmor 和全部设备接口。
+- [ ] 构建并烧录首个最小镜像，测量启动时间、空闲内存和 SD 写入。
+- [ ] 加入只读根文件系统原型。
 
-完成条件：冷启动进入 DRM 测试画面，所有输入输出设备通过自动化 smoke test，空闲
-内存低于 180 MB。
+完成条件：冷启动进入 DRM 测试画面，所有输入输出设备通过自动化 smoke test，系统
+识别至少 400 MB RAM，首页前的基础系统空闲内存低于 180 MB。
 
 ## Phase 2：Compositor 与 System Shell
 

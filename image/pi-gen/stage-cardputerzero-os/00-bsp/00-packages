@@ -1,0 +1,12 @@
+apparmor
+apparmor-utils
+alsa-utils
+bubblewrap
+ca-certificates
+jq
+libdrm-tests
+libinput-tools
+libseccomp2
+network-manager
+openssh-server
+

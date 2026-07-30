@@ -8,13 +8,15 @@ WebAssembly；应用不能直接访问 Linux 设备节点、系统总线或其�
 
 ## 当前状态
 
-Phase 0 已启动，当前仓库包含：
+Phase 0 的基础契约已经建立，Phase 1 BSP 与最小镜像工作正在进行。当前仓库包含：
 
 - 系统架构与资源预算；
 - 分阶段 Roadmap 和初始 ADR；
 - CardputerZero SDK 的 WIT ABI 草案；
 - 应用 manifest v1 和 Rust 校验库；
 - `cp0ctl manifest validate` 开发工具。
+- 固定版本的 CM0 V0.6 BSP 和 `pi-gen` 外部构建阶段；
+- 真机启动内存配置、可回滚部署脚本和硬件 smoke test。
 
 ## 快速验证
 
@@ -25,3 +27,4 @@ make check
 
 详细设计见 [系统架构](docs/ARCHITECTURE.md) 和 [Roadmap](docs/ROADMAP.md)。
 
+Phase 1 构建和真机验证方法见 [BSP 与镜像说明](docs/PHASE1-BSP.md)。

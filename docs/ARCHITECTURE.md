@@ -32,9 +32,9 @@ LCD / keyboard / audio / battery / camera / LoRa / GPIO
 
 - 初期使用 Debian arm64 minimal 和 systemd，镜像构建复用现有 `pi-gen` 经验。
 - 不安装 X11、完整桌面环境、浏览器和本机编译工具链。
-- ST7789V 显示驱动迁移到 DRM/KMS TinyDRM/MIPI-DBI；用户应用不能访问 framebuffer。
+- 固定现有 ST7789V DRM/KMS MIPI-DBI 驱动版本；用户应用不能访问 framebuffer。
 - 键盘由 libinput/evdev 交给 compositor，应用只收到当前焦点窗口的输入事件。
-- 使用 zram，不在 SD 卡上启用常规 swap。
+- 使用 zram，不在 SD 卡上启用常规 swap 或 zram writeback。
 - 系统根分区最终设为只读；A/B OTA 和安全启动暂不进入首版范围。
 
 ## 4. 图形与窗口模型
@@ -101,9 +101,11 @@ Intent Broker 路由，接收方必须显式声明 Intent，不提供任意应�
 首页空闲常驻内存目标低于 220 MB，应用运行时总使用目标低于 360 MB。超出 manifest
 资源上限的应用由 cgroup 限制并由系统 Shell 报告终止原因。
 
+CM0 固件内存划分固定为 64 MB VideoCore、448 MB ARM，VC4 CMA 固定为 64 MB。
+memory cgroup 必须启用，否则 `appd` 无法执行 manifest 内存上限。
+
 ## 9. 信任边界
 
 内核、compositor、System Shell、App Runtime、appd 和能力服务属于可信计算基。
 第三方 WASM、应用资源、网络响应和应用商店内容均视为不可信输入。原生第三方
 可执行文件不属于支持范围；开发模式也只安装未上架的 WASM 应用。
-

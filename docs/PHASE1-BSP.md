@@ -1,0 +1,86 @@
+# Phase 1：CM0 V0.6 BSP 与最小镜像
+
+## 真机基线（2026-07-30）
+
+设备运行 Debian 13.6、Linux `6.18.34+rpt-rpi-v8`，固件报告 512 MB 总内存，但当前
+划分为 ARM 256 MB、VideoCore 256 MB。Linux `MemTotal` 只有 233008 KiB，且启动
+参数含 `cgroup_disable=memory`。这会同时破坏应用容量和 cgroup 内存隔离。
+
+VC4 overlay 还请求 256 MB CMA；因为 ARM 区域不足，内核回退到 8 MB CMA，并持续
+出现相机/DRM CMA 分配失败。Phase 1 配置因此采用：
+
+- `gpu_mem=64` 与 `gpu_mem_512=64`：后者覆盖 CM0 固件的 512 MB 专用默认值，
+  ARM 可获得约 448 MB；
+- `dtoverlay=vc4-kms-v3d,cma-64`：为 DRM/相机保留合理 CMA；
+- 在镜像构建时用 `fdtget`/`fdtput` 精确删除基础 CM0 DTB 内置的
+  `cgroup_disable=memory` token，保留其他 firmware bootargs；
+- `cgroup_memory=1 cgroup_enable=memory`：启用 memory cgroup controller；
+- `apparmor=1 security=apparmor`：启用内核已编译的 AppArmor 主 LSM。
+
+真机已经存在可用的 SPI DRM 设备：`/dev/dri/cardputer-zero-internal` 指向 `card1`，
+connector `card1-SPI-1` 为 connected，模式为 320x170，fbdev compatibility 层为
+RGB565。因此本阶段固定现有驱动，不再重新迁移显示栈。
+
+## BSP 来源
+
+驱动源码固定到：
+
+```text
+repository: https://github.com/m5stack/m5stack-linux-dtoverlays.git
+commit:     c3b254819307c177a34100b66fe19e52059ce8c4
+profile:    CONFIG_CARDPUTERO_V0_5=y
+```
+
+上游用 V0.5 编译开关生成 `cardputerzero-v5-overlay`，该 overlay 也是 V0.6 真机当前
+使用的硬件描述。构建脚本必须校验 commit，不允许使用浮动 HEAD。
+
+## 构建最小镜像
+
+构建需要 arm64 Linux 或 x86_64 Linux + Docker。macOS 只负责开发，不能直接执行
+`pi-gen` chroot 构建。
+
+```sh
+export PI_GEN_DIR=/path/to/pi-gen
+export CP0_FIRST_USER_PASSWORD='development-password'
+./image/build-image.sh
+```
+
+也可设置 `CP0_SSH_PUBLIC_KEY`，生成只允许公钥登录的开发镜像。正式镜像不得设置
+默认密码或启用 SSH。
+
+自定义阶段在官方 `stage2` 后执行，生成 `-cp0-os-dev` 镜像。它会编译固定 BSP、
+删除构建依赖和 cloud-init、关闭桌面无关服务并安装真机诊断脚本。
+
+## 在现有真机验证启动参数
+
+先从设备读取匹配当前固件的 `bcm2710-rpi-cm0.dtb`，用 `patch-cm0-dtb.sh` 生成修补
+版本，将它与两个脚本上传到设备，再以 root 执行配置安装器：
+
+```sh
+./scripts/patch-cm0-dtb.sh bcm2710-rpi-cm0.dtb
+sudo ./apply-dev-boot-profile.sh
+sudo reboot
+./device-smoke.sh
+```
+
+安装器在 `/boot/firmware/cardputerzero-os-backup/<UTC timestamp>` 保存原文件，不会
+自动重启。若验证失败，可从 SD 卡或 SSH 恢复备份的 `config.txt` 和 `cmdline.txt`。
+DTB 必须来自同一设备和固件版本，脚本拒绝修补不包含目标 token 的文件。
+
+如果开发配置导致设备无法启动，在电脑上挂载 bootfs 后恢复最后一个已确认可启动的
+备份：
+
+```sh
+cp cardputerzero-os-backup/20260730T075924Z/config.txt ./config.txt
+cp cardputerzero-os-backup/20260730T075924Z/cmdline.txt ./cmdline.txt
+```
+
+这个备份保留已经验证可用的 AppArmor 和 `cma-64`，但不加载失败的 bootargs overlay。
+
+## 最小化策略
+
+开发镜像保留 NetworkManager 和 SSH。LightDM、X11、Cloud Init、Avahi、RPC/NFS、
+UDisks、ModemManager、Raspberry Pi Connect 和自动 apt 定时任务均不属于基础系统。
+Bluetooth 暂时关闭但不删除，后续由权限 broker 接管时再启用。
+
+设备使用 192 MB zram，禁止 zram writeback 和磁盘 swap，避免持续写 SD 卡。

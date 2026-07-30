@@ -1,0 +1,2 @@
+cgroup_memory=1 cgroup_enable=memory apparmor=1 security=apparmor quiet fbcon=map:off
+
