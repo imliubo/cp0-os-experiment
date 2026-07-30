@@ -119,13 +119,21 @@ fn serve() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let permissions = PermissionCoordinator::new(permission_engine);
     let (shell_uid, _) = lookup_unix_account("cp0-shell").map_err(|error| error.to_string())?;
-    let listener = systemd_listener()?;
-    AppdServer::new(manager, permissions, [0, shell_uid])
-        .serve(listener)
-        .map_err(|error| error.to_string())
+    let listeners = systemd_listeners()?;
+    let server = AppdServer::new(manager, permissions, [0, shell_uid]);
+    match listeners.broker {
+        Some(broker) => server.serve_with_broker(listeners.control, broker),
+        None => server.serve(listeners.control),
+    }
+    .map_err(|error| error.to_string())
 }
 
-fn systemd_listener() -> Result<UnixListener, String> {
+struct ActivatedListeners {
+    control: UnixListener,
+    broker: Option<UnixListener>,
+}
+
+fn systemd_listeners() -> Result<ActivatedListeners, String> {
     let listen_pid = env::var("LISTEN_PID")
         .map_err(|_| "LISTEN_PID is not set")?
         .parse::<u32>()
@@ -134,18 +142,33 @@ fn systemd_listener() -> Result<UnixListener, String> {
         .map_err(|_| "LISTEN_FDS is not set")?
         .parse::<u32>()
         .map_err(|_| "LISTEN_FDS is invalid")?;
-    if listen_pid != std::process::id() || listen_fds != 1 {
-        return Err("exactly one systemd-owned listening socket is required".into());
+    if listen_pid != std::process::id() || !(1..=2).contains(&listen_fds) {
+        return Err("one control socket and at most one broker socket are required".into());
     }
-    if env::var("LISTEN_FDNAMES").is_ok_and(|names| names != "control") {
-        return Err("systemd listening socket must be named control".into());
+    let names = env::var("LISTEN_FDNAMES").map_err(|_| "LISTEN_FDNAMES is not set")?;
+    let names: Vec<_> = names.split(':').collect();
+    if names.len() != listen_fds as usize {
+        return Err("LISTEN_FDNAMES does not match LISTEN_FDS".into());
     }
 
-    // SAFETY: systemd's socket activation contract assigns the first inherited
-    // descriptor to FD 3 when LISTEN_PID matches this process and LISTEN_FDS=1.
-    let listener = unsafe { UnixListener::from_raw_fd(3) };
-    listener
-        .local_addr()
-        .map_err(|error| format!("inherited descriptor is not a Unix listener: {error}"))?;
-    Ok(listener)
+    let mut control = None;
+    let mut broker = None;
+    for (index, name) in names.into_iter().enumerate() {
+        let descriptor = 3 + i32::try_from(index).expect("at most two descriptors");
+        // SAFETY: systemd assigns LISTEN_FDS consecutive descriptors starting
+        // at 3 and each descriptor is consumed exactly once in this loop.
+        let listener = unsafe { UnixListener::from_raw_fd(descriptor) };
+        listener.local_addr().map_err(|error| {
+            format!("inherited descriptor {name} is not a Unix listener: {error}")
+        })?;
+        match name {
+            "control" if control.is_none() => control = Some(listener),
+            "broker" if broker.is_none() => broker = Some(listener),
+            _ => return Err(format!("unknown or duplicate systemd socket name {name:?}")),
+        }
+    }
+    Ok(ActivatedListeners {
+        control: control.ok_or("systemd control socket is missing")?,
+        broker,
+    })
 }

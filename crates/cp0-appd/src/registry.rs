@@ -87,6 +87,13 @@ impl AppRegistry {
         self.apps.get(app_id)
     }
 
+    pub fn installed_app_for_uid(&self, uid: u32) -> Option<(&str, &AppAccount)> {
+        self.apps.iter().find_map(|(app_id, account)| {
+            (account.unix_uid == uid && account.installed_version.is_some())
+                .then_some((app_id.as_str(), account))
+        })
+    }
+
     pub fn assign(&mut self, app_id: &str) -> Result<AppAccount, RegistryError> {
         if !cp0_manifest::is_valid_app_id(app_id) {
             return Err(RegistryError::Invalid(format!(
@@ -278,6 +285,13 @@ mod tests {
 
         assert_eq!(first.account_id, second.account_id);
         assert_eq!(second.installed_version.as_deref(), Some("1.2.4"));
+        assert_eq!(
+            registry
+                .installed_app_for_uid(second.unix_uid)
+                .map(|(app_id, _)| app_id),
+            Some("dev.cardputerzero.hello")
+        );
+        assert!(registry.installed_app_for_uid(0).is_none());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use std::fmt;
 use std::fs::Metadata;
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -176,6 +177,20 @@ impl AppManager {
             .collect()
     }
 
+    pub fn installed_app_for_uid(&self, uid: u32) -> Option<InstalledApp> {
+        self.registry
+            .installed_app_for_uid(uid)
+            .map(|(app_id, account)| InstalledApp {
+                app_id: app_id.into(),
+                version: account
+                    .installed_version
+                    .clone()
+                    .expect("registry lookup only returns installed applications"),
+                account_user: account.unix_user.clone(),
+                account_uid: account.unix_uid,
+            })
+    }
+
     pub fn sandbox_plan(&self, app_id: &str) -> Result<SandboxPlan, AppManagerError> {
         let account = self
             .registry
@@ -258,7 +273,7 @@ impl AppManager {
         Ok(())
     }
 
-    fn unit_for_app(&self, app_id: &str) -> Result<String, AppManagerError> {
+    pub(crate) fn unit_for_app(&self, app_id: &str) -> Result<String, AppManagerError> {
         let account = self
             .registry
             .account(app_id)
@@ -295,6 +310,17 @@ impl AppManager {
         if !runtime.is_file() || runtime.mode() & 0o111 == 0 {
             return Err(AppManagerError::InvalidHostIdentity(
                 "runtime is not executable".into(),
+            ));
+        }
+        let broker_path = Path::new(&self.paths.layout.broker_socket);
+        let broker_parent = broker_path.parent().ok_or_else(|| {
+            AppManagerError::InvalidHostIdentity("broker socket has no parent".into())
+        })?;
+        require_root_directory(broker_parent, "broker socket directory")?;
+        let broker = secure_metadata(broker_path, "broker socket")?;
+        if !broker.file_type().is_socket() || broker.uid() != 0 {
+            return Err(AppManagerError::InvalidHostIdentity(
+                "broker socket is not a root-owned Unix socket".into(),
             ));
         }
         let package = secure_metadata(Path::new(&plan.package_dir), "package directory")?;
@@ -500,6 +526,7 @@ mod tests {
                     apps_root,
                     data_root: root.join("data"),
                     runtime_path: runtime,
+                    broker_socket: root.join("broker.sock"),
                 },
             },
             manifest,

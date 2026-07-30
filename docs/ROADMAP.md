@@ -55,6 +55,8 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 - [x] 实现 socket-activated `appd` 核心生命周期：可信安装注册表、规范路径解析、
   root/Shell peer UID 认证、单运行槽、分页 list 及 start/stop 真机闭环。
 - [x] 实现 manifest 权限数据库、会话/持久决策和可信 Shell 提示控制协议。
+- [x] 实现首个 `notifications.post` typed capability broker、peer UID 身份绑定和
+  有界 Shell 通知队列。
 - [ ] 实现网络、文档、音频、相机和 LoRa/GPIO broker。
 - 定义 Intent Broker 和应用私有存储配额。
 - [ ] 建立恶意应用测试集，已覆盖 seccomp 旁路和 cgroup 资源耗尽；继续覆盖路径

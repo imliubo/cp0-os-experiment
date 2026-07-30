@@ -36,6 +36,8 @@ Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真�
   和 `cp0ctl app list/start/stop` 真机生命周期闭环。
 - Phase 3C root-owned 权限数据库、仅本次/始终/拒绝决策、单待处理可信提示状态机，
   以及经过 peer UID 认证的 Shell 查询与决策协议。
+- Phase 3D `notifications.post` typed broker、运行中应用 peer UID 认证、沙箱内唯一
+  broker socket 和固定 8 条上限的 Shell 通知队列。
 
 ## 快速验证
 
@@ -67,3 +69,5 @@ Phase 3A 的 runtime、沙箱契约和真机安全验证见
 [appd lifecycle service](docs/PHASE3B-APPD-LIFECYCLE.md)。
 权限持久化、提示状态机和 Shell 控制契约见
 [permission decisions and trusted prompts](docs/PHASE3C-PERMISSIONS.md)。
+首个应用能力调用链及资源边界见
+[notification capability broker](docs/PHASE3D-NOTIFICATION-BROKER.md)。

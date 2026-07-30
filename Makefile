@@ -9,6 +9,7 @@ check: fmt
 	./tests/test-image-profile.sh
 	./tests/test-compositor-profile.sh
 	./tests/test-system-shell-ui.sh
+	./tests/test-appd-profile.sh
 	./tests/test-patch-cm0-dtb.sh
 	cargo check --workspace --all-targets
 	cargo test --workspace

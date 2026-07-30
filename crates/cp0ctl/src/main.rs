@@ -5,11 +5,13 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use cp0_appd::{
-    APPD_PROTOCOL_VERSION, AppdCommand, AppdRequest, PermissionChoice, ResponseOutcome,
-    read_response, write_request,
+    APPD_PROTOCOL_VERSION, AppdCommand, AppdRequest, BROKER_PROTOCOL_VERSION, BrokerCommand,
+    BrokerOutcome, BrokerRequest, PermissionChoice, ResponseOutcome, read_broker_response,
+    read_response, write_broker_request, write_request,
 };
 
 const APPD_SOCKET: &str = "/run/cardputerzero-appd/control.sock";
+const BROKER_SOCKET: &str = "/run/cardputerzero-broker/runtime.sock";
 const REQUEST_ID: u64 = 1;
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -62,8 +64,17 @@ fn main() -> ExitCode {
                 })
             })
         }
+        [notification, command] if notification == "notification" && command == "take" => {
+            send_app_command(AppdCommand::TakeNotification)
+        }
+        [broker, command, title, body] if broker == "broker" && command == "notify" => {
+            send_broker_command(BrokerCommand::PostNotification {
+                title: title.clone(),
+                body: body.clone(),
+            })
+        }
         _ => Err(
-            "usage: cp0ctl manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny>"
+            "usage: cp0ctl manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | notification take | broker notify <title> <body>"
                 .into(),
         ),
     };
@@ -142,6 +153,45 @@ fn send_app_command(command: AppdCommand) -> Result<(), String> {
         }
         ResponseOutcome::Error { code, message } => {
             Err(format!("appd returned {code:?}: {message}"))
+        }
+    }
+}
+
+fn send_broker_command(command: BrokerCommand) -> Result<(), String> {
+    let socket = env::var("CP0_BROKER_SOCKET").unwrap_or_else(|_| BROKER_SOCKET.into());
+    let mut stream = UnixStream::connect(&socket)
+        .map_err(|error| format!("cannot connect to capability broker at {socket}: {error}"))?;
+    stream
+        .set_read_timeout(Some(TIMEOUT))
+        .map_err(|error| format!("cannot set broker timeout: {error}"))?;
+    stream
+        .set_write_timeout(Some(TIMEOUT))
+        .map_err(|error| format!("cannot set broker timeout: {error}"))?;
+    let request = BrokerRequest {
+        protocol_version: BROKER_PROTOCOL_VERSION,
+        request_id: REQUEST_ID,
+        command,
+    };
+    write_broker_request(&mut stream, &request)
+        .map_err(|error| format!("cannot send broker request: {error}"))?;
+    let mut reader = BufReader::new(stream);
+    let response = read_broker_response(&mut reader)
+        .map_err(|error| format!("cannot read broker response: {error}"))?
+        .ok_or_else(|| "broker closed the connection without a response".to_owned())?;
+    if response.request_id != REQUEST_ID {
+        return Err("broker response request ID does not match".into());
+    }
+    match &response.outcome {
+        BrokerOutcome::Ok { .. } | BrokerOutcome::PermissionPending { .. } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&response)
+                    .map_err(|error| format!("cannot encode broker response: {error}"))?
+            );
+            Ok(())
+        }
+        BrokerOutcome::Error { code, message } => {
+            Err(format!("broker returned {code:?}: {message}"))
         }
     }
 }

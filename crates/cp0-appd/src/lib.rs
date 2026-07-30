@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use cp0_manifest::AppManifest;
 use serde::Serialize;
 
+mod broker;
 mod lifecycle;
 mod permission_prompt;
 mod permissions;
@@ -11,6 +12,12 @@ mod protocol;
 mod registry;
 mod server;
 
+pub use broker::{
+    BROKER_PROTOCOL_VERSION, BrokerCommand, BrokerErrorCode, BrokerOutcome, BrokerProtocolError,
+    BrokerRequest, BrokerResponse, MAX_BROKER_FRAME_BYTES, MAX_PENDING_NOTIFICATIONS, Notification,
+    NotificationQueue, NotificationQueueError, read_broker_request, read_broker_response,
+    write_broker_request, write_broker_response,
+};
 pub use lifecycle::{AppManager, AppManagerError, InstalledApp, ManagerPaths, lookup_unix_account};
 pub use permission_prompt::{
     PermissionCoordinator, PermissionPrompt, PermissionPromptError, PermissionRequestResult,
@@ -33,6 +40,7 @@ pub use server::{AppdServer, ServerError};
 pub const DEFAULT_APPS_ROOT: &str = "/var/lib/cardputerzero/apps";
 pub const DEFAULT_DATA_ROOT: &str = "/var/lib/cardputerzero/data";
 pub const DEFAULT_RUNTIME: &str = "/usr/libexec/cardputerzero/app-runtime";
+pub const DEFAULT_BROKER_SOCKET: &str = "/run/cardputerzero-broker/runtime.sock";
 pub const BWRAP_PATH: &str = "/usr/bin/bwrap";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +48,7 @@ pub struct AppLayout {
     pub apps_root: PathBuf,
     pub data_root: PathBuf,
     pub runtime_path: PathBuf,
+    pub broker_socket: PathBuf,
 }
 
 impl Default for AppLayout {
@@ -48,6 +57,7 @@ impl Default for AppLayout {
             apps_root: PathBuf::from(DEFAULT_APPS_ROOT),
             data_root: PathBuf::from(DEFAULT_DATA_ROOT),
             runtime_path: PathBuf::from(DEFAULT_RUNTIME),
+            broker_socket: PathBuf::from(DEFAULT_BROKER_SOCKET),
         }
     }
 }
@@ -99,12 +109,14 @@ pub fn build_sandbox_plan(
     validate_root(&layout.apps_root, "apps_root")?;
     validate_root(&layout.data_root, "data_root")?;
     validate_root(&layout.runtime_path, "runtime_path")?;
+    validate_root(&layout.broker_socket, "broker_socket")?;
 
     let package_dir = layout.apps_root.join(&manifest.id).join(&manifest.version);
     let data_dir = layout.data_root.join(&manifest.id);
     let package = path_text(&package_dir, "package_dir")?;
     let data = path_text(&data_dir, "data_dir")?;
     let runtime = path_text(&layout.runtime_path, "runtime_path")?;
+    let broker_socket = path_text(&layout.broker_socket, "broker_socket")?;
     let entrypoint = format!("/app/{}", manifest.entrypoint);
     let unit = format!("cardputerzero-app-{}.service", &app_user[8..]);
     let memory_max_bytes = u64::from(manifest.resources.memory_mb) * 1024 * 1024;
@@ -120,6 +132,10 @@ pub fn build_sandbox_plan(
         "/app".into(),
         "--dir".into(),
         "/data".into(),
+        "--dir".into(),
+        "/run".into(),
+        "--dir".into(),
+        "/run/cardputerzero".into(),
         "--proc".into(),
         "/proc".into(),
         "--dev".into(),
@@ -135,6 +151,9 @@ pub fn build_sandbox_plan(
         "--bind".into(),
         data.clone(),
         "/data".into(),
+        "--ro-bind".into(),
+        broker_socket,
+        "/run/cardputerzero/broker.sock".into(),
         "--chdir".into(),
         "/app".into(),
         "--setenv".into(),
@@ -146,6 +165,9 @@ pub fn build_sandbox_plan(
         "--setenv".into(),
         "TMPDIR".into(),
         "/tmp".into(),
+        "--setenv".into(),
+        "CP0_BROKER_SOCKET".into(),
+        "/run/cardputerzero/broker.sock".into(),
         "--".into(),
         "/runtime/cardputerzero-app-runtime".into(),
         entrypoint,

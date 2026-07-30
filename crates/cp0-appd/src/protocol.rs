@@ -6,7 +6,7 @@ use std::os::unix::net::UnixStream;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{PermissionChoice, PermissionPrompt};
+use crate::{Notification, PermissionChoice, PermissionPrompt};
 
 pub const APPD_PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024;
@@ -38,6 +38,7 @@ pub enum AppdCommand {
         prompt_id: u64,
         choice: PermissionChoice,
     },
+    TakeNotification,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +79,9 @@ pub enum ResponseData {
         app_id: String,
         permission: cp0_manifest::Permission,
         choice: PermissionChoice,
+    },
+    NextNotification {
+        notification: Option<Notification>,
     },
 }
 
