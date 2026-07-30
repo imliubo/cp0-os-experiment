@@ -20,6 +20,8 @@ pub struct AppAccount {
     pub account_id: u32,
     pub unix_user: String,
     pub unix_uid: u32,
+    #[serde(default)]
+    pub installed_version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,8 +106,22 @@ impl AppRegistry {
             account_id,
             unix_user: format!("cp0-app-{account_id}"),
             unix_uid: account_id,
+            installed_version: None,
         };
         self.apps.insert(app_id.to_owned(), account.clone());
+        Ok(account)
+    }
+
+    pub fn mark_installed(
+        &mut self,
+        manifest: &cp0_manifest::AppManifest,
+    ) -> Result<AppAccount, RegistryError> {
+        cp0_manifest::validate(manifest).map_err(|errors| {
+            RegistryError::Invalid(format!("invalid installed manifest: {}", errors.join("; ")))
+        })?;
+        let mut account = self.assign(&manifest.id)?;
+        account.installed_version = Some(manifest.version.clone());
+        self.apps.insert(manifest.id.clone(), account.clone());
         Ok(account)
     }
 
@@ -147,6 +163,16 @@ impl AppRegistry {
                 return Err(RegistryError::Invalid(
                     "two applications share the same Unix identity".into(),
                 ));
+            }
+            if account
+                .installed_version
+                .as_deref()
+                .is_some_and(|version| !cp0_manifest::is_valid_app_version(version))
+            {
+                return Err(RegistryError::Invalid(format!(
+                    "account {} has an invalid installed version",
+                    account.account_id
+                )));
             }
             highest_account_id = Some(
                 highest_account_id.map_or(account.account_id, |highest: u32| {
@@ -236,6 +262,22 @@ mod tests {
         assert_eq!(second.unix_user, "cp0-app-20001");
         assert_eq!(registry.assign("dev.cardputerzero.alpha").unwrap(), first);
         assert_eq!(registry.next_account_id, 20_002);
+    }
+
+    #[test]
+    fn records_installed_version_without_changing_identity() {
+        let mut registry = AppRegistry::default();
+        let first = registry
+            .mark_installed(&crate::tests::manifest())
+            .expect("register first version");
+        let mut upgraded = crate::tests::manifest();
+        upgraded.version = "1.2.4".into();
+        let second = registry
+            .mark_installed(&upgraded)
+            .expect("register upgraded version");
+
+        assert_eq!(first.account_id, second.account_id);
+        assert_eq!(second.installed_version.as_deref(), Some("1.2.4"));
     }
 
     #[test]

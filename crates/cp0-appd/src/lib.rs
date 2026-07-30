@@ -4,8 +4,11 @@ use std::path::{Component, Path, PathBuf};
 use cp0_manifest::AppManifest;
 use serde::Serialize;
 
+mod lifecycle;
 mod protocol;
 mod registry;
+
+pub use lifecycle::{AppManager, AppManagerError, InstalledApp, ManagerPaths};
 
 pub use protocol::{
     AppSummary, AppdCommand, AppdRequest, AppdResponse, ErrorCode, PeerCredentials, ProtocolError,
@@ -221,7 +224,7 @@ mod tests {
 
     use super::*;
 
-    fn manifest() -> AppManifest {
+    pub(crate) fn manifest() -> AppManifest {
         AppManifest {
             schema_version: 1,
             id: "dev.cardputerzero.hello".into(),

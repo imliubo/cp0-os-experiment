@@ -117,7 +117,7 @@ pub fn validate(manifest: &AppManifest) -> Result<(), Vec<String>> {
     if !(1..=32).contains(&name_len) {
         errors.push("name must contain between 1 and 32 characters".into());
     }
-    if !valid_semver(&manifest.version) {
+    if !is_valid_app_version(&manifest.version) {
         errors.push("version must be a valid three-part semantic version".into());
     }
     if !valid_sdk_version(&manifest.sdk_version) {
@@ -178,7 +178,7 @@ pub fn is_valid_app_id(id: &str) -> bool {
         })
 }
 
-fn valid_semver(version: &str) -> bool {
+pub fn is_valid_app_version(version: &str) -> bool {
     let (without_build, build) = version
         .split_once('+')
         .map_or((version, None), |(left, right)| (left, Some(right)));
