@@ -15,6 +15,9 @@
 #define CP0_PROMPT_APP_NAME_BYTES 129
 #define CP0_PROMPT_PERMISSION_BYTES 64
 #define CP0_PROMPT_REASON_BYTES 641
+#define CP0_DOCUMENT_MAX 16
+#define CP0_DOCUMENT_ID_BYTES 33
+#define CP0_DOCUMENT_NAME_BYTES 129
 
 enum cp0_permission_choice {
     CP0_PERMISSION_ALLOW_ONCE,
@@ -51,6 +54,19 @@ struct cp0_notification {
     char body[CP0_NOTIFICATION_BODY_BYTES];
 };
 
+struct cp0_document_summary {
+    uint64_t size_bytes;
+    char document_id[CP0_DOCUMENT_ID_BYTES];
+    char name[CP0_DOCUMENT_NAME_BYTES];
+};
+
+struct cp0_document_prompt {
+    uint64_t prompt_id;
+    size_t document_count;
+    char app_name[CP0_PROMPT_APP_NAME_BYTES];
+    struct cp0_document_summary documents[CP0_DOCUMENT_MAX];
+};
+
 int cp0_appd_list_apps(struct cp0_app_list *list);
 int cp0_appd_start_app(const char *app_id);
 int cp0_appd_stop_app(const char *app_id);
@@ -58,5 +74,8 @@ int cp0_appd_take_notification(struct cp0_notification *notification);
 int cp0_appd_get_permission_prompt(struct cp0_permission_prompt *prompt);
 int cp0_appd_resolve_permission(uint64_t prompt_id,
                                 enum cp0_permission_choice choice);
+int cp0_appd_get_document_prompt(struct cp0_document_prompt *prompt);
+int cp0_appd_resolve_document(uint64_t prompt_id,
+                              const char *document_id);
 
 #endif

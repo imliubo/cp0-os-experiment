@@ -1,28 +1,26 @@
 [Unit]
-Description=CardputerZero application lifecycle daemon
-Requires=cardputerzero-appd.socket cardputerzero-broker.socket cardputerzero-networkd.socket cardputerzero-documentd.socket
-After=cardputerzero-appd.socket cardputerzero-broker.socket cardputerzero-networkd.socket cardputerzero-documentd.socket
+Description=CardputerZero restricted document portal
+Requires=cardputerzero-documentd.socket
+After=cardputerzero-documentd.socket
 
 [Service]
 Type=simple
-ExecStart=/usr/libexec/cardputerzero/cp0-appd serve
-User=root
-Group=root
-SupplementaryGroups=cp0-wayland
+ExecStart=/usr/libexec/cardputerzero/cp0-documentd serve
+User=cp0-document
+Group=cp0-document
 UMask=0077
 Restart=on-failure
 RestartSec=500ms
 TimeoutStopSec=5
-MemoryMax=24M
+MemoryMax=16M
 MemorySwapMax=0
-TasksMax=16
+TasksMax=8
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
 PrivateDevices=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/cardputerzero/registry
 ProtectHome=yes
 ProtectHostname=yes
 ProtectClock=yes

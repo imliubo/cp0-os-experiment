@@ -170,6 +170,19 @@ static bool valid_app_id(const char *app_id)
            app_id[length - 1] != '-';
 }
 
+static bool valid_document_id(const char *document_id)
+{
+    if (document_id == NULL || strlen(document_id) != 32)
+        return false;
+    for (size_t index = 0; index < 32; index++) {
+        unsigned char byte = (unsigned char)document_id[index];
+        if (!((byte >= '0' && byte <= '9') ||
+              (byte >= 'a' && byte <= 'f')))
+            return false;
+    }
+    return true;
+}
+
 static int parse_app_page(const char *response, size_t response_length,
                           uint64_t request_id, uint16_t offset,
                           struct cp0_app_summary *apps, size_t capacity,
@@ -364,6 +377,11 @@ bool cp0_appd_test_valid_app_id(const char *app_id)
 {
     return valid_app_id(app_id);
 }
+
+bool cp0_appd_test_valid_document_id(const char *document_id)
+{
+    return valid_document_id(document_id);
+}
 #endif
 
 static int parse_notification_response(
@@ -537,6 +555,145 @@ int cp0_appd_resolve_permission(uint64_t prompt_id,
     int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
     return kind >= 0 && cp0_json_string_equals(
                             response, &tokens[kind], "permission-resolved")
+               ? 0
+               : -1;
+}
+
+static int parse_document_prompt_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    struct cp0_document_prompt *prompt)
+{
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    struct cp0_document_prompt decoded = {0};
+    size_t token_count;
+    int data;
+
+    if (prompt == NULL ||
+        parse_success(response, response_length, request_id, tokens,
+                      &token_count, &data) != 0)
+        return -1;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int prompt_token = cp0_json_object_get(response, tokens, token_count, data,
+                                           "prompt");
+    if (kind < 0 || prompt_token < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind],
+                                "pending-document"))
+        return -1;
+    if (cp0_json_is_null(response, &tokens[prompt_token]))
+        return 0;
+    if (tokens[prompt_token].type != CP0_JSON_OBJECT)
+        return -1;
+
+    int prompt_id = cp0_json_object_get(response, tokens, token_count,
+                                        prompt_token, "prompt_id");
+    int documents = cp0_json_object_get(response, tokens, token_count,
+                                        prompt_token, "documents");
+    if (prompt_id < 0 || documents < 0 ||
+        !cp0_json_get_u64(response, &tokens[prompt_id], &decoded.prompt_id) ||
+        decoded.prompt_id == 0 ||
+        !copy_member(response, tokens, token_count, prompt_token, "app_name",
+                     decoded.app_name, sizeof(decoded.app_name)) ||
+        decoded.app_name[0] == '\0' || tokens[documents].type != CP0_JSON_ARRAY ||
+        tokens[documents].children == 0 ||
+        tokens[documents].children > CP0_DOCUMENT_MAX)
+        return -1;
+
+    decoded.document_count = tokens[documents].children;
+    for (size_t index = 0; index < decoded.document_count; index++) {
+        int item = cp0_json_array_get(tokens, token_count, documents,
+                                      (unsigned int)index);
+        struct cp0_document_summary *document = &decoded.documents[index];
+        int size;
+        if (item < 0 || tokens[item].type != CP0_JSON_OBJECT ||
+            !copy_member(response, tokens, token_count, item, "document_id",
+                         document->document_id,
+                         sizeof(document->document_id)) ||
+            !valid_document_id(document->document_id) ||
+            !copy_member(response, tokens, token_count, item, "name",
+                         document->name, sizeof(document->name)) ||
+            document->name[0] == '\0')
+            return -1;
+        size = cp0_json_object_get(response, tokens, token_count, item,
+                                   "size_bytes");
+        if (size < 0 ||
+            !cp0_json_get_u64(response, &tokens[size], &document->size_bytes) ||
+            document->size_bytes > 16U * 1024U * 1024U)
+            return -1;
+    }
+    *prompt = decoded;
+    return 1;
+}
+
+#ifdef CP0_APPD_CLIENT_TEST
+int cp0_appd_test_parse_document_prompt_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    struct cp0_document_prompt *prompt)
+{
+    return parse_document_prompt_response(response, response_length, request_id,
+                                          prompt);
+}
+#endif
+
+int cp0_appd_get_document_prompt(struct cp0_document_prompt *prompt)
+{
+    char request[256];
+    char response[CP0_APPD_FRAME_BYTES];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"get-document-prompt\"}}\n",
+        (unsigned long long)request_id);
+
+    if (prompt == NULL || request_length <= 0 ||
+        (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 250) != 0)
+        return -1;
+    return parse_document_prompt_response(response, response_length, request_id,
+                                          prompt);
+}
+
+int cp0_appd_resolve_document(uint64_t prompt_id, const char *document_id)
+{
+    char request[512];
+    char response[CP0_APPD_FRAME_BYTES];
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    size_t response_length;
+    size_t token_count;
+    int data;
+    uint64_t request_id = next_request_id++;
+    int request_length;
+
+    if (prompt_id == 0 ||
+        (document_id != NULL && !valid_document_id(document_id)))
+        return -1;
+    if (document_id == NULL) {
+        request_length = snprintf(
+            request, sizeof(request),
+            "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+            "\"name\":\"resolve-document\",\"prompt_id\":%llu,"
+            "\"document_id\":null}}\n",
+            (unsigned long long)request_id, (unsigned long long)prompt_id);
+    } else {
+        request_length = snprintf(
+            request, sizeof(request),
+            "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+            "\"name\":\"resolve-document\",\"prompt_id\":%llu,"
+            "\"document_id\":\"%s\"}}\n",
+            (unsigned long long)request_id, (unsigned long long)prompt_id,
+            document_id);
+    }
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 250) != 0 ||
+        parse_success(response, response_length, request_id, tokens,
+                      &token_count, &data) != 0)
+        return -1;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    return kind >= 0 && cp0_json_string_equals(
+                            response, &tokens[kind], "document-resolved")
                ? 0
                : -1;
 }

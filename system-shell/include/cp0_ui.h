@@ -17,6 +17,9 @@
 #define CP0_UI_NOTIFICATION_TITLE_MAX 128
 #define CP0_UI_NOTIFICATION_BODY_MAX 640
 #define CP0_UI_NOTIFICATION_BOTTOM 88
+#define CP0_UI_MAX_DOCUMENTS 16
+#define CP0_UI_DOCUMENT_ID_MAX 32
+#define CP0_UI_DOCUMENT_NAME_MAX 128
 
 enum cp0_ui_screen {
     CP0_UI_HOME,
@@ -47,6 +50,8 @@ enum cp0_ui_event {
     CP0_UI_EVENT_PERMISSION_ONCE,
     CP0_UI_EVENT_PERMISSION_ALWAYS,
     CP0_UI_EVENT_PERMISSION_DENY,
+    CP0_UI_EVENT_DOCUMENT_SELECT,
+    CP0_UI_EVENT_DOCUMENT_CANCEL,
 };
 
 enum cp0_ui_app_state {
@@ -72,6 +77,18 @@ struct cp0_ui_app {
     char name[CP0_UI_APP_NAME_MAX + 1];
 };
 
+struct cp0_ui_document_option {
+    uint64_t size_bytes;
+    const char *document_id;
+    const char *name;
+};
+
+struct cp0_ui_document {
+    uint64_t size_bytes;
+    char document_id[CP0_UI_DOCUMENT_ID_MAX + 1];
+    char name[CP0_UI_DOCUMENT_NAME_MAX + 1];
+};
+
 struct cp0_ui {
     enum cp0_ui_screen screen;
     unsigned int selected;
@@ -82,6 +99,7 @@ struct cp0_ui {
     unsigned int dialog_selected;
     bool power_dialog;
     bool permission_prompt;
+    bool document_prompt;
     bool notification_banner;
     bool network_online;
     int battery_percent;
@@ -91,6 +109,11 @@ struct cp0_ui {
     char prompt_app_name[CP0_UI_PROMPT_APP_NAME_MAX + 1];
     char prompt_permission[CP0_UI_PROMPT_PERMISSION_MAX + 1];
     char prompt_reason[CP0_UI_PROMPT_REASON_MAX + 1];
+    uint64_t document_prompt_id;
+    unsigned int document_selected;
+    unsigned int document_count;
+    char document_app_name[CP0_UI_PROMPT_APP_NAME_MAX + 1];
+    struct cp0_ui_document documents[CP0_UI_MAX_DOCUMENTS];
     uint64_t notification_id;
     char notification_app_name[CP0_UI_NOTIFICATION_APP_NAME_MAX + 1];
     char notification_title[CP0_UI_NOTIFICATION_TITLE_MAX + 1];
@@ -119,6 +142,12 @@ bool cp0_ui_show_permission(struct cp0_ui *ui, uint64_t prompt_id,
                             const char *app_name, const char *permission,
                             const char *reason);
 void cp0_ui_clear_permission(struct cp0_ui *ui);
+bool cp0_ui_show_documents(struct cp0_ui *ui, uint64_t prompt_id,
+                           const char *app_name,
+                           const struct cp0_ui_document_option *documents,
+                           size_t document_count);
+void cp0_ui_clear_documents(struct cp0_ui *ui);
+const char *cp0_ui_selected_document_id(const struct cp0_ui *ui);
 bool cp0_ui_show_notification(struct cp0_ui *ui, uint64_t notification_id,
                               const char *app_name, const char *title,
                               const char *body);

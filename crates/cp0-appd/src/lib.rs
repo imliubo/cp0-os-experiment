@@ -5,6 +5,8 @@ use cp0_manifest::{AppManifest, DisplayMode};
 use serde::Serialize;
 
 mod broker;
+mod document_client;
+mod document_prompt;
 mod lifecycle;
 mod network_client;
 mod permission_prompt;
@@ -16,8 +18,14 @@ mod server;
 pub use broker::{
     BROKER_PROTOCOL_VERSION, BrokerCommand, BrokerErrorCode, BrokerOutcome, BrokerProtocolError,
     BrokerRequest, BrokerResponse, MAX_BROKER_FRAME_BYTES, MAX_PENDING_NOTIFICATIONS, Notification,
-    NotificationQueue, NotificationQueueError, read_broker_request, read_broker_response,
-    write_broker_request, write_broker_response,
+    NotificationQueue, NotificationQueueError, encode_broker_response, read_broker_request,
+    read_broker_response, write_broker_request, write_broker_response,
+};
+pub use document_client::{
+    DEFAULT_DOCUMENT_SOCKET, DocumentClient, DocumentClientError, OpenedDocument,
+};
+pub use document_prompt::{
+    DocumentCoordinator, DocumentPrompt, DocumentPromptError, DocumentRequestResult,
 };
 pub use lifecycle::{AppManager, AppManagerError, InstalledApp, ManagerPaths, lookup_unix_account};
 pub use network_client::{

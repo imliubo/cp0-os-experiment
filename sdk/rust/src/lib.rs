@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod display;
+pub mod documents;
 pub mod input;
 pub mod network;
 pub mod system;

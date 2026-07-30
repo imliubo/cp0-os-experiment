@@ -63,6 +63,19 @@ interface network {
     http-get: func(url: string) -> result<http-response, error-code>;
 }
 
+interface documents {
+    use types.{error-code};
+
+    record document {
+        handle: u32,
+        length: u32,
+    }
+
+    open: func() -> result<document, error-code>;
+    read: func(handle: u32, offset: u64, maximum: u32) -> result<list<u8>, error-code>;
+    close: func(handle: u32) -> result<_, error-code>;
+}
+
 interface application {
     use types.{app-event, error-code};
 
@@ -74,5 +87,6 @@ world cardputer-application {
     import system;
     import display;
     import network;
+    import documents;
     export application;
 }

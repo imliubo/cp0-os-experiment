@@ -1,0 +1,15 @@
+[Unit]
+Description=CardputerZero privileged document portal socket
+
+[Socket]
+ListenStream=/run/cardputerzero-documentd/documents.sock
+FileDescriptorName=documents
+Service=cardputerzero-documentd.service
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

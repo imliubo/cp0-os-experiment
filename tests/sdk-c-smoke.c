@@ -13,10 +13,17 @@ int sdk_c_smoke(void) {
     cp0_http_response_t response = {0};
     uint8_t network_body[64] = {0};
     static const uint8_t url[] = "https://example.com";
+    cp0_document_t document = {0};
+    uint32_t bytes_read = 0;
     (void)cp0_poll_key_event(&event, sizeof(event), 0);
     (void)cp0_display_dimensions();
     (void)cp0_http_get(url, (uint32_t)(sizeof(url) - 1U), network_body,
                        sizeof(network_body), &response);
+    if (cp0_document_open(&document) == CP0_OK) {
+        (void)cp0_document_read(&document, 0, network_body,
+                                sizeof(network_body), &bytes_read);
+        (void)cp0_document_close(&document);
+    }
     return result == CP0_ERROR_UNAVAILABLE ? (int)cp0_monotonic_milliseconds()
                                            : (int)result;
 }

@@ -93,6 +93,19 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
                            "Notify when background work is complete and ready");
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     write_snapshot(directory, "permission", ui, frame);
+    cp0_ui_clear_permission(ui);
+
+    static const struct cp0_ui_document_option documents[] = {
+        {.size_bytes = 1200,
+         .document_id = "00000000000000010000000000000002",
+         .name = "notes.txt"},
+        {.size_bytes = 8192,
+         .document_id = "00000000000000030000000000000004",
+         .name = "field-report.md"},
+    };
+    assert(cp0_ui_show_documents(ui, 10, "Hello Card", documents, 2));
+    cp0_ui_handle_action(ui, CP0_UI_DOWN);
+    write_snapshot(directory, "document", ui, frame);
 }
 
 int main(int argc, char **argv)
@@ -243,6 +256,29 @@ int main(int argc, char **argv)
     assert(ui.notification_body[0] == '\0');
     cp0_ui_clear_notification(&ui);
     assert(!cp0_ui_show_notification(&ui, 0, "Hello", "Title", "Body"));
+
+    static const struct cp0_ui_document_option documents[] = {
+        {.size_bytes = 5,
+         .document_id = "00000000000000010000000000000002",
+         .name = "one.txt"},
+        {.size_bytes = 4097,
+         .document_id = "00000000000000030000000000000004",
+         .name = "two.md"},
+    };
+    assert(cp0_ui_show_documents(&ui, 101, "Hello Card", documents, 2));
+    assert(ui.document_prompt && ui.document_prompt_id == 101);
+    assert(strcmp(cp0_ui_selected_document_id(&ui),
+                  documents[0].document_id) == 0);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_DOCUMENT_SELECT);
+    assert(strcmp(cp0_ui_selected_document_id(&ui),
+                  documents[1].document_id) == 0);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_BACK) ==
+           CP0_UI_EVENT_DOCUMENT_CANCEL);
+    cp0_ui_clear_documents(&ui);
+    assert(!ui.document_prompt && ui.document_prompt_id == 0);
+    assert(cp0_ui_selected_document_id(&ui) == NULL);
 
     render(&ui, frame);
     if (argc == 2)

@@ -19,6 +19,8 @@
 #define CP0_MAX_NOTIFICATION_BODY_CHARS 160U
 #define CP0_MAX_NETWORK_URL_BYTES 1024U
 #define CP0_MAX_NETWORK_BODY_BYTES 2048U
+#define CP0_MAX_DOCUMENT_BYTES (16U * 1024U * 1024U)
+#define CP0_MAX_DOCUMENT_READ_BYTES 4096U
 
 #if !defined(__wasm32__)
 #error "CardputerZero applications must target wasm32"
@@ -64,6 +66,11 @@ typedef struct cp0_http_response {
     uint16_t body_length;
 } cp0_http_response_t;
 
+typedef struct cp0_document {
+    int32_t handle;
+    uint32_t length;
+} cp0_document_t;
+
 CP0_IMPORT("cp0_monotonic_milliseconds")
 uint64_t cp0_monotonic_milliseconds(void);
 
@@ -89,6 +96,16 @@ cp0_result_t cp0_post_notification(const uint8_t *title, uint32_t title_length,
 CP0_IMPORT("cp0_http_get")
 int64_t cp0_http_get_raw(const uint8_t *url, uint32_t url_length,
                          uint8_t *body, uint32_t body_capacity);
+
+CP0_IMPORT("cp0_document_open")
+int64_t cp0_document_open_raw(void);
+
+CP0_IMPORT("cp0_document_read")
+int64_t cp0_document_read_raw(int32_t handle, uint64_t offset,
+                              uint8_t *buffer, uint32_t capacity);
+
+CP0_IMPORT("cp0_document_close")
+cp0_result_t cp0_document_close_raw(int32_t handle);
 
 static inline cp0_result_t cp0_http_get(const uint8_t *url,
                                         uint32_t url_length, uint8_t *body,
@@ -121,6 +138,60 @@ static inline cp0_result_t cp0_http_get(const uint8_t *url,
     response->status_code = (uint16_t)status_code;
     response->body_length = (uint16_t)body_length;
     return CP0_OK;
+}
+
+static inline cp0_result_t cp0_document_open(cp0_document_t *document) {
+    int64_t packed;
+    int32_t handle;
+    uint32_t length;
+
+    if (document == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    packed = cp0_document_open_raw();
+    if (packed < 0)
+        return packed >= CP0_ERROR_INTERNAL ? (cp0_result_t)packed
+                                           : CP0_ERROR_INTERNAL;
+    handle = (int32_t)((uint64_t)packed >> 32);
+    length = (uint32_t)packed;
+    if (handle <= 0 || length > CP0_MAX_DOCUMENT_BYTES)
+        return CP0_ERROR_INTERNAL;
+    document->handle = handle;
+    document->length = length;
+    return CP0_OK;
+}
+
+static inline cp0_result_t cp0_document_read(const cp0_document_t *document,
+                                             uint64_t offset,
+                                             uint8_t *buffer,
+                                             uint32_t capacity,
+                                             uint32_t *bytes_read) {
+    int64_t count;
+
+    if (document == NULL || document->handle <= 0 || buffer == NULL ||
+        capacity == 0U || capacity > CP0_MAX_DOCUMENT_READ_BYTES ||
+        bytes_read == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    count = cp0_document_read_raw(document->handle, offset, buffer, capacity);
+    if (count < 0)
+        return count >= CP0_ERROR_INTERNAL ? (cp0_result_t)count
+                                          : CP0_ERROR_INTERNAL;
+    if ((uint64_t)count > capacity)
+        return CP0_ERROR_INTERNAL;
+    *bytes_read = (uint32_t)count;
+    return CP0_OK;
+}
+
+static inline cp0_result_t cp0_document_close(cp0_document_t *document) {
+    cp0_result_t result;
+
+    if (document == NULL || document->handle <= 0)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    result = cp0_document_close_raw(document->handle);
+    if (result == CP0_OK) {
+        document->handle = 0;
+        document->length = 0;
+    }
+    return result;
 }
 
 #ifdef __cplusplus

@@ -3,6 +3,8 @@
 #include <assert.h>
 #include <stdint.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 int main(void) {
     static const char success[] =
@@ -25,5 +27,28 @@ int main(void) {
            CP0_BROKER_RESOURCE_LIMIT);
     assert(cp0_broker_decode_http_response(blocked, body, sizeof(body)) ==
            CP0_BROKER_DENIED);
+
+    static const char opened[] =
+        "{\"protocol_version\":1,\"request_id\":3,\"outcome\":{"
+        "\"status\":\"document-opened\","
+        "\"document_id\":\"00000000000000010000000000000002\","
+        "\"size_bytes\":5}}\n";
+    static const char pending[] =
+        "{\"protocol_version\":1,\"request_id\":3,\"outcome\":{"
+        "\"status\":\"document-selection-pending\",\"prompt_id\":8}}\n";
+    int source = open("Cargo.toml", O_RDONLY);
+    int descriptor = -1;
+    uint32_t size_bytes = 0;
+    assert(source >= 0);
+    assert(cp0_broker_decode_document_response(opened, source, &descriptor,
+                                               &size_bytes) == CP0_BROKER_OK);
+    assert(descriptor == source && size_bytes == 5U);
+    close(descriptor);
+    source = open("Cargo.toml", O_RDONLY);
+    assert(source >= 0);
+    assert(cp0_broker_decode_document_response(pending, source, &descriptor,
+                                               &size_bytes) ==
+           CP0_BROKER_UNAVAILABLE);
+    assert(fcntl(source, F_GETFD) < 0);
     return 0;
 }

@@ -53,6 +53,7 @@ struct shell {
     struct cp0_ui ui;
     uint32_t overlay_mode;
     uint32_t interrupted_overlay_mode;
+    uint32_t document_restore_mode;
     uint32_t notification_restore_mode;
     int timer_fd;
     int width;
@@ -91,6 +92,8 @@ static void poll_permission_prompt(struct shell *shell)
     struct cp0_permission_prompt prompt;
     int result;
 
+    if (shell->ui.document_prompt)
+        return;
     result = cp0_appd_get_permission_prompt(&prompt);
     if (shell->ui.permission_prompt && result == 0) {
         cp0_ui_clear_permission(&shell->ui);
@@ -118,6 +121,49 @@ static void poll_permission_prompt(struct shell *shell)
     shell_redraw(shell);
 }
 
+static void poll_document_prompt(struct shell *shell)
+{
+    struct cp0_document_prompt prompt;
+    struct cp0_ui_document_option documents[CP0_DOCUMENT_MAX];
+    int result;
+
+    if (shell->ui.permission_prompt)
+        return;
+    result = cp0_appd_get_document_prompt(&prompt);
+    if (shell->ui.document_prompt && result == 0) {
+        cp0_ui_clear_documents(&shell->ui);
+        shell->overlay_mode = shell->document_restore_mode;
+        cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                              shell->overlay_mode);
+        shell_redraw(shell);
+        return;
+    }
+    if (shell->ui.document_prompt && result == 1 &&
+        prompt.prompt_id == shell->ui.document_prompt_id)
+        return;
+    if (result != 1)
+        return;
+    for (size_t index = 0; index < prompt.document_count; index++) {
+        documents[index] = (struct cp0_ui_document_option){
+            .size_bytes = prompt.documents[index].size_bytes,
+            .document_id = prompt.documents[index].document_id,
+            .name = prompt.documents[index].name,
+        };
+    }
+    cancel_notification(shell, true);
+    if (!shell->ui.document_prompt)
+        shell->document_restore_mode = shell->overlay_mode;
+    shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+    if (!cp0_ui_show_documents(&shell->ui, prompt.prompt_id, prompt.app_name,
+                               documents, prompt.document_count))
+        return;
+    cp0_system_shell_v1_set_overlay_mode(
+        shell->system_control, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL);
+    fprintf(stderr, "system-shell: document prompt=%llu visible\n",
+            (unsigned long long)prompt.prompt_id);
+    shell_redraw(shell);
+}
+
 static void poll_app_catalog(struct shell *shell)
 {
     struct cp0_app_list list;
@@ -140,7 +186,8 @@ static void poll_notification(struct shell *shell)
 {
     struct cp0_notification notification;
 
-    if (shell->ui.permission_prompt || shell->ui.power_dialog ||
+    if (shell->ui.permission_prompt || shell->ui.document_prompt ||
+        shell->ui.power_dialog ||
         shell->ui.notification_banner ||
         cp0_appd_take_notification(&notification) != 1)
         return;
@@ -414,6 +461,25 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         } else {
             fprintf(stderr,
                     "system-shell: permission prompt=%llu resolution failed\n",
+                    (unsigned long long)prompt_id);
+        }
+    } else if (event == CP0_UI_EVENT_DOCUMENT_SELECT ||
+               event == CP0_UI_EVENT_DOCUMENT_CANCEL) {
+        uint64_t prompt_id = shell->ui.document_prompt_id;
+        const char *document_id =
+            event == CP0_UI_EVENT_DOCUMENT_SELECT
+                ? cp0_ui_selected_document_id(&shell->ui)
+                : NULL;
+        if (cp0_appd_resolve_document(prompt_id, document_id) == 0) {
+            cp0_ui_clear_documents(&shell->ui);
+            shell->overlay_mode = shell->document_restore_mode;
+            cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                                  shell->overlay_mode);
+            fprintf(stderr, "system-shell: document prompt=%llu resolved\n",
+                    (unsigned long long)prompt_id);
+        } else {
+            fprintf(stderr,
+                    "system-shell: document prompt=%llu resolution failed\n",
                     (unsigned long long)prompt_id);
         }
     } else if (event == CP0_UI_EVENT_SLEEP) {
@@ -983,6 +1049,7 @@ static int shell_dispatch(struct shell *shell)
             if (read(shell->timer_fd, &expirations, sizeof(expirations)) > 0) {
                 update_notification_timer(shell);
                 poll_permission_prompt(shell);
+                poll_document_prompt(shell);
                 poll_notification(shell);
                 shell->catalog_ticks++;
                 if (shell->catalog_ticks >= 5) {

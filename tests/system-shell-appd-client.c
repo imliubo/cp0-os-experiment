@@ -13,9 +13,13 @@ int cp0_appd_test_parse_lifecycle_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *expected_kind, const char *app_id);
 bool cp0_appd_test_valid_app_id(const char *app_id);
+bool cp0_appd_test_valid_document_id(const char *document_id);
 int cp0_appd_test_parse_notification_response(
     const char *response, size_t response_length, uint64_t request_id,
     struct cp0_notification *notification);
+int cp0_appd_test_parse_document_prompt_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    struct cp0_document_prompt *prompt);
 
 int main(void)
 {
@@ -104,5 +108,25 @@ int main(void)
     assert(!cp0_appd_test_valid_app_id("../../etc"));
     assert(!cp0_appd_test_valid_app_id("Dev.cardputerzero.first"));
     assert(!cp0_appd_test_valid_app_id("dev..first"));
+
+    static const char document_response[] =
+        "{\"protocol_version\":1,\"request_id\":14,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"pending-document\","
+        "\"prompt\":{\"prompt_id\":5,"
+        "\"app_id\":\"dev.cardputerzero.first\","
+        "\"app_name\":\"First Card\",\"documents\":[{"
+        "\"document_id\":\"00000000000000010000000000000002\","
+        "\"name\":\"notes.txt\",\"size_bytes\":17}]}}}}";
+    struct cp0_document_prompt document_prompt;
+    assert(cp0_appd_test_parse_document_prompt_response(
+               document_response, strlen(document_response), 14,
+               &document_prompt) == 1);
+    assert(document_prompt.prompt_id == 5 &&
+           document_prompt.document_count == 1);
+    assert(strcmp(document_prompt.documents[0].name, "notes.txt") == 0);
+    assert(document_prompt.documents[0].size_bytes == 17);
+    assert(cp0_appd_test_valid_document_id(
+        "00000000000000010000000000000002"));
+    assert(!cp0_appd_test_valid_document_id("../../etc/passwd"));
     return 0;
 }

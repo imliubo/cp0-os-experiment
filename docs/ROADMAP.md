@@ -43,7 +43,7 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 - [x] 实现可信通知横幅、应用焦点保持、权限弹窗优先级和通知像素回归。
 - [x] 建立像素级截图回归测试并完成两个客户端的可靠切换与 200 轮压力测试。
 - [x] 建立核心服务 SIGKILL 恢复测试和 RAM-backed 24 小时稳定性/内存采样工具。
-- [ ] 完成 Launcher 启动与 Tasks 停止的最终物理按键验收。
+- [x] 完成 Launcher 启动、Tasks 停止及 F1/F2/F3/F4 全局动作的最终物理按键验收。
 - [ ] 完成 24 小时 compositor/Shell/appd 真机稳定性与内存泄漏验收（监控已于
   2026-07-31 05:25 CST 启动）。
 
@@ -71,7 +71,9 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
   应用键盘焦点。
 - [x] 实现 `network.client` HTTPS-only broker、SSRF/DNS rebinding 防护、WAMR
   host call 和 Rust/C/C++ SDK 有界响应 API。
-- [ ] 实现文档、音频、相机和 LoRa/GPIO broker。
+- [x] 实现无路径 Document Portal、可信文件选择器、`SCM_RIGHTS` 只读 FD 传递和
+  Rust/C/C++ SDK 有界读取 API。
+- [ ] 实现音频、相机和 LoRa/GPIO broker。
 - 定义 Intent Broker 和应用私有存储配额。
 - [ ] 建立恶意应用测试集，已覆盖 seccomp 旁路和 cgroup 资源耗尽；继续覆盖路径
   逃逸、设备访问和 IPC。

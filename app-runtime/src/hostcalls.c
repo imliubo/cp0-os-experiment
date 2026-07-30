@@ -1,6 +1,7 @@
 #include "hostcalls.h"
 #include "broker_client.h"
 #include "display.h"
+#include "document.h"
 
 #include <errno.h>
 #include <stdint.h>
@@ -65,6 +66,27 @@ static int64_t cp0_http_get(wasm_exec_env_t execution_environment,
                                (size_t)body_capacity);
 }
 
+static int64_t cp0_open_document(wasm_exec_env_t execution_environment) {
+    (void)execution_environment;
+    return cp0_document_open();
+}
+
+static int64_t cp0_read_document(wasm_exec_env_t execution_environment,
+                                 int32_t handle, int64_t offset,
+                                 uint8_t *buffer, uint32_t capacity) {
+    (void)execution_environment;
+    if (offset < 0)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    return cp0_document_read(handle, (uint64_t)offset, buffer,
+                             (size_t)capacity);
+}
+
+static int32_t cp0_close_document(wasm_exec_env_t execution_environment,
+                                  int32_t handle) {
+    (void)execution_environment;
+    return cp0_document_close(handle);
+}
+
 static NativeSymbol symbols[] = {
     {"cp0_monotonic_milliseconds", (void *)cp0_monotonic_milliseconds, "()I",
      NULL},
@@ -75,6 +97,9 @@ static NativeSymbol symbols[] = {
     {"cp0_poll_key_event", (void *)cp0_poll_key_event, "(*~i)i", NULL},
     {"cp0_post_notification", (void *)cp0_post_notification, "(*~*~)i", NULL},
     {"cp0_http_get", (void *)cp0_http_get, "(*~*~)I", NULL},
+    {"cp0_document_open", (void *)cp0_open_document, "()I", NULL},
+    {"cp0_document_read", (void *)cp0_read_document, "(iI*~)I", NULL},
+    {"cp0_document_close", (void *)cp0_close_document, "(i)i", NULL},
 };
 
 NativeSymbol *cp0_host_symbols(uint32_t *count) {

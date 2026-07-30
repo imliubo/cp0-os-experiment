@@ -34,13 +34,14 @@ mkdir -p "$snapshot_dir"
 
 if command -v sha256sum >/dev/null 2>&1; then
     actual=$(cd "$snapshot_dir" && \
-        sha256sum apps.ppm home.ppm notification.ppm permission.ppm power.ppm tasks.ppm)
+        sha256sum apps.ppm document.ppm home.ppm notification.ppm permission.ppm power.ppm tasks.ppm)
 else
     actual=$(cd "$snapshot_dir" && \
-        shasum -a 256 apps.ppm home.ppm notification.ppm permission.ppm power.ppm tasks.ppm)
+        shasum -a 256 apps.ppm document.ppm home.ppm notification.ppm permission.ppm power.ppm tasks.ppm)
 fi
 
 expected='895d13c55341090c408fa658ef89aca771dc4ae32a8d741d8cefe2194cb71e70  apps.ppm
+b30227204599548f1de899e863e80589155694b5f3240b8c598c1396a3d21c76  document.ppm
 4e5d5f4cef0235b44e87e9f40e00aef57ebf21f35bc7b6b897cc674cc04d8d81  home.ppm
 8fb4e226637acb0f85027f430d4f7ff94d7ed33764a77ceac73ba0411bc2d943  notification.ppm
 3c9f90a8bcc0c5d5ffaad46d31748dd831fface44e7615083e1e8357b63256a6  permission.ppm

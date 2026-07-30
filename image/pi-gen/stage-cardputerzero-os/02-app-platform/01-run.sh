@@ -7,6 +7,8 @@ install -D -m 0755 "${payload}/cp0-appd" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-appd"
 install -D -m 0755 "${payload}/cp0-networkd" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-networkd"
+install -D -m 0755 "${payload}/cp0-documentd" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-documentd"
 install -D -m 0755 "${payload}/cp0ctl" \
     "${ROOTFS_DIR}/usr/bin/cp0ctl"
 install -D -m 0755 "${payload}/cardputerzero-app-runtime" \
@@ -21,6 +23,10 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-networkd.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-networkd.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-networkd.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-networkd.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-documentd.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-documentd.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-documentd.socket" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-documentd.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-appd.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-appd.conf"
 install -D -m 0755 "${payload}/diagnostics/device-core-recovery.sh" \
@@ -45,6 +51,13 @@ if ! id cp0-network >/dev/null 2>&1; then
     useradd --system --gid cp0-network --home-dir /nonexistent \
         --shell /usr/sbin/nologin cp0-network
 fi
+if ! getent group cp0-document >/dev/null 2>&1; then
+    groupadd --system cp0-document
+fi
+if ! id cp0-document >/dev/null 2>&1; then
+    useradd --system --gid cp0-document --home-dir /nonexistent \
+        --shell /usr/sbin/nologin cp0-document
+fi
 if ! getent group cp0-app-20000 >/dev/null 2>&1; then
     groupadd --system --gid 20000 cp0-app-20000
 fi
@@ -61,6 +74,13 @@ install -d -o root -g root -m 0755 \
     /var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/bin \
     /var/lib/cardputerzero/data
 install -d -o root -g root -m 0700 /var/lib/cardputerzero/registry
+install -d -o cp0-document -g cp0-document -m 0750 \
+    /var/lib/cardputerzero/documents
+printf '%s\n' 'CardputerZero Document Portal is ready.' \
+    >/var/lib/cardputerzero/documents/welcome.txt
+chown cp0-document:cp0-document \
+    /var/lib/cardputerzero/documents/welcome.txt
+chmod 0640 /var/lib/cardputerzero/documents/welcome.txt
 install -d -o cp0-app-20000 -g cp0-app-20000 -m 0700 \
     /var/lib/cardputerzero/data/dev.cardputerzero.hello
 chown -R root:root /var/lib/cardputerzero/apps/dev.cardputerzero.hello
@@ -70,5 +90,5 @@ chmod -R go-w /var/lib/cardputerzero/apps/dev.cardputerzero.hello
 
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-appd.conf
 systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
-    cardputerzero-networkd.socket
+    cardputerzero-networkd.socket cardputerzero-documentd.socket
 CHROOT

@@ -7,6 +7,8 @@ extern "C" int sdk_cxx_smoke() {
     cp0_http_response_t response{};
     uint8_t body[32]{};
     static const uint8_t url[] = "https://example.com";
+    cp0_document_t document{};
     (void)cp0_http_get(url, sizeof(url) - 1U, body, sizeof(body), &response);
+    (void)cp0_document_open(&document);
     return cp0_poll_key_event(&event, sizeof(event), 1);
 }

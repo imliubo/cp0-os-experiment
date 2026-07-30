@@ -1,6 +1,7 @@
 #include "cp0_ui.h"
 
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 #define COLOR_BG 0x000e1112u
@@ -118,6 +119,8 @@ static const char *screen_title(const struct cp0_ui *ui)
 {
     if (ui->permission_prompt)
         return "PERMISSION";
+    if (ui->document_prompt)
+        return "DOCUMENT";
     switch (ui->screen) {
     case CP0_UI_HOME:
         return "HOME";
@@ -405,6 +408,43 @@ static void draw_permission_dialog(struct canvas *canvas,
     }
 }
 
+static void draw_document_dialog(struct canvas *canvas,
+                                 const struct cp0_ui *ui)
+{
+    unsigned int first = ui->document_selected > 3
+                             ? ui->document_selected - 3
+                             : 0;
+    unsigned int visible = ui->document_count - first;
+
+    if (visible > 4)
+        visible = 4;
+    fill_rect(canvas, 0, 21, CP0_UI_WIDTH, CP0_UI_HEIGHT - 21, 0x00090b0cu);
+    fill_rect(canvas, 8, 27, 304, 136, COLOR_SURFACE);
+    stroke_rect(canvas, 8, 27, 304, 136, 2, COLOR_GREEN);
+    draw_prompt_line(canvas, 35, ui->document_app_name, 0, 46);
+    for (unsigned int row = 0; row < visible; row++) {
+        unsigned int index = first + row;
+        int y = 49 + (int)row * 23;
+        bool selected = index == ui->document_selected;
+        char size[16];
+        uint64_t bounded_size = ui->documents[index].size_bytes;
+        if (bounded_size > 16U * 1024U * 1024U)
+            bounded_size = 16U * 1024U * 1024U;
+        unsigned int kib = (unsigned int)((bounded_size + 1023U) / 1024U);
+
+        fill_rect(canvas, 16, y, 288, 20,
+                  selected ? COLOR_SELECTED : COLOR_BAR);
+        stroke_rect(canvas, 16, y, 288, 20, selected ? 2 : 1,
+                    selected ? COLOR_GREEN : COLOR_MUTED);
+        draw_prompt_line(canvas, y + 7, ui->documents[index].name, 0, 31);
+        snprintf(size, sizeof(size), "%uK", kib);
+        draw_text(canvas, 259, y + 7, size, 1,
+                  selected ? COLOR_TEXT : COLOR_MUTED);
+    }
+    draw_text(canvas, 20, 149, "ENTER OPEN", 1, COLOR_GREEN);
+    draw_text(canvas, 210, 149, "ESC CANCEL", 1, COLOR_MUTED);
+}
+
 void cp0_ui_init(struct cp0_ui *ui)
 {
     memset(ui, 0, sizeof(*ui));
@@ -683,6 +723,72 @@ void cp0_ui_clear_permission(struct cp0_ui *ui)
     memset(ui->prompt_reason, 0, sizeof(ui->prompt_reason));
 }
 
+bool cp0_ui_show_documents(struct cp0_ui *ui, uint64_t prompt_id,
+                           const char *app_name,
+                           const struct cp0_ui_document_option *documents,
+                           size_t document_count)
+{
+    if (ui == NULL || prompt_id == 0 || documents == NULL ||
+        document_count == 0 || document_count > CP0_UI_MAX_DOCUMENTS ||
+        !copy_text(ui->document_app_name, sizeof(ui->document_app_name),
+                   app_name))
+        return false;
+    memset(ui->documents, 0, sizeof(ui->documents));
+    for (size_t index = 0; index < document_count; index++) {
+        if (!copy_text(ui->documents[index].document_id,
+                       sizeof(ui->documents[index].document_id),
+                       documents[index].document_id) ||
+            strlen(ui->documents[index].document_id) !=
+                CP0_UI_DOCUMENT_ID_MAX ||
+            !copy_text(ui->documents[index].name,
+                       sizeof(ui->documents[index].name),
+                       documents[index].name)) {
+            cp0_ui_clear_documents(ui);
+            return false;
+        }
+        for (size_t byte = 0; byte < CP0_UI_DOCUMENT_ID_MAX; byte++) {
+            unsigned char value =
+                (unsigned char)ui->documents[index].document_id[byte];
+            if (!((value >= '0' && value <= '9') ||
+                  (value >= 'a' && value <= 'f'))) {
+                cp0_ui_clear_documents(ui);
+                return false;
+            }
+        }
+        if (documents[index].size_bytes > 16U * 1024U * 1024U) {
+            cp0_ui_clear_documents(ui);
+            return false;
+        }
+        ui->documents[index].size_bytes = documents[index].size_bytes;
+    }
+    ui->document_prompt_id = prompt_id;
+    ui->document_selected = 0;
+    ui->document_count = (unsigned int)document_count;
+    ui->document_prompt = true;
+    ui->power_dialog = false;
+    return true;
+}
+
+void cp0_ui_clear_documents(struct cp0_ui *ui)
+{
+    if (ui == NULL)
+        return;
+    ui->document_prompt = false;
+    ui->document_prompt_id = 0;
+    ui->document_selected = 0;
+    ui->document_count = 0;
+    memset(ui->document_app_name, 0, sizeof(ui->document_app_name));
+    memset(ui->documents, 0, sizeof(ui->documents));
+}
+
+const char *cp0_ui_selected_document_id(const struct cp0_ui *ui)
+{
+    if (ui == NULL || !ui->document_prompt ||
+        ui->document_selected >= ui->document_count)
+        return NULL;
+    return ui->documents[ui->document_selected].document_id;
+}
+
 bool cp0_ui_show_notification(struct cp0_ui *ui, uint64_t notification_id,
                               const char *app_name, const char *title,
                               const char *body)
@@ -730,6 +836,18 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             };
             return choices[ui->prompt_selected];
         }
+        return CP0_UI_EVENT_NONE;
+    }
+    if (ui->document_prompt) {
+        if (action == CP0_UI_UP && ui->document_selected > 0)
+            ui->document_selected--;
+        else if (action == CP0_UI_DOWN &&
+                 ui->document_selected + 1 < ui->document_count)
+            ui->document_selected++;
+        else if (action == CP0_UI_BACK)
+            return CP0_UI_EVENT_DOCUMENT_CANCEL;
+        else if (action == CP0_UI_ACCEPT && ui->document_count > 0)
+            return CP0_UI_EVENT_DOCUMENT_SELECT;
         return CP0_UI_EVENT_NONE;
     }
     if (action == CP0_UI_GO_HOME) {
@@ -843,10 +961,12 @@ void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
     draw_status_bar(&canvas, ui);
     draw_page(&canvas, ui);
     if (ui->notification_banner && !ui->power_dialog &&
-        !ui->permission_prompt)
+        !ui->permission_prompt && !ui->document_prompt)
         draw_notification_banner(&canvas, ui);
     if (ui->power_dialog)
         draw_power_dialog(&canvas, ui);
     if (ui->permission_prompt)
         draw_permission_dialog(&canvas, ui);
+    else if (ui->document_prompt)
+        draw_document_dialog(&canvas, ui);
 }

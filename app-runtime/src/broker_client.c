@@ -18,6 +18,8 @@
 #define CP0_NOTIFICATION_BODY_BYTES 640U
 #define CP0_NETWORK_URL_BYTES 1024U
 #define CP0_NETWORK_BODY_BYTES 2048U
+#define CP0_DOCUMENT_ID_BYTES 32U
+#define CP0_DOCUMENT_MAX_BYTES (16U * 1024U * 1024U)
 
 static bool append_bytes(char *output, size_t capacity, size_t *offset,
                          const char *value, size_t length) {
@@ -65,7 +67,8 @@ static int write_all(int descriptor, const char *buffer, size_t length) {
 static int32_t decode_result(const char *response) {
     if (strstr(response, "\"status\":\"ok\"") != NULL)
         return CP0_BROKER_OK;
-    if (strstr(response, "\"status\":\"permission-pending\"") != NULL)
+    if (strstr(response, "\"status\":\"permission-pending\"") != NULL ||
+        strstr(response, "\"status\":\"document-selection-pending\"") != NULL)
         return CP0_BROKER_UNAVAILABLE;
     if (strstr(response, "\"code\":\"denied\"") != NULL ||
         strstr(response, "\"code\":\"undeclared\"") != NULL ||
@@ -78,6 +81,7 @@ static int32_t decode_result(const char *response) {
         strstr(response, "\"code\":\"response-too-large\"") != NULL)
         return CP0_BROKER_RESOURCE_LIMIT;
     if (strstr(response, "\"code\":\"upstream-unavailable\"") != NULL ||
+        strstr(response, "\"code\":\"unavailable\"") != NULL ||
         strstr(response, "\"code\":\"timeout\"") != NULL ||
         strstr(response, "\"code\":\"tls\"") != NULL ||
         strstr(response, "\"code\":\"too-many-redirects\"") != NULL)
@@ -85,14 +89,19 @@ static int32_t decode_result(const char *response) {
     return CP0_BROKER_INTERNAL;
 }
 
-static int32_t broker_exchange(const char *request, size_t request_length,
-                               char *response, size_t response_capacity) {
+static int32_t broker_exchange_with_fd(const char *request,
+                                       size_t request_length, char *response,
+                                       size_t response_capacity,
+                                       int *received_descriptor) {
     struct sockaddr_un address;
     const struct timeval timeout = {.tv_sec = 6, .tv_usec = 0};
     const char *socket_path = getenv("CP0_BROKER_SOCKET");
     size_t response_length = 0;
     int descriptor = -1;
     int32_t result = CP0_BROKER_INTERNAL;
+
+    if (received_descriptor != NULL)
+        *received_descriptor = -1;
 
     if (request == NULL || request_length == 0U || response == NULL ||
         response_capacity < 2U)
@@ -128,14 +137,58 @@ static int32_t broker_exchange(const char *request, size_t request_length,
         goto cleanup;
 
     while (response_length < response_capacity - 1U) {
-        ssize_t count = read(descriptor, response + response_length,
-                             response_capacity - 1U - response_length);
+        union {
+            struct cmsghdr alignment;
+            unsigned char bytes[CMSG_SPACE(sizeof(int))];
+        } control = {0};
+        struct iovec io_vector = {
+            .iov_base = response + response_length,
+            .iov_len = response_capacity - 1U - response_length,
+        };
+        struct msghdr message = {
+            .msg_iov = &io_vector,
+            .msg_iovlen = 1,
+            .msg_control = control.bytes,
+            .msg_controllen = sizeof(control.bytes),
+        };
+        ssize_t count = recvmsg(descriptor, &message, 0);
         if (count < 0 && errno == EINTR)
             continue;
         if (count < 0)
             goto cleanup;
         if (count == 0)
             break;
+        for (struct cmsghdr *header = CMSG_FIRSTHDR(&message); header != NULL;
+             header = CMSG_NXTHDR(&message, header)) {
+            int passed_descriptor;
+            size_t data_bytes;
+            if (header->cmsg_level != SOL_SOCKET ||
+                header->cmsg_type != SCM_RIGHTS ||
+                header->cmsg_len < CMSG_LEN(0))
+                goto cleanup;
+            data_bytes = header->cmsg_len - CMSG_LEN(0);
+            if (data_bytes != sizeof(int)) {
+                size_t descriptor_count = data_bytes / sizeof(int);
+                for (size_t index = 0; index < descriptor_count; index++) {
+                    memcpy(&passed_descriptor,
+                           CMSG_DATA(header) + index * sizeof(int), sizeof(int));
+                    if (passed_descriptor >= 0)
+                        close(passed_descriptor);
+                }
+                goto cleanup;
+            }
+            memcpy(&passed_descriptor, CMSG_DATA(header), sizeof(int));
+            if (passed_descriptor < 0 || received_descriptor == NULL ||
+                *received_descriptor >= 0 ||
+                fcntl(passed_descriptor, F_SETFD, FD_CLOEXEC) != 0) {
+                if (passed_descriptor >= 0)
+                    close(passed_descriptor);
+                goto cleanup;
+            }
+            *received_descriptor = passed_descriptor;
+        }
+        if ((message.msg_flags & (MSG_CTRUNC | MSG_TRUNC)) != 0)
+            goto cleanup;
         response_length += (size_t)count;
         if (memchr(response, '\n', response_length) != NULL)
             break;
@@ -146,8 +199,19 @@ static int32_t broker_exchange(const char *request, size_t request_length,
     result = CP0_BROKER_OK;
 
 cleanup:
+    if (result != CP0_BROKER_OK && received_descriptor != NULL &&
+        *received_descriptor >= 0) {
+        close(*received_descriptor);
+        *received_descriptor = -1;
+    }
     close(descriptor);
     return result;
+}
+
+static int32_t broker_exchange(const char *request, size_t request_length,
+                               char *response, size_t response_capacity) {
+    return broker_exchange_with_fd(request, request_length, response,
+                                   response_capacity, NULL);
 }
 
 static const char *json_string_field(const char *response, const char *field,
@@ -192,6 +256,30 @@ static bool json_u16_field(const char *response, const char *field,
         (*end != ',' && *end != '}'))
         return false;
     *value = (uint16_t)parsed;
+    return true;
+}
+
+static bool json_u32_field(const char *response, const char *field,
+                           uint32_t *value) {
+    char key[64];
+    const char *start;
+    char *end;
+    unsigned long long parsed;
+    int written;
+
+    written = snprintf(key, sizeof(key), "\"%s\":", field);
+    if (written <= 0 || (size_t)written >= sizeof(key))
+        return false;
+    start = strstr(response, key);
+    if (start == NULL)
+        return false;
+    start += (size_t)written;
+    errno = 0;
+    parsed = strtoull(start, &end, 10);
+    if (errno != 0 || end == start || parsed > UINT32_MAX ||
+        (*end != ',' && *end != '}'))
+        return false;
+    *value = (uint32_t)parsed;
     return true;
 }
 
@@ -330,4 +418,67 @@ int64_t cp0_broker_http_get(const uint8_t *url, size_t url_length,
     if (result != CP0_BROKER_OK)
         return result;
     return cp0_broker_decode_http_response(response, body, body_capacity);
+}
+
+int32_t cp0_broker_decode_document_response(const char *response,
+                                            int received_descriptor,
+                                            int *descriptor,
+                                            uint32_t *size_bytes) {
+    const char *document_id;
+    size_t document_id_length;
+    uint32_t decoded_size;
+
+    if (response == NULL || descriptor == NULL || size_bytes == NULL) {
+        if (received_descriptor >= 0)
+            close(received_descriptor);
+        return CP0_BROKER_INVALID_ARGUMENT;
+    }
+    *descriptor = -1;
+    *size_bytes = 0;
+    if (strstr(response, "\"status\":\"document-opened\"") == NULL) {
+        if (received_descriptor >= 0)
+            close(received_descriptor);
+        return decode_result(response);
+    }
+    document_id = json_string_field(response, "document_id",
+                                    &document_id_length);
+    if (received_descriptor < 0 || document_id == NULL ||
+        document_id_length != CP0_DOCUMENT_ID_BYTES ||
+        !json_u32_field(response, "size_bytes", &decoded_size) ||
+        decoded_size > CP0_DOCUMENT_MAX_BYTES) {
+        if (received_descriptor >= 0)
+            close(received_descriptor);
+        return CP0_BROKER_INTERNAL;
+    }
+    for (size_t index = 0; index < document_id_length; index++) {
+        char byte = document_id[index];
+        if (!((byte >= '0' && byte <= '9') ||
+              (byte >= 'a' && byte <= 'f'))) {
+            close(received_descriptor);
+            return CP0_BROKER_INTERNAL;
+        }
+    }
+    *descriptor = received_descriptor;
+    *size_bytes = decoded_size;
+    return CP0_BROKER_OK;
+}
+
+int32_t cp0_broker_open_document(int *descriptor, uint32_t *size_bytes) {
+    static const char request[] =
+        "{\"protocol_version\":1,\"request_id\":3,\"command\":{"
+        "\"name\":\"open-document\"}}\n";
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int received_descriptor = -1;
+    int32_t result;
+
+    if (descriptor == NULL || size_bytes == NULL)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    *descriptor = -1;
+    *size_bytes = 0;
+    result = broker_exchange_with_fd(request, sizeof(request) - 1U, response,
+                                     sizeof(response), &received_descriptor);
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_document_response(
+        response, received_descriptor, descriptor, size_bytes);
 }

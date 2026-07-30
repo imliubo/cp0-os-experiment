@@ -15,8 +15,9 @@ case "$staging" in
         ;;
 esac
 
-for file in cp0-appd cp0-networkd cp0ctl cardputerzero-app-runtime app.json hello-card.wasm \
-    cardputerzero-appd.service cardputerzero-networkd.service \
+for file in cp0-appd cp0-documentd cp0-networkd cp0ctl cardputerzero-app-runtime app.json hello-card.wasm \
+    cardputerzero-appd.service cardputerzero-documentd.service \
+    cardputerzero-documentd.socket cardputerzero-networkd.service \
     cardputerzero-networkd.socket; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
         echo "error: invalid staged file: $file" >&2
@@ -27,6 +28,7 @@ done
 systemctl stop cardputerzero-app-20000.service 2>/dev/null || :
 systemctl stop cardputerzero-appd.service
 systemctl stop cardputerzero-networkd.service 2>/dev/null || :
+systemctl stop cardputerzero-documentd.service 2>/dev/null || :
 if ! getent group cp0-network >/dev/null 2>&1; then
     groupadd --system cp0-network
 fi
@@ -34,10 +36,28 @@ if ! id cp0-network >/dev/null 2>&1; then
     useradd --system --gid cp0-network --home-dir /nonexistent \
         --shell /usr/sbin/nologin cp0-network
 fi
+if ! getent group cp0-document >/dev/null 2>&1; then
+    groupadd --system cp0-document
+fi
+if ! id cp0-document >/dev/null 2>&1; then
+    useradd --system --gid cp0-document --home-dir /nonexistent \
+        --shell /usr/sbin/nologin cp0-document
+fi
+install -d -o cp0-document -g cp0-document -m 0750 \
+    /var/lib/cardputerzero/documents
+if [ ! -e /var/lib/cardputerzero/documents/welcome.txt ]; then
+    printf '%s\n' 'CardputerZero Document Portal is ready.' \
+        >/var/lib/cardputerzero/documents/welcome.txt
+    chown cp0-document:cp0-document \
+        /var/lib/cardputerzero/documents/welcome.txt
+    chmod 0640 /var/lib/cardputerzero/documents/welcome.txt
+fi
 install -o root -g root -m 0755 "$staging/cp0-appd" \
     /usr/libexec/cardputerzero/cp0-appd
 install -o root -g root -m 0755 "$staging/cp0-networkd" \
     /usr/libexec/cardputerzero/cp0-networkd
+install -o root -g root -m 0755 "$staging/cp0-documentd" \
+    /usr/libexec/cardputerzero/cp0-documentd
 install -o root -g root -m 0755 "$staging/cp0ctl" /usr/bin/cp0ctl
 install -o root -g root -m 0755 "$staging/cardputerzero-app-runtime" \
     /usr/libexec/cardputerzero/app-runtime
@@ -51,16 +71,23 @@ install -o root -g root -m 0644 "$staging/cardputerzero-networkd.service" \
     /etc/systemd/system/cardputerzero-networkd.service
 install -o root -g root -m 0644 "$staging/cardputerzero-networkd.socket" \
     /etc/systemd/system/cardputerzero-networkd.socket
+install -o root -g root -m 0644 "$staging/cardputerzero-documentd.service" \
+    /etc/systemd/system/cardputerzero-documentd.service
+install -o root -g root -m 0644 "$staging/cardputerzero-documentd.socket" \
+    /etc/systemd/system/cardputerzero-documentd.socket
 systemctl daemon-reload
 systemctl enable --now cardputerzero-networkd.socket
+systemctl enable --now cardputerzero-documentd.socket
 systemctl start cardputerzero-appd.service
 
 systemctl is-active --quiet cardputerzero-appd.service
 systemctl is-active --quiet cardputerzero-networkd.socket
+systemctl is-active --quiet cardputerzero-documentd.socket
 systemctl is-active --quiet cardputerzero-compositor.service
 systemctl is-active --quiet cardputerzero-system-shell.service
 sha256sum \
     /usr/libexec/cardputerzero/cp0-appd \
+    /usr/libexec/cardputerzero/cp0-documentd \
     /usr/libexec/cardputerzero/cp0-networkd \
     /usr/bin/cp0ctl \
     /usr/libexec/cardputerzero/app-runtime \

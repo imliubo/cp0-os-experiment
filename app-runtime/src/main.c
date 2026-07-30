@@ -1,5 +1,6 @@
 #include "hostcalls.h"
 #include "display.h"
+#include "document.h"
 #include "seccomp.h"
 
 #include <errno.h>
@@ -150,6 +151,7 @@ display_cleanup:
 runtime_cleanup:
     wasm_runtime_destroy();
 cleanup:
+    cp0_document_destroy();
     free(module_bytes);
     return result;
 }

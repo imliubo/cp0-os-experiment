@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/cp0-appd",
+    "crates/cp0-document-protocol",
+    "crates/cp0-documentd",
     "crates/cp0-manifest",
     "crates/cp0-network-protocol",
     "crates/cp0-networkd",

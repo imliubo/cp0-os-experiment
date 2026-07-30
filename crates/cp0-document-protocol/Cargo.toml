@@ -1,0 +1,11 @@
+[package]
+name = "cp0-document-protocol"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true

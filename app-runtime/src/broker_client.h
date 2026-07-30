@@ -19,5 +19,10 @@ int64_t cp0_broker_http_get(const uint8_t *url, size_t url_length,
                             uint8_t *body, size_t body_capacity);
 int64_t cp0_broker_decode_http_response(const char *response, uint8_t *body,
                                         size_t body_capacity);
+int32_t cp0_broker_open_document(int *descriptor, uint32_t *size_bytes);
+int32_t cp0_broker_decode_document_response(const char *response,
+                                            int received_descriptor,
+                                            int *descriptor,
+                                            uint32_t *size_bytes);
 
 #endif

@@ -111,8 +111,14 @@ URL、5 秒总超时、2 次重定向和 2048 字节响应体的同步 HTTPS GET
 NAT64/Teredo 等非公网目标，TLS 证书校验不可关闭。appd 在网络 I/O 前完成调用者
 UID/cgroup、manifest 和权限验证并释放共享状态锁。
 
-文件共享不暴露路径，通过 Document Portal 返回受限文件描述符。应用间调用通过
-Intent Broker 路由，接收方必须显式声明 Intent，不提供任意应用间 socket。
+文件共享不暴露路径。`cp0-documentd` 以专用账户只读枚举最多 16 个共享文档，可信
+Shell 显示单前台选择器；应用请求不包含路径或文档 ID。选择结果先绑定到 appd 的
+可信快照，再由 documentd 使用 `openat(O_NOFOLLOW)` 和 device/inode 二次校验打开。
+只读 FD 通过两段 `SCM_RIGHTS` 传入 Runtime，WASM 只得到单个代际句柄、文件长度和
+每次最多 4096 字节的偏移读取 API。首版文档上限为 16 MiB。
+
+应用间调用通过 Intent Broker 路由，接收方必须显式声明 Intent，不提供任意应用间
+socket。
 
 ## 7. 包与应用商店
 

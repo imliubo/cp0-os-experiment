@@ -1,21 +1,25 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io::BufReader;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use cp0_document_protocol::{DocumentErrorCode as ServiceDocumentErrorCode, send_frame_with_fd};
 use cp0_manifest::Permission;
 use cp0_network_protocol::NetworkErrorCode as ServiceNetworkErrorCode;
 
 use crate::protocol::APPD_PROTOCOL_VERSION;
 use crate::{
     AppManager, AppManagerError, AppSummary, AppdCommand, AppdRequest, AppdResponse, BrokerCommand,
-    BrokerErrorCode, BrokerProtocolError, BrokerRequest, BrokerResponse, ErrorCode, NetworkClient,
-    NetworkClientError, NotificationQueue, PermissionChoice, PermissionCoordinator,
-    PermissionPromptError, PermissionRequestResult, ResponseData, peer_credentials,
-    read_broker_request, read_request, write_broker_response, write_response,
+    BrokerErrorCode, BrokerProtocolError, BrokerRequest, BrokerResponse, DocumentClient,
+    DocumentClientError, DocumentCoordinator, DocumentPromptError, DocumentRequestResult,
+    ErrorCode, NetworkClient, NetworkClientError, NotificationQueue, PermissionChoice,
+    PermissionCoordinator, PermissionPromptError, PermissionRequestResult, ResponseData,
+    encode_broker_response, peer_credentials, read_broker_request, read_request,
+    write_broker_response, write_response,
 };
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -51,6 +55,7 @@ pub struct AppdServer {
     state: Arc<Mutex<ServerState>>,
     trusted_uids: BTreeSet<u32>,
     network: NetworkClient,
+    documents: DocumentClient,
 }
 
 #[derive(Debug)]
@@ -58,6 +63,7 @@ struct ServerState {
     manager: AppManager,
     permissions: PermissionCoordinator,
     notifications: NotificationQueue,
+    document_prompts: DocumentCoordinator,
 }
 
 impl AppdServer {
@@ -66,7 +72,13 @@ impl AppdServer {
         permissions: PermissionCoordinator,
         trusted_uids: impl IntoIterator<Item = u32>,
     ) -> Self {
-        Self::new_with_network(manager, permissions, trusted_uids, NetworkClient::default())
+        Self::new_with_services(
+            manager,
+            permissions,
+            trusted_uids,
+            NetworkClient::default(),
+            DocumentClient::default(),
+        )
     }
 
     pub fn new_with_network(
@@ -75,14 +87,32 @@ impl AppdServer {
         trusted_uids: impl IntoIterator<Item = u32>,
         network: NetworkClient,
     ) -> Self {
+        Self::new_with_services(
+            manager,
+            permissions,
+            trusted_uids,
+            network,
+            DocumentClient::default(),
+        )
+    }
+
+    pub fn new_with_services(
+        manager: AppManager,
+        permissions: PermissionCoordinator,
+        trusted_uids: impl IntoIterator<Item = u32>,
+        network: NetworkClient,
+        documents: DocumentClient,
+    ) -> Self {
         Self {
             state: Arc::new(Mutex::new(ServerState {
                 manager,
                 permissions,
                 notifications: NotificationQueue::default(),
+                document_prompts: DocumentCoordinator::default(),
             })),
             trusted_uids: trusted_uids.into_iter().collect(),
             network,
+            documents,
         }
     }
 
@@ -184,6 +214,7 @@ impl AppdServer {
             AppdCommand::Stop { app_id } => match state.manager.stop(&app_id) {
                 Ok(()) => {
                     state.permissions.clear_app_session(&app_id);
+                    state.document_prompts.clear_app(&app_id);
                     Ok(ResponseData::Stopped { app_id })
                 }
                 Err(error) => Err(CommandError::Manager(error)),
@@ -210,6 +241,21 @@ impl AppdServer {
             AppdCommand::TakeNotification => Ok(ResponseData::NextNotification {
                 notification: state.notifications.take(),
             }),
+            AppdCommand::GetDocumentPrompt => Ok(ResponseData::PendingDocument {
+                prompt: state.document_prompts.pending().cloned(),
+            }),
+            AppdCommand::ResolveDocument {
+                prompt_id,
+                document_id,
+            } => state
+                .document_prompts
+                .resolve(prompt_id, document_id.as_deref())
+                .map(|(app_id, document_id)| ResponseData::DocumentResolved {
+                    prompt_id,
+                    app_id,
+                    document_id,
+                })
+                .map_err(CommandError::Document),
         };
         match result {
             Ok(data) => AppdResponse::success(request_id, data),
@@ -289,8 +335,18 @@ impl AppdServer {
                 return Ok(());
             }
         };
-        let response = self.dispatch_broker(credentials, request);
-        write_broker_response(&mut stream, &response).map_err(broker_io)
+        let dispatch = if matches!(&request.command, BrokerCommand::OpenDocument) {
+            self.dispatch_document(credentials, request.request_id)
+        } else {
+            BrokerDispatch::response(self.dispatch_broker(credentials, request))
+        };
+        if let Some(descriptor) = dispatch.descriptor {
+            let frame = encode_broker_response(&dispatch.response).map_err(broker_io)?;
+            send_frame_with_fd(&mut stream, &frame, descriptor.as_fd())
+                .map_err(document_protocol_io)
+        } else {
+            write_broker_response(&mut stream, &dispatch.response).map_err(broker_io)
+        }
     }
 
     fn dispatch_broker(
@@ -346,6 +402,143 @@ impl AppdServer {
                     Err(error) => {
                         eprintln!("cp0-appd: network service request failed: {error}");
                         network_error_response(request_id, &error)
+                    }
+                }
+            }
+            BrokerCommand::OpenDocument => unreachable!("document requests carry descriptors"),
+        }
+    }
+
+    fn dispatch_document(&self, peer: crate::PeerCredentials, request_id: u64) -> BrokerDispatch {
+        let app = match self.authorize_broker_caller(peer, request_id, Permission::DocumentsOpen) {
+            Ok(app) => app,
+            Err(response) => return BrokerDispatch::response(response),
+        };
+
+        let state_result = match self.state.lock() {
+            Ok(mut state) => state.document_prompts.poll(&app.app_id),
+            Err(_) => {
+                return BrokerDispatch::response(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "application service state is unavailable",
+                ));
+            }
+        };
+        match state_result {
+            Ok(DocumentRequestResult::Selected(document_id)) => {
+                match self.documents.open(request_id, &document_id) {
+                    Ok(opened) => BrokerDispatch {
+                        response: BrokerResponse::document_opened(
+                            request_id,
+                            opened.summary.document_id,
+                            opened.summary.size_bytes,
+                        ),
+                        descriptor: Some(opened.descriptor),
+                    },
+                    Err(error) => {
+                        eprintln!("cp0-appd: document service open failed: {error}");
+                        BrokerDispatch::response(document_error_response(request_id, &error))
+                    }
+                }
+            }
+            Ok(DocumentRequestResult::Cancelled) => {
+                BrokerDispatch::response(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Denied,
+                    "document selection was cancelled",
+                ))
+            }
+            Ok(DocumentRequestResult::Pending(prompt)) => BrokerDispatch::response(
+                BrokerResponse::document_selection_pending(request_id, prompt.prompt_id),
+            ),
+            Err(DocumentPromptError::Busy(_)) => BrokerDispatch::response(BrokerResponse::error(
+                request_id,
+                BrokerErrorCode::ResourceExhausted,
+                "another document selection is pending",
+            )),
+            Err(error) => {
+                eprintln!("cp0-appd: document selection state failed: {error}");
+                BrokerDispatch::response(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "document selection state is unavailable",
+                ))
+            }
+            Ok(DocumentRequestResult::NeedsDocuments) => {
+                let documents = match self.documents.list(request_id) {
+                    Ok(documents) => documents,
+                    Err(error) => {
+                        eprintln!("cp0-appd: document service list failed: {error}");
+                        return BrokerDispatch::response(document_error_response(
+                            request_id, &error,
+                        ));
+                    }
+                };
+                let selection = match self.state.lock() {
+                    Ok(mut state) => {
+                        state
+                            .document_prompts
+                            .request(&app.app_id, &app.app_name, documents)
+                    }
+                    Err(_) => {
+                        return BrokerDispatch::response(BrokerResponse::error(
+                            request_id,
+                            BrokerErrorCode::Internal,
+                            "application service state is unavailable",
+                        ));
+                    }
+                };
+                match selection {
+                    Ok(DocumentRequestResult::Pending(prompt)) => BrokerDispatch::response(
+                        BrokerResponse::document_selection_pending(request_id, prompt.prompt_id),
+                    ),
+                    Ok(DocumentRequestResult::Selected(document_id)) => {
+                        match self.documents.open(request_id, &document_id) {
+                            Ok(opened) => BrokerDispatch {
+                                response: BrokerResponse::document_opened(
+                                    request_id,
+                                    opened.summary.document_id,
+                                    opened.summary.size_bytes,
+                                ),
+                                descriptor: Some(opened.descriptor),
+                            },
+                            Err(error) => BrokerDispatch::response(document_error_response(
+                                request_id, &error,
+                            )),
+                        }
+                    }
+                    Ok(DocumentRequestResult::Cancelled) => {
+                        BrokerDispatch::response(BrokerResponse::error(
+                            request_id,
+                            BrokerErrorCode::Denied,
+                            "document selection was cancelled",
+                        ))
+                    }
+                    Ok(DocumentRequestResult::NeedsDocuments) => {
+                        BrokerDispatch::response(BrokerResponse::error(
+                            request_id,
+                            BrokerErrorCode::Internal,
+                            "document selection could not be created",
+                        ))
+                    }
+                    Err(DocumentPromptError::EmptyDocumentList) => {
+                        BrokerDispatch::response(BrokerResponse::error(
+                            request_id,
+                            BrokerErrorCode::Unavailable,
+                            "no documents are available",
+                        ))
+                    }
+                    Err(DocumentPromptError::Busy(prompt)) => BrokerDispatch::response(
+                        BrokerResponse::document_selection_pending(request_id, prompt.prompt_id),
+                    ),
+                    Err(error) => {
+                        eprintln!("cp0-appd: document prompt creation failed: {error}");
+                        BrokerDispatch::response(BrokerResponse::error(
+                            request_id,
+                            BrokerErrorCode::Internal,
+                            "document selection could not be created",
+                        ))
                     }
                 }
             }
@@ -477,9 +670,25 @@ struct AuthorizedApp {
 }
 
 #[derive(Debug)]
+struct BrokerDispatch {
+    response: BrokerResponse,
+    descriptor: Option<OwnedFd>,
+}
+
+impl BrokerDispatch {
+    fn response(response: BrokerResponse) -> Self {
+        Self {
+            response,
+            descriptor: None,
+        }
+    }
+}
+
+#[derive(Debug)]
 enum CommandError {
     Manager(AppManagerError),
     Permission(PermissionPromptError),
+    Document(DocumentPromptError),
 }
 
 impl fmt::Display for CommandError {
@@ -487,6 +696,7 @@ impl fmt::Display for CommandError {
         match self {
             Self::Manager(error) => write!(formatter, "{error}"),
             Self::Permission(error) => write!(formatter, "{error}"),
+            Self::Document(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -521,6 +731,27 @@ fn command_error_response(request_id: u64, error: &CommandError) -> AppdResponse
             request_id,
             ErrorCode::Internal,
             "permission decision could not be saved",
+        ),
+        CommandError::Document(DocumentPromptError::NoPendingPrompt)
+        | CommandError::Document(DocumentPromptError::StalePrompt) => AppdResponse::error(
+            request_id,
+            ErrorCode::NotFound,
+            "document prompt is missing or stale",
+        ),
+        CommandError::Document(DocumentPromptError::InvalidSelection) => AppdResponse::error(
+            request_id,
+            ErrorCode::InvalidRequest,
+            "selected document is not in the trusted prompt",
+        ),
+        CommandError::Document(DocumentPromptError::Busy(_)) => AppdResponse::error(
+            request_id,
+            ErrorCode::ResourceExhausted,
+            "another document prompt is already pending",
+        ),
+        CommandError::Document(DocumentPromptError::EmptyDocumentList) => AppdResponse::error(
+            request_id,
+            ErrorCode::NotFound,
+            "no documents are available",
         ),
     }
 }
@@ -598,6 +829,38 @@ fn network_error_response(request_id: u64, error: &NetworkClientError) -> Broker
     BrokerResponse::error(request_id, code, message)
 }
 
+fn document_error_response(request_id: u64, error: &DocumentClientError) -> BrokerResponse {
+    let (code, message) = match error {
+        DocumentClientError::Service(ServiceDocumentErrorCode::InvalidRequest) => (
+            BrokerErrorCode::InvalidRequest,
+            "selected document is invalid",
+        ),
+        DocumentClientError::Service(ServiceDocumentErrorCode::NotFound) => (
+            BrokerErrorCode::Unavailable,
+            "selected document is no longer available",
+        ),
+        DocumentClientError::Service(ServiceDocumentErrorCode::ResourceExhausted) => (
+            BrokerErrorCode::ResourceExhausted,
+            "document service resource limit was reached",
+        ),
+        DocumentClientError::Io(_) | DocumentClientError::EmptyResponse => (
+            BrokerErrorCode::Unavailable,
+            "document service is unavailable",
+        ),
+        DocumentClientError::Protocol(_)
+        | DocumentClientError::MismatchedRequestId
+        | DocumentClientError::MissingDescriptor
+        | DocumentClientError::UnexpectedDescriptor
+        | DocumentClientError::MismatchedDocument
+        | DocumentClientError::Service(ServiceDocumentErrorCode::Unauthorized)
+        | DocumentClientError::Service(ServiceDocumentErrorCode::Internal) => (
+            BrokerErrorCode::Internal,
+            "document service returned an invalid response",
+        ),
+    };
+    BrokerResponse::error(request_id, code, message)
+}
+
 fn protocol_io(error: crate::ProtocolError) -> ServerError {
     match error {
         crate::ProtocolError::Io(error) => ServerError::Io(error),
@@ -611,6 +874,16 @@ fn protocol_io(error: crate::ProtocolError) -> ServerError {
 fn broker_io(error: BrokerProtocolError) -> ServerError {
     match error {
         BrokerProtocolError::Io(error) => ServerError::Io(error),
+        other => ServerError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            other.to_string(),
+        )),
+    }
+}
+
+fn document_protocol_io(error: cp0_document_protocol::DocumentProtocolError) -> ServerError {
+    match error {
+        cp0_document_protocol::DocumentProtocolError::Io(error) => ServerError::Io(error),
         other => ServerError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             other.to_string(),

@@ -38,6 +38,7 @@ int cp0_install_runtime_seccomp(void) {
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
                  (uint32_t)offsetof(struct seccomp_data, nr)),
         CP0_ALLOW_SYSCALL(read),
+        CP0_ALLOW_SYSCALL(pread64),
         CP0_ALLOW_SYSCALL(write),
         CP0_ALLOW_SYSCALL(close),
         CP0_ALLOW_SYSCALL(connect),

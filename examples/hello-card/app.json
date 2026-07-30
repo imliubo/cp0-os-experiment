@@ -19,6 +19,10 @@
     {
       "name": "network.client",
       "reason": "Run the user-requested HTTPS connectivity check"
+    },
+    {
+      "name": "documents.open",
+      "reason": "Open a document selected in the trusted system picker"
     }
   ]
 }

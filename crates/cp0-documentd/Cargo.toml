@@ -1,13 +1,10 @@
 [package]
-name = "cp0-appd"
+name = "cp0-documentd"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
+publish = false
 
 [dependencies]
 cp0-document-protocol = { path = "../cp0-document-protocol" }
-cp0-manifest = { path = "../cp0-manifest" }
-cp0-network-protocol = { path = "../cp0-network-protocol" }
 libc.workspace = true
-serde.workspace = true
-serde_json.workspace = true

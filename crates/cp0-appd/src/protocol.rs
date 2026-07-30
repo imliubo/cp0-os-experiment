@@ -6,7 +6,7 @@ use std::os::unix::net::UnixStream;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Notification, PermissionChoice, PermissionPrompt};
+use crate::{DocumentPrompt, Notification, PermissionChoice, PermissionPrompt};
 
 pub const APPD_PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024;
@@ -44,6 +44,11 @@ pub enum AppdCommand {
         permission: cp0_manifest::Permission,
     },
     TakeNotification,
+    GetDocumentPrompt,
+    ResolveDocument {
+        prompt_id: u64,
+        document_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +97,14 @@ pub enum ResponseData {
     NextNotification {
         notification: Option<Notification>,
     },
+    PendingDocument {
+        prompt: Option<DocumentPrompt>,
+    },
+    DocumentResolved {
+        prompt_id: u64,
+        app_id: String,
+        document_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +139,7 @@ pub enum ProtocolError {
     InvalidAppId,
     InvalidPagination,
     InvalidPromptId,
+    InvalidDocumentId,
 }
 
 impl fmt::Display for ProtocolError {
@@ -153,6 +167,7 @@ impl fmt::Display for ProtocolError {
                 formatter.write_str("application list limit must be between 1 and 8")
             }
             Self::InvalidPromptId => formatter.write_str("permission prompt ID must be non-zero"),
+            Self::InvalidDocumentId => formatter.write_str("invalid document ID"),
         }
     }
 }
@@ -199,6 +214,15 @@ impl AppdRequest {
             }
             AppdCommand::ResolvePermission { prompt_id: 0, .. } => {
                 Err(ProtocolError::InvalidPromptId)
+            }
+            AppdCommand::ResolveDocument { prompt_id: 0, .. } => {
+                Err(ProtocolError::InvalidPromptId)
+            }
+            AppdCommand::ResolveDocument {
+                document_id: Some(document_id),
+                ..
+            } if !cp0_document_protocol::is_valid_document_id(document_id) => {
+                Err(ProtocolError::InvalidDocumentId)
             }
             _ => Ok(()),
         }
@@ -421,6 +445,37 @@ mod tests {
         assert!(matches!(
             invalid.validate(),
             Err(ProtocolError::InvalidPromptId)
+        ));
+    }
+
+    #[test]
+    fn validates_document_resolution_against_opaque_ids() {
+        let request = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 79,
+            command: AppdCommand::ResolveDocument {
+                prompt_id: 3,
+                document_id: Some("00000000000000010000000000000002".into()),
+            },
+        };
+        let mut encoded = Vec::new();
+        write_request(&mut encoded, &request).unwrap();
+        assert_eq!(
+            read_request(&mut Cursor::new(encoded)).unwrap(),
+            Some(request)
+        );
+
+        let invalid = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 80,
+            command: AppdCommand::ResolveDocument {
+                prompt_id: 3,
+                document_id: Some("../../etc/passwd".into()),
+            },
+        };
+        assert!(matches!(
+            invalid.validate(),
+            Err(ProtocolError::InvalidDocumentId)
         ));
     }
 

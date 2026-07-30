@@ -23,6 +23,7 @@ pub struct BrokerRequest {
 pub enum BrokerCommand {
     PostNotification { title: String, body: String },
     HttpGet { url: String },
+    OpenDocument,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +47,13 @@ pub enum BrokerOutcome {
     PermissionPending {
         prompt_id: u64,
     },
+    DocumentSelectionPending {
+        prompt_id: u64,
+    },
+    DocumentOpened {
+        document_id: String,
+        size_bytes: u64,
+    },
     Error {
         code: BrokerErrorCode,
         message: String,
@@ -60,6 +68,7 @@ pub enum BrokerErrorCode {
     Undeclared,
     Denied,
     ResourceExhausted,
+    Unavailable,
     BlockedAddress,
     UpstreamUnavailable,
     Timeout,
@@ -89,6 +98,7 @@ pub enum BrokerProtocolError {
     InvalidNotification,
     InvalidUrl,
     InvalidNetworkResponse,
+    InvalidDocumentResponse,
 }
 
 impl fmt::Display for BrokerProtocolError {
@@ -111,6 +121,9 @@ impl fmt::Display for BrokerProtocolError {
             ),
             Self::InvalidUrl => formatter.write_str("invalid or oversized HTTPS URL"),
             Self::InvalidNetworkResponse => formatter.write_str("invalid bounded HTTPS response"),
+            Self::InvalidDocumentResponse => {
+                formatter.write_str("invalid bounded document response")
+            }
         }
     }
 }
@@ -180,6 +193,25 @@ impl BrokerResponse {
         }
     }
 
+    pub fn document_selection_pending(request_id: u64, prompt_id: u64) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::DocumentSelectionPending { prompt_id },
+        }
+    }
+
+    pub fn document_opened(request_id: u64, document_id: String, size_bytes: u64) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::DocumentOpened {
+                document_id,
+                size_bytes,
+            },
+        }
+    }
+
     pub fn validate(&self) -> Result<(), BrokerProtocolError> {
         if self.protocol_version != BROKER_PROTOCOL_VERSION {
             return Err(BrokerProtocolError::UnsupportedVersion(
@@ -196,6 +228,15 @@ impl BrokerResponse {
             {
                 return Err(BrokerProtocolError::InvalidNetworkResponse);
             }
+        }
+        if let BrokerOutcome::DocumentOpened {
+            document_id,
+            size_bytes,
+        } = &self.outcome
+            && (!cp0_document_protocol::is_valid_document_id(document_id)
+                || *size_bytes > cp0_document_protocol::MAX_DOCUMENT_BYTES)
+        {
+            return Err(BrokerProtocolError::InvalidDocumentResponse);
         }
         Ok(())
     }
@@ -246,19 +287,31 @@ pub fn write_broker_response(
     writer: &mut impl Write,
     response: &BrokerResponse,
 ) -> Result<(), BrokerProtocolError> {
+    let encoded = encode_broker_response(response)?;
+    writer.write_all(&encoded)?;
+    writer.flush()?;
+    Ok(())
+}
+
+pub fn encode_broker_response(response: &BrokerResponse) -> Result<Vec<u8>, BrokerProtocolError> {
     response.validate()?;
-    write_value(writer, response)
+    encode_value(response)
 }
 
 fn write_value(writer: &mut impl Write, value: &impl Serialize) -> Result<(), BrokerProtocolError> {
-    let encoded = serde_json::to_vec(value)?;
+    let encoded = encode_value(value)?;
+    writer.write_all(&encoded)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn encode_value(value: &impl Serialize) -> Result<Vec<u8>, BrokerProtocolError> {
+    let mut encoded = serde_json::to_vec(value)?;
     if encoded.len() + 1 > MAX_BROKER_FRAME_BYTES {
         return Err(BrokerProtocolError::FrameTooLarge);
     }
-    writer.write_all(&encoded)?;
-    writer.write_all(b"\n")?;
-    writer.flush()?;
-    Ok(())
+    encoded.push(b'\n');
+    Ok(encoded)
 }
 
 fn read_frame(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, BrokerProtocolError> {
@@ -444,5 +497,28 @@ mod tests {
         let mut maximum_frame = Vec::new();
         write_broker_response(&mut maximum_frame, &maximum).unwrap();
         assert!(maximum_frame.len() <= MAX_BROKER_FRAME_BYTES);
+    }
+
+    #[test]
+    fn validates_descriptor_backed_document_response() {
+        let request = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 3,
+            command: BrokerCommand::OpenDocument,
+        };
+        let mut encoded = Vec::new();
+        write_broker_request(&mut encoded, &request).unwrap();
+        assert_eq!(
+            read_broker_request(&mut Cursor::new(encoded)).unwrap(),
+            Some(request)
+        );
+        let response =
+            BrokerResponse::document_opened(3, "00000000000000010000000000000002".into(), 1024);
+        assert!(response.validate().is_ok());
+        assert!(
+            BrokerResponse::document_opened(3, "../../etc/passwd".into(), 1)
+                .validate()
+                .is_err()
+        );
     }
 }
