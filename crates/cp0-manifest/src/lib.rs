@@ -110,7 +110,7 @@ pub fn validate(manifest: &AppManifest) -> Result<(), Vec<String>> {
             manifest.schema_version
         ));
     }
-    if !valid_app_id(&manifest.id) {
+    if !is_valid_app_id(&manifest.id) {
         errors.push("id must be a lowercase reverse-domain name with at least three parts".into());
     }
     let name_len = manifest.name.chars().count();
@@ -161,7 +161,7 @@ pub fn validate(manifest: &AppManifest) -> Result<(), Vec<String>> {
     }
 }
 
-fn valid_app_id(id: &str) -> bool {
+pub fn is_valid_app_id(id: &str) -> bool {
     if id.len() > 128 {
         return false;
     }

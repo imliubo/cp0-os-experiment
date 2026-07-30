@@ -4,6 +4,12 @@ use std::path::{Component, Path, PathBuf};
 use cp0_manifest::AppManifest;
 use serde::Serialize;
 
+mod registry;
+
+pub use registry::{
+    AppAccount, AppRegistry, FIRST_APP_ACCOUNT_ID, LAST_APP_ACCOUNT_ID, RegistryError,
+};
+
 pub const DEFAULT_APPS_ROOT: &str = "/var/lib/cardputerzero/apps";
 pub const DEFAULT_DATA_ROOT: &str = "/var/lib/cardputerzero/data";
 pub const DEFAULT_RUNTIME: &str = "/usr/libexec/cardputerzero/app-runtime";
