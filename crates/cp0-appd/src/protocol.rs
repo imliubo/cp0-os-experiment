@@ -6,6 +6,8 @@ use std::os::unix::net::UnixStream;
 
 use serde::{Deserialize, Serialize};
 
+use crate::{PermissionChoice, PermissionPrompt};
+
 pub const APPD_PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024;
 
@@ -21,9 +23,21 @@ pub struct AppdRequest {
 #[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum AppdCommand {
     Ping,
-    List { offset: u16, limit: u8 },
-    Start { app_id: String },
-    Stop { app_id: String },
+    List {
+        offset: u16,
+        limit: u8,
+    },
+    Start {
+        app_id: String,
+    },
+    Stop {
+        app_id: String,
+    },
+    GetPermissionPrompt,
+    ResolvePermission {
+        prompt_id: u64,
+        choice: PermissionChoice,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +70,15 @@ pub enum ResponseData {
     Stopped {
         app_id: String,
     },
+    PendingPermission {
+        prompt: Option<PermissionPrompt>,
+    },
+    PermissionResolved {
+        prompt_id: u64,
+        app_id: String,
+        permission: cp0_manifest::Permission,
+        choice: PermissionChoice,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +110,7 @@ pub enum ProtocolError {
     UnsupportedVersion(u32),
     InvalidAppId,
     InvalidPagination,
+    InvalidPromptId,
 }
 
 impl fmt::Display for ProtocolError {
@@ -113,6 +137,7 @@ impl fmt::Display for ProtocolError {
             Self::InvalidPagination => {
                 formatter.write_str("application list limit must be between 1 and 32")
             }
+            Self::InvalidPromptId => formatter.write_str("permission prompt ID must be non-zero"),
         }
     }
 }
@@ -151,6 +176,9 @@ impl AppdRequest {
                 if !cp0_manifest::is_valid_app_id(app_id) =>
             {
                 Err(ProtocolError::InvalidAppId)
+            }
+            AppdCommand::ResolvePermission { prompt_id: 0, .. } => {
+                Err(ProtocolError::InvalidPromptId)
             }
             _ => Ok(()),
         }
@@ -343,6 +371,37 @@ mod tests {
         );
         let mut response_reader = Cursor::new(encoded);
         assert_eq!(read_response(&mut response_reader).unwrap(), Some(response));
+    }
+
+    #[test]
+    fn round_trips_permission_resolution() {
+        let request = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 77,
+            command: AppdCommand::ResolvePermission {
+                prompt_id: 9,
+                choice: PermissionChoice::AllowOnce,
+            },
+        };
+        let mut encoded = Vec::new();
+        write_request(&mut encoded, &request).unwrap();
+        assert_eq!(
+            read_request(&mut Cursor::new(encoded)).unwrap(),
+            Some(request)
+        );
+
+        let invalid = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 78,
+            command: AppdCommand::ResolvePermission {
+                prompt_id: 0,
+                choice: PermissionChoice::Deny,
+            },
+        };
+        assert!(matches!(
+            invalid.validate(),
+            Err(ProtocolError::InvalidPromptId)
+        ));
     }
 
     #[test]

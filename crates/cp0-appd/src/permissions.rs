@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Write};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -42,7 +43,8 @@ pub enum Authorization {
     Undeclared,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum PermissionChoice {
     AllowOnce,
     AllowAlways,
@@ -99,6 +101,22 @@ impl PermissionStore {
         let store: Self = serde_json::from_reader(BufReader::new(file))?;
         store.validate()?;
         Ok(store)
+    }
+
+    pub fn load_secure(path: impl AsRef<Path>) -> Result<Self, PermissionError> {
+        let path = path.as_ref();
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.file_type().is_file() {
+            return Err(PermissionError::Invalid(
+                "permission database must be a regular file, not a symbolic link".into(),
+            ));
+        }
+        if metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+            return Err(PermissionError::Invalid(
+                "permission database must be root-owned and not group/world writable".into(),
+            ));
+        }
+        Self::load(path)
     }
 
     pub fn save_atomic(&self, path: impl AsRef<Path>) -> Result<(), PermissionError> {
@@ -349,5 +367,21 @@ mod tests {
             reloaded.authorize(&manifest, Permission::NotificationsPost),
             Authorization::Allow
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_load_rejects_symbolic_links() {
+        use std::os::unix::fs::symlink;
+
+        let path = fixture("symlink");
+        let target = path.with_file_name("target.json");
+        PermissionStore::default().save_atomic(&target).unwrap();
+        symlink(&target, &path).unwrap();
+
+        assert!(matches!(
+            PermissionStore::load_secure(path),
+            Err(PermissionError::Invalid(_))
+        ));
     }
 }

@@ -5,7 +5,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use cp0_appd::{
-    APPD_PROTOCOL_VERSION, AppdCommand, AppdRequest, ResponseOutcome, read_response, write_request,
+    APPD_PROTOCOL_VERSION, AppdCommand, AppdRequest, PermissionChoice, ResponseOutcome,
+    read_response, write_request,
 };
 
 const APPD_SOCKET: &str = "/run/cardputerzero-appd/control.sock";
@@ -49,8 +50,20 @@ fn main() -> ExitCode {
                 app_id: app_id.clone(),
             })
         }
+        [permission, command] if permission == "permission" && command == "pending" => {
+            send_app_command(AppdCommand::GetPermissionPrompt)
+        }
+        [permission, command, prompt_id, choice]
+            if permission == "permission" && command == "resolve" =>
+        {
+            parse_prompt_id(prompt_id).and_then(|prompt_id| {
+                parse_permission_choice(choice).and_then(|choice| {
+                    send_app_command(AppdCommand::ResolvePermission { prompt_id, choice })
+                })
+            })
+        }
         _ => Err(
-            "usage: cp0ctl manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id>"
+            "usage: cp0ctl manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny>"
                 .into(),
         ),
     };
@@ -61,6 +74,23 @@ fn main() -> ExitCode {
             eprintln!("cp0ctl: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn parse_prompt_id(value: &str) -> Result<u64, String> {
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|prompt_id| *prompt_id != 0)
+        .ok_or_else(|| "permission prompt ID must be a non-zero integer".into())
+}
+
+fn parse_permission_choice(value: &str) -> Result<PermissionChoice, String> {
+    match value {
+        "once" => Ok(PermissionChoice::AllowOnce),
+        "always" => Ok(PermissionChoice::AllowAlways),
+        "deny" => Ok(PermissionChoice::Deny),
+        _ => Err("permission choice must be once, always or deny".into()),
     }
 }
 

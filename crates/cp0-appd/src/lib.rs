@@ -5,12 +5,16 @@ use cp0_manifest::AppManifest;
 use serde::Serialize;
 
 mod lifecycle;
+mod permission_prompt;
 mod permissions;
 mod protocol;
 mod registry;
 mod server;
 
 pub use lifecycle::{AppManager, AppManagerError, InstalledApp, ManagerPaths, lookup_unix_account};
+pub use permission_prompt::{
+    PermissionCoordinator, PermissionPrompt, PermissionPromptError, PermissionRequestResult,
+};
 pub use permissions::{
     Authorization, DEFAULT_PERMISSION_PATH, PermissionChoice, PermissionEngine, PermissionError,
     PermissionStore,
@@ -327,8 +331,10 @@ mod tests {
             build_sandbox_plan(&manifest(), "root", &AppLayout::default()),
             Err(PlanError::InvalidAppUser)
         );
-        let mut layout = AppLayout::default();
-        layout.data_root = PathBuf::from("relative/data");
+        let layout = AppLayout {
+            data_root: PathBuf::from("relative/data"),
+            ..AppLayout::default()
+        };
         assert_eq!(
             build_sandbox_plan(&manifest(), "cp0-app-1", &layout),
             Err(PlanError::InvalidLayout("data_root"))

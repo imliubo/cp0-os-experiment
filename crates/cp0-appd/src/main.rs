@@ -4,7 +4,8 @@ use std::os::unix::net::UnixListener;
 use std::process::ExitCode;
 
 use cp0_appd::{
-    AppLayout, AppManager, AppRegistry, AppdServer, ManagerPaths, RegistryError,
+    AppLayout, AppManager, AppRegistry, AppdServer, DEFAULT_PERMISSION_PATH, ManagerPaths,
+    PermissionCoordinator, PermissionEngine, PermissionError, PermissionStore, RegistryError,
     build_sandbox_plan, lookup_unix_account,
 };
 
@@ -107,9 +108,19 @@ fn serve() -> Result<(), String> {
         return Err("serve requires root".into());
     }
     let manager = AppManager::load(ManagerPaths::default()).map_err(|error| error.to_string())?;
+    let permission_store = match PermissionStore::load_secure(DEFAULT_PERMISSION_PATH) {
+        Ok(store) => store,
+        Err(PermissionError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            PermissionStore::default()
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    let permission_engine = PermissionEngine::new(DEFAULT_PERMISSION_PATH, permission_store)
+        .map_err(|error| error.to_string())?;
+    let permissions = PermissionCoordinator::new(permission_engine);
     let (shell_uid, _) = lookup_unix_account("cp0-shell").map_err(|error| error.to_string())?;
     let listener = systemd_listener()?;
-    AppdServer::new(manager, [0, shell_uid])
+    AppdServer::new(manager, permissions, [0, shell_uid])
         .serve(listener)
         .map_err(|error| error.to_string())
 }

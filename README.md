@@ -34,6 +34,8 @@ Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真�
   seccomp、systemd cgroup 硬限制及资源耗尽真机负向测试。
 - Phase 3B socket-activated `appd`、可信安装注册表、Shell peer UID 认证、单运行槽
   和 `cp0ctl app list/start/stop` 真机生命周期闭环。
+- Phase 3C root-owned 权限数据库、仅本次/始终/拒绝决策、单待处理可信提示状态机，
+  以及经过 peer UID 认证的 Shell 查询与决策协议。
 
 ## 快速验证
 
@@ -63,3 +65,5 @@ Phase 3A 的 runtime、沙箱契约和真机安全验证见
 [App Runtime and Linux sandbox](docs/PHASE3A-APP-RUNTIME.md)。
 `appd` 的控制协议、启动前校验与真机生命周期证据见
 [appd lifecycle service](docs/PHASE3B-APPD-LIFECYCLE.md)。
+权限持久化、提示状态机和 Shell 控制契约见
+[permission decisions and trusted prompts](docs/PHASE3C-PERMISSIONS.md)。

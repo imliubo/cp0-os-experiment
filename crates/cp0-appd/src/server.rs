@@ -7,7 +7,8 @@ use std::time::Duration;
 use crate::protocol::APPD_PROTOCOL_VERSION;
 use crate::{
     AppManager, AppManagerError, AppSummary, AppdCommand, AppdRequest, AppdResponse, ErrorCode,
-    ResponseData, peer_credentials, read_request, write_response,
+    PermissionChoice, PermissionCoordinator, PermissionPromptError, ResponseData, peer_credentials,
+    read_request, write_response,
 };
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -38,18 +39,24 @@ impl From<std::io::Error> for ServerError {
 #[derive(Debug)]
 pub struct AppdServer {
     manager: AppManager,
+    permissions: PermissionCoordinator,
     trusted_uids: BTreeSet<u32>,
 }
 
 impl AppdServer {
-    pub fn new(manager: AppManager, trusted_uids: impl IntoIterator<Item = u32>) -> Self {
+    pub fn new(
+        manager: AppManager,
+        permissions: PermissionCoordinator,
+        trusted_uids: impl IntoIterator<Item = u32>,
+    ) -> Self {
         Self {
             manager,
+            permissions,
             trusted_uids: trusted_uids.into_iter().collect(),
         }
     }
 
-    pub fn serve(self, listener: UnixListener) -> Result<(), ServerError> {
+    pub fn serve(mut self, listener: UnixListener) -> Result<(), ServerError> {
         loop {
             let (stream, _) = listener.accept()?;
             if let Err(error) = self.handle_connection(stream) {
@@ -58,7 +65,7 @@ impl AppdServer {
         }
     }
 
-    fn handle_connection(&self, mut stream: UnixStream) -> Result<(), ServerError> {
+    fn handle_connection(&mut self, mut stream: UnixStream) -> Result<(), ServerError> {
         stream.set_read_timeout(Some(CLIENT_TIMEOUT))?;
         stream.set_write_timeout(Some(CLIENT_TIMEOUT))?;
         let credentials = peer_credentials(&stream)?;
@@ -93,26 +100,38 @@ impl AppdServer {
         Ok(())
     }
 
-    fn dispatch(&self, request: AppdRequest) -> AppdResponse {
+    fn dispatch(&mut self, request: AppdRequest) -> AppdResponse {
         let request_id = request.request_id;
         debug_assert_eq!(request.protocol_version, APPD_PROTOCOL_VERSION);
-        let result = match request.command {
+        let result: Result<ResponseData, CommandError> = match request.command {
             AppdCommand::Ping => Ok(ResponseData::Pong),
-            AppdCommand::List { offset, limit } => self.list_apps(offset, limit),
+            AppdCommand::List { offset, limit } => {
+                self.list_apps(offset, limit).map_err(CommandError::Manager)
+            }
             AppdCommand::Start { app_id } => self
                 .manager
                 .start(&app_id)
-                .map(|unit| ResponseData::Started { app_id, unit }),
-            AppdCommand::Stop { app_id } => self
-                .manager
-                .stop(&app_id)
-                .map(|()| ResponseData::Stopped { app_id }),
+                .map(|unit| ResponseData::Started { app_id, unit })
+                .map_err(CommandError::Manager),
+            AppdCommand::Stop { app_id } => match self.manager.stop(&app_id) {
+                Ok(()) => {
+                    self.permissions.clear_app_session(&app_id);
+                    Ok(ResponseData::Stopped { app_id })
+                }
+                Err(error) => Err(CommandError::Manager(error)),
+            },
+            AppdCommand::GetPermissionPrompt => Ok(ResponseData::PendingPermission {
+                prompt: self.permissions.pending().cloned(),
+            }),
+            AppdCommand::ResolvePermission { prompt_id, choice } => {
+                self.resolve_permission(prompt_id, choice)
+            }
         };
         match result {
             Ok(data) => AppdResponse::success(request_id, data),
             Err(error) => {
-                eprintln!("cp0-appd: lifecycle request failed: {error}");
-                manager_error_response(request_id, &error)
+                eprintln!("cp0-appd: control request failed: {error}");
+                command_error_response(request_id, &error)
             }
         }
     }
@@ -136,6 +155,75 @@ impl AppdServer {
             u16::try_from(consumed).expect("application registry is bounded below u16::MAX")
         });
         Ok(ResponseData::Applications { apps, next_offset })
+    }
+
+    fn resolve_permission(
+        &mut self,
+        prompt_id: u64,
+        choice: PermissionChoice,
+    ) -> Result<ResponseData, CommandError> {
+        let pending = self
+            .permissions
+            .pending()
+            .cloned()
+            .ok_or(PermissionPromptError::NoPendingPrompt)?;
+        let manifest = self.manager.installed_manifest(&pending.app_id)?;
+        let prompt = self.permissions.resolve(prompt_id, &manifest, choice)?;
+        Ok(ResponseData::PermissionResolved {
+            prompt_id: prompt.prompt_id,
+            app_id: prompt.app_id,
+            permission: prompt.permission,
+            choice,
+        })
+    }
+}
+
+#[derive(Debug)]
+enum CommandError {
+    Manager(AppManagerError),
+    Permission(PermissionPromptError),
+}
+
+impl fmt::Display for CommandError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Manager(error) => write!(formatter, "{error}"),
+            Self::Permission(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl From<AppManagerError> for CommandError {
+    fn from(error: AppManagerError) -> Self {
+        Self::Manager(error)
+    }
+}
+
+impl From<PermissionPromptError> for CommandError {
+    fn from(error: PermissionPromptError) -> Self {
+        Self::Permission(error)
+    }
+}
+
+fn command_error_response(request_id: u64, error: &CommandError) -> AppdResponse {
+    match error {
+        CommandError::Manager(error) => manager_error_response(request_id, error),
+        CommandError::Permission(PermissionPromptError::NoPendingPrompt)
+        | CommandError::Permission(PermissionPromptError::StalePrompt) => AppdResponse::error(
+            request_id,
+            ErrorCode::NotFound,
+            "permission prompt is missing or stale",
+        ),
+        CommandError::Permission(PermissionPromptError::Busy(_)) => AppdResponse::error(
+            request_id,
+            ErrorCode::ResourceExhausted,
+            "another permission prompt is already pending",
+        ),
+        CommandError::Permission(PermissionPromptError::Permission(_)) => AppdResponse::error(
+            request_id,
+            ErrorCode::Internal,
+            "permission decision could not be saved",
+        ),
     }
 }
 

@@ -196,6 +196,22 @@ impl AppManager {
         )?)
     }
 
+    pub fn installed_manifest(&self, app_id: &str) -> Result<AppManifest, AppManagerError> {
+        let account = self
+            .registry
+            .account(app_id)
+            .ok_or_else(|| AppManagerError::NotInstalled(app_id.into()))?;
+        let version = account
+            .installed_version
+            .as_deref()
+            .ok_or_else(|| AppManagerError::NotInstalled(app_id.into()))?;
+        let manifest = self.load_package_manifest(app_id, version)?;
+        if manifest.id != app_id || manifest.version != version {
+            return Err(AppManagerError::IdentityMismatch);
+        }
+        Ok(manifest)
+    }
+
     pub fn is_running(&self, app_id: &str) -> Result<bool, AppManagerError> {
         unit_is_active(&self.unit_for_app(app_id)?)
     }
