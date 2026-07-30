@@ -1,7 +1,7 @@
 #![no_std]
 
 use core::panic::PanicInfo;
-use cp0_sdk::{Error, audio, display, documents, input, network, system};
+use cp0_sdk::{Error, audio, camera, display, documents, input, network, system};
 
 const FRAME_BYTES: usize =
     display::WIDTH as usize * display::STANDARD_HEIGHT as usize * 2;
@@ -9,10 +9,12 @@ static mut FRAME: [u8; FRAME_BYTES] = [0; FRAME_BYTES];
 static mut NETWORK_BODY: [u8; network::MAX_RESPONSE_BODY_BYTES] =
     [0; network::MAX_RESPONSE_BODY_BYTES];
 static mut AUDIO_SAMPLES: [i16; audio::MAX_FRAMES] = [0; audio::MAX_FRAMES];
+static mut CAMERA_PIXELS: [u16; camera::PIXEL_COUNT] = [0; camera::PIXEL_COUNT];
 const KEY_N: u16 = 49;
 const KEY_D: u16 = 32;
 const KEY_P: u16 = 25;
 const KEY_R: u16 = 19;
+const KEY_C: u16 = 46;
 
 fn prepare_frame() -> &'static mut [u8] {
     // The frame lives in the WASM data section rather than the 64 KiB call
@@ -137,6 +139,31 @@ fn request_audio_capture(frame: &mut [u8]) {
     show_action_status(frame, color);
 }
 
+fn request_camera(frame: &mut [u8]) {
+    let pixels = unsafe {
+        core::slice::from_raw_parts_mut(
+            core::ptr::addr_of_mut!(CAMERA_PIXELS).cast::<u16>(),
+            camera::PIXEL_COUNT,
+        )
+    };
+    match camera::capture_rgb565(pixels) {
+        Ok(()) => {
+            for y in 0..usize::from(display::STANDARD_HEIGHT) {
+                for x in 0..usize::from(display::WIDTH) {
+                    let pixel = pixels[y * usize::from(camera::WIDTH) + x].to_le_bytes();
+                    let offset = (y * usize::from(display::WIDTH) + x) * 2;
+                    frame[offset] = pixel[0];
+                    frame[offset + 1] = pixel[1];
+                }
+            }
+            show_action_status(frame, 0x07e0);
+        }
+        Err(Error::Denied) => show_action_status(frame, 0xf800),
+        Err(Error::Unavailable) => show_action_status(frame, 0xffe0),
+        Err(_) => show_action_status(frame, 0xf81f),
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
     const TITLE: &str = "Hello Card";
@@ -173,6 +200,9 @@ pub extern "C" fn main() -> i32 {
                 }
                 if event.code == KEY_R {
                     request_audio_capture(frame);
+                }
+                if event.code == KEY_C {
+                    request_camera(frame);
                 }
                 show_key(frame, event.code);
                 rendered = false;

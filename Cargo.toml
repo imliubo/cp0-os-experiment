@@ -3,6 +3,8 @@ members = [
     "crates/cp0-appd",
     "crates/cp0-audio-protocol",
     "crates/cp0-audiod",
+    "crates/cp0-camera-protocol",
+    "crates/cp0-camerad",
     "crates/cp0-document-protocol",
     "crates/cp0-documentd",
     "crates/cp0-manifest",

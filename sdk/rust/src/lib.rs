@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod audio;
+pub mod camera;
 pub mod display;
 pub mod documents;
 pub mod input;

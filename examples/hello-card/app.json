@@ -31,6 +31,10 @@
     {
       "name": "audio.capture",
       "reason": "Capture a short microphone sample when requested"
+    },
+    {
+      "name": "camera.capture",
+      "reason": "Capture a frame after the user presses the camera key"
     }
   ]
 }

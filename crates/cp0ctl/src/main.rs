@@ -220,7 +220,8 @@ fn send_broker_command(command: BrokerCommand) -> Result<(), String> {
         | BrokerOutcome::DocumentSelectionPending { .. }
         | BrokerOutcome::DocumentOpened { .. }
         | BrokerOutcome::AudioPlayed { .. }
-        | BrokerOutcome::AudioCaptured { .. } => {
+        | BrokerOutcome::AudioCaptured { .. }
+        | BrokerOutcome::CameraCaptured { .. } => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&response)

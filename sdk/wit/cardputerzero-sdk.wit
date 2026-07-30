@@ -83,6 +83,12 @@ interface audio {
     capture-pcm-s16le: func(frames: u16) -> result<list<s16>, error-code>;
 }
 
+interface camera {
+    use types.{error-code};
+
+    capture-rgb565: func() -> result<list<u16>, error-code>;
+}
+
 interface application {
     use types.{app-event, error-code};
 
@@ -96,5 +102,6 @@ world cardputer-application {
     import network;
     import documents;
     import audio;
+    import camera;
     export application;
 }

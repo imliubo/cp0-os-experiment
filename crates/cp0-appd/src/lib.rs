@@ -6,6 +6,7 @@ use serde::Serialize;
 
 mod audio_client;
 mod broker;
+mod camera_client;
 mod document_client;
 mod document_prompt;
 mod lifecycle;
@@ -22,6 +23,9 @@ pub use broker::{
     BrokerRequest, BrokerResponse, MAX_BROKER_FRAME_BYTES, MAX_PENDING_NOTIFICATIONS, Notification,
     NotificationQueue, NotificationQueueError, encode_broker_response, read_broker_request,
     read_broker_response, write_broker_request, write_broker_response,
+};
+pub use camera_client::{
+    CameraClient, CameraClientError, CapturedCameraFrame, DEFAULT_CAMERA_SOCKET,
 };
 pub use document_client::{
     DEFAULT_DOCUMENT_SOCKET, DocumentClient, DocumentClientError, OpenedDocument,

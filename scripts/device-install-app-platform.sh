@@ -15,11 +15,12 @@ case "$staging" in
         ;;
 esac
 
-for file in cp0-appd cp0-audiod cp0-documentd cp0-networkd cp0ctl cardputerzero-app-runtime app.json hello-card.wasm \
+for file in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-networkd cp0ctl cardputerzero-app-runtime app.json hello-card.wasm \
     cardputerzero-appd.service cardputerzero-documentd.service \
     cardputerzero-documentd.socket cardputerzero-networkd.service \
     cardputerzero-networkd.socket cardputerzero-audiod.service \
-    cardputerzero-audiod.socket; do
+    cardputerzero-audiod.socket cardputerzero-camerad.service \
+    cardputerzero-camerad.socket; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
         echo "error: invalid staged file: $file" >&2
         exit 1
@@ -31,6 +32,7 @@ systemctl stop cardputerzero-appd.service
 systemctl stop cardputerzero-networkd.service 2>/dev/null || :
 systemctl stop cardputerzero-documentd.service 2>/dev/null || :
 systemctl stop cardputerzero-audiod.service 2>/dev/null || :
+systemctl stop cardputerzero-camerad.service 2>/dev/null || :
 if ! getent group cp0-network >/dev/null 2>&1; then
     groupadd --system cp0-network
 fi
@@ -52,6 +54,13 @@ if ! id cp0-audio >/dev/null 2>&1; then
     useradd --system --gid cp0-audio --groups audio --home-dir /nonexistent \
         --shell /usr/sbin/nologin cp0-audio
 fi
+if ! getent group cp0-camera >/dev/null 2>&1; then
+    groupadd --system cp0-camera
+fi
+if ! id cp0-camera >/dev/null 2>&1; then
+    useradd --system --gid cp0-camera --groups video --home-dir /nonexistent \
+        --shell /usr/sbin/nologin cp0-camera
+fi
 install -d -o cp0-document -g cp0-document -m 0750 \
     /var/lib/cardputerzero/documents
 if [ ! -e /var/lib/cardputerzero/documents/welcome.txt ]; then
@@ -69,6 +78,8 @@ install -o root -g root -m 0755 "$staging/cp0-documentd" \
     /usr/libexec/cardputerzero/cp0-documentd
 install -o root -g root -m 0755 "$staging/cp0-audiod" \
     /usr/libexec/cardputerzero/cp0-audiod
+install -o root -g root -m 0755 "$staging/cp0-camerad" \
+    /usr/libexec/cardputerzero/cp0-camerad
 install -o root -g root -m 0755 "$staging/cp0ctl" /usr/bin/cp0ctl
 install -o root -g root -m 0755 "$staging/cardputerzero-app-runtime" \
     /usr/libexec/cardputerzero/app-runtime
@@ -90,22 +101,29 @@ install -o root -g root -m 0644 "$staging/cardputerzero-audiod.service" \
     /etc/systemd/system/cardputerzero-audiod.service
 install -o root -g root -m 0644 "$staging/cardputerzero-audiod.socket" \
     /etc/systemd/system/cardputerzero-audiod.socket
+install -o root -g root -m 0644 "$staging/cardputerzero-camerad.service" \
+    /etc/systemd/system/cardputerzero-camerad.service
+install -o root -g root -m 0644 "$staging/cardputerzero-camerad.socket" \
+    /etc/systemd/system/cardputerzero-camerad.socket
 systemctl daemon-reload
 systemctl enable --now cardputerzero-networkd.socket
 systemctl enable --now cardputerzero-documentd.socket
 systemctl enable --now cardputerzero-audiod.socket
+systemctl enable --now cardputerzero-camerad.socket
 systemctl start cardputerzero-appd.service
 
 systemctl is-active --quiet cardputerzero-appd.service
 systemctl is-active --quiet cardputerzero-networkd.socket
 systemctl is-active --quiet cardputerzero-documentd.socket
 systemctl is-active --quiet cardputerzero-audiod.socket
+systemctl is-active --quiet cardputerzero-camerad.socket
 systemctl is-active --quiet cardputerzero-compositor.service
 systemctl is-active --quiet cardputerzero-system-shell.service
 sha256sum \
     /usr/libexec/cardputerzero/cp0-appd \
     /usr/libexec/cardputerzero/cp0-documentd \
     /usr/libexec/cardputerzero/cp0-audiod \
+    /usr/libexec/cardputerzero/cp0-camerad \
     /usr/libexec/cardputerzero/cp0-networkd \
     /usr/bin/cp0ctl \
     /usr/libexec/cardputerzero/app-runtime \

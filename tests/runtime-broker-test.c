@@ -60,5 +60,29 @@ int main(void) {
     assert(memcmp(audio, "\x00\x80\xff\x7f", sizeof(audio)) == 0);
     assert(cp0_broker_decode_audio_capture_response(captured, audio, 2U) ==
            CP0_BROKER_INTERNAL);
+
+    static const char camera_captured[] =
+        "{\"protocol_version\":1,\"request_id\":6,\"outcome\":{"
+        "\"status\":\"camera-captured\",\"width\":320,\"height\":170,"
+        "\"pixel_format\":\"rgb565-le\",\"size_bytes\":108800}}\n";
+    source = open("Cargo.toml", O_RDONLY);
+    assert(source >= 0);
+    descriptor = -1;
+    assert(cp0_broker_decode_camera_response(camera_captured, source,
+                                             &descriptor) == CP0_BROKER_OK);
+    assert(descriptor == source);
+    close(descriptor);
+    static const char invalid_camera[] =
+        "{\"protocol_version\":1,\"request_id\":6,\"outcome\":{"
+        "\"status\":\"camera-captured\",\"width\":640,\"height\":170,"
+        "\"pixel_format\":\"rgb565-le\",\"size_bytes\":108800}}\n";
+    source = open("Cargo.toml", O_RDONLY);
+    assert(source >= 0);
+    descriptor = -1;
+    assert(cp0_broker_decode_camera_response(invalid_camera, source,
+                                             &descriptor) ==
+           CP0_BROKER_INTERNAL);
+    assert(descriptor == -1);
+    assert(fcntl(source, F_GETFD) < 0);
     return 0;
 }

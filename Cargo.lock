@@ -35,6 +35,7 @@ name = "cp0-appd"
 version = "0.1.0"
 dependencies = [
  "cp0-audio-protocol",
+ "cp0-camera-protocol",
  "cp0-document-protocol",
  "cp0-manifest",
  "cp0-network-protocol",
@@ -56,6 +57,23 @@ name = "cp0-audiod"
 version = "0.1.0"
 dependencies = [
  "cp0-audio-protocol",
+ "libc",
+]
+
+[[package]]
+name = "cp0-camera-protocol"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cp0-camerad"
+version = "0.1.0"
+dependencies = [
+ "cp0-camera-protocol",
  "libc",
 ]
 

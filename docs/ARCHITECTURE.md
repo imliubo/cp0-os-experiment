@@ -123,6 +123,12 @@ Shell 显示单前台选择器；应用请求不包含路径或文档 ID。选�
 协议、appd broker、Runtime 线性内存和 SDK 四层都重复验证长度与偶数字节边界。
 服务使用专用账户、root-only Unix socket、空 capability 集和 systemd 设备白名单。
 
+相机能力不暴露 V4L2、Media Controller、dma-heap、VideoCore 设备或捕获进程。
+`cp0-camerad` 以专用账户运行并通过 systemd 白名单独占这些设备类，固定调用系统
+`rpicam-still` 捕获 320x170 RGB888 后转换为 RGB565_LE。每次调用只返回一个
+108800 字节的密封 memfd；appd 验证只读访问、普通文件类型、精确长度和全部写入
+封印后才转发，Runtime 将内容复制进 WASM 线性内存，应用永远看不到原生 FD。
+
 应用间调用通过 Intent Broker 路由，接收方必须显式声明 Intent，不提供任意应用间
 socket。
 

@@ -22,6 +22,9 @@
 #define CP0_DOCUMENT_MAX_BYTES (16U * 1024U * 1024U)
 #define CP0_AUDIO_MAX_FRAMES 1024U
 #define CP0_AUDIO_MAX_BYTES (CP0_AUDIO_MAX_FRAMES * 2U)
+#define CP0_CAMERA_WIDTH 320U
+#define CP0_CAMERA_HEIGHT 170U
+#define CP0_CAMERA_FRAME_BYTES (CP0_CAMERA_WIDTH * CP0_CAMERA_HEIGHT * 2U)
 
 static bool append_bytes(char *output, size_t capacity, size_t *offset,
                          const char *value, size_t length) {
@@ -582,4 +585,61 @@ int32_t cp0_broker_capture_audio(uint8_t *samples, size_t sample_capacity) {
         return result;
     return cp0_broker_decode_audio_capture_response(response, samples,
                                                     sample_capacity);
+}
+
+int32_t cp0_broker_decode_camera_response(const char *response,
+                                          int received_descriptor,
+                                          int *descriptor) {
+    const char *pixel_format;
+    size_t pixel_format_length;
+    uint16_t width;
+    uint16_t height;
+    uint32_t size_bytes;
+
+    if (response == NULL || descriptor == NULL) {
+        if (received_descriptor >= 0)
+            close(received_descriptor);
+        return CP0_BROKER_INVALID_ARGUMENT;
+    }
+    *descriptor = -1;
+    if (strstr(response, "\"status\":\"camera-captured\"") == NULL) {
+        if (received_descriptor >= 0)
+            close(received_descriptor);
+        return decode_result(response);
+    }
+    pixel_format = json_string_field(response, "pixel_format",
+                                     &pixel_format_length);
+    if (received_descriptor < 0 ||
+        !json_u16_field(response, "width", &width) ||
+        !json_u16_field(response, "height", &height) ||
+        !json_u32_field(response, "size_bytes", &size_bytes) ||
+        width != CP0_CAMERA_WIDTH || height != CP0_CAMERA_HEIGHT ||
+        size_bytes != CP0_CAMERA_FRAME_BYTES || pixel_format == NULL ||
+        pixel_format_length != sizeof("rgb565-le") - 1U ||
+        memcmp(pixel_format, "rgb565-le", sizeof("rgb565-le") - 1U) != 0) {
+        if (received_descriptor >= 0)
+            close(received_descriptor);
+        return CP0_BROKER_INTERNAL;
+    }
+    *descriptor = received_descriptor;
+    return CP0_BROKER_OK;
+}
+
+int32_t cp0_broker_capture_camera(int *descriptor) {
+    static const char request[] =
+        "{\"protocol_version\":1,\"request_id\":6,\"command\":{"
+        "\"name\":\"capture-camera\"}}\n";
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int received_descriptor = -1;
+    int32_t result;
+
+    if (descriptor == NULL)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    *descriptor = -1;
+    result = broker_exchange_with_fd(request, sizeof(request) - 1U, response,
+                                     sizeof(response), &received_descriptor);
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_camera_response(response, received_descriptor,
+                                             descriptor);
 }

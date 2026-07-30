@@ -8,6 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use cp0_audio_protocol::AudioErrorCode as ServiceAudioErrorCode;
+use cp0_camera_protocol::CameraErrorCode as ServiceCameraErrorCode;
 use cp0_document_protocol::{DocumentErrorCode as ServiceDocumentErrorCode, send_frame_with_fd};
 use cp0_manifest::Permission;
 use cp0_network_protocol::NetworkErrorCode as ServiceNetworkErrorCode;
@@ -16,11 +17,11 @@ use crate::protocol::APPD_PROTOCOL_VERSION;
 use crate::{
     AppManager, AppManagerError, AppSummary, AppdCommand, AppdRequest, AppdResponse, AudioClient,
     AudioClientError, BrokerCommand, BrokerErrorCode, BrokerProtocolError, BrokerRequest,
-    BrokerResponse, DocumentClient, DocumentClientError, DocumentCoordinator, DocumentPromptError,
-    DocumentRequestResult, ErrorCode, NetworkClient, NetworkClientError, NotificationQueue,
-    PermissionChoice, PermissionCoordinator, PermissionPromptError, PermissionRequestResult,
-    ResponseData, encode_broker_response, peer_credentials, read_broker_request, read_request,
-    write_broker_response, write_response,
+    BrokerResponse, CameraClient, CameraClientError, DocumentClient, DocumentClientError,
+    DocumentCoordinator, DocumentPromptError, DocumentRequestResult, ErrorCode, NetworkClient,
+    NetworkClientError, NotificationQueue, PermissionChoice, PermissionCoordinator,
+    PermissionPromptError, PermissionRequestResult, ResponseData, encode_broker_response,
+    peer_credentials, read_broker_request, read_request, write_broker_response, write_response,
 };
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -58,6 +59,7 @@ pub struct AppdServer {
     network: NetworkClient,
     documents: DocumentClient,
     audio: AudioClient,
+    camera: CameraClient,
 }
 
 #[derive(Debug)]
@@ -112,6 +114,7 @@ impl AppdServer {
             network,
             documents,
             AudioClient::default(),
+            CameraClient::default(),
         )
     }
 
@@ -122,6 +125,7 @@ impl AppdServer {
         network: NetworkClient,
         documents: DocumentClient,
         audio: AudioClient,
+        camera: CameraClient,
     ) -> Self {
         Self {
             state: Arc::new(Mutex::new(ServerState {
@@ -134,6 +138,7 @@ impl AppdServer {
             network,
             documents,
             audio,
+            camera,
         }
     }
 
@@ -356,10 +361,10 @@ impl AppdServer {
                 return Ok(());
             }
         };
-        let dispatch = if matches!(&request.command, BrokerCommand::OpenDocument) {
-            self.dispatch_document(credentials, request.request_id)
-        } else {
-            BrokerDispatch::response(self.dispatch_broker(credentials, request))
+        let dispatch = match &request.command {
+            BrokerCommand::OpenDocument => self.dispatch_document(credentials, request.request_id),
+            BrokerCommand::CaptureCamera => self.dispatch_camera(credentials, request.request_id),
+            _ => BrokerDispatch::response(self.dispatch_broker(credentials, request)),
         };
         if let Some(descriptor) = dispatch.descriptor {
             let frame = encode_broker_response(&dispatch.response).map_err(broker_io)?;
@@ -467,6 +472,27 @@ impl AppdServer {
                         audio_error_response(request_id, &error)
                     }
                 }
+            }
+            BrokerCommand::CaptureCamera => {
+                unreachable!("camera requests carry descriptors")
+            }
+        }
+    }
+
+    fn dispatch_camera(&self, peer: crate::PeerCredentials, request_id: u64) -> BrokerDispatch {
+        if let Err(response) =
+            self.authorize_broker_caller(peer, request_id, Permission::CameraCapture)
+        {
+            return BrokerDispatch::response(response);
+        }
+        match self.camera.capture(request_id) {
+            Ok(frame) => BrokerDispatch {
+                response: BrokerResponse::camera_captured(request_id),
+                descriptor: Some(frame.descriptor),
+            },
+            Err(error) => {
+                eprintln!("cp0-appd: camera capture request failed: {error}");
+                BrokerDispatch::response(camera_error_response(request_id, &error))
             }
         }
     }
@@ -944,6 +970,34 @@ fn audio_error_response(request_id: u64, error: &AudioClientError) -> BrokerResp
         | AudioClientError::Service(ServiceAudioErrorCode::Internal) => (
             BrokerErrorCode::Internal,
             "audio service returned an invalid response",
+        ),
+    };
+    BrokerResponse::error(request_id, code, message)
+}
+
+fn camera_error_response(request_id: u64, error: &CameraClientError) -> BrokerResponse {
+    let (code, message) = match error {
+        CameraClientError::Service(ServiceCameraErrorCode::InvalidRequest) => {
+            (BrokerErrorCode::InvalidRequest, "camera request is invalid")
+        }
+        CameraClientError::Service(ServiceCameraErrorCode::Busy) => {
+            (BrokerErrorCode::ResourceExhausted, "camera is busy")
+        }
+        CameraClientError::Service(ServiceCameraErrorCode::Unavailable)
+        | CameraClientError::Service(ServiceCameraErrorCode::CaptureFailed)
+        | CameraClientError::Io(_)
+        | CameraClientError::EmptyResponse => {
+            (BrokerErrorCode::Unavailable, "camera is unavailable")
+        }
+        CameraClientError::Protocol(_)
+        | CameraClientError::MismatchedRequestId
+        | CameraClientError::MissingDescriptor
+        | CameraClientError::UnexpectedDescriptor
+        | CameraClientError::InvalidDescriptor
+        | CameraClientError::Service(ServiceCameraErrorCode::Unauthorized)
+        | CameraClientError::Service(ServiceCameraErrorCode::Internal) => (
+            BrokerErrorCode::Internal,
+            "camera service returned an invalid response",
         ),
     };
     BrokerResponse::error(request_id, code, message)

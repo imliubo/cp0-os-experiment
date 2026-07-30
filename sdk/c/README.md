@@ -19,3 +19,7 @@ DNS, TLS override or arbitrary-header API.
 PCM buffers. The format is fixed to 16 kHz mono S16_LE and one call is limited
 to 1024 frames. Playback and capture require separate manifest permissions; the
 SDK exposes no ALSA device, mixer or format negotiation API.
+
+`cp0_camera_capture` fills exactly one caller-owned 320x170 RGB565 frame. It
+requires `camera.capture`; applications cannot select a sensor, access V4L2 or
+receive a native descriptor.

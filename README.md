@@ -53,6 +53,8 @@ Phase 3 已贯通 WAMR 强隔离运行时、权限系统和首个 capability bro
   无路径 API、`SCM_RIGHTS` 只读 FD、符号链接/替换防护及 4 KiB 有界读取。
 - Phase 3H 音频能力：独立 `cp0-audiod`、ES8389 专用 ALSA 端点、播放/录音分权、
   16 kHz 单声道 S16_LE 格式、每次 1024 帧上限及三语言 SDK API。
+- Phase 3I 相机能力：独立 `cp0-camerad`、固定 320x170 RGB565 捕获、密封只读
+  memfd 传递、V4L2/Media/dma-heap 设备白名单及三语言 SDK API。
 - Phase 4A dependency-free `no_std` Rust SDK，封装时钟、事件等待、通知 capability
   和稳定错误类型；Hello 示例不再使用 Runtime 私有 FFI。
 - `cp0ctl new/build` SDK-only 项目脚手架、结构化 Cargo metadata 构建和规范应用
@@ -109,5 +111,7 @@ Runtime host call ABI 与真机结果见
 [restricted Document Portal](docs/PHASE3G-DOCUMENT-PORTAL.md)。
 有界 PCM 播放/录音、ALSA 设备隔离和服务加固见
 [restricted audio broker](docs/PHASE3H-AUDIO-BROKER.md)。
+固定帧相机 API、密封 FD 传递和捕获设备隔离见
+[restricted camera broker](docs/PHASE3I-CAMERA-BROKER.md)。
 Rust SDK 公共 API 和真机迁移结果见
 [Rust SDK foundation](docs/PHASE4A-RUST-SDK.md)。

@@ -1,5 +1,6 @@
 #include "hostcalls.h"
 #include "broker_client.h"
+#include "camera.h"
 #include "display.h"
 #include "document.h"
 
@@ -101,6 +102,13 @@ static int32_t cp0_audio_capture_pcm_s16le(
     return cp0_broker_capture_audio(samples, (size_t)sample_capacity);
 }
 
+static int32_t cp0_capture_camera_rgb565(
+    wasm_exec_env_t execution_environment, uint8_t *pixels,
+    uint32_t pixel_bytes) {
+    (void)execution_environment;
+    return cp0_camera_capture_rgb565(pixels, (size_t)pixel_bytes);
+}
+
 static NativeSymbol symbols[] = {
     {"cp0_monotonic_milliseconds", (void *)cp0_monotonic_milliseconds, "()I",
      NULL},
@@ -118,6 +126,8 @@ static NativeSymbol symbols[] = {
      NULL},
     {"cp0_audio_capture_pcm_s16le", (void *)cp0_audio_capture_pcm_s16le,
      "(*~)i", NULL},
+    {"cp0_camera_capture_rgb565", (void *)cp0_capture_camera_rgb565, "(*~)i",
+     NULL},
 };
 
 NativeSymbol *cp0_host_symbols(uint32_t *count) {

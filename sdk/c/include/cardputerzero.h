@@ -24,6 +24,9 @@
 #define CP0_AUDIO_SAMPLE_RATE_HZ 16000U
 #define CP0_AUDIO_CHANNELS 1U
 #define CP0_MAX_AUDIO_FRAMES 1024U
+#define CP0_CAMERA_WIDTH 320U
+#define CP0_CAMERA_HEIGHT 170U
+#define CP0_CAMERA_PIXEL_COUNT (CP0_CAMERA_WIDTH * CP0_CAMERA_HEIGHT)
 
 #if !defined(__wasm32__)
 #error "CardputerZero applications must target wasm32"
@@ -117,6 +120,10 @@ cp0_result_t cp0_audio_play_pcm_s16le_raw(const uint8_t *samples,
 CP0_IMPORT("cp0_audio_capture_pcm_s16le")
 int32_t cp0_audio_capture_pcm_s16le_raw(uint8_t *samples,
                                        uint32_t sample_capacity);
+
+CP0_IMPORT("cp0_camera_capture_rgb565")
+cp0_result_t cp0_camera_capture_rgb565_raw(uint8_t *pixels,
+                                           uint32_t pixel_bytes);
 
 static inline cp0_result_t cp0_http_get(const uint8_t *url,
                                         uint32_t url_length, uint8_t *body,
@@ -233,6 +240,14 @@ static inline cp0_result_t cp0_audio_capture(int16_t *samples,
         return CP0_ERROR_INTERNAL;
     *frames_captured = (uint32_t)result / sizeof(int16_t);
     return CP0_OK;
+}
+
+static inline cp0_result_t cp0_camera_capture(uint16_t *pixels,
+                                              uint32_t pixel_count) {
+    if (pixels == NULL || pixel_count != CP0_CAMERA_PIXEL_COUNT)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    return cp0_camera_capture_rgb565_raw((uint8_t *)pixels,
+                                         pixel_count * sizeof(uint16_t));
 }
 
 #ifdef __cplusplus

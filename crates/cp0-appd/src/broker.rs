@@ -26,6 +26,7 @@ pub enum BrokerCommand {
     OpenDocument,
     PlayAudio { samples_base64: String },
     CaptureAudio { frames: u16 },
+    CaptureCamera,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +62,12 @@ pub enum BrokerOutcome {
     },
     AudioCaptured {
         samples_base64: String,
+    },
+    CameraCaptured {
+        width: u16,
+        height: u16,
+        pixel_format: cp0_camera_protocol::CameraPixelFormat,
+        size_bytes: u32,
     },
     Error {
         code: BrokerErrorCode,
@@ -108,6 +115,7 @@ pub enum BrokerProtocolError {
     InvalidNetworkResponse,
     InvalidDocumentResponse,
     InvalidAudio,
+    InvalidCameraResponse,
 }
 
 impl fmt::Display for BrokerProtocolError {
@@ -134,6 +142,9 @@ impl fmt::Display for BrokerProtocolError {
                 formatter.write_str("invalid bounded document response")
             }
             Self::InvalidAudio => formatter.write_str("invalid bounded audio samples"),
+            Self::InvalidCameraResponse => {
+                formatter.write_str("invalid fixed camera frame metadata")
+            }
         }
     }
 }
@@ -248,6 +259,19 @@ impl BrokerResponse {
         }
     }
 
+    pub fn camera_captured(request_id: u64) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::CameraCaptured {
+                width: cp0_camera_protocol::CAMERA_WIDTH,
+                height: cp0_camera_protocol::CAMERA_HEIGHT,
+                pixel_format: cp0_camera_protocol::CameraPixelFormat::Rgb565Le,
+                size_bytes: cp0_camera_protocol::CAMERA_FRAME_BYTES as u32,
+            },
+        }
+    }
+
     pub fn validate(&self) -> Result<(), BrokerProtocolError> {
         if self.protocol_version != BROKER_PROTOCOL_VERSION {
             return Err(BrokerProtocolError::UnsupportedVersion(
@@ -284,6 +308,18 @@ impl BrokerResponse {
                 if cp0_audio_protocol::decode_samples(samples_base64).is_err() =>
             {
                 return Err(BrokerProtocolError::InvalidAudio);
+            }
+            BrokerOutcome::CameraCaptured {
+                width,
+                height,
+                pixel_format,
+                size_bytes,
+            } if *width != cp0_camera_protocol::CAMERA_WIDTH
+                || *height != cp0_camera_protocol::CAMERA_HEIGHT
+                || *pixel_format != cp0_camera_protocol::CameraPixelFormat::Rgb565Le
+                || *size_bytes != cp0_camera_protocol::CAMERA_FRAME_BYTES as u32 =>
+            {
+                return Err(BrokerProtocolError::InvalidCameraResponse);
             }
             _ => {}
         }
@@ -600,5 +636,32 @@ mod tests {
             BrokerResponse::audio_captured(5, cp0_audio_protocol::encode_base64(&samples));
         assert!(response.validate().is_ok());
         assert!(BrokerResponse::audio_played(5, 0).validate().is_err());
+    }
+
+    #[test]
+    fn validates_fixed_camera_request_and_response() {
+        let request = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 6,
+            command: BrokerCommand::CaptureCamera,
+        };
+        let mut frame = Vec::new();
+        write_broker_request(&mut frame, &request).unwrap();
+        assert_eq!(
+            read_broker_request(&mut Cursor::new(frame)).unwrap(),
+            Some(request)
+        );
+        assert!(BrokerResponse::camera_captured(6).validate().is_ok());
+        let invalid = BrokerResponse {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 6,
+            outcome: BrokerOutcome::CameraCaptured {
+                width: 640,
+                height: cp0_camera_protocol::CAMERA_HEIGHT,
+                pixel_format: cp0_camera_protocol::CameraPixelFormat::Rgb565Le,
+                size_bytes: cp0_camera_protocol::CAMERA_FRAME_BYTES as u32,
+            },
+        };
+        assert!(invalid.validate().is_err());
     }
 }

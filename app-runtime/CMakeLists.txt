@@ -74,6 +74,7 @@ target_compile_options(cp0-wamr PRIVATE -Os -fstack-protector-strong)
 
 add_executable(cardputerzero-app-runtime
   src/broker_client.c
+  src/camera.c
   src/display.c
   src/document.c
   src/hostcalls.c

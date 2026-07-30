@@ -1,0 +1,15 @@
+[Unit]
+Description=CardputerZero privileged camera broker socket
+
+[Socket]
+ListenStream=/run/cardputerzero-camerad/camera.sock
+FileDescriptorName=camera
+Service=cardputerzero-camerad.service
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

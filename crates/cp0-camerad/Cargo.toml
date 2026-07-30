@@ -1,0 +1,10 @@
+[package]
+name = "cp0-camerad"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+cp0-camera-protocol = { path = "../cp0-camera-protocol" }
+libc.workspace = true

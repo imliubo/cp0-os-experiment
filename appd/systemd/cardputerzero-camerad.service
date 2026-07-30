@@ -1,0 +1,45 @@
+[Unit]
+Description=CardputerZero restricted camera broker
+Requires=cardputerzero-camerad.socket
+After=cardputerzero-camerad.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/cardputerzero/cp0-camerad serve
+User=cp0-camera
+Group=cp0-camera
+SupplementaryGroups=video
+UMask=0077
+Restart=on-failure
+RestartSec=500ms
+TimeoutStopSec=5
+MemoryMax=64M
+MemorySwapMax=0
+TasksMax=32
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=char-video4linux rw
+DeviceAllow=char-media rw
+DeviceAllow=char-dma_heap rw
+DeviceAllow=/dev/vchiq rw
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
