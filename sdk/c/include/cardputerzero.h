@@ -8,6 +8,8 @@
 #define CP0_SDK_VERSION_MINOR 1
 #define CP0_DISPLAY_WIDTH 320U
 #define CP0_DISPLAY_HEIGHT 170U
+#define CP0_STANDARD_DISPLAY_HEIGHT 150U
+#define CP0_MAX_DAMAGE_RECTS 32U
 #define CP0_MAX_WAIT_MILLISECONDS 1000U
 #define CP0_MAX_NOTIFICATION_TITLE_CHARS 32U
 #define CP0_MAX_NOTIFICATION_BODY_CHARS 160U
@@ -36,11 +38,26 @@ typedef enum cp0_result {
     CP0_ERROR_INTERNAL = -5,
 } cp0_result_t;
 
+typedef struct cp0_rect {
+    uint16_t x;
+    uint16_t y;
+    uint16_t width;
+    uint16_t height;
+} cp0_rect_t;
+
 CP0_IMPORT("cp0_monotonic_milliseconds")
 uint64_t cp0_monotonic_milliseconds(void);
 
 CP0_IMPORT("cp0_wait_event")
 cp0_result_t cp0_wait_event(int32_t timeout_milliseconds);
+
+CP0_IMPORT("cp0_display_dimensions")
+uint32_t cp0_display_dimensions(void);
+
+CP0_IMPORT("cp0_present_rgb565")
+cp0_result_t cp0_present_rgb565(const uint8_t *pixels, uint32_t pixel_bytes,
+                                const cp0_rect_t *damage,
+                                uint32_t damage_bytes);
 
 CP0_IMPORT("cp0_post_notification")
 cp0_result_t cp0_post_notification(const uint8_t *title, uint32_t title_length,

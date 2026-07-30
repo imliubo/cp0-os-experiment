@@ -1,4 +1,5 @@
 #include "hostcalls.h"
+#include "display.h"
 #include "seccomp.h"
 
 #include <errno.h>
@@ -77,6 +78,10 @@ int main(int argc, char **argv) {
     uint32_t module_size = 0;
     char error[CP0_ERROR_BYTES] = {0};
     int result = EXIT_FAILURE;
+    const char *app_id;
+    const char *display_mode;
+    const char *wayland_socket;
+    bool immersive;
 
     if (argc != 2 || !valid_module_path(argv[1])) {
         fprintf(stderr,
@@ -87,6 +92,18 @@ int main(int argc, char **argv) {
     if (module_bytes == NULL)
         return EXIT_FAILURE;
 
+    app_id = getenv("CP0_APP_ID");
+    display_mode = getenv("CP0_DISPLAY_MODE");
+    wayland_socket = getenv("WAYLAND_SOCKET");
+    if (display_mode == NULL ||
+        (strcmp(display_mode, "standard") != 0 &&
+         strcmp(display_mode, "immersive") != 0) ||
+        wayland_socket == NULL || strcmp(wayland_socket, "3") != 0) {
+        fprintf(stderr, "app-runtime: invalid display launch contract\n");
+        goto cleanup;
+    }
+    immersive = strcmp(display_mode, "immersive") == 0;
+
     memset(&init_args, 0, sizeof(init_args));
     init_args.mem_alloc_type = Alloc_With_System_Allocator;
     init_args.native_module_name = "cardputerzero";
@@ -95,15 +112,19 @@ int main(int argc, char **argv) {
         fprintf(stderr, "app-runtime: WAMR initialization failed\n");
         goto cleanup;
     }
+    if (!cp0_display_initialize(3, app_id, immersive)) {
+        fprintf(stderr, "app-runtime: Wayland display initialization failed\n");
+        goto runtime_cleanup;
+    }
     if (cp0_install_runtime_seccomp() != 0) {
         fprintf(stderr, "app-runtime: seccomp setup failed: %s\n", strerror(errno));
-        goto runtime_cleanup;
+        goto display_cleanup;
     }
 
     module = wasm_runtime_load(module_bytes, module_size, error, sizeof(error));
     if (module == NULL) {
         fprintf(stderr, "app-runtime: module load failed: %s\n", error);
-        goto runtime_cleanup;
+        goto display_cleanup;
     }
     instance = wasm_runtime_instantiate(module, CP0_WASM_STACK_BYTES,
                                         CP0_WASM_HEAP_BYTES, error,
@@ -124,6 +145,8 @@ instance_cleanup:
     wasm_runtime_deinstantiate(instance);
 module_cleanup:
     wasm_runtime_unload(module);
+display_cleanup:
+    cp0_display_destroy();
 runtime_cleanup:
     wasm_runtime_destroy();
 cleanup:

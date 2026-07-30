@@ -12,3 +12,8 @@ is available at:
 No local modifications are made to the WAMR source. CardputerZero supplies its
 own embedding executable, build configuration and post-initialization seccomp
 policy.
+
+The Runtime also statically links Wayland 1.23.1 and libffi 3.5.2. The xdg-shell
+client protocol is generated from wayland-protocols 1.44. Exact repositories
+and commits are pinned in `wayland.env`; none of the three source trees are
+modified by CardputerZero source patches.

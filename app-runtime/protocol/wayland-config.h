@@ -1,0 +1,10 @@
+#ifndef WAYLAND_CONFIG_H
+#define WAYLAND_CONFIG_H
+
+#define PACKAGE "wayland"
+#define PACKAGE_VERSION "1.23.1"
+#define HAVE_ACCEPT4 1
+#define HAVE_XUCRED_CR_PID 0
+#define HAVE_BROKEN_MSG_CMSG_CLOEXEC 0
+
+#endif

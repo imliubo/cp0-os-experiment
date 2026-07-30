@@ -2,9 +2,9 @@
 
 ## Scope
 
-Phase 3A establishes the executable isolation boundary below the SDK. It does
-does not yet expose display or capability host calls beyond the bounded
-`cp0_wait_event` lifecycle primitive.
+Phase 3A establishes the executable isolation boundary below the SDK. Follow-up
+work added the notification broker and the controlled display channel described
+in `PHASE3D-CONTROLLED-DISPLAY.md`.
 
 The trusted App Runtime embeds WAMR 2.4.5 at commit
 `25bd7eb63e828e4bd242cc9b38d260b4b31c6605`. The target build is a static
@@ -30,9 +30,9 @@ make example-app
 make malicious-apps
 ```
 
-`scripts/build-app-runtime.sh` refuses a WAMR checkout whose HEAD differs from
-the pinned commit. It verifies the resulting ELF is aarch64 and has no dynamic
-library dependencies.
+`scripts/build-app-runtime.sh` refuses WAMR, Wayland, wayland-protocols or
+libffi checkouts whose HEAD differs from the pinned commits. It verifies the
+resulting ELF is aarch64 and has no dynamic library dependencies.
 
 ## Sandbox contract
 

@@ -46,6 +46,11 @@ Runtime cannot retain the mount and namespace syscalls needed during setup. The
 runtime allowlist, inherited descriptor protocol, account registry and quota
 backend are required before `appd` can launch production applications.
 
+The Wayland runtime directory is never mounted and application accounts never
+join its owning group. systemd PID 1 opens the configured compositor socket and
+passes the connected stream as descriptor 3. Bubblewrap preserves that single
+descriptor, and the Runtime rejects any other display descriptor contract.
+
 `ProtectKernelTunables=yes` cannot be applied to the outer transient unit: its
 systemd `/proc/sys` remount prevents an unprivileged user namespace from mounting
 the private `/proc` required by bubblewrap. The application still cannot change

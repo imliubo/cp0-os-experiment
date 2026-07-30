@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod display;
 pub mod system;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

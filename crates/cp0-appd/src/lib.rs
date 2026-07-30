@@ -1,7 +1,7 @@
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
-use cp0_manifest::AppManifest;
+use cp0_manifest::{AppManifest, DisplayMode};
 use serde::Serialize;
 
 mod broker;
@@ -41,6 +41,7 @@ pub const DEFAULT_APPS_ROOT: &str = "/var/lib/cardputerzero/apps";
 pub const DEFAULT_DATA_ROOT: &str = "/var/lib/cardputerzero/data";
 pub const DEFAULT_RUNTIME: &str = "/usr/libexec/cardputerzero/app-runtime";
 pub const DEFAULT_BROKER_SOCKET: &str = "/run/cardputerzero-broker/runtime.sock";
+pub const DEFAULT_WAYLAND_SOCKET: &str = "/run/cardputerzero/wayland-0";
 pub const BWRAP_PATH: &str = "/usr/bin/bwrap";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +50,7 @@ pub struct AppLayout {
     pub data_root: PathBuf,
     pub runtime_path: PathBuf,
     pub broker_socket: PathBuf,
+    pub wayland_socket: PathBuf,
 }
 
 impl Default for AppLayout {
@@ -58,6 +60,7 @@ impl Default for AppLayout {
             data_root: PathBuf::from(DEFAULT_DATA_ROOT),
             runtime_path: PathBuf::from(DEFAULT_RUNTIME),
             broker_socket: PathBuf::from(DEFAULT_BROKER_SOCKET),
+            wayland_socket: PathBuf::from(DEFAULT_WAYLAND_SOCKET),
         }
     }
 }
@@ -110,6 +113,7 @@ pub fn build_sandbox_plan(
     validate_root(&layout.data_root, "data_root")?;
     validate_root(&layout.runtime_path, "runtime_path")?;
     validate_root(&layout.broker_socket, "broker_socket")?;
+    validate_root(&layout.wayland_socket, "wayland_socket")?;
 
     let package_dir = layout.apps_root.join(&manifest.id).join(&manifest.version);
     let data_dir = layout.data_root.join(&manifest.id);
@@ -117,6 +121,11 @@ pub fn build_sandbox_plan(
     let data = path_text(&data_dir, "data_dir")?;
     let runtime = path_text(&layout.runtime_path, "runtime_path")?;
     let broker_socket = path_text(&layout.broker_socket, "broker_socket")?;
+    let wayland_socket = path_text(&layout.wayland_socket, "wayland_socket")?;
+    let display_mode = match manifest.display {
+        DisplayMode::Standard => "standard",
+        DisplayMode::Immersive => "immersive",
+    };
     let entrypoint = format!("/app/{}", manifest.entrypoint);
     let unit = format!("cardputerzero-app-{}.service", &app_user[8..]);
     let memory_max_bytes = u64::from(manifest.resources.memory_mb) * 1024 * 1024;
@@ -126,6 +135,8 @@ pub fn build_sandbox_plan(
         "--die-with-parent".into(),
         "--new-session".into(),
         "--clearenv".into(),
+        "--keep-fd".into(),
+        "3".into(),
         "--dir".into(),
         "/runtime".into(),
         "--dir".into(),
@@ -168,6 +179,15 @@ pub fn build_sandbox_plan(
         "--setenv".into(),
         "CP0_BROKER_SOCKET".into(),
         "/run/cardputerzero/broker.sock".into(),
+        "--setenv".into(),
+        "WAYLAND_SOCKET".into(),
+        "3".into(),
+        "--setenv".into(),
+        "CP0_APP_ID".into(),
+        manifest.id.clone(),
+        "--setenv".into(),
+        "CP0_DISPLAY_MODE".into(),
+        display_mode.into(),
         "--".into(),
         "/runtime/cardputerzero-app-runtime".into(),
         entrypoint,
@@ -194,6 +214,8 @@ pub fn build_sandbox_plan(
         "LockPersonality=yes".into(),
         "RestrictRealtime=yes".into(),
         "SystemCallArchitectures=native".into(),
+        "Environment=WAYLAND_SOCKET=3".into(),
+        format!("OpenFile={wayland_socket}:wayland"),
     ];
 
     Ok(SandboxPlan {
@@ -308,6 +330,21 @@ mod tests {
                 "/var/lib/cardputerzero/data/dev.cardputerzero.hello",
                 "/data"
             ]));
+        assert!(
+            plan.arguments
+                .windows(2)
+                .any(|values| values == ["--keep-fd", "3"])
+        );
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|values| values == ["--setenv", "CP0_APP_ID", "dev.cardputerzero.hello"])
+        );
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|values| values == ["--setenv", "CP0_DISPLAY_MODE", "standard"])
+        );
         for directory in ["/runtime", "/app", "/data"] {
             assert!(
                 plan.arguments
@@ -332,6 +369,10 @@ mod tests {
         assert!(plan.systemd_properties.contains(
             &"ReadWritePaths=/var/lib/cardputerzero/data/dev.cardputerzero.hello".into()
         ));
+        assert!(
+            plan.systemd_properties
+                .contains(&"OpenFile=/run/cardputerzero/wayland-0:wayland".into())
+        );
     }
 
     #[test]

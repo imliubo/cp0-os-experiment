@@ -1,5 +1,6 @@
 #include "hostcalls.h"
 #include "broker_client.h"
+#include "display.h"
 
 #include <errno.h>
 #include <stdint.h>
@@ -17,18 +18,26 @@ static int64_t cp0_monotonic_milliseconds(
 
 static int32_t cp0_wait_event(wasm_exec_env_t execution_environment,
                               int32_t timeout_ms) {
-    struct timespec timeout;
-
     (void)execution_environment;
     if (timeout_ms < 0 || timeout_ms > 1000)
         return -1;
-    timeout.tv_sec = timeout_ms / 1000;
-    timeout.tv_nsec = (long)(timeout_ms % 1000) * 1000L * 1000L;
-    while (nanosleep(&timeout, &timeout) != 0) {
-        if (errno != EINTR)
-            return -1;
-    }
-    return 0;
+    return cp0_display_wait(timeout_ms);
+}
+
+static int32_t cp0_get_display_dimensions(
+    wasm_exec_env_t execution_environment) {
+    (void)execution_environment;
+    return (int32_t)cp0_display_dimensions();
+}
+
+static int32_t cp0_present_rgb565(wasm_exec_env_t execution_environment,
+                                  const uint8_t *pixels,
+                                  uint32_t pixel_bytes,
+                                  const uint8_t *damage,
+                                  uint32_t damage_bytes) {
+    (void)execution_environment;
+    return cp0_display_present_rgb565(pixels, (size_t)pixel_bytes, damage,
+                                      (size_t)damage_bytes);
 }
 
 static int32_t cp0_post_notification(wasm_exec_env_t execution_environment,
@@ -45,6 +54,9 @@ static NativeSymbol symbols[] = {
     {"cp0_monotonic_milliseconds", (void *)cp0_monotonic_milliseconds, "()I",
      NULL},
     {"cp0_wait_event", (void *)cp0_wait_event, "(i)i", NULL},
+    {"cp0_display_dimensions", (void *)cp0_get_display_dimensions, "()i",
+     NULL},
+    {"cp0_present_rgb565", (void *)cp0_present_rgb565, "(*~*~)i", NULL},
     {"cp0_post_notification", (void *)cp0_post_notification, "(*~*~)i", NULL},
 };
 

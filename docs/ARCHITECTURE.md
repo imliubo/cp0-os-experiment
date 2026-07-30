@@ -67,11 +67,12 @@ socket；第三方应用不加入该组。可信 Shell 协议以 Wayland peer UI
 - 独立 UID、PID/mount/network namespace 和 cgroup；
 - `no_new_privs`、capability 全部移除、seccomp syscall allowlist；
 - 只读应用包、一个带配额的私有数据目录、空的设备目录；
-- 不暴露 system D-Bus、Wayland socket、evdev、DRM、ALSA 和 GPIO；
-- 只有受信任的 App Runtime 持有 Wayland 连接并代理 SDK 调用。
+- 不暴露 system D-Bus、Wayland socket 路径、evdev、DRM、ALSA 和 GPIO；
+- PID 1 只把预连接的 Wayland FD 3 交给受信任的 App Runtime，由它代理 SDK 调用。
 
-App Runtime 在应用线性内存与 Wayland surface 之间传递 320x170 RGB565 帧。单帧约
-106 KiB，即使发生一次内存复制也在硬件预算内。
+App Runtime 在应用线性内存与 Wayland surface 之间传递 RGB565 帧，并转换到
+Weston 的 XRGB8888 SHM buffer。标准应用只能提交 320x150，沉浸应用可提交
+320x170；可信 shadow frame 和两个 compositor buffer 的总量仍低于 700 KiB。
 
 ## 6. 权限与能力服务
 

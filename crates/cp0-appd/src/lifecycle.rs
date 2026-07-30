@@ -323,6 +323,17 @@ impl AppManager {
                 "broker socket is not a root-owned Unix socket".into(),
             ));
         }
+        let wayland_path = Path::new(&self.paths.layout.wayland_socket);
+        let wayland_parent = wayland_path.parent().ok_or_else(|| {
+            AppManagerError::InvalidHostIdentity("Wayland socket has no parent".into())
+        })?;
+        require_root_controlled_directory(wayland_parent, "Wayland runtime directory")?;
+        let wayland = secure_metadata(wayland_path, "Wayland socket")?;
+        if !wayland.file_type().is_socket() {
+            return Err(AppManagerError::InvalidHostIdentity(
+                "Wayland endpoint is not a Unix socket".into(),
+            ));
+        }
         let package = secure_metadata(Path::new(&plan.package_dir), "package directory")?;
         require_owner_mode(&package, 0, 0o022, "package directory")?;
         let manifest = secure_metadata(&Path::new(&plan.package_dir).join("app.json"), "manifest")?;
@@ -384,6 +395,19 @@ fn require_root_directory(path: &Path, field: &'static str) -> Result<(), AppMan
         )));
     }
     require_owner_mode(&metadata, 0, 0o022, field)
+}
+
+fn require_root_controlled_directory(
+    path: &Path,
+    field: &'static str,
+) -> Result<(), AppManagerError> {
+    let metadata = secure_metadata(path, field)?;
+    if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o002 != 0 {
+        return Err(AppManagerError::InvalidHostIdentity(format!(
+            "{field} must be a root-owned directory that is not world-writable"
+        )));
+    }
+    Ok(())
 }
 
 pub fn lookup_unix_account(user: &str) -> Result<(u32, u32), AppManagerError> {
@@ -527,6 +551,7 @@ mod tests {
                     data_root: root.join("data"),
                     runtime_path: runtime,
                     broker_socket: root.join("broker.sock"),
+                    wayland_socket: root.join("wayland.sock"),
                 },
             },
             manifest,
