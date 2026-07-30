@@ -9,7 +9,8 @@ WebAssembly；应用不能直接访问 Linux 设备节点、系统总线或其�
 ## 当前状态
 
 Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真机验收，Phase 2
-已完成最小 compositor 基线、Phase 2A System Shell 和 Phase 2B 可信 policy 核心。
+已完成最小 compositor 基线、Phase 2A System Shell、Phase 2B/2C 可信单前台策略，
+并进入 Phase 3 应用运行时与隔离实现。
 当前仓库包含：
 
 - 系统架构与资源预算；
@@ -29,6 +30,8 @@ Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真�
   compositor 可信层和全局 Home/Back/Tasks/Power 协议。
 - Phase 2C 单前台窗口策略：compositor surface token、应用发现/选择、可信层与应用层
   切换、焦点恢复、四页面像素回归和双客户端真机压力测试。
+- Phase 3A 静态 WAMR App Runtime、每应用稳定 UID、bubblewrap namespace、runtime
+  seccomp、systemd cgroup 硬限制及资源耗尽真机负向测试。
 
 ## 快速验证
 
@@ -54,3 +57,5 @@ Phase 2B 的安全不变量与实现边界见
 [Trusted compositor policy](docs/PHASE2B-COMPOSITOR-POLICY.md)。
 Phase 2C 的单前台策略和真机切换结果见
 [Single-foreground window switching](docs/PHASE2C-WINDOW-SWITCHING.md)。
+Phase 3A 的 runtime、沙箱契约和真机安全验证见
+[App Runtime and Linux sandbox](docs/PHASE3A-APP-RUNTIME.md)。

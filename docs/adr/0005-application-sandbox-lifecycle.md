@@ -46,6 +46,12 @@ Runtime cannot retain the mount and namespace syscalls needed during setup. The
 runtime allowlist, inherited descriptor protocol, account registry and quota
 backend are required before `appd` can launch production applications.
 
+`ProtectKernelTunables=yes` cannot be applied to the outer transient unit: its
+systemd `/proc/sys` remount prevents an unprivileged user namespace from mounting
+the private `/proc` required by bubblewrap. The application still cannot change
+host tunables because it is in a non-initial user namespace and the runtime
+seccomp policy rejects `open`, `openat` and all mount syscalls.
+
 ## Consequences
 
 - A compromised WASM runtime is still confined by a unique host UID, namespaces,

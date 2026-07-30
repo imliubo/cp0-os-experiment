@@ -50,9 +50,12 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 - [ ] 实现 `appd` 生命周期、每应用 UID、namespace、seccomp 和 cgroup。
 - [x] 冻结首版 `appd` 沙箱启动契约：稳定应用账户、systemd cgroup、bubblewrap
   namespace、只读应用包和唯一可写私有数据目录。
+- [x] 固定并静态构建 WAMR 2.4.5，真机贯通每应用 UID、systemd cgroup、
+  bubblewrap namespace、runtime seccomp 和 WASM 执行。
 - 实现 manifest 权限数据库及网络、文档、音频、相机和 LoRa/GPIO broker。
 - 定义 Intent Broker 和应用私有存储配额。
-- 建立恶意应用测试集，覆盖路径逃逸、设备访问、IPC 和资源耗尽。
+- [ ] 建立恶意应用测试集，已覆盖 seccomp 旁路和 cgroup 资源耗尽；继续覆盖路径
+  逃逸、设备访问和 IPC。
 
 完成条件：测试应用只能使用被授予的能力；拒绝权限后没有旁路；OOM/崩溃不会影响
 Shell 和其他应用数据。

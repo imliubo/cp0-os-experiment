@@ -140,17 +140,18 @@ pub fn build_sandbox_plan(
         format!("User={app_user}"),
         format!("Group={app_user}"),
         format!("MemoryMax={memory_max_bytes}"),
+        "MemorySwapMax=0".into(),
         "TasksMax=32".into(),
         "UMask=0077".into(),
         "NoNewPrivileges=yes".into(),
         "PrivateDevices=yes".into(),
         "PrivateTmp=yes".into(),
         "ProtectSystem=strict".into(),
+        format!("ReadWritePaths={data}"),
         "ProtectHome=yes".into(),
-        "ProtectKernelTunables=yes".into(),
         "ProtectKernelModules=yes".into(),
         "ProtectControlGroups=yes".into(),
-        "RestrictAddressFamilies=AF_UNIX".into(),
+        "RestrictAddressFamilies=AF_UNIX AF_NETLINK".into(),
         "CapabilityBoundingSet=".into(),
         "AmbientCapabilities=".into(),
         "LockPersonality=yes".into(),
@@ -279,16 +280,20 @@ mod tests {
         assert!(!plan.arguments.iter().any(|value| value == "/usr"));
         assert!(
             plan.systemd_properties
-                .contains(&"RestrictAddressFamilies=AF_UNIX".into())
+                .contains(&"RestrictAddressFamilies=AF_UNIX AF_NETLINK".into())
         );
         assert!(
             plan.systemd_properties
                 .contains(&"CapabilityBoundingSet=".into())
         );
+        assert!(plan.systemd_properties.contains(&"MemorySwapMax=0".into()));
         assert!(
             plan.systemd_properties
                 .contains(&"PrivateDevices=yes".into())
         );
+        assert!(plan.systemd_properties.contains(
+            &"ReadWritePaths=/var/lib/cardputerzero/data/dev.cardputerzero.hello".into()
+        ));
     }
 
     #[test]

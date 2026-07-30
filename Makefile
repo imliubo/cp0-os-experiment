@@ -1,4 +1,4 @@
-.PHONY: check test fmt image verify-image
+.PHONY: check test fmt app-runtime example-app malicious-apps image verify-image
 
 check: fmt
 	jq empty schemas/app-manifest-v1.schema.json examples/hello-card/app.json
@@ -18,6 +18,15 @@ test:
 
 fmt:
 	cargo fmt --all -- --check
+
+app-runtime:
+	./scripts/build-app-runtime.sh
+
+example-app:
+	./scripts/build-example-app.sh
+
+malicious-apps:
+	./scripts/build-malicious-apps.sh
 
 image:
 	./image/build-image.sh
