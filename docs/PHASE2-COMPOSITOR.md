@@ -33,8 +33,10 @@ system-shell input path.
 V0.6 hardware validation passed with Weston 14.0.2, the DRM atomic backend,
 Pixman shadow framebuffer, kiosk shell and `weston-simple-shm` at
 `320x170@30Hz`. Libinput selected `tca8418c` when the custom seat was active.
-The non-root compositor and test client used 8.2 MiB together during the
-hardware test.
+The final image's systemd cgroup reported 9.7 MiB for the non-root compositor
+and test client, with zero restarts. Stopping the service restored `tty1`, and
+a subsequent reboot kept the compositor disabled and the recovery console
+active.
 
 ## Development activation
 

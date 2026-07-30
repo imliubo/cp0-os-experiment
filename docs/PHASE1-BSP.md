@@ -90,13 +90,16 @@ CP0_RESUME_BUILD=1 ./image/build-image.sh
 
 2026-07-30 的 V0.6 精简镜像真机验收结果：
 
-- `MemTotal` 为 424756 KiB，空闲系统约使用 96 MiB，zram 为 192 MiB；
-- 启动到 `multi-user.target` 为 17.8 秒；
+- `MemTotal` 为 424756 KiB，最终 Phase 2 候选的空闲系统约使用 151 MiB，zram 为
+  192 MiB；
+- 首次扩容启动到 `multi-user.target` 为 27.7 秒，后续稳定启动为 18.1 秒；
 - LCD、RGB565 framebuffer、TCA8418 键盘、ES8389 音频、电池、memory cgroup
-  和 AppArmor smoke test 全部通过；
-- 启动后采样的 SD 写入量约 0.86 MiB，journald 保持 volatile；
-- 安装 `raspberrypi-sys-mods` 后，32 GB 卡的根分区和 ext4 从 976 MiB 自动扩展到
-  28.6 GiB。
+  和 AppArmor smoke test 全部通过，`failures=0`；未接相机与未暴露通用
+  `/dev/i2c-1` 记录为非阻塞警告；
+- 首次扩容后 ext4 会运行一次 `ext4lazyinit` 初始化新增 inode table；该线程退出后，
+  20 秒稳定采样窗口仅写入约 16 KiB，journald 保持 volatile；
+- 32 GB 卡的根分区和 ext4 在首次启动自动从 976 MiB 扩展到 28.2 GiB；服务完成后
+  自停用，第二次启动根分区保持 `rw,noatime`。
 
 ## 无调试接口时的首次启动
 
