@@ -2,6 +2,14 @@
 
 source "${STAGE_DIR}/01-compositor/weston.env"
 
+shell_source="${ROOTFS_DIR}/tmp/cardputerzero-system-shell"
+install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/cp0_ui.h" \
+    "${shell_source}/cp0_ui.h"
+install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/ui.c" \
+    "${shell_source}/ui.c"
+install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/main.c" \
+    "${shell_source}/main.c"
+
 on_chroot <<CHROOT
 set -e
 
@@ -56,6 +64,8 @@ toolchain_deps="
 apt-get update
 apt-get install -y --no-install-recommends \$build_deps
 
+rm -rf /tmp/cardputerzero-weston /tmp/cardputerzero-weston-build \
+    /tmp/cardputerzero-weston-install
 http_proxy="$APT_PROXY" https_proxy="$APT_PROXY" \
     git clone --no-checkout "${WESTON_REPOSITORY}" /tmp/cardputerzero-weston
 git -C /tmp/cardputerzero-weston checkout "${WESTON_COMMIT}"
@@ -94,6 +104,16 @@ meson setup /tmp/cardputerzero-weston-build /tmp/cardputerzero-weston \
     -Dtests=false \
     -Ddoc=false
 meson compile -C /tmp/cardputerzero-weston-build
+
+cc -std=c11 -Os -Wall -Wextra -Werror \
+    -I/tmp/cardputerzero-system-shell \
+    -I/tmp/cardputerzero-weston-build/protocol \
+    /tmp/cardputerzero-system-shell/main.c \
+    /tmp/cardputerzero-system-shell/ui.c \
+    /tmp/cardputerzero-weston-build/protocol/xdg-shell-protocol.c \
+    \$(pkg-config --cflags --libs wayland-client) \
+    -o /tmp/cardputerzero-system-shell/cardputerzero-system-shell
+
 DESTDIR=/tmp/cardputerzero-weston-install \
     meson install --strip -C /tmp/cardputerzero-weston-build
 
@@ -101,6 +121,9 @@ install -D -m 0755 /tmp/cardputerzero-weston-install/usr/bin/weston \
     /usr/bin/weston
 install -D -m 0755 /tmp/cardputerzero-weston-install/usr/bin/weston-simple-shm \
     /usr/bin/weston-simple-shm
+install -D -m 0755 \
+    /tmp/cardputerzero-system-shell/cardputerzero-system-shell \
+    /usr/bin/cardputerzero-system-shell
 install -D -m 0755 \
     /tmp/cardputerzero-weston-install/usr/lib/aarch64-linux-gnu/libweston-14.so.0.0.2 \
     /usr/lib/aarch64-linux-gnu/libweston-14.so.0.0.2
@@ -129,7 +152,8 @@ fi
 
 rm -rf /tmp/cardputerzero-weston \
     /tmp/cardputerzero-weston-build \
-    /tmp/cardputerzero-weston-install
+    /tmp/cardputerzero-weston-install \
+    /tmp/cardputerzero-system-shell
 apt-get purge -y \$build_deps \$toolchain_deps
 apt-get autoremove -y --purge
 apt-get clean
@@ -140,8 +164,13 @@ install -D -m 0644 "${STAGE_DIR}/01-compositor/files/weston.ini" \
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/files/cardputerzero-compositor.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-compositor.service"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/files/cardputerzero-system-shell.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-system-shell.service"
 install -D -m 0755 "${STAGE_DIR}/01-compositor/files/start-compositor.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/start-compositor.sh"
+install -D -m 0755 "${STAGE_DIR}/01-compositor/files/wait-wayland.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/wait-wayland.sh"
 
 on_chroot <<'CHROOT'
 set -e

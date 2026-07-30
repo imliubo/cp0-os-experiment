@@ -15,11 +15,6 @@ input=$1
 output=${2:-"$repo_root/target/bsp/bcm2710-rpi-cm0.dtb"}
 bootargs=$(fdtget -t s "$input" /chosen bootargs)
 
-if [[ " $bootargs " != *" cgroup_disable=memory "* ]]; then
-    echo "error: input DTB does not contain cgroup_disable=memory" >&2
-    exit 1
-fi
-
 filtered=()
 for token in $bootargs; do
     [[ "$token" == cgroup_disable=memory ]] || filtered+=("$token")
@@ -27,7 +22,9 @@ done
 
 mkdir -p "$(dirname "$output")"
 cp "$input" "$output"
-fdtput -t s "$output" /chosen bootargs "${filtered[*]}"
+if [[ "$bootargs" != "${filtered[*]}" ]]; then
+    fdtput -t s "$output" /chosen bootargs "${filtered[*]}"
+fi
 
 result=$(fdtget -t s "$output" /chosen bootargs)
 if [[ " $result " == *" cgroup_disable=memory "* ]]; then

@@ -12,6 +12,7 @@ apt-get install -y --no-install-recommends \
     git \
     linux-headers-rpi-v8
 
+rm -rf /tmp/cardputerzero-bsp
 http_proxy="$APT_PROXY" https_proxy="$APT_PROXY" \
     git clone --no-checkout "${BSP_REPOSITORY}" /tmp/cardputerzero-bsp
 git -C /tmp/cardputerzero-bsp checkout "${BSP_COMMIT}"
@@ -30,17 +31,15 @@ depmod -a "\$KVER"
 
 CM0_DTB=/boot/firmware/bcm2710-rpi-cm0.dtb
 BOOTARGS=\$(fdtget -t s "\$CM0_DTB" /chosen bootargs)
-case " \$BOOTARGS " in
-    *" cgroup_disable=memory "*) ;;
-    *) echo "expected cgroup_disable=memory in \$CM0_DTB" >&2; exit 1 ;;
-esac
 FILTERED=
 for token in \$BOOTARGS; do
     if [ "\$token" != cgroup_disable=memory ]; then
         FILTERED="\${FILTERED:+\$FILTERED }\$token"
     fi
 done
-fdtput -t s "\$CM0_DTB" /chosen bootargs "\$FILTERED"
+if [ "\$BOOTARGS" != "\$FILTERED" ]; then
+    fdtput -t s "\$CM0_DTB" /chosen bootargs "\$FILTERED"
+fi
 fdtget -t s "\$CM0_DTB" /chosen bootargs | grep -qv cgroup_disable=memory
 
 rm -rf /tmp/cardputerzero-bsp
@@ -56,10 +55,23 @@ cmdline="${ROOTFS_DIR}/boot/firmware/cmdline.txt"
 sed -i -E '/^dtoverlay=vc4-kms-v3d(,cma-[0-9]+)?[[:space:]]*$/d' "$boot_config"
 sed -i '/^gpu_mem=/d' "$boot_config"
 sed -i '/^gpu_mem_512=/d' "$boot_config"
+sed -i '/^# CardputerZero OS CM0 V0.6 BSP$/d' "$boot_config"
+sed -i '/^# BEGIN CardputerZero OS BSP$/,/^# END CardputerZero OS BSP$/d' \
+    "$boot_config"
+for managed_line in \
+    'enable_uart=1' \
+    'dtoverlay=dwc2' \
+    'dtoverlay=cardputerzero-v5-overlay' \
+    'dtoverlay=bq27220_v5' \
+    'dtoverlay=bmi270_bmm150_overlay' \
+    'dtoverlay=gpio-ir,gpio_pin=13,gpio_pull=up' \
+    'dtoverlay=gpio-ir-tx,gpio_pin=12'; do
+    sed -i "\|^${managed_line}$|d" "$boot_config"
+done
 
 cat >>"$boot_config" <<'CONFIG'
 
-# CardputerZero OS CM0 V0.6 BSP
+# BEGIN CardputerZero OS BSP
 [all]
 gpu_mem=64
 gpu_mem_512=64
@@ -71,6 +83,7 @@ dtoverlay=bq27220_v5
 dtoverlay=bmi270_bmm150_overlay
 dtoverlay=gpio-ir,gpio_pin=13,gpio_pull=up
 dtoverlay=gpio-ir-tx,gpio_pin=12
+# END CardputerZero OS BSP
 CONFIG
 
 for token in quiet splash fbcon=map:off fbcon=map:0; do

@@ -1,0 +1,25 @@
+[Unit]
+Description=CardputerZero trusted System Shell
+BindsTo=cardputerzero-compositor.service
+After=cardputerzero-compositor.service
+PartOf=cardputerzero-compositor.service
+ConditionPathExists=/usr/bin/cardputerzero-system-shell
+
+[Service]
+Type=simple
+User=cp0-shell
+Group=cp0-shell
+Environment=XDG_RUNTIME_DIR=/run/cardputerzero
+Environment=WAYLAND_DISPLAY=wayland-0
+ExecStartPre=/usr/libexec/cardputerzero/wait-wayland.sh
+ExecStart=/usr/bin/cardputerzero-system-shell
+Restart=always
+RestartSec=250ms
+TimeoutStopSec=3
+MemoryMax=32M
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+

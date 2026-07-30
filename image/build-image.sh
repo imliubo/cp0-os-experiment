@@ -11,6 +11,7 @@ container_image="cardputerzero-pigen:${PI_GEN_COMMIT:0:12}"
 deploy_dir="$repo_root/deploy"
 apt_proxy=${CP0_APT_PROXY:-${http_proxy:-}}
 resume_build=${CP0_RESUME_BUILD:-0}
+image_name=${CP0_IMAGE_NAME:-}
 
 if [[ $(uname -s) == Darwin && -n "$apt_proxy" ]]; then
     apt_proxy=${apt_proxy/127.0.0.1/host.docker.internal}
@@ -59,6 +60,11 @@ printf '%s\n' \
 rm -rf "$pi_gen_dir/stage-cardputerzero-os"
 cp -R "$repo_root/image/pi-gen/stage-cardputerzero-os" \
     "$pi_gen_dir/stage-cardputerzero-os"
+mkdir -p "$pi_gen_dir/stage-cardputerzero-os/01-compositor/system-shell"
+cp "$repo_root/system-shell/include/cp0_ui.h" \
+    "$repo_root/system-shell/src/ui.c" \
+    "$repo_root/system-shell/src/main.c" \
+    "$pi_gen_dir/stage-cardputerzero-os/01-compositor/system-shell/"
 # The stage1 user already exists. Installing userconf-pi after sizing the
 # image adds a large Raspberry Pi utility dependency set and can fill rootfs.
 touch "$pi_gen_dir/export-image/01-user-rename/SKIP"
@@ -70,6 +76,14 @@ cleanup() {
 trap cleanup EXIT
 
 cp "$repo_root/image/pi-gen/config.example" "$config_file"
+if [[ -n "$image_name" ]]; then
+    if [[ ! "$image_name" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        echo "error: CP0_IMAGE_NAME contains unsupported characters" >&2
+        exit 2
+    fi
+    sed -i.bak "s/^IMG_NAME=.*/IMG_NAME=$image_name/" "$config_file"
+    rm -f "${config_file}.bak"
+fi
 printf 'FIRST_USER_PASS=%q\n' "$password" >>"$config_file"
 
 if [[ -n ${CP0_SSH_PUBLIC_KEY:-} ]]; then

@@ -41,7 +41,9 @@ active.
 ## Development activation
 
 The compositor remains disabled until the real System Shell replaces the SHM
-test client. To switch the LCD from the recovery console to the compositor:
+test client. Phase 2A now supplies that client, but default activation remains
+disabled until its compositor-side trusted overlay is complete. To switch the
+LCD from the recovery console to the compositor:
 
 ```sh
 sudo systemctl start cardputerzero-compositor.service

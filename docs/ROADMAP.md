@@ -33,6 +33,8 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 
 - [x] 固定并裁剪构建 Weston，真机验证 DRM/Pixman kiosk 与单前台测试客户端。
 - [x] 使用专用 seat 隔离内部 LCD/键盘，并建立 320x170 headless 测试后端。
+- [x] 实现 Phase 2A 原生 Wayland System Shell：首页、状态栏、系统电源弹窗骨架、
+  双缓冲 renderer、定时状态刷新和崩溃自动返回首页。
 - [ ] 实现 Launcher、状态栏、系统弹窗、沉浸模式和崩溃返回首页。
 - [ ] 统一键盘焦点、Home/Back/任务切换快捷键和屏幕休眠。
 - [ ] 建立截图回归测试并完成两个客户端的可靠切换。

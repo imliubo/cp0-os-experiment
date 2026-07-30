@@ -20,5 +20,4 @@ exec /usr/bin/weston \
     --shell=kiosk \
     --socket=wayland-0 \
     --idle-time=0 \
-    --log=/run/cardputerzero/weston.log \
-    -- weston-simple-shm
+    --log=/run/cardputerzero/weston.log

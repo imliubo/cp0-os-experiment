@@ -4,7 +4,8 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/cp0-dtb-test.XXXXXX")
 cleanup() {
-    rm -f "$temp_dir/input.dtb" "$temp_dir/output.dtb"
+    rm -f "$temp_dir/input.dtb" "$temp_dir/output.dtb" \
+        "$temp_dir/output-again.dtb"
     rmdir "$temp_dir"
 }
 trap cleanup EXIT
@@ -23,5 +24,13 @@ if [[ "$result" != "$expected" ]]; then
     exit 1
 fi
 
-echo "DTB bootargs patch test passed"
+"$repo_root/scripts/patch-cm0-dtb.sh" \
+    "$temp_dir/output.dtb" \
+    "$temp_dir/output-again.dtb" >/dev/null
+result=$(fdtget -t s "$temp_dir/output-again.dtb" /chosen bootargs)
+if [[ "$result" != "$expected" ]]; then
+    echo "unexpected bootargs after second patch: $result" >&2
+    exit 1
+fi
 
+echo "DTB bootargs patch test passed"
