@@ -85,4 +85,5 @@ The process boundary was tested in three layers:
 A forced Shell `SIGKILL` changed its PID from 2731 to 2798 with `NRestarts=1`.
 The compositor stayed active, the policy accepted the replacement trusted
 surface, and camera inspection confirmed that Home returned. Physical Fn-layer
-Home/Tasks/Power mapping and two-client focus restoration remain pending.
+F1/F2/F3/F4 validation confirmed Home, Back, Tasks and Power delivery through
+the compositor. Two-client focus restoration remains pending.
