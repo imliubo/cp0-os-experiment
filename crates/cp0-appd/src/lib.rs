@@ -5,11 +5,16 @@ use cp0_manifest::AppManifest;
 use serde::Serialize;
 
 mod lifecycle;
+mod permissions;
 mod protocol;
 mod registry;
 mod server;
 
 pub use lifecycle::{AppManager, AppManagerError, InstalledApp, ManagerPaths, lookup_unix_account};
+pub use permissions::{
+    Authorization, DEFAULT_PERMISSION_PATH, PermissionChoice, PermissionEngine, PermissionError,
+    PermissionStore,
+};
 
 pub use protocol::{
     APPD_PROTOCOL_VERSION, AppSummary, AppdCommand, AppdRequest, AppdResponse, ErrorCode,
