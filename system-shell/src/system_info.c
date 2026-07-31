@@ -10,6 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/statvfs.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static bool read_document(const char *path, char *output, size_t capacity)
 {
@@ -75,6 +77,36 @@ static bool parse_uptime(const char *document, uint64_t *uptime_seconds)
     return true;
 }
 
+static bool parse_power_value(const char *document, int64_t minimum,
+                              int64_t maximum, int64_t *value)
+{
+    char *end;
+    long long parsed;
+    if (document == NULL || value == NULL || minimum > maximum)
+        return false;
+    parsed = strtoll(document, &end, 10);
+    if (end == document || (*end != '\0' && *end != '\n' && *end != '\r') ||
+        parsed < minimum || parsed > maximum)
+        return false;
+    *value = (int64_t)parsed;
+    return true;
+}
+
+static enum cp0_battery_status parse_battery_status(const char *status)
+{
+    if (status == NULL)
+        return CP0_BATTERY_UNKNOWN;
+    if (strcmp(status, "Charging") == 0)
+        return CP0_BATTERY_CHARGING;
+    if (strcmp(status, "Discharging") == 0)
+        return CP0_BATTERY_DISCHARGING;
+    if (strcmp(status, "Full") == 0)
+        return CP0_BATTERY_FULL;
+    if (strcmp(status, "Not charging") == 0)
+        return CP0_BATTERY_NOT_CHARGING;
+    return CP0_BATTERY_UNKNOWN;
+}
+
 #ifdef CP0_SYSTEM_INFO_TEST
 bool cp0_system_info_parse_meminfo(const char *document, uint64_t *total_bytes,
                                    uint64_t *available_bytes)
@@ -86,6 +118,18 @@ bool cp0_system_info_parse_uptime(const char *document,
                                   uint64_t *uptime_seconds)
 {
     return parse_uptime(document, uptime_seconds);
+}
+
+bool cp0_system_info_parse_power_value(const char *document, int64_t minimum,
+                                       int64_t maximum, int64_t *value)
+{
+    return parse_power_value(document, minimum, maximum, value);
+}
+
+enum cp0_battery_status cp0_system_info_parse_battery_status(
+    const char *status)
+{
+    return parse_battery_status(status);
 }
 #endif
 
@@ -156,6 +200,7 @@ static void collect_battery(struct cp0_system_info *info)
                  entry->d_name);
         if (!read_text(path, text, sizeof(text)) || strcmp(text, "Battery") != 0)
             continue;
+        info->battery_present = true;
         snprintf(path, sizeof(path), "/sys/class/power_supply/%s/capacity",
                  entry->d_name);
         if (read_text(path, text, sizeof(text))) {
@@ -164,9 +209,52 @@ static void collect_battery(struct cp0_system_info *info)
             if (end != text && value >= 0 && value <= 100)
                 info->battery_percent = (int)value;
         }
+        snprintf(path, sizeof(path), "/sys/class/power_supply/%s/status",
+                 entry->d_name);
+        if (read_text(path, text, sizeof(text)))
+            info->battery_status = parse_battery_status(text);
+        snprintf(path, sizeof(path), "/sys/class/power_supply/%s/voltage_now",
+                 entry->d_name);
+        if (read_text(path, text, sizeof(text)) &&
+            parse_power_value(text, 0, 20000000,
+                              &info->battery_voltage_microvolts))
+            info->battery_voltage_available = true;
+        snprintf(path, sizeof(path), "/sys/class/power_supply/%s/current_now",
+                 entry->d_name);
+        if (read_text(path, text, sizeof(text)) &&
+            parse_power_value(text, -10000000, 10000000,
+                              &info->battery_current_microamps))
+            info->battery_current_available = true;
         break;
     }
     closedir(directory);
+}
+
+static enum cp0_capability_state device_capability(const char *primary,
+                                                    const char *fallback)
+{
+    struct stat metadata;
+    if (stat(primary, &metadata) == 0 ||
+        (fallback != NULL && stat(fallback, &metadata) == 0))
+        return CP0_CAPABILITY_AVAILABLE;
+    return CP0_CAPABILITY_UNAVAILABLE;
+}
+
+static void collect_capabilities(struct cp0_system_info *info)
+{
+    struct stat metadata;
+    if (stat("/dev/i2c-1", &metadata) != 0) {
+        info->i2c_bus_state = CP0_BUS_UNAVAILABLE;
+    } else if (access("/dev/i2c-1", R_OK | W_OK) == 0) {
+        info->i2c_bus_state = CP0_BUS_READY;
+    } else {
+        info->i2c_bus_state = CP0_BUS_INACCESSIBLE;
+    }
+    info->display_state = device_capability("/dev/dri/card0", "/dev/fb0");
+    info->keyboard_state =
+        device_capability("/proc/bus/input/devices", NULL);
+    info->audio_state = device_capability("/proc/asound/cards", "/dev/snd");
+    info->camera_state = device_capability("/dev/video0", NULL);
 }
 
 static int interface_priority(const char *name)
@@ -223,4 +311,5 @@ void cp0_system_info_collect(struct cp0_system_info *info)
     collect_device(info);
     collect_battery(info);
     collect_network(info);
+    collect_capabilities(info);
 }

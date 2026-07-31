@@ -46,7 +46,10 @@ pub use installer::{
 pub use intent::{
     IntentQueue, IntentQueueError, MAX_INTENT_PAYLOAD_BYTES, MAX_PENDING_INTENTS, PendingIntent,
 };
-pub use lifecycle::{AppManager, AppManagerError, InstalledApp, ManagerPaths, lookup_unix_account};
+pub use lifecycle::{
+    AppManager, AppManagerError, AppUsage, InstalledApp, ManagerPaths, UninstalledApp,
+    lookup_unix_account,
+};
 pub use network_client::{
     DEFAULT_NETWORK_SOCKET, NetworkClient, NetworkClientError, NetworkHttpResponse,
 };

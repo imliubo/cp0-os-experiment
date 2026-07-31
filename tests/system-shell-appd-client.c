@@ -12,6 +12,9 @@ int cp0_appd_test_parse_app_page(
 int cp0_appd_test_parse_lifecycle_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *expected_kind, const char *app_id);
+int cp0_appd_test_parse_uninstall_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *app_id);
 bool cp0_appd_test_valid_app_id(const char *app_id);
 bool cp0_appd_test_valid_document_id(const char *document_id);
 int cp0_appd_test_parse_notification_response(
@@ -31,10 +34,16 @@ int main(void)
         "\"status\":\"ok\",\"data\":{\"kind\":\"applications\","
         "\"apps\":[{\"app_id\":\"dev.cardputerzero.first\","
         "\"name\":\"First Card\",\"version\":\"1.0.0\","
-        "\"display\":\"standard\",\"running\":false},{"
+        "\"display\":\"standard\",\"running\":false,"
+        "\"installed_at_unix_seconds\":1722470400,"
+        "\"package_bytes\":65536,\"data_bytes\":4096,"
+        "\"permissions\":[\"network.client\",\"camera.capture\"]},{"
         "\"app_id\":\"dev.cardputerzero.second\","
         "\"name\":\"Second Card\",\"version\":\"2.1.0\","
-        "\"display\":\"immersive\",\"running\":true}],"
+        "\"display\":\"immersive\",\"running\":true,"
+        "\"installed_at_unix_seconds\":1722470500,"
+        "\"package_bytes\":1000,\"data_bytes\":2000,"
+        "\"permissions\":[]}],"
         "\"next_offset\":10}}}";
     struct cp0_app_summary apps[2];
     size_t count;
@@ -46,6 +55,11 @@ int main(void)
     assert(count == 2 && has_next && next_offset == 10);
     assert(strcmp(apps[0].name, "First Card") == 0);
     assert(!apps[0].running && !apps[0].immersive);
+    assert(apps[0].installed_at_unix_seconds == 1722470400);
+    assert(apps[0].package_bytes == 65536 && apps[0].data_bytes == 4096);
+    assert(apps[0].permissions ==
+           (CP0_APP_PERMISSION_NETWORK_CLIENT |
+            CP0_APP_PERMISSION_CAMERA_CAPTURE));
     assert(strcmp(apps[1].version, "2.1.0") == 0);
     assert(apps[1].running && apps[1].immersive);
     assert(cp0_appd_test_parse_app_page(
@@ -60,7 +74,9 @@ int main(void)
         "\"status\":\"ok\",\"data\":{\"kind\":\"applications\","
         "\"apps\":[{\"app_id\":\"dev.cardputerzero.bad\","
         "\"name\":\"Bad\",\"version\":\"1.0.0\","
-        "\"display\":\"overlay\",\"running\":true}],"
+        "\"display\":\"overlay\",\"running\":true,"
+        "\"installed_at_unix_seconds\":1,\"package_bytes\":1,"
+        "\"data_bytes\":0,\"permissions\":[]}],"
         "\"next_offset\":null}}}";
     assert(cp0_appd_test_parse_app_page(
                bad_display, strlen(bad_display), 9, 0, apps, 2, &count,
@@ -80,6 +96,28 @@ int main(void)
     assert(cp0_appd_test_parse_lifecycle_response(
                started, strlen(started), 11, "started",
                "dev.cardputerzero.second") < 0);
+
+    static const char uninstalled[] =
+        "{\"protocol_version\":1,\"request_id\":17,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"uninstalled\","
+        "\"app_id\":\"dev.cardputerzero.first\","
+        "\"private_data_retained\":true,"
+        "\"package_cleanup_pending\":false}}}";
+    assert(cp0_appd_test_parse_uninstall_response(
+               uninstalled, strlen(uninstalled), 17,
+               "dev.cardputerzero.first") == 0);
+    assert(cp0_appd_test_parse_uninstall_response(
+               uninstalled, strlen(uninstalled), 17,
+               "dev.cardputerzero.second") < 0);
+    static const char destructive_uninstall[] =
+        "{\"protocol_version\":1,\"request_id\":18,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"uninstalled\","
+        "\"app_id\":\"dev.cardputerzero.first\","
+        "\"private_data_retained\":false,"
+        "\"package_cleanup_pending\":false}}}";
+    assert(cp0_appd_test_parse_uninstall_response(
+               destructive_uninstall, strlen(destructive_uninstall), 18,
+               "dev.cardputerzero.first") < 0);
 
     static const char notification_response[] =
         "{\"protocol_version\":1,\"request_id\":12,\"outcome\":{"

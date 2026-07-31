@@ -44,12 +44,23 @@ enum cp0_ui_action {
     CP0_UI_GO_HOME,
     CP0_UI_SHOW_TASKS,
     CP0_UI_SHOW_POWER,
+    CP0_UI_BRIGHTNESS_DOWN,
+    CP0_UI_BRIGHTNESS_UP,
+    CP0_UI_MUTE,
+    CP0_UI_VOLUME_DOWN,
+    CP0_UI_VOLUME_UP,
+    CP0_UI_MEDIA_PLAY_PAUSE,
+    CP0_UI_MEDIA_PREVIOUS,
+    CP0_UI_MEDIA_NEXT,
+    CP0_UI_HELP,
+    CP0_UI_SCREENSHOT,
 };
 
 enum cp0_ui_event {
     CP0_UI_EVENT_NONE,
     CP0_UI_EVENT_SLEEP,
     CP0_UI_EVENT_RESTART,
+    CP0_UI_EVENT_POWER_OFF,
     CP0_UI_EVENT_OPEN_APP,
     CP0_UI_EVENT_STOP_APP,
     CP0_UI_EVENT_PERMISSION_ONCE,
@@ -63,6 +74,11 @@ enum cp0_ui_event {
     CP0_UI_EVENT_DEVELOPER_DISABLE,
     CP0_UI_EVENT_RECOVERY_ENABLE,
     CP0_UI_EVENT_RECOVERY_DISABLE,
+    CP0_UI_EVENT_UNINSTALL_APP,
+    CP0_UI_EVENT_MEDIA_PLAY_PAUSE,
+    CP0_UI_EVENT_MEDIA_PREVIOUS,
+    CP0_UI_EVENT_MEDIA_NEXT,
+    CP0_UI_EVENT_SCREENSHOT,
 };
 
 enum cp0_ui_authority {
@@ -101,6 +117,10 @@ struct cp0_ui_catalog_app {
     const char *app_id;
     const char *name;
     const char *version;
+    uint16_t permissions;
+    uint64_t installed_at_unix_seconds;
+    uint64_t package_bytes;
+    uint64_t data_bytes;
 };
 
 struct cp0_ui_app {
@@ -108,6 +128,10 @@ struct cp0_ui_app {
     bool installed;
     bool immersive;
     enum cp0_ui_app_state state;
+    uint16_t permissions;
+    uint64_t installed_at_unix_seconds;
+    uint64_t package_bytes;
+    uint64_t data_bytes;
     char app_id[CP0_UI_APP_ID_MAX + 1];
     char name[CP0_UI_APP_NAME_MAX + 1];
     char version[CP0_UI_APP_VERSION_MAX + 1];
@@ -117,6 +141,17 @@ struct cp0_ui_device_info {
     bool available;
     int battery_percent;
     int temperature_millicelsius;
+    bool battery_present;
+    bool battery_voltage_available;
+    bool battery_current_available;
+    int64_t battery_voltage_microvolts;
+    int64_t battery_current_microamps;
+    unsigned int battery_status;
+    unsigned int i2c_bus_state;
+    unsigned int display_state;
+    unsigned int keyboard_state;
+    unsigned int audio_state;
+    unsigned int camera_state;
     uint64_t uptime_seconds;
     uint64_t memory_total_bytes;
     uint64_t memory_available_bytes;
@@ -178,6 +213,10 @@ struct cp0_ui {
     unsigned int store_count;
     unsigned int task_action_selected;
     unsigned int settings_selected;
+    unsigned int settings_item_selected;
+    unsigned int app_detail_page;
+    unsigned int app_permission_offset;
+    unsigned int app_action_selected;
     unsigned int device_page;
     unsigned int network_page;
     bool app_list_truncated;
@@ -185,6 +224,7 @@ struct cp0_ui {
     bool store_catalog_stale;
     bool store_detail;
     bool app_detail;
+    bool app_uninstall_confirm;
     bool settings_detail;
     enum cp0_ui_store_status store_status;
     unsigned int dialog_selected;
@@ -192,6 +232,22 @@ struct cp0_ui {
     bool settings_available;
     bool settings_confirm;
     bool settings_confirm_recovery;
+    bool wifi_enabled;
+    bool airplane_mode;
+    bool muted;
+    bool key_sounds;
+    bool camera_mirror;
+    bool local_simulation;
+    unsigned int brightness_percent;
+    unsigned int volume_percent;
+    unsigned int theme;
+    unsigned int screen_timeout;
+    unsigned int camera_resolution;
+    unsigned int camera_rotation;
+    bool system_action_overlay;
+    bool help_overlay;
+    unsigned int system_action_kind;
+    unsigned int system_action_ticks;
     bool developer_mode;
     bool developer_mode_allowed;
     bool recovery_mode;
@@ -207,6 +263,17 @@ struct cp0_ui {
     int battery_percent;
     bool device_available;
     int temperature_millicelsius;
+    bool battery_present;
+    bool battery_voltage_available;
+    bool battery_current_available;
+    int64_t battery_voltage_microvolts;
+    int64_t battery_current_microamps;
+    unsigned int battery_status;
+    unsigned int i2c_bus_state;
+    unsigned int display_state;
+    unsigned int keyboard_state;
+    unsigned int audio_state;
+    unsigned int camera_state;
     uint64_t uptime_seconds;
     uint64_t memory_total_bytes;
     uint64_t memory_available_bytes;
@@ -288,6 +355,8 @@ bool cp0_ui_show_notification(struct cp0_ui *ui, uint64_t notification_id,
                               const char *app_name, const char *title,
                               const char *body);
 void cp0_ui_clear_notification(struct cp0_ui *ui);
+void cp0_ui_set_local_simulation(struct cp0_ui *ui, bool enabled);
+bool cp0_ui_tick(struct cp0_ui *ui);
 enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                                         enum cp0_ui_action action);
 void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,

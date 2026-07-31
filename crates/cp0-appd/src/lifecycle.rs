@@ -1,6 +1,6 @@
 use std::ffi::CString;
 use std::fmt;
-use std::fs::Metadata;
+use std::fs::{self, Metadata};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
@@ -14,6 +14,7 @@ pub const DEFAULT_REGISTRY_PATH: &str = "/var/lib/cardputerzero/registry/apps.js
 const SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
 const SYSTEMCTL_PATH: &str = "/usr/bin/systemctl";
 const COMPOSITOR_USER: &str = "cp0-compositor";
+const MAX_USAGE_TREE_ENTRIES: usize = 16_384;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagerPaths {
@@ -36,6 +37,19 @@ pub struct InstalledApp {
     pub version: String,
     pub account_user: String,
     pub account_uid: u32,
+    pub installed_at_unix_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppUsage {
+    pub package_bytes: u64,
+    pub data_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UninstalledApp {
+    pub app_id: String,
+    pub package_cleanup_pending: bool,
 }
 
 #[derive(Debug)]
@@ -52,6 +66,7 @@ pub enum AppManagerError {
     NotRunning(String),
     NoRollback(String),
     UnitFailed(&'static str),
+    PackageIo(&'static str, std::io::Error),
     Plan(crate::PlanError),
 }
 
@@ -95,6 +110,9 @@ impl fmt::Display for AppManagerError {
             }
             Self::UnitFailed(action) => {
                 write!(formatter, "application systemd unit failed to {action}")
+            }
+            Self::PackageIo(action, error) => {
+                write!(formatter, "cannot {action} application package: {error}")
             }
             Self::Plan(error) => write!(formatter, "cannot construct application sandbox: {error}"),
         }
@@ -163,6 +181,7 @@ impl AppManager {
             version: manifest.version.clone(),
             account_user: account.unix_user,
             account_uid: account.unix_uid,
+            installed_at_unix_seconds: account.installed_at_unix_seconds.unwrap_or(0),
         })
     }
 
@@ -197,6 +216,7 @@ impl AppManager {
             version,
             account_user: account.unix_user,
             account_uid: account.unix_uid,
+            installed_at_unix_seconds: account.installed_at_unix_seconds.unwrap_or(0),
         })
     }
 
@@ -213,6 +233,7 @@ impl AppManager {
                         version: version.clone(),
                         account_user: account.unix_user.clone(),
                         account_uid: account.unix_uid,
+                        installed_at_unix_seconds: account.installed_at_unix_seconds.unwrap_or(0),
                     })
             })
             .collect()
@@ -229,6 +250,7 @@ impl AppManager {
                     .expect("registry lookup only returns installed applications"),
                 account_user: account.unix_user.clone(),
                 account_uid: account.unix_uid,
+                installed_at_unix_seconds: account.installed_at_unix_seconds.unwrap_or(0),
             })
     }
 
@@ -266,6 +288,73 @@ impl AppManager {
             return Err(AppManagerError::IdentityMismatch);
         }
         Ok(manifest)
+    }
+
+    pub fn app_usage(&self, app_id: &str) -> Result<AppUsage, AppManagerError> {
+        if !cp0_manifest::is_valid_app_id(app_id) {
+            return Err(AppManagerError::NotInstalled(app_id.into()));
+        }
+        self.registry
+            .account(app_id)
+            .filter(|account| account.installed_version.is_some())
+            .ok_or_else(|| AppManagerError::NotInstalled(app_id.into()))?;
+        let package_root = self.paths.layout.apps_root.join(app_id);
+        let data_root = self.paths.layout.data_root.join(app_id);
+        Ok(AppUsage {
+            package_bytes: tree_bytes(&package_root)
+                .map_err(|error| AppManagerError::PackageIo("measure", error))?,
+            data_bytes: match fs::symlink_metadata(&data_root) {
+                Ok(_) => tree_bytes(&data_root)
+                    .map_err(|error| AppManagerError::PackageIo("measure data", error))?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+                Err(error) => return Err(AppManagerError::PackageIo("measure data", error)),
+            },
+        })
+    }
+
+    pub fn uninstall(&mut self, app_id: &str) -> Result<UninstalledApp, AppManagerError> {
+        if self.is_running(app_id)? {
+            return Err(AppManagerError::AlreadyRunning(app_id.into()));
+        }
+        self.uninstall_stopped(app_id)
+    }
+
+    fn uninstall_stopped(&mut self, app_id: &str) -> Result<UninstalledApp, AppManagerError> {
+        let account = self
+            .registry
+            .account(app_id)
+            .filter(|account| account.installed_version.is_some())
+            .ok_or_else(|| AppManagerError::NotInstalled(app_id.into()))?;
+        let app_root = self.paths.layout.apps_root.join(app_id);
+        let tombstone = self
+            .paths
+            .layout
+            .apps_root
+            .join(format!(".uninstall-{}", account.account_id));
+        let metadata = fs::symlink_metadata(&app_root)
+            .map_err(|error| AppManagerError::PackageIo("inspect", error))?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(AppManagerError::InvalidPackagePath("application directory"));
+        }
+        fs::rename(&app_root, &tombstone)
+            .map_err(|error| AppManagerError::PackageIo("stage removal", error))?;
+
+        let result = (|| {
+            let mut next_registry = self.registry.clone();
+            next_registry.uninstall(app_id)?;
+            next_registry.save_atomic(&self.paths.registry_path)?;
+            self.registry = next_registry;
+            Ok::<(), AppManagerError>(())
+        })();
+        if let Err(error) = result {
+            let _ = fs::rename(&tombstone, &app_root);
+            return Err(error);
+        }
+        let package_cleanup_pending = fs::remove_dir_all(&tombstone).is_err();
+        Ok(UninstalledApp {
+            app_id: app_id.into(),
+            package_cleanup_pending,
+        })
     }
 
     pub fn is_running(&self, app_id: &str) -> Result<bool, AppManagerError> {
@@ -534,6 +623,38 @@ fn secure_metadata(path: &Path, field: &'static str) -> Result<Metadata, AppMana
     Ok(metadata)
 }
 
+fn tree_bytes(root: &Path) -> std::io::Result<u64> {
+    let metadata = fs::symlink_metadata(root)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "usage root must be a directory, not a symbolic link",
+        ));
+    }
+
+    let mut total = metadata.len();
+    let mut visited = 1usize;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            visited = visited.saturating_add(1);
+            if visited > MAX_USAGE_TREE_ENTRIES {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "usage tree exceeds the bounded entry count",
+                ));
+            }
+            let metadata = fs::symlink_metadata(entry.path())?;
+            total = total.saturating_add(metadata.len());
+            if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    Ok(total)
+}
+
 fn require_owner_mode(
     metadata: &Metadata,
     expected_uid: u32,
@@ -701,5 +822,42 @@ mod tests {
             manager.mark_installed(&manifest),
             Err(AppManagerError::InvalidPackagePath("entrypoint"))
         ));
+    }
+
+    #[test]
+    fn measures_package_and_private_data_without_following_links() {
+        let (paths, manifest) = fixture("usage");
+        let mut manager = AppManager::from_registry(paths.clone(), AppRegistry::default()).unwrap();
+        manager.mark_installed(&manifest).unwrap();
+        let data = paths.layout.data_root.join(&manifest.id);
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("state.bin"), vec![7; 123]).unwrap();
+        symlink("/dev/null", data.join("outside")).unwrap();
+
+        let usage = manager.app_usage(&manifest.id).unwrap();
+        assert!(usage.package_bytes >= 4);
+        assert!(usage.data_bytes >= 123);
+        assert!(usage.data_bytes < 4096);
+    }
+
+    #[test]
+    fn uninstall_removes_packages_but_preserves_private_data_and_identity() {
+        let (paths, manifest) = fixture("uninstall");
+        let mut manager = AppManager::from_registry(paths.clone(), AppRegistry::default()).unwrap();
+        let installed = manager.mark_installed(&manifest).unwrap();
+        let data = paths.layout.data_root.join(&manifest.id);
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("state.bin"), b"private").unwrap();
+
+        let removed = manager.uninstall_stopped(&manifest.id).unwrap();
+        assert_eq!(removed.app_id, manifest.id);
+        assert!(!removed.package_cleanup_pending);
+        assert!(!paths.layout.apps_root.join(&manifest.id).exists());
+        assert_eq!(fs::read(data.join("state.bin")).unwrap(), b"private");
+        assert_eq!(
+            manager.registry().account(&manifest.id).unwrap().unix_uid,
+            installed.account_uid
+        );
+        assert!(manager.installed_apps().is_empty());
     }
 }

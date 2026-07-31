@@ -124,6 +124,7 @@ static void draw_text_slice(struct canvas *canvas, int x, int y,
                             uint32_t color);
 static bool copy_optional_text(char *output, size_t capacity,
                                const char *input);
+static void format_bytes(char output[16], uint64_t bytes);
 
 static const char *screen_title(const struct cp0_ui *ui)
 {
@@ -143,7 +144,15 @@ static const char *screen_title(const struct cp0_ui *ui)
     case CP0_UI_NETWORK:
         return "NETWORK";
     case CP0_UI_SETTINGS:
-        return ui->settings_detail ? "POLICY" : "SETTINGS";
+        if (ui->settings_detail) {
+            static const char *categories[] = {
+                "CONNECTIVITY", "DISPLAY", "SOUND",  "CAMERA",
+                "POWER",        "APPS & PRIVACY", "SYSTEM", "SECURITY",
+            };
+            return ui->settings_selected < 8 ? categories[ui->settings_selected]
+                                             : "SETTINGS";
+        }
+        return "SETTINGS";
     case CP0_UI_TASKS:
         return "TASKS";
     }
@@ -308,27 +317,139 @@ static void draw_labeled_value(struct canvas *canvas, int y, const char *label,
     draw_text_slice(canvas, 142, y, value, 0, 27, color);
 }
 
+static void format_install_date(char output[20], uint64_t seconds)
+{
+    if (seconds == 0 || seconds > 253402300799ULL) {
+        snprintf(output, 20, "UNKNOWN");
+        return;
+    }
+    int64_t days = (int64_t)(seconds / 86400U) + 719468;
+    int64_t era = days / 146097;
+    unsigned int day_of_era = (unsigned int)(days - era * 146097);
+    unsigned int year_of_era =
+        (day_of_era - day_of_era / 1460U + day_of_era / 36524U -
+         day_of_era / 146096U) /
+        365U;
+    int64_t year = (int64_t)year_of_era + era * 400;
+    unsigned int day_of_year =
+        day_of_era -
+        (365U * year_of_era + year_of_era / 4U - year_of_era / 100U);
+    unsigned int month_piece = (5U * day_of_year + 2U) / 153U;
+    unsigned int day =
+        day_of_year - (153U * month_piece + 2U) / 5U + 1U;
+    unsigned int month = month_piece < 10U ? month_piece + 3U
+                                           : month_piece - 9U;
+    year += month <= 2U;
+    if (year < 1970 || year > 9999 || month < 1U || month > 12U || day < 1U ||
+        day > 31U) {
+        snprintf(output, 20, "UNKNOWN");
+        return;
+    }
+    unsigned int display_year = (unsigned int)year;
+    output[0] = (char)('0' + display_year / 1000U);
+    output[1] = (char)('0' + display_year / 100U % 10U);
+    output[2] = (char)('0' + display_year / 10U % 10U);
+    output[3] = (char)('0' + display_year % 10U);
+    output[4] = '-';
+    output[5] = (char)('0' + month / 10U);
+    output[6] = (char)('0' + month % 10U);
+    output[7] = '-';
+    output[8] = (char)('0' + day / 10U);
+    output[9] = (char)('0' + day % 10U);
+    output[10] = '\0';
+}
+
 static void draw_app_detail(struct canvas *canvas, const struct cp0_ui *ui)
 {
     static const char *states[] = {"READY", "STARTING", "RUNNING", "FAILED"};
+    static const char *permission_names[] = {
+        "MICROPHONE", "AUDIO", "CAMERA", "DOCUMENTS",
+        "GPIO",       "NETWORK", "NOTIFICATIONS", "LORA",
+    };
     const struct cp0_ui_app *app = &ui->apps[ui->app_selected];
-    const char *action = app->state == CP0_UI_APP_RUNNING ? "STOP" : "OPEN";
+    char value[32];
 
     fill_rect(canvas, 8, 28, 304, 135, COLOR_SURFACE);
     fill_rect(canvas, 8, 28, 4, 135, COLOR_GREEN);
-    draw_prompt_line(canvas, 36, app->name, 0, 46);
-    draw_labeled_value(canvas, 57, "VERSION", app->version, COLOR_TEXT);
-    draw_labeled_value(canvas, 73, "STATE", states[app->state],
-                       app->state == CP0_UI_APP_FAILED ? COLOR_RED : COLOR_GREEN);
-    draw_labeled_value(canvas, 89, "DISPLAY",
-                       app->immersive ? "IMMERSIVE" : "STANDARD", COLOR_TEXT);
-    draw_text(canvas, 20, 106, "ID", 1, COLOR_MUTED);
-    draw_prompt_line(canvas, 119, app->app_id, 0, 46);
-    fill_rect(canvas, 214, 135, 82, 22, COLOR_SELECTED);
-    stroke_rect(canvas, 214, 135, 82, 22, 2,
-                app->state == CP0_UI_APP_STARTING ? COLOR_MUTED : COLOR_GREEN);
-    draw_text(canvas, 239, 143, action, 1,
-              app->state == CP0_UI_APP_STARTING ? COLOR_MUTED : COLOR_TEXT);
+    if (ui->app_detail_page == 0) {
+        draw_prompt_line(canvas, 36, app->name, 0, 46);
+        draw_labeled_value(canvas, 57, "VERSION", app->version, COLOR_TEXT);
+        draw_labeled_value(canvas, 76, "STATE", states[app->state],
+                           app->state == CP0_UI_APP_FAILED ? COLOR_RED
+                                                          : COLOR_GREEN);
+        draw_labeled_value(canvas, 95, "DISPLAY",
+                           app->immersive ? "IMMERSIVE" : "STANDARD",
+                           COLOR_TEXT);
+        format_install_date(value, app->installed_at_unix_seconds);
+        draw_labeled_value(canvas, 114, "INSTALLED", value, COLOR_TEXT);
+        draw_text(canvas, 20, 136, "ID", 1, COLOR_MUTED);
+        draw_prompt_line(canvas, 148, app->app_id, 0, 42);
+    } else if (ui->app_detail_page == 1) {
+        char package[16];
+        char data[16];
+        char total[16];
+        uint64_t total_bytes = UINT64_MAX - app->package_bytes < app->data_bytes
+                                   ? UINT64_MAX
+                                   : app->package_bytes + app->data_bytes;
+        format_bytes(package, app->package_bytes);
+        format_bytes(data, app->data_bytes);
+        format_bytes(total, total_bytes);
+        draw_labeled_value(canvas, 43, "APP PACKAGE", package, COLOR_TEXT);
+        draw_labeled_value(canvas, 67, "PRIVATE DATA", data, COLOR_TEXT);
+        draw_labeled_value(canvas, 91, "TOTAL", total, COLOR_GREEN);
+        draw_labeled_value(canvas, 119, "ON UNINSTALL", "DATA RETAINED",
+                           COLOR_YELLOW);
+        draw_labeled_value(canvas, 141, "DATA LIMIT", "APP MANIFEST",
+                           COLOR_MUTED);
+    } else if (ui->app_detail_page == 2) {
+        unsigned int row = 0;
+        unsigned int seen = 0;
+        unsigned int count = 0;
+        for (unsigned int bit = 0; bit < 8; bit++)
+            count += (app->permissions & (1U << bit)) != 0;
+        for (unsigned int bit = 0; bit < 8 && row < 4; bit++) {
+            if ((app->permissions & (1U << bit)) == 0)
+                continue;
+            if (seen++ < ui->app_permission_offset)
+                continue;
+            int y = 37 + (int)row * 27;
+            fill_rect(canvas, 20, y, 280, 23, COLOR_BAR);
+            draw_text(canvas, 31, y + 8, permission_names[bit], 1, COLOR_TEXT);
+            draw_text(canvas, 245, y + 8, "DECLARED", 1, COLOR_GREEN);
+            row++;
+        }
+        if (row == 0)
+            draw_text(canvas, 28, 58, "NO PERMISSIONS DECLARED", 1,
+                      COLOR_GREEN);
+        if (count > 4)
+            snprintf(value, sizeof(value), "%u-%u / %u",
+                     ui->app_permission_offset + 1U,
+                     ui->app_permission_offset + row, count);
+        else
+            snprintf(value, sizeof(value), "%u TOTAL", count);
+        draw_text(canvas, 20, 151, value, 1, COLOR_MUTED);
+    } else {
+        static const char *actions[] = {"OPEN / STOP", "UNINSTALL"};
+        for (unsigned int row = 0; row < 2; row++) {
+            int y = 45 + (int)row * 43;
+            bool selected = ui->app_action_selected == row;
+            fill_rect(canvas, 24, y, 272, 34,
+                      selected ? COLOR_SELECTED : COLOR_BAR);
+            stroke_rect(canvas, 24, y, 272, 34, selected ? 2 : 1,
+                        selected ? (row == 1 ? COLOR_RED : COLOR_GREEN)
+                                 : COLOR_MUTED);
+            draw_text(canvas, 40, y + 12, actions[row], 1,
+                      selected ? COLOR_TEXT : COLOR_MUTED);
+        }
+        draw_text(canvas, 24, 139,
+                  app->state == CP0_UI_APP_RUNNING
+                      ? "STOP APP BEFORE UNINSTALL"
+                      : "PRIVATE DATA WILL BE RETAINED",
+                  1, app->state == CP0_UI_APP_RUNNING ? COLOR_YELLOW
+                                                      : COLOR_MUTED);
+    }
+    snprintf(value, sizeof(value), "%u/4", ui->app_detail_page + 1U);
+    draw_text(canvas, 286, 154, value, 1, COLOR_MUTED);
 }
 
 static const char *store_state_label(const struct cp0_ui_store_app *app,
@@ -495,6 +616,20 @@ static void draw_page_mark(struct canvas *canvas, unsigned int page)
     draw_text(canvas, 286, 154, page == 0 ? "1/2" : "2/2", 1, COLOR_MUTED);
 }
 
+static void draw_page_mark_count(struct canvas *canvas, unsigned int page,
+                                 unsigned int count)
+{
+    char value[8];
+    snprintf(value, sizeof(value), "%u/%u", page + 1U, count);
+    draw_text(canvas, 286, 154, value, 1, COLOR_MUTED);
+}
+
+static const char *capability_state(unsigned int state)
+{
+    static const char *states[] = {"UNKNOWN", "UNAVAILABLE", "READY"};
+    return state < 3 ? states[state] : "UNKNOWN";
+}
+
 static void draw_device_page(struct canvas *canvas, const struct cp0_ui *ui)
 {
     char value[32];
@@ -524,7 +659,7 @@ static void draw_device_page(struct canvas *canvas, const struct cp0_ui *ui)
                 ? COLOR_MUTED
                 : (ui->temperature_millicelsius >= 80000 ? COLOR_RED
                                                           : COLOR_GREEN));
-    } else {
+    } else if (ui->device_page == 1) {
         char total[16];
         char available[16];
         format_bytes(total, ui->memory_total_bytes);
@@ -539,17 +674,69 @@ static void draw_device_page(struct canvas *canvas, const struct cp0_ui *ui)
         draw_labeled_value(canvas, 87, "STORAGE", value, COLOR_TEXT);
         snprintf(value, sizeof(value), "%s TOTAL", total);
         draw_labeled_value(canvas, 105, "", value, COLOR_MUTED);
+        draw_labeled_value(canvas, 133, "APP STORAGE", "ISOLATED", COLOR_GREEN);
+    } else if (ui->device_page == 2) {
+        static const char *statuses[] = {"UNKNOWN", "CHARGING", "DISCHARGING",
+                                         "FULL", "NOT CHARGING"};
         if (ui->battery_percent >= 0)
             snprintf(value, sizeof(value), "%d%%", ui->battery_percent);
         else
             snprintf(value, sizeof(value), "UNKNOWN");
-        draw_labeled_value(
-            canvas, 133, "BATTERY", value,
-            ui->battery_percent < 0
-                ? COLOR_MUTED
-                : (ui->battery_percent <= 15 ? COLOR_RED : COLOR_GREEN));
+        draw_labeled_value(canvas, 41, "CAPACITY", value,
+                           ui->battery_percent < 0 ? COLOR_MUTED : COLOR_GREEN);
+        draw_labeled_value(canvas, 65, "STATUS",
+                           ui->battery_status < 5
+                               ? statuses[ui->battery_status]
+                               : "UNKNOWN",
+                           ui->battery_status == 1 ? COLOR_GREEN : COLOR_TEXT);
+        if (ui->battery_voltage_available)
+            snprintf(value, sizeof(value), "%lld.%03lld V",
+                     (long long)(ui->battery_voltage_microvolts / 1000000),
+                     (long long)((ui->battery_voltage_microvolts % 1000000) /
+                                 1000));
+        else
+            snprintf(value, sizeof(value), "UNKNOWN");
+        draw_labeled_value(canvas, 89, "VOLTAGE", value,
+                           ui->battery_voltage_available ? COLOR_TEXT
+                                                         : COLOR_MUTED);
+        if (ui->battery_current_available)
+            snprintf(value, sizeof(value), "%+lld MA",
+                     (long long)(ui->battery_current_microamps / 1000));
+        else
+            snprintf(value, sizeof(value), "UNKNOWN");
+        draw_labeled_value(canvas, 113, "CURRENT", value,
+                           ui->battery_current_available ? COLOR_TEXT
+                                                         : COLOR_MUTED);
+        if (ui->battery_voltage_available && ui->battery_current_available)
+            snprintf(value, sizeof(value), "%lld MW",
+                     (long long)((ui->battery_voltage_microvolts / 1000) *
+                                 (ui->battery_current_microamps / 1000) /
+                                 1000));
+        else
+            snprintf(value, sizeof(value), "UNKNOWN");
+        draw_labeled_value(canvas, 137, "POWER", value, COLOR_MUTED);
+    } else {
+        static const char *bus_states[] = {"UNKNOWN", "UNAVAILABLE",
+                                           "INACCESSIBLE", "READY"};
+        draw_labeled_value(canvas, 41, "DISPLAY",
+                           capability_state(ui->display_state),
+                           ui->display_state == 2 ? COLOR_GREEN : COLOR_MUTED);
+        draw_labeled_value(canvas, 63, "KEYBOARD",
+                           capability_state(ui->keyboard_state),
+                           ui->keyboard_state == 2 ? COLOR_GREEN : COLOR_MUTED);
+        draw_labeled_value(canvas, 85, "AUDIO",
+                           capability_state(ui->audio_state),
+                           ui->audio_state == 2 ? COLOR_GREEN : COLOR_MUTED);
+        draw_labeled_value(canvas, 107, "CAMERA",
+                           capability_state(ui->camera_state),
+                           ui->camera_state == 2 ? COLOR_GREEN : COLOR_MUTED);
+        draw_labeled_value(canvas, 129, "I2C BUS",
+                           ui->i2c_bus_state < 4
+                               ? bus_states[ui->i2c_bus_state]
+                               : "UNKNOWN",
+                           ui->i2c_bus_state == 3 ? COLOR_GREEN : COLOR_MUTED);
     }
-    draw_page_mark(canvas, ui->device_page);
+    draw_page_mark_count(canvas, ui->device_page, 4);
 }
 
 static void draw_network_page(struct canvas *canvas, const struct cp0_ui *ui)
@@ -591,62 +778,223 @@ static void draw_network_page(struct canvas *canvas, const struct cp0_ui *ui)
 
 static void draw_settings_page(struct canvas *canvas, const struct cp0_ui *ui)
 {
-    static const char *titles[] = {"DEVELOPER MODE", "RECOVERY BOOT", "POLICY"};
-    static const char *details[] = {"INSTALL TRUSTED DEV PACKAGES",
-                                    "NEXT BOOT USES CONSOLE",
-                                    "AUTHORITY AND RESTRICTIONS"};
-    static const char *authorities[] = {"PERSONAL POLICY", "PARENT POLICY",
-                                        "ORGANIZATION POLICY"};
-    if (!ui->settings_available) {
-        draw_empty_page(canvas, "SETTINGS", "SETTINGS UNAVAILABLE", COLOR_RED);
-        return;
-    }
-    for (unsigned int row = 0; row < 3; row++) {
-        int y = 27 + (int)row * 40;
-        bool selected = ui->settings_selected == row;
-        bool enabled = row == 0 ? ui->developer_mode : ui->recovery_mode;
-        bool allowed =
-            row == 0 ? ui->developer_mode_allowed : ui->recovery_mode_allowed;
-        fill_rect(canvas, 8, y, 304, 36,
+    static const char *titles[] = {
+        "CONNECTIVITY", "DISPLAY", "SOUND",  "CAMERA",
+        "POWER",        "APPS & PRIVACY", "SYSTEM", "SECURITY",
+    };
+    static const char *details[] = {
+        "WI-FI, AIRPLANE, NETWORK", "BRIGHTNESS, THEME, TIMEOUT",
+        "VOLUME, MUTE, KEY SOUNDS", "RESOLUTION, ROTATION, MIRROR",
+        "BATTERY AND POWER ACTIONS", "APPS, STORAGE, PERMISSIONS",
+        "ABOUT, TIME, UPDATE, ACCESS", "POLICY, MODES, DEVICE LOCK",
+    };
+    unsigned int first = ui->settings_selected > 3 ? ui->settings_selected - 3 : 0;
+    for (unsigned int row = 0; row < 4 && first + row < 8; row++) {
+        unsigned int index = first + row;
+        int y = 27 + (int)row * 32;
+        bool selected = ui->settings_selected == index;
+        fill_rect(canvas, 8, y, 304, 28,
                   selected ? COLOR_SELECTED : COLOR_SURFACE);
-        stroke_rect(canvas, 8, y, 304, 36, selected ? 2 : 1,
+        stroke_rect(canvas, 8, y, 304, 28, selected ? 2 : 1,
                     selected ? COLOR_GREEN : COLOR_BAR);
-        draw_text(canvas, 20, y + 7, titles[row], 1, COLOR_TEXT);
-        if (row < 2)
-            draw_text(canvas, 230, y + 7, settings_state(enabled, allowed), 1,
-                      !allowed ? COLOR_MUTED
-                               : (enabled ? COLOR_YELLOW : COLOR_GREEN));
-        else
-            draw_text(canvas, 254, y + 7, "VIEW", 1, COLOR_GREEN);
-        draw_text(canvas, 20, y + 22, details[row], 1, COLOR_MUTED);
+        draw_text(canvas, 20, y + 6, titles[index], 1,
+                  selected ? COLOR_TEXT : COLOR_MUTED);
+        draw_text_slice(canvas, 20, y + 17, details[index], 0, 42,
+                        COLOR_MUTED);
+        draw_text(canvas, 294, y + 10, ">", 1,
+                  selected ? COLOR_GREEN : COLOR_MUTED);
     }
-    draw_text(canvas, 8, 151, authorities[ui->settings_authority], 1,
-              ui->settings_authority == CP0_UI_AUTHORITY_PERSONAL ? COLOR_MUTED
-                                                                  : COLOR_YELLOW);
-    if (!ui->store_install_allowed || ui->app_launch_restricted ||
-        ui->denied_permission_count > 0)
-        draw_text(canvas, 230, 151, "LOCKED", 1, COLOR_YELLOW);
+    draw_text(canvas, 8, 158, "8 CATEGORIES", 1, COLOR_MUTED);
 }
 
-static void draw_policy_detail(struct canvas *canvas, const struct cp0_ui *ui)
+static unsigned int settings_item_count(unsigned int category)
 {
+    static const unsigned int counts[] = {6, 3, 4, 4, 5, 4, 6, 5};
+    return category < 8 ? counts[category] : 0;
+}
+
+static void settings_item(const struct cp0_ui *ui, unsigned int category,
+                          unsigned int item, const char **label, char value[24],
+                          bool *available)
+{
+    static const char *themes[] = {"DARK", "LIGHT", "HIGH CONTRAST"};
+    static const char *timeouts[] = {"30 SEC", "1 MIN", "5 MIN", "NEVER"};
+    static const char *rotations[] = {"0 DEG", "90 DEG", "180 DEG", "270 DEG"};
     static const char *authorities[] = {"PERSONAL", "PARENT", "ORGANIZATION"};
-    char denied[16];
-    snprintf(denied, sizeof(denied), "%u DENIED", ui->denied_permission_count);
-    fill_rect(canvas, 8, 28, 304, 135, COLOR_SURFACE);
-    fill_rect(canvas, 8, 28, 4, 135, COLOR_YELLOW);
-    draw_labeled_value(canvas, 43, "AUTHORITY",
-                       authorities[ui->settings_authority], COLOR_TEXT);
-    draw_labeled_value(canvas, 67, "STORE",
-                       ui->store_install_allowed ? "ALLOWED" : "BLOCKED",
-                       ui->store_install_allowed ? COLOR_GREEN : COLOR_YELLOW);
-    draw_labeled_value(canvas, 91, "APP LAUNCH",
-                       ui->app_launch_restricted ? "RESTRICTED" : "ALLOWED",
-                       ui->app_launch_restricted ? COLOR_YELLOW : COLOR_GREEN);
-    draw_labeled_value(canvas, 115, "CAPABILITIES", denied,
-                       ui->denied_permission_count > 0 ? COLOR_YELLOW
-                                                       : COLOR_GREEN);
-    draw_labeled_value(canvas, 139, "SOURCE", "DEVICE POLICY", COLOR_MUTED);
+    *available = true;
+    value[0] = '\0';
+    switch (category) {
+    case 0: {
+        static const char *labels[] = {"WI-FI", "AIRPLANE MODE", "NETWORK DETAILS",
+                                       "BLUETOOTH", "HOTSPOT", "VPN"};
+        *label = labels[item];
+        if (item == 0)
+            snprintf(value, 24, "%s", ui->wifi_enabled ? "ON" : "OFF");
+        else if (item == 1)
+            snprintf(value, 24, "%s", ui->airplane_mode ? "ON" : "OFF");
+        else if (item == 2)
+            snprintf(value, 24, "%s", ui->network_online ? "CONNECTED" : "OFFLINE");
+        else {
+            snprintf(value, 24, "UNAVAILABLE");
+            *available = false;
+        }
+        if (item <= 1 && !ui->local_simulation) {
+            snprintf(value, 24, "UNAVAILABLE");
+            *available = false;
+        }
+        break;
+    }
+    case 1: {
+        static const char *labels[] = {"BRIGHTNESS", "THEME", "SCREEN TIMEOUT"};
+        *label = labels[item];
+        if (item == 0)
+            snprintf(value, 24, "%u%%", ui->brightness_percent);
+        else if (item == 1)
+            snprintf(value, 24, "%s", themes[ui->theme % 3]);
+        else
+            snprintf(value, 24, "%s", timeouts[ui->screen_timeout % 4]);
+        if (!ui->local_simulation) {
+            snprintf(value, 24, "UNAVAILABLE");
+            *available = false;
+        }
+        break;
+    }
+    case 2: {
+        static const char *labels[] = {"MEDIA VOLUME", "MUTE", "KEY SOUNDS", "OUTPUT"};
+        *label = labels[item];
+        if (item == 0)
+            snprintf(value, 24, "%u%%", ui->volume_percent);
+        else if (item == 1)
+            snprintf(value, 24, "%s", ui->muted ? "ON" : "OFF");
+        else if (item == 2)
+            snprintf(value, 24, "%s", ui->key_sounds ? "ON" : "OFF");
+        else {
+            snprintf(value, 24, "%s", capability_state(ui->audio_state));
+            *available = ui->audio_state == 2;
+        }
+        if (item <= 2 && !ui->local_simulation) {
+            snprintf(value, 24, "UNAVAILABLE");
+            *available = false;
+        }
+        break;
+    }
+    case 3: {
+        static const char *labels[] = {"RESOLUTION", "ROTATION", "MIRROR", "CAMERA ACCESS"};
+        *label = labels[item];
+        if (item == 0)
+            snprintf(value, 24, "320 X 170");
+        else if (item == 1)
+            snprintf(value, 24, "%s", rotations[ui->camera_rotation % 4]);
+        else if (item == 2)
+            snprintf(value, 24, "%s", ui->camera_mirror ? "ON" : "OFF");
+        else
+            snprintf(value, 24, "%s", capability_state(ui->camera_state));
+        if (item <= 2 && !ui->local_simulation) {
+            snprintf(value, 24, "UNAVAILABLE");
+            *available = false;
+        }
+        break;
+    }
+    case 4: {
+        static const char *labels[] = {"BATTERY STATUS", "BATTERY SAVER",
+                                       "CHARGE LIMIT", "RESTART", "POWER OFF"};
+        *label = labels[item];
+        if (item == 0)
+            snprintf(value, 24, "%s", ui->battery_percent >= 0 ? "DETAILS" : "UNKNOWN");
+        else if (item == 3 || item == 4)
+            snprintf(value, 24, "ACTION");
+        else {
+            snprintf(value, 24, "UNAVAILABLE");
+            *available = false;
+        }
+        break;
+    }
+    case 5: {
+        static const char *labels[] = {"INSTALLED APPS", "PERMISSIONS", "STORAGE",
+                                       "DOCUMENT ACCESS"};
+        *label = labels[item];
+        if (item == 0)
+            snprintf(value, 24, "%u APPS", ui->app_count);
+        else if (item == 1)
+            snprintf(value, 24, "%u POLICY DENIED", ui->denied_permission_count);
+        else if (item == 2)
+            snprintf(value, 24, "DETAILS");
+        else {
+            snprintf(value, 24, "UNAVAILABLE");
+            *available = false;
+        }
+        break;
+    }
+    case 6: {
+        static const char *labels[] = {"ABOUT", "HARDWARE DIAGNOSTICS", "DATE & TIME",
+                                       "LANGUAGE", "ACCESSIBILITY", "OS UPDATE"};
+        *label = labels[item];
+        if (item == 0)
+            snprintf(value, 24, "%.23s", ui->os_version);
+        else if (item == 1)
+            snprintf(value, 24, "DETAILS");
+        else if (item == 2)
+            snprintf(value, 24, "AUTOMATIC");
+        else if (item == 3)
+            snprintf(value, 24, "ENGLISH");
+        else if (item == 4)
+            snprintf(value, 24, "DEFAULT");
+        else {
+            snprintf(value, 24, "UNAVAILABLE");
+            *available = false;
+        }
+        break;
+    }
+    default: {
+        static const char *labels[] = {"AUTHORITY", "DEVELOPER MODE", "RECOVERY BOOT",
+                                       "SCREEN LOCK", "ENCRYPTION"};
+        *label = labels[item];
+        if (item == 0)
+            snprintf(value, 24, "%s",
+                     ui->settings_available ? authorities[ui->settings_authority]
+                                            : "UNKNOWN");
+        else if (item == 1)
+            snprintf(value, 24, "%s",
+                     settings_state(ui->developer_mode, ui->developer_mode_allowed));
+        else if (item == 2)
+            snprintf(value, 24, "%s",
+                     settings_state(ui->recovery_mode, ui->recovery_mode_allowed));
+        else {
+            snprintf(value, 24, "UNAVAILABLE");
+            *available = false;
+        }
+        break;
+    }
+    }
+}
+
+static void draw_settings_detail(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    unsigned int count = settings_item_count(ui->settings_selected);
+    unsigned int first = ui->settings_item_selected > 3
+                             ? ui->settings_item_selected - 3
+                             : 0;
+    for (unsigned int row = 0; row < 4 && first + row < count; row++) {
+        unsigned int item = first + row;
+        const char *label;
+        char value[24];
+        bool available;
+        bool selected = item == ui->settings_item_selected;
+        int y = 27 + (int)row * 32;
+        settings_item(ui, ui->settings_selected, item, &label, value, &available);
+        fill_rect(canvas, 8, y, 304, 28,
+                  selected ? COLOR_SELECTED : COLOR_SURFACE);
+        stroke_rect(canvas, 8, y, 304, 28, selected ? 2 : 1,
+                    selected ? (available ? COLOR_GREEN : COLOR_MUTED) : COLOR_BAR);
+        draw_text_slice(canvas, 20, y + 6, label, 0, 22,
+                        selected ? COLOR_TEXT : COLOR_MUTED);
+        draw_text_slice(canvas, 180, y + 17, value, 0, 20,
+                        available ? COLOR_GREEN : COLOR_MUTED);
+    }
+    char page[16];
+    snprintf(page, sizeof(page), "%u/%u", ui->settings_item_selected + 1U,
+             count);
+    draw_text(canvas, 278, 158, page, 1, COLOR_MUTED);
 }
 
 static void draw_settings_confirm(struct canvas *canvas,
@@ -696,7 +1044,7 @@ static void draw_page(struct canvas *canvas, const struct cp0_ui *ui)
         break;
     case CP0_UI_SETTINGS:
         if (ui->settings_detail)
-            draw_policy_detail(canvas, ui);
+            draw_settings_detail(canvas, ui);
         else
             draw_settings_page(canvas, ui);
         break;
@@ -707,6 +1055,66 @@ static void draw_page(struct canvas *canvas, const struct cp0_ui *ui)
         draw_home(canvas, ui);
         break;
     }
+}
+
+static void draw_uninstall_confirm(struct canvas *canvas,
+                                   const struct cp0_ui *ui)
+{
+    static const char *labels[] = {"UNINSTALL", "CANCEL"};
+    const struct cp0_ui_app *app = &ui->apps[ui->app_selected];
+    fill_rect(canvas, 0, 21, CP0_UI_WIDTH, CP0_UI_HEIGHT - 21, 0x00090b0cu);
+    fill_rect(canvas, 24, 33, 272, 116, COLOR_SURFACE);
+    stroke_rect(canvas, 24, 33, 272, 116, 2, COLOR_RED);
+    draw_text_slice(canvas, 42, 47, app->name, 0, 38, COLOR_TEXT);
+    draw_text(canvas, 42, 68, "REMOVE APP PACKAGE?", 1, COLOR_RED);
+    draw_text(canvas, 42, 84, "PRIVATE DATA IS RETAINED", 1, COLOR_YELLOW);
+    for (unsigned int index = 0; index < 2; index++) {
+        int x = 42 + (int)index * 122;
+        bool selected = ui->dialog_selected == index;
+        fill_rect(canvas, x, 111, 110, 24,
+                  selected ? COLOR_SELECTED : COLOR_BAR);
+        stroke_rect(canvas, x, 111, 110, 24, selected ? 2 : 1,
+                    selected ? (index == 0 ? COLOR_RED : COLOR_GREEN)
+                             : COLOR_MUTED);
+        draw_text(canvas, x + 20, 120, labels[index], 1,
+                  selected ? COLOR_TEXT : COLOR_MUTED);
+    }
+}
+
+static void draw_system_action_overlay(struct canvas *canvas,
+                                       const struct cp0_ui *ui)
+{
+    static const char *labels[] = {"BRIGHTNESS", "VOLUME", "MUTED", "PLAY / PAUSE",
+                                   "PREVIOUS", "NEXT", "SCREENSHOT"};
+    char value[24];
+    unsigned int kind = ui->system_action_kind < 7 ? ui->system_action_kind : 0;
+    fill_rect(canvas, 62, 25, 196, 60, 0x00090b0cu);
+    stroke_rect(canvas, 62, 25, 196, 60, 2, COLOR_GREEN);
+    draw_text(canvas, 82, 38, labels[kind], 1, COLOR_TEXT);
+    if (!ui->local_simulation && kind <= 2)
+        snprintf(value, sizeof(value), "UNAVAILABLE");
+    else if (kind == 0)
+        snprintf(value, sizeof(value), "%u%%", ui->brightness_percent);
+    else if (kind == 1)
+        snprintf(value, sizeof(value), "%u%%", ui->volume_percent);
+    else if (kind == 2)
+        snprintf(value, sizeof(value), "%s", ui->muted ? "ON" : "OFF");
+    else
+        snprintf(value, sizeof(value), "REQUESTED");
+    draw_text(canvas, 82, 61, value, 2,
+              kind == 2 && ui->muted ? COLOR_YELLOW : COLOR_GREEN);
+}
+
+static void draw_help_overlay(struct canvas *canvas)
+{
+    fill_rect(canvas, 12, 27, 296, 135, COLOR_SURFACE);
+    stroke_rect(canvas, 12, 27, 296, 135, 2, COLOR_GREEN);
+    draw_text(canvas, 28, 39, "SYSTEM KEYS", 2, COLOR_TEXT);
+    draw_labeled_value(canvas, 70, "F1 / F2", "HOME / BACK", COLOR_GREEN);
+    draw_labeled_value(canvas, 90, "F3 / F4", "TASKS / POWER", COLOR_GREEN);
+    draw_labeled_value(canvas, 110, "FN U / I", "BRIGHTNESS", COLOR_TEXT);
+    draw_labeled_value(canvas, 130, "FN A / S / D", "MUTE / VOLUME", COLOR_TEXT);
+    draw_text(canvas, 28, 150, "ESC CLOSE", 1, COLOR_MUTED);
 }
 
 static void draw_power_dialog(struct canvas *canvas, const struct cp0_ui *ui)
@@ -832,6 +1240,11 @@ void cp0_ui_init(struct cp0_ui *ui)
     ui->store_status = CP0_UI_STORE_LOADING;
     ui->battery_percent = -1;
     ui->temperature_millicelsius = -1;
+    ui->wifi_enabled = true;
+    ui->brightness_percent = 70;
+    ui->volume_percent = 60;
+    ui->key_sounds = true;
+    ui->screen_timeout = 1;
     memcpy(ui->clock_text, "--:--", sizeof(ui->clock_text));
 }
 
@@ -843,6 +1256,17 @@ void cp0_ui_set_device_info(struct cp0_ui *ui,
     ui->device_available = info->available;
     ui->battery_percent = info->battery_percent;
     ui->temperature_millicelsius = info->temperature_millicelsius;
+    ui->battery_present = info->battery_present;
+    ui->battery_voltage_available = info->battery_voltage_available;
+    ui->battery_current_available = info->battery_current_available;
+    ui->battery_voltage_microvolts = info->battery_voltage_microvolts;
+    ui->battery_current_microamps = info->battery_current_microamps;
+    ui->battery_status = info->battery_status;
+    ui->i2c_bus_state = info->i2c_bus_state;
+    ui->display_state = info->display_state;
+    ui->keyboard_state = info->keyboard_state;
+    ui->audio_state = info->audio_state;
+    ui->camera_state = info->camera_state;
     ui->uptime_seconds = info->uptime_seconds;
     ui->memory_total_bytes = info->memory_total_bytes;
     ui->memory_available_bytes = info->memory_available_bytes;
@@ -1001,6 +1425,10 @@ void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
         struct cp0_ui_app app = {
             .installed = true,
             .immersive = apps[source].immersive,
+            .permissions = apps[source].permissions,
+            .installed_at_unix_seconds = apps[source].installed_at_unix_seconds,
+            .package_bytes = apps[source].package_bytes,
+            .data_bytes = apps[source].data_bytes,
             .state = apps[source].running ? CP0_UI_APP_RUNNING
                                           : CP0_UI_APP_STOPPED,
         };
@@ -1380,9 +1808,88 @@ void cp0_ui_clear_notification(struct cp0_ui *ui)
     memset(ui->notification_body, 0, sizeof(ui->notification_body));
 }
 
+void cp0_ui_set_local_simulation(struct cp0_ui *ui, bool enabled)
+{
+    if (ui != NULL)
+        ui->local_simulation = enabled;
+}
+
+bool cp0_ui_tick(struct cp0_ui *ui)
+{
+    if (ui == NULL || ui->system_action_ticks == 0)
+        return false;
+    ui->system_action_ticks--;
+    if (ui->system_action_ticks == 0) {
+        ui->system_action_overlay = false;
+        return true;
+    }
+    return false;
+}
+
 enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                                         enum cp0_ui_action action)
 {
+    if (action == CP0_UI_BRIGHTNESS_DOWN || action == CP0_UI_BRIGHTNESS_UP) {
+        if (ui->local_simulation && action == CP0_UI_BRIGHTNESS_DOWN)
+            ui->brightness_percent = ui->brightness_percent >= 10
+                                         ? ui->brightness_percent - 10
+                                         : 0;
+        else if (ui->local_simulation)
+            ui->brightness_percent = ui->brightness_percent <= 90
+                                         ? ui->brightness_percent + 10
+                                         : 100;
+        ui->system_action_kind = 0;
+        ui->system_action_overlay = true;
+        ui->system_action_ticks = 2;
+        return CP0_UI_EVENT_NONE;
+    }
+    if (action == CP0_UI_VOLUME_DOWN || action == CP0_UI_VOLUME_UP ||
+        action == CP0_UI_MUTE) {
+        if (ui->local_simulation && action == CP0_UI_VOLUME_DOWN) {
+            ui->volume_percent = ui->volume_percent >= 10
+                                     ? ui->volume_percent - 10
+                                     : 0;
+            ui->muted = false;
+        } else if (ui->local_simulation && action == CP0_UI_VOLUME_UP) {
+            ui->volume_percent = ui->volume_percent <= 90
+                                     ? ui->volume_percent + 10
+                                     : 100;
+            ui->muted = false;
+        } else if (ui->local_simulation) {
+            ui->muted = !ui->muted;
+        }
+        ui->system_action_kind = action == CP0_UI_MUTE ? 2 : 1;
+        ui->system_action_overlay = true;
+        ui->system_action_ticks = 2;
+        return CP0_UI_EVENT_NONE;
+    }
+    if (action == CP0_UI_MEDIA_PLAY_PAUSE || action == CP0_UI_MEDIA_PREVIOUS ||
+        action == CP0_UI_MEDIA_NEXT || action == CP0_UI_SCREENSHOT) {
+        ui->system_action_kind = action == CP0_UI_MEDIA_PLAY_PAUSE
+                                     ? 3
+                                     : (action == CP0_UI_MEDIA_PREVIOUS
+                                            ? 4
+                                            : (action == CP0_UI_MEDIA_NEXT ? 5 : 6));
+        ui->system_action_overlay = true;
+        ui->system_action_ticks = 2;
+        if (action == CP0_UI_MEDIA_PLAY_PAUSE)
+            return CP0_UI_EVENT_MEDIA_PLAY_PAUSE;
+        if (action == CP0_UI_MEDIA_PREVIOUS)
+            return CP0_UI_EVENT_MEDIA_PREVIOUS;
+        if (action == CP0_UI_MEDIA_NEXT)
+            return CP0_UI_EVENT_MEDIA_NEXT;
+        return CP0_UI_EVENT_SCREENSHOT;
+    }
+    if (action == CP0_UI_HELP && !ui->permission_prompt &&
+        !ui->document_prompt) {
+        ui->help_overlay = !ui->help_overlay;
+        return CP0_UI_EVENT_NONE;
+    }
+    if (ui->help_overlay) {
+        if (action == CP0_UI_BACK || action == CP0_UI_ACCEPT)
+            ui->help_overlay = false;
+        return CP0_UI_EVENT_NONE;
+    }
     if (ui->permission_prompt) {
         if (action == CP0_UI_LEFT && ui->prompt_selected > 0)
             ui->prompt_selected--;
@@ -1453,6 +1960,22 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         return CP0_UI_EVENT_NONE;
     }
 
+    if (ui->app_uninstall_confirm) {
+        if (action == CP0_UI_LEFT)
+            ui->dialog_selected = 0;
+        else if (action == CP0_UI_RIGHT)
+            ui->dialog_selected = 1;
+        else if (action == CP0_UI_BACK)
+            ui->app_uninstall_confirm = false;
+        else if (action == CP0_UI_ACCEPT) {
+            unsigned int selected = ui->dialog_selected;
+            ui->app_uninstall_confirm = false;
+            if (selected == 0)
+                return CP0_UI_EVENT_UNINSTALL_APP;
+        }
+        return CP0_UI_EVENT_NONE;
+    }
+
     if (ui->settings_confirm) {
         if (action == CP0_UI_LEFT)
             ui->dialog_selected = 0;
@@ -1502,12 +2025,39 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     if (ui->screen == CP0_UI_APPS) {
         if (ui->app_detail) {
             enum cp0_ui_app_state state = cp0_ui_selected_app_state(ui);
-            if (action == CP0_UI_LEFT) {
-                ui->app_detail = false;
-            } else if (action == CP0_UI_ACCEPT &&
+            if (action == CP0_UI_LEFT && ui->app_detail_page > 0) {
+                ui->app_detail_page--;
+                ui->app_permission_offset = 0;
+            } else if (action == CP0_UI_RIGHT && ui->app_detail_page < 3) {
+                ui->app_detail_page++;
+                ui->app_permission_offset = 0;
+            } else if (ui->app_detail_page == 2 && action == CP0_UI_UP &&
+                       ui->app_permission_offset > 0) {
+                ui->app_permission_offset--;
+            } else if (ui->app_detail_page == 2 && action == CP0_UI_DOWN) {
+                unsigned int permission_count = 0;
+                for (unsigned int bit = 0; bit < 8; bit++)
+                    permission_count +=
+                        (ui->apps[ui->app_selected].permissions & (1U << bit)) !=
+                        0;
+                if (ui->app_permission_offset + 4U < permission_count)
+                    ui->app_permission_offset++;
+            } else if (ui->app_detail_page == 3 && action == CP0_UI_UP) {
+                ui->app_action_selected = 0;
+            } else if (ui->app_detail_page == 3 && action == CP0_UI_DOWN) {
+                ui->app_action_selected = 1;
+            } else if (ui->app_detail_page == 3 && action == CP0_UI_ACCEPT &&
+                       ui->app_action_selected == 1 &&
+                       state != CP0_UI_APP_RUNNING &&
+                       state != CP0_UI_APP_STARTING) {
+                ui->app_uninstall_confirm = true;
+                ui->dialog_selected = 1;
+            } else if (ui->app_detail_page == 3 && action == CP0_UI_ACCEPT &&
+                       ui->app_action_selected == 0 &&
                        state == CP0_UI_APP_RUNNING) {
                 return CP0_UI_EVENT_STOP_APP;
-            } else if (action == CP0_UI_ACCEPT &&
+            } else if (ui->app_detail_page == 3 && action == CP0_UI_ACCEPT &&
+                       ui->app_action_selected == 0 &&
                        (state == CP0_UI_APP_STOPPED ||
                         state == CP0_UI_APP_FAILED)) {
                 return CP0_UI_EVENT_OPEN_APP;
@@ -1522,15 +2072,16 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         else if (action == CP0_UI_ACCEPT && ui->app_count > 0)
             return CP0_UI_EVENT_OPEN_APP;
         else if (action == CP0_UI_RIGHT && ui->app_count > 0)
-            ui->app_detail = true;
+            ui->app_detail = true, ui->app_detail_page = 0,
+            ui->app_permission_offset = 0, ui->app_action_selected = 0;
         return CP0_UI_EVENT_NONE;
     }
 
     if (ui->screen == CP0_UI_DEVICE) {
-        if (action == CP0_UI_LEFT)
-            ui->device_page = 0;
-        else if (action == CP0_UI_RIGHT)
-            ui->device_page = 1;
+        if (action == CP0_UI_LEFT && ui->device_page > 0)
+            ui->device_page--;
+        else if (action == CP0_UI_RIGHT && ui->device_page < 3)
+            ui->device_page++;
         return CP0_UI_EVENT_NONE;
     }
 
@@ -1568,31 +2119,123 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     }
 
     if (ui->screen == CP0_UI_SETTINGS) {
-        if (!ui->settings_available)
+        if (ui->settings_detail) {
+            unsigned int count = settings_item_count(ui->settings_selected);
+            unsigned int item = ui->settings_item_selected;
+            if (action == CP0_UI_UP && item > 0)
+                ui->settings_item_selected--;
+            else if (action == CP0_UI_DOWN && item + 1 < count)
+                ui->settings_item_selected++;
+            else if (ui->local_simulation && ui->settings_selected == 0 &&
+                     item == 0 &&
+                     (action == CP0_UI_ACCEPT || action == CP0_UI_LEFT ||
+                      action == CP0_UI_RIGHT)) {
+                ui->wifi_enabled = !ui->wifi_enabled;
+                if (ui->wifi_enabled)
+                    ui->airplane_mode = false;
+            } else if (ui->local_simulation && ui->settings_selected == 0 &&
+                       item == 1 &&
+                       (action == CP0_UI_ACCEPT || action == CP0_UI_LEFT ||
+                        action == CP0_UI_RIGHT)) {
+                ui->airplane_mode = !ui->airplane_mode;
+                if (ui->airplane_mode)
+                    ui->wifi_enabled = false;
+            } else if (ui->settings_selected == 0 && item == 2 &&
+                       action == CP0_UI_ACCEPT) {
+                ui->screen = CP0_UI_NETWORK;
+                ui->network_page = 0;
+                ui->settings_detail = false;
+            } else if (ui->local_simulation && ui->settings_selected == 1 &&
+                       item == 0 &&
+                       (action == CP0_UI_LEFT || action == CP0_UI_RIGHT)) {
+                cp0_ui_handle_action(ui, action == CP0_UI_LEFT
+                                             ? CP0_UI_BRIGHTNESS_DOWN
+                                             : CP0_UI_BRIGHTNESS_UP);
+            } else if (ui->local_simulation && ui->settings_selected == 1 &&
+                       item == 1 &&
+                       (action == CP0_UI_LEFT || action == CP0_UI_RIGHT ||
+                        action == CP0_UI_ACCEPT)) {
+                ui->theme = (ui->theme + (action == CP0_UI_LEFT ? 2U : 1U)) % 3U;
+            } else if (ui->local_simulation && ui->settings_selected == 1 &&
+                       item == 2 &&
+                       (action == CP0_UI_LEFT || action == CP0_UI_RIGHT ||
+                        action == CP0_UI_ACCEPT)) {
+                ui->screen_timeout =
+                    (ui->screen_timeout + (action == CP0_UI_LEFT ? 3U : 1U)) % 4U;
+            } else if (ui->local_simulation && ui->settings_selected == 2 &&
+                       item == 0 &&
+                       (action == CP0_UI_LEFT || action == CP0_UI_RIGHT)) {
+                cp0_ui_handle_action(ui, action == CP0_UI_LEFT
+                                             ? CP0_UI_VOLUME_DOWN
+                                             : CP0_UI_VOLUME_UP);
+            } else if (ui->local_simulation && ui->settings_selected == 2 &&
+                       item == 1 &&
+                       action == CP0_UI_ACCEPT) {
+                cp0_ui_handle_action(ui, CP0_UI_MUTE);
+            } else if (ui->local_simulation && ui->settings_selected == 2 &&
+                       item == 2 &&
+                       action == CP0_UI_ACCEPT) {
+                ui->key_sounds = !ui->key_sounds;
+            } else if (ui->local_simulation && ui->settings_selected == 3 &&
+                       item == 1 &&
+                       (action == CP0_UI_LEFT || action == CP0_UI_RIGHT ||
+                        action == CP0_UI_ACCEPT)) {
+                ui->camera_rotation =
+                    (ui->camera_rotation + (action == CP0_UI_LEFT ? 3U : 1U)) % 4U;
+            } else if (ui->local_simulation && ui->settings_selected == 3 &&
+                       item == 2 &&
+                       action == CP0_UI_ACCEPT) {
+                ui->camera_mirror = !ui->camera_mirror;
+            } else if (ui->settings_selected == 4 && item == 0 &&
+                       action == CP0_UI_ACCEPT) {
+                ui->screen = CP0_UI_DEVICE;
+                ui->device_page = 2;
+                ui->settings_detail = false;
+            } else if (ui->settings_selected == 4 && item == 3 &&
+                       action == CP0_UI_ACCEPT) {
+                return CP0_UI_EVENT_RESTART;
+            } else if (ui->settings_selected == 4 && item == 4 &&
+                       action == CP0_UI_ACCEPT) {
+                return CP0_UI_EVENT_POWER_OFF;
+            } else if (ui->settings_selected == 5 && item == 0 &&
+                       action == CP0_UI_ACCEPT) {
+                ui->screen = CP0_UI_APPS;
+                ui->app_detail = false;
+                ui->settings_detail = false;
+            } else if (ui->settings_selected == 5 && item == 2 &&
+                       action == CP0_UI_ACCEPT) {
+                ui->screen = CP0_UI_DEVICE;
+                ui->device_page = 1;
+                ui->settings_detail = false;
+            } else if (ui->settings_selected == 6 && item <= 1 &&
+                       action == CP0_UI_ACCEPT) {
+                ui->screen = CP0_UI_DEVICE;
+                ui->device_page = item == 0 ? 0 : 3;
+                ui->settings_detail = false;
+            } else if (ui->settings_selected == 7 && (item == 1 || item == 2) &&
+                       action == CP0_UI_ACCEPT) {
+                bool recovery = item == 2;
+                bool allowed = recovery ? ui->recovery_mode_allowed
+                                        : ui->developer_mode_allowed;
+                bool enabled = recovery ? ui->recovery_mode : ui->developer_mode;
+                if (allowed && enabled)
+                    return recovery ? CP0_UI_EVENT_RECOVERY_DISABLE
+                                    : CP0_UI_EVENT_DEVELOPER_DISABLE;
+                if (allowed) {
+                    ui->settings_confirm = true;
+                    ui->settings_confirm_recovery = recovery;
+                    ui->dialog_selected = 1;
+                }
+            }
             return CP0_UI_EVENT_NONE;
-        if (ui->settings_detail)
-            return CP0_UI_EVENT_NONE;
+        }
         if (action == CP0_UI_UP && ui->settings_selected > 0)
             ui->settings_selected--;
-        else if (action == CP0_UI_DOWN && ui->settings_selected < 2)
+        else if (action == CP0_UI_DOWN && ui->settings_selected < 7)
             ui->settings_selected++;
         else if (action == CP0_UI_ACCEPT) {
-            if (ui->settings_selected == 2) {
-                ui->settings_detail = true;
-                return CP0_UI_EVENT_NONE;
-            }
-            bool recovery = ui->settings_selected == 1;
-            bool allowed = recovery ? ui->recovery_mode_allowed
-                                    : ui->developer_mode_allowed;
-            bool enabled = recovery ? ui->recovery_mode : ui->developer_mode;
-            if (!allowed)
-                return CP0_UI_EVENT_NONE;
-            if (enabled)
-                return recovery ? CP0_UI_EVENT_RECOVERY_DISABLE
-                                : CP0_UI_EVENT_DEVELOPER_DISABLE;
-            ui->settings_confirm = true;
-            ui->settings_confirm_recovery = recovery;
-            ui->dialog_selected = 1;
+            ui->settings_detail = true;
+            ui->settings_item_selected = 0;
         }
         return CP0_UI_EVENT_NONE;
     }
@@ -1629,6 +2272,7 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         default:
             ui->screen = CP0_UI_SETTINGS;
             ui->settings_selected = 0;
+            ui->settings_item_selected = 0;
             ui->settings_detail = false;
             break;
         }
@@ -1659,10 +2303,46 @@ void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
         draw_notification_banner(&canvas, ui);
     if (ui->power_dialog)
         draw_power_dialog(&canvas, ui);
+    else if (ui->app_uninstall_confirm)
+        draw_uninstall_confirm(&canvas, ui);
     else if (ui->settings_confirm)
         draw_settings_confirm(&canvas, ui);
     if (ui->permission_prompt)
         draw_permission_dialog(&canvas, ui);
     else if (ui->document_prompt)
         draw_document_dialog(&canvas, ui);
+    else if (ui->help_overlay)
+        draw_help_overlay(&canvas);
+    else if (ui->system_action_overlay)
+        draw_system_action_overlay(&canvas, ui);
+
+    if (ui->theme != 0) {
+        static const uint32_t source[] = {
+            COLOR_BG, COLOR_BAR, COLOR_SURFACE, COLOR_SELECTED, COLOR_TEXT,
+            COLOR_MUTED, COLOR_GREEN, COLOR_YELLOW, COLOR_RED, 0x00090b0cu,
+        };
+        static const uint32_t light[] = {
+            0x00e9eeecu, 0x00dce3e0u, 0x00f8faf9u, 0x00d8eee2u,
+            0x00101515u, 0x0057645fu, 0x00087443u, 0x009a6a00u,
+            0x00b4232du, 0x00ffffffu,
+        };
+        static const uint32_t contrast[] = {
+            0x00000000u, 0x00000000u, 0x00101010u, 0x0000391fu,
+            0x00ffffffu, 0x00c0c0c0u, 0x0000ff80u, 0x00ffff00u,
+            0x00ff4040u, 0x00000000u,
+        };
+        const uint32_t *target = ui->theme == 1 ? light : contrast;
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                uint32_t *pixel = &pixels[y * stride_pixels + x];
+                for (size_t index = 0;
+                     index < sizeof(source) / sizeof(source[0]); index++) {
+                    if (*pixel == source[index]) {
+                        *pixel = target[index];
+                        break;
+                    }
+                }
+            }
+        }
+    }
 }

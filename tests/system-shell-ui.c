@@ -62,14 +62,23 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
          .immersive = false,
          .app_id = "dev.cardputerzero.first",
          .name = "First Card",
-         .version = "1.2.3"},
+         .version = "1.2.3",
+         .installed_at_unix_seconds = 1722470400,
+         .package_bytes = 3U * 1024U * 1024U,
+         .data_bytes = 512U * 1024U,
+         .permissions = (1U << 2) | (1U << 5)},
         {.running = true,
          .immersive = true,
          .app_id = "dev.cardputerzero.second",
          .name = "Second Card",
-         .version = "2.0.0"},
+         .version = "2.0.0",
+         .installed_at_unix_seconds = 1722556800,
+         .package_bytes = 8U * 1024U * 1024U,
+         .data_bytes = 2U * 1024U * 1024U,
+         .permissions = (1U << 0) | (1U << 6)},
     };
     cp0_ui_init(ui);
+    cp0_ui_set_local_simulation(ui, true);
     cp0_ui_set_status(ui, "12:34", true, 73);
     write_snapshot(directory, "home", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
@@ -110,7 +119,18 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     cp0_ui_handle_action(ui, CP0_UI_DOWN);
     write_snapshot(directory, "apps", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
-    write_snapshot(directory, "app-detail", ui, frame);
+    write_snapshot(directory, "app-overview", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "app-storage", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "app-permissions", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "app-actions", ui, frame);
+    cp0_ui_set_app_state(ui, "dev.cardputerzero.second", CP0_UI_APP_STOPPED);
+    cp0_ui_handle_action(ui, CP0_UI_DOWN);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    write_snapshot(directory, "app-uninstall", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_BACK);
     cp0_ui_handle_action(ui, CP0_UI_BACK);
 
     cp0_ui_handle_action(ui, CP0_UI_SHOW_TASKS);
@@ -152,6 +172,17 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
         .available = true,
         .battery_percent = 73,
         .temperature_millicelsius = 48750,
+        .battery_present = true,
+        .battery_voltage_available = true,
+        .battery_current_available = true,
+        .battery_voltage_microvolts = 3875000,
+        .battery_current_microamps = -125000,
+        .battery_status = 2,
+        .i2c_bus_state = 3,
+        .display_state = 2,
+        .keyboard_state = 2,
+        .audio_state = 2,
+        .camera_state = 2,
         .uptime_seconds = 93784,
         .memory_total_bytes = 512U * 1024U * 1024U,
         .memory_available_bytes = 318U * 1024U * 1024U,
@@ -164,6 +195,10 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     write_snapshot(directory, "device", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     write_snapshot(directory, "device-resources", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "device-power", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "device-diagnostics", ui, frame);
     const struct cp0_ui_device_info unavailable_device = {
         .battery_percent = -1,
         .temperature_millicelsius = -1,
@@ -204,16 +239,37 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
     cp0_ui_set_device_settings(
-        ui, CP0_UI_AUTHORITY_ORGANIZATION, false, false, false, true,
+        ui, CP0_UI_AUTHORITY_ORGANIZATION, false, true, false, true,
         false, true, 3);
     write_snapshot(directory, "settings", ui, frame);
-    cp0_ui_handle_action(ui, CP0_UI_DOWN);
+    static const char *setting_names[] = {
+        "settings-connectivity", "settings-display", "settings-sound",
+        "settings-camera", "settings-power", "settings-apps-privacy",
+        "settings-system", "settings-security",
+    };
+    for (unsigned int category = 0; category < 8; category++) {
+        ui->settings_selected = category;
+        ui->settings_item_selected = 0;
+        ui->settings_detail = true;
+        write_snapshot(directory, setting_names[category], ui, frame);
+    }
+    ui->settings_selected = 7;
+    ui->settings_item_selected = 1;
+    ui->settings_detail = true;
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
     write_snapshot(directory, "settings-confirm", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_BACK);
-    cp0_ui_handle_action(ui, CP0_UI_DOWN);
-    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
-    write_snapshot(directory, "settings-policy", ui, frame);
+
+    cp0_ui_handle_action(ui, CP0_UI_BRIGHTNESS_UP);
+    write_snapshot(directory, "system-brightness", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_HELP);
+    write_snapshot(directory, "system-help", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_HELP);
+    ui->system_action_overlay = false;
+    ui->theme = 1;
+    write_snapshot(directory, "theme-light", ui, frame);
+    ui->theme = 2;
+    write_snapshot(directory, "theme-high-contrast", ui, frame);
 }
 
 int main(int argc, char **argv)
@@ -223,6 +279,7 @@ int main(int argc, char **argv)
     assert(frame != NULL);
 
     cp0_ui_init(&ui);
+    cp0_ui_set_local_simulation(&ui, true);
     cp0_ui_set_status(&ui, "12:34", true, 73);
     render(&ui, frame);
     assert(ui.screen == CP0_UI_HOME);
@@ -248,10 +305,20 @@ int main(int argc, char **argv)
     assert(!ui.developer_mode && !ui.store_install_allowed);
     assert(ui.app_launch_restricted && ui.denied_permission_count == 3);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
-    assert(ui.settings_confirm && ui.dialog_selected == 1);
+    assert(ui.settings_detail && ui.settings_item_selected == 0);
+    assert(ui.wifi_enabled);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
-    assert(!ui.settings_confirm);
+    assert(!ui.wifi_enabled);
+    cp0_ui_handle_action(&ui, CP0_UI_BACK);
+    assert(!ui.settings_detail);
+    for (unsigned int index = 0; index < 7; index++)
+        cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(ui.settings_selected == 7);
     cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(ui.settings_item_selected == 1);
+    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    assert(ui.settings_confirm && ui.dialog_selected == 1);
     cp0_ui_handle_action(&ui, CP0_UI_LEFT);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_DEVELOPER_ENABLE);
@@ -265,10 +332,7 @@ int main(int argc, char **argv)
     cp0_ui_handle_action(&ui, CP0_UI_LEFT);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_RECOVERY_ENABLE);
-    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
-    assert(ui.settings_selected == 2);
-    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
-    assert(ui.settings_detail);
+    assert(ui.settings_item_selected == 2);
     cp0_ui_handle_action(&ui, CP0_UI_BACK);
     assert(!ui.settings_detail && ui.screen == CP0_UI_SETTINGS);
 
@@ -283,6 +347,7 @@ int main(int argc, char **argv)
     assert(!ui.power_dialog);
 
     cp0_ui_init(&ui);
+    cp0_ui_set_local_simulation(&ui, true);
     static const struct cp0_ui_store_catalog_app store_catalog[] = {
         {.package_bytes = 1024,
          .permissions = (1U << 2) | (1U << 5),
@@ -344,15 +409,18 @@ int main(int argc, char **argv)
     assert(ui.screen == CP0_UI_HOME);
 
     cp0_ui_init(&ui);
+    cp0_ui_set_local_simulation(&ui, true);
     static const struct cp0_ui_catalog_app catalog[] = {
         {.running = false,
          .immersive = false,
          .app_id = "dev.cardputerzero.first",
-         .name = "First Card"},
+         .name = "First Card",
+         .permissions = UINT16_MAX},
         {.running = true,
          .immersive = true,
          .app_id = "dev.cardputerzero.second",
-         .name = "Second Card"},
+         .name = "Second Card",
+         .permissions = UINT16_MAX},
     };
     cp0_ui_sync_app_catalog(&ui, catalog, 2, false);
     assert(ui.app_count == 2);
@@ -379,6 +447,20 @@ int main(int argc, char **argv)
     assert(pixel(frame, 8, 60) == GREEN);
     cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
     assert(ui.app_detail);
+    assert(ui.app_detail_page == 0);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    assert(ui.app_detail_page == 2);
+    assert(ui.app_permission_offset == 0);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(ui.app_permission_offset == 1);
+    for (unsigned int index = 0; index < 8; index++)
+        cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(ui.app_permission_offset == 4);
+    cp0_ui_handle_action(&ui, CP0_UI_UP);
+    assert(ui.app_permission_offset == 3);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    assert(ui.app_detail_page == 3);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_STOP_APP);
     cp0_ui_handle_action(&ui, CP0_UI_BACK);
@@ -422,6 +504,41 @@ int main(int argc, char **argv)
     assert(ui.app_selected == 5);
     assert(ui.app_list_truncated);
     render(&ui, frame);
+
+    unsigned int original_brightness = ui.brightness_percent;
+    cp0_ui_handle_action(&ui, CP0_UI_BRIGHTNESS_UP);
+    assert(ui.brightness_percent >= original_brightness);
+    assert(ui.system_action_overlay && ui.system_action_ticks == 2);
+    assert(!cp0_ui_tick(&ui));
+    assert(cp0_ui_tick(&ui) && !ui.system_action_overlay);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_MEDIA_NEXT) ==
+           CP0_UI_EVENT_MEDIA_NEXT);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_SCREENSHOT) ==
+           CP0_UI_EVENT_SCREENSHOT);
+
+    struct cp0_ui production;
+    cp0_ui_init(&production);
+    unsigned int production_brightness = production.brightness_percent;
+    cp0_ui_handle_action(&production, CP0_UI_BRIGHTNESS_UP);
+    assert(production.brightness_percent == production_brightness);
+    assert(production.system_action_overlay);
+
+    struct cp0_ui uninstall_ui;
+    cp0_ui_init(&uninstall_ui);
+    cp0_ui_set_local_simulation(&uninstall_ui, true);
+    cp0_ui_sync_app_catalog(&uninstall_ui, catalog, 1, false);
+    cp0_ui_handle_action(&uninstall_ui, CP0_UI_ACCEPT);
+    cp0_ui_handle_action(&uninstall_ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&uninstall_ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&uninstall_ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&uninstall_ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&uninstall_ui, CP0_UI_DOWN);
+    cp0_ui_handle_action(&uninstall_ui, CP0_UI_ACCEPT);
+    assert(uninstall_ui.app_uninstall_confirm &&
+           uninstall_ui.dialog_selected == 1);
+    cp0_ui_handle_action(&uninstall_ui, CP0_UI_LEFT);
+    assert(cp0_ui_handle_action(&uninstall_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_UNINSTALL_APP);
 
     assert(cp0_ui_show_permission(
         &ui, 77, "Hello Card", "camera.capture",

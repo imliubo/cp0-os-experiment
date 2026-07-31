@@ -552,7 +552,7 @@ bind_system_shell(struct wl_client *client, void *data, uint32_t version,
     }
 
     resource = wl_resource_create(client, &cp0_system_shell_v1_interface,
-                                  version < 4 ? version : 4, id);
+                                  version < 5 ? version : 5, id);
     if (resource == NULL) {
         wl_client_post_no_memory(client);
         return;
@@ -567,7 +567,6 @@ static uint32_t
 action_for_key(uint32_t key)
 {
     switch (key) {
-    case KEY_HOME:
     case KEY_HOMEPAGE:
     case KEY_F1:
         return CP0_SYSTEM_SHELL_V1_ACTION_HOME;
@@ -579,6 +578,26 @@ action_for_key(uint32_t key)
     case KEY_POWER:
     case KEY_F4:
         return CP0_SYSTEM_SHELL_V1_ACTION_POWER;
+    case KEY_BRIGHTNESSDOWN:
+        return CP0_SYSTEM_SHELL_V1_ACTION_BRIGHTNESS_DOWN;
+    case KEY_BRIGHTNESSUP:
+        return CP0_SYSTEM_SHELL_V1_ACTION_BRIGHTNESS_UP;
+    case KEY_MUTE:
+        return CP0_SYSTEM_SHELL_V1_ACTION_MUTE;
+    case KEY_VOLUMEDOWN:
+        return CP0_SYSTEM_SHELL_V1_ACTION_VOLUME_DOWN;
+    case KEY_VOLUMEUP:
+        return CP0_SYSTEM_SHELL_V1_ACTION_VOLUME_UP;
+    case KEY_PLAYPAUSE:
+        return CP0_SYSTEM_SHELL_V1_ACTION_MEDIA_PLAY_PAUSE;
+    case KEY_PREVIOUSSONG:
+        return CP0_SYSTEM_SHELL_V1_ACTION_MEDIA_PREVIOUS;
+    case KEY_NEXTSONG:
+        return CP0_SYSTEM_SHELL_V1_ACTION_MEDIA_NEXT;
+    case KEY_HELP:
+        return CP0_SYSTEM_SHELL_V1_ACTION_HELP;
+    case KEY_SYSRQ:
+        return CP0_SYSTEM_SHELL_V1_ACTION_SCREENSHOT;
     default:
         return UINT32_MAX;
     }
@@ -595,7 +614,14 @@ system_key_binding(struct weston_keyboard *keyboard,
     if (action == UINT32_MAX || policy->shell_resource == NULL ||
         policy->trusted_surface == NULL)
         return;
-    set_overlay_mode(policy, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL, keyboard);
+    if (action <= CP0_SYSTEM_SHELL_V1_ACTION_POWER ||
+        action == CP0_SYSTEM_SHELL_V1_ACTION_HELP)
+        set_overlay_mode(policy, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL,
+                         keyboard);
+    else
+        set_overlay_mode(policy,
+                         CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION,
+                         keyboard);
     cp0_system_shell_v1_send_action(policy->shell_resource, action);
 }
 
@@ -693,7 +719,7 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
                   &policy->compositor_wake_listener);
 
     policy->global = wl_global_create(
-        compositor->wl_display, &cp0_system_shell_v1_interface, 4, policy,
+        compositor->wl_display, &cp0_system_shell_v1_interface, 5, policy,
         bind_system_shell);
     if (policy->global == NULL) {
         wl_list_remove(&policy->create_surface_listener.link);
@@ -706,7 +732,6 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
         return -1;
     }
 
-    add_system_binding(policy, KEY_HOME);
     add_system_binding(policy, KEY_HOMEPAGE);
     add_system_binding(policy, KEY_F1);
     add_system_binding(policy, KEY_ESC);
@@ -714,6 +739,16 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
     add_system_binding(policy, KEY_F3);
     add_system_binding(policy, KEY_POWER);
     add_system_binding(policy, KEY_F4);
+    add_system_binding(policy, KEY_BRIGHTNESSDOWN);
+    add_system_binding(policy, KEY_BRIGHTNESSUP);
+    add_system_binding(policy, KEY_MUTE);
+    add_system_binding(policy, KEY_VOLUMEDOWN);
+    add_system_binding(policy, KEY_VOLUMEUP);
+    add_system_binding(policy, KEY_PLAYPAUSE);
+    add_system_binding(policy, KEY_PREVIOUSSONG);
+    add_system_binding(policy, KEY_NEXTSONG);
+    add_system_binding(policy, KEY_HELP);
+    add_system_binding(policy, KEY_SYSRQ);
 
     weston_log("cardputerzero-policy: trusted uid=%u policy active\n",
                (unsigned int)policy->trusted_uid);

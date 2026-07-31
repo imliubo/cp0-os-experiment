@@ -25,6 +25,17 @@ enum cp0_permission_choice {
     CP0_PERMISSION_DENY,
 };
 
+enum cp0_app_permission {
+    CP0_APP_PERMISSION_AUDIO_CAPTURE = 1U << 0,
+    CP0_APP_PERMISSION_AUDIO_PLAYBACK = 1U << 1,
+    CP0_APP_PERMISSION_CAMERA_CAPTURE = 1U << 2,
+    CP0_APP_PERMISSION_DOCUMENTS_OPEN = 1U << 3,
+    CP0_APP_PERMISSION_HARDWARE_GPIO = 1U << 4,
+    CP0_APP_PERMISSION_NETWORK_CLIENT = 1U << 5,
+    CP0_APP_PERMISSION_NOTIFICATIONS_POST = 1U << 6,
+    CP0_APP_PERMISSION_RADIO_LORA = 1U << 7,
+};
+
 enum cp0_management_authority {
     CP0_AUTHORITY_PERSONAL,
     CP0_AUTHORITY_PARENT,
@@ -57,6 +68,10 @@ struct cp0_permission_prompt {
 struct cp0_app_summary {
     bool running;
     bool immersive;
+    uint16_t permissions;
+    uint64_t installed_at_unix_seconds;
+    uint64_t package_bytes;
+    uint64_t data_bytes;
     char app_id[CP0_APP_ID_BYTES];
     char name[CP0_APP_NAME_BYTES];
     char version[CP0_APP_VERSION_BYTES];
@@ -92,6 +107,7 @@ struct cp0_document_prompt {
 int cp0_appd_list_apps(struct cp0_app_list *list);
 int cp0_appd_start_app(const char *app_id);
 int cp0_appd_stop_app(const char *app_id);
+int cp0_appd_uninstall_app(const char *app_id);
 int cp0_appd_take_notification(struct cp0_notification *notification);
 int cp0_appd_get_permission_prompt(struct cp0_permission_prompt *prompt);
 int cp0_appd_resolve_permission(uint64_t prompt_id,

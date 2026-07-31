@@ -18,7 +18,7 @@
     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
   </copyright>
 
-  <interface name="cp0_system_shell_v1" version="4">
+  <interface name="cp0_system_shell_v1" version="5">
     <description summary="trusted CardputerZero System Shell control">
       This global is restricted by the compositor to the dedicated cp0-shell
       Unix account. It registers the trusted system surface and carries global
@@ -37,6 +37,16 @@
       <entry name="back" value="1"/>
       <entry name="tasks" value="2"/>
       <entry name="power" value="3"/>
+      <entry name="brightness_down" value="4" since="5"/>
+      <entry name="brightness_up" value="5" since="5"/>
+      <entry name="mute" value="6" since="5"/>
+      <entry name="volume_down" value="7" since="5"/>
+      <entry name="volume_up" value="8" since="5"/>
+      <entry name="media_play_pause" value="9" since="5"/>
+      <entry name="media_previous" value="10" since="5"/>
+      <entry name="media_next" value="11" since="5"/>
+      <entry name="help" value="12" since="5"/>
+      <entry name="screenshot" value="13" since="5"/>
     </enum>
 
     <enum name="overlay_mode" since="3">

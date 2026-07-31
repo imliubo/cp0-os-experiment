@@ -56,6 +56,7 @@ struct shell {
     uint32_t interrupted_overlay_mode;
     uint32_t document_restore_mode;
     uint32_t notification_restore_mode;
+    uint32_t system_action_restore_mode;
     int timer_fd;
     int width;
     int height;
@@ -91,6 +92,20 @@ static void cancel_notification(struct shell *shell, bool restore_mode)
     }
 }
 
+static void cancel_system_action(struct shell *shell, bool restore_mode)
+{
+    if (!shell->ui.system_action_overlay)
+        return;
+    shell->ui.system_action_overlay = false;
+    shell->ui.system_action_ticks = 0;
+    if (restore_mode &&
+        shell->overlay_mode == CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION) {
+        shell->overlay_mode = shell->system_action_restore_mode;
+        cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                              shell->overlay_mode);
+    }
+}
+
 static void poll_permission_prompt(struct shell *shell)
 {
     struct cp0_permission_prompt prompt;
@@ -113,6 +128,7 @@ static void poll_permission_prompt(struct shell *shell)
     if (result != 1)
         return;
     cancel_notification(shell, true);
+    cancel_system_action(shell, true);
     shell->interrupted_overlay_mode = shell->overlay_mode;
     shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     if (!cp0_ui_show_permission(&shell->ui, prompt.prompt_id, prompt.app_name,
@@ -155,6 +171,7 @@ static void poll_document_prompt(struct shell *shell)
         };
     }
     cancel_notification(shell, true);
+    cancel_system_action(shell, true);
     if (!shell->ui.document_prompt)
         shell->document_restore_mode = shell->overlay_mode;
     shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
@@ -184,6 +201,11 @@ static void poll_app_catalog(struct shell *shell)
             .app_id = list.apps[index].app_id,
             .name = list.apps[index].name,
             .version = list.apps[index].version,
+            .permissions = list.apps[index].permissions,
+            .installed_at_unix_seconds =
+                list.apps[index].installed_at_unix_seconds,
+            .package_bytes = list.apps[index].package_bytes,
+            .data_bytes = list.apps[index].data_bytes,
         };
     }
     cp0_ui_sync_app_catalog(&shell->ui, catalog, list.count, list.truncated);
@@ -285,7 +307,7 @@ static void poll_notification(struct shell *shell)
 
     if (shell->ui.permission_prompt || shell->ui.document_prompt ||
         shell->ui.power_dialog || shell->ui.settings_confirm ||
-        shell->ui.notification_banner ||
+        shell->ui.notification_banner || shell->ui.system_action_overlay ||
         cp0_appd_take_notification(&notification) != 1)
         return;
     if (!cp0_ui_show_notification(&shell->ui, notification.notification_id,
@@ -423,6 +445,17 @@ static void update_status(struct shell *shell)
         .available = info.device_available,
         .battery_percent = info.battery_percent,
         .temperature_millicelsius = info.temperature_millicelsius,
+        .battery_present = info.battery_present,
+        .battery_voltage_available = info.battery_voltage_available,
+        .battery_current_available = info.battery_current_available,
+        .battery_voltage_microvolts = info.battery_voltage_microvolts,
+        .battery_current_microamps = info.battery_current_microamps,
+        .battery_status = info.battery_status,
+        .i2c_bus_state = info.i2c_bus_state,
+        .display_state = info.display_state,
+        .keyboard_state = info.keyboard_state,
+        .audio_state = info.audio_state,
+        .camera_state = info.camera_state,
         .uptime_seconds = info.uptime_seconds,
         .memory_total_bytes = info.memory_total_bytes,
         .memory_available_bytes = info.memory_available_bytes,
@@ -562,6 +595,8 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         cp0_system_shell_v1_sleep_display(shell->system_control);
     } else if (event == CP0_UI_EVENT_RESTART) {
         fprintf(stderr, "system-shell: restart requested; broker unavailable\n");
+    } else if (event == CP0_UI_EVENT_POWER_OFF) {
+        fprintf(stderr, "system-shell: power off requested; broker unavailable\n");
     } else if (event == CP0_UI_EVENT_OPEN_APP) {
         char app_id[CP0_APP_ID_BYTES];
         const char *selected_id = cp0_ui_selected_app_id(&shell->ui);
@@ -622,6 +657,27 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                         "system-shell: application %s stop failed\n", app_id);
             }
         }
+    } else if (event == CP0_UI_EVENT_UNINSTALL_APP) {
+        char app_id[CP0_APP_ID_BYTES];
+        const char *selected_id = cp0_ui_selected_app_id(&shell->ui);
+        if (selected_id != NULL &&
+            snprintf(app_id, sizeof(app_id), "%s", selected_id) > 0) {
+            if (cp0_appd_uninstall_app(app_id) == 0) {
+                shell->ui.app_detail = false;
+                poll_app_catalog(shell);
+                fprintf(stderr, "system-shell: application %s uninstalled; private data retained\n",
+                        app_id);
+            } else {
+                fprintf(stderr, "system-shell: application %s uninstall failed\n",
+                        app_id);
+            }
+        }
+    } else if (event == CP0_UI_EVENT_MEDIA_PLAY_PAUSE ||
+               event == CP0_UI_EVENT_MEDIA_PREVIOUS ||
+               event == CP0_UI_EVENT_MEDIA_NEXT) {
+        fprintf(stderr, "system-shell: media action requested; broker unavailable\n");
+    } else if (event == CP0_UI_EVENT_SCREENSHOT) {
+        fprintf(stderr, "system-shell: screenshot requested; broker unavailable\n");
     } else if (event == CP0_UI_EVENT_STORE_REFRESH) {
         int result = cp0_store_refresh();
         if (result == CP0_STORE_RESULT_OK) {
@@ -711,11 +767,48 @@ static void handle_system_action(void *data,
     case CP0_SYSTEM_SHELL_V1_ACTION_POWER:
         ui_action = CP0_UI_SHOW_POWER;
         break;
+    case CP0_SYSTEM_SHELL_V1_ACTION_BRIGHTNESS_DOWN:
+        ui_action = CP0_UI_BRIGHTNESS_DOWN;
+        break;
+    case CP0_SYSTEM_SHELL_V1_ACTION_BRIGHTNESS_UP:
+        ui_action = CP0_UI_BRIGHTNESS_UP;
+        break;
+    case CP0_SYSTEM_SHELL_V1_ACTION_MUTE:
+        ui_action = CP0_UI_MUTE;
+        break;
+    case CP0_SYSTEM_SHELL_V1_ACTION_VOLUME_DOWN:
+        ui_action = CP0_UI_VOLUME_DOWN;
+        break;
+    case CP0_SYSTEM_SHELL_V1_ACTION_VOLUME_UP:
+        ui_action = CP0_UI_VOLUME_UP;
+        break;
+    case CP0_SYSTEM_SHELL_V1_ACTION_MEDIA_PLAY_PAUSE:
+        ui_action = CP0_UI_MEDIA_PLAY_PAUSE;
+        break;
+    case CP0_SYSTEM_SHELL_V1_ACTION_MEDIA_PREVIOUS:
+        ui_action = CP0_UI_MEDIA_PREVIOUS;
+        break;
+    case CP0_SYSTEM_SHELL_V1_ACTION_MEDIA_NEXT:
+        ui_action = CP0_UI_MEDIA_NEXT;
+        break;
+    case CP0_SYSTEM_SHELL_V1_ACTION_HELP:
+        ui_action = CP0_UI_HELP;
+        break;
+    case CP0_SYSTEM_SHELL_V1_ACTION_SCREENSHOT:
+        ui_action = CP0_UI_SCREENSHOT;
+        break;
     default:
         return;
     }
-    cancel_notification(shell, false);
-    shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+    cancel_notification(shell, true);
+    cancel_system_action(shell, true);
+    if (action > CP0_SYSTEM_SHELL_V1_ACTION_POWER &&
+        action != CP0_SYSTEM_SHELL_V1_ACTION_HELP) {
+        shell->system_action_restore_mode = shell->overlay_mode;
+        shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION;
+    } else {
+        shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+    }
     handle_ui_action(shell, ui_action);
 }
 
@@ -816,7 +909,6 @@ static bool translate_key(struct shell *shell, uint32_t key,
     case KEY_BACKSPACE:
         *action = CP0_UI_BACK;
         return true;
-    case KEY_HOME:
     case KEY_HOMEPAGE:
     case KEY_F1:
         *action = CP0_UI_GO_HOME;
@@ -830,6 +922,18 @@ static bool translate_key(struct shell *shell, uint32_t key,
     case KEY_POWER:
     case KEY_F4:
         *action = CP0_UI_SHOW_POWER;
+        return true;
+    case KEY_F:
+        *action = CP0_UI_UP;
+        return true;
+    case KEY_Z:
+        *action = CP0_UI_LEFT;
+        return true;
+    case KEY_X:
+        *action = CP0_UI_DOWN;
+        return true;
+    case KEY_C:
+        *action = CP0_UI_RIGHT;
         return true;
     case KEY_H:
         if (shell->meta_pressed) {
@@ -984,8 +1088,9 @@ static void handle_registry_global(void *data, struct wl_registry *registry,
         xdg_wm_base_add_listener(shell->wm_base, &wm_base_listener, shell);
     } else if (strcmp(interface, cp0_system_shell_v1_interface.name) == 0 &&
                version >= 4) {
+        uint32_t bind_version = version < 5 ? version : 5;
         shell->system_control = wl_registry_bind(
-            registry, name, &cp0_system_shell_v1_interface, 4);
+            registry, name, &cp0_system_shell_v1_interface, bind_version);
         cp0_system_shell_v1_add_listener(shell->system_control,
                                          &system_control_listener, shell);
     }
@@ -1187,6 +1292,14 @@ static int shell_dispatch(struct shell *shell)
             uint64_t expirations;
             if (read(shell->timer_fd, &expirations, sizeof(expirations)) > 0) {
                 update_notification_timer(shell);
+                if (cp0_ui_tick(&shell->ui) &&
+                    shell->overlay_mode ==
+                        CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION &&
+                    !shell->ui.notification_banner) {
+                    shell->overlay_mode = shell->system_action_restore_mode;
+                    cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                                          shell->overlay_mode);
+                }
                 poll_permission_prompt(shell);
                 poll_document_prompt(shell);
                 poll_notification(shell);

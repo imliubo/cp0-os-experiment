@@ -297,6 +297,39 @@ impl AppdServer {
                 }
                 Err(error) => Err(CommandError::Manager(error)),
             },
+            AppdCommand::Uninstall { app_id } => {
+                let result = state
+                    .manager
+                    .is_running(&app_id)
+                    .map_err(CommandError::Manager)
+                    .and_then(|running| {
+                        if running {
+                            Err(CommandError::Manager(AppManagerError::AlreadyRunning(
+                                app_id.clone(),
+                            )))
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .and_then(|()| {
+                        state
+                            .permissions
+                            .reset_app(&app_id)
+                            .map_err(CommandError::Permission)
+                    })
+                    .and_then(|()| {
+                        state.document_prompts.clear_app(&app_id);
+                        state
+                            .manager
+                            .uninstall(&app_id)
+                            .map_err(CommandError::Manager)
+                    });
+                result.map(|removed| ResponseData::Uninstalled {
+                    app_id: removed.app_id,
+                    private_data_retained: true,
+                    package_cleanup_pending: removed.package_cleanup_pending,
+                })
+            }
             AppdCommand::Rollback { app_id } => state
                 .manager
                 .rollback(&app_id)
@@ -524,12 +557,21 @@ impl AppdServer {
             .take(usize::from(limit))
         {
             let manifest = state.manager.installed_manifest(&installed.app_id)?;
+            let usage = state.manager.app_usage(&installed.app_id)?;
             apps.push(AppSummary {
                 running: state.manager.is_running(&installed.app_id)?,
                 app_id: installed.app_id.clone(),
                 name: manifest.name,
                 version: installed.version.clone(),
                 display: manifest.display,
+                installed_at_unix_seconds: installed.installed_at_unix_seconds,
+                package_bytes: usage.package_bytes,
+                data_bytes: usage.data_bytes,
+                permissions: manifest
+                    .permissions
+                    .into_iter()
+                    .map(|request| request.name)
+                    .collect(),
             });
         }
         let consumed = usize::from(offset) + apps.len();

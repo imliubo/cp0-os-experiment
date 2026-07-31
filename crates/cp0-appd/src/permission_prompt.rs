@@ -160,6 +160,18 @@ impl PermissionCoordinator {
         Ok(())
     }
 
+    pub fn reset_app(&mut self, app_id: &str) -> Result<(), PermissionPromptError> {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|prompt| prompt.app_id == app_id)
+        {
+            self.pending = None;
+        }
+        self.engine.reset_app(app_id)?;
+        Ok(())
+    }
+
     fn allocate_prompt_id(&mut self) -> u64 {
         let prompt_id = self.next_prompt_id;
         self.next_prompt_id = self.next_prompt_id.wrapping_add(1).max(1);

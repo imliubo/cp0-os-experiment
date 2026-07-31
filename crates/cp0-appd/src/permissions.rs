@@ -182,6 +182,10 @@ impl PermissionStore {
         }
     }
 
+    fn reset_app(&mut self, app_id: &str) {
+        self.apps.remove(app_id);
+    }
+
     fn validate(&self) -> Result<(), PermissionError> {
         if self.schema_version != PERMISSION_SCHEMA_VERSION {
             return Err(PermissionError::Invalid(format!(
@@ -272,6 +276,12 @@ impl PermissionEngine {
         }
         self.allow_once.remove(&(manifest.id.clone(), permission));
         self.store.reset(&manifest.id, permission);
+        self.store.save_atomic(&self.path)
+    }
+
+    pub fn reset_app(&mut self, app_id: &str) -> Result<(), PermissionError> {
+        self.allow_once.retain(|(id, _)| id != app_id);
+        self.store.reset_app(app_id);
         self.store.save_atomic(&self.path)
     }
 }
@@ -416,6 +426,27 @@ mod tests {
             reloaded.authorize(&manifest, Permission::NotificationsPost),
             Authorization::Prompt
         );
+    }
+
+    #[test]
+    fn reset_app_removes_session_and_all_persistent_decisions() {
+        let path = fixture("reset-app");
+        let manifest = crate::tests::manifest();
+        let mut engine = PermissionEngine::new(&path, PermissionStore::default()).unwrap();
+        engine
+            .resolve(
+                &manifest,
+                Permission::NotificationsPost,
+                PermissionChoice::AllowAlways,
+            )
+            .unwrap();
+        engine.reset_app(&manifest.id).unwrap();
+        assert_eq!(
+            engine.authorize(&manifest, Permission::NotificationsPost),
+            Authorization::Prompt
+        );
+        let loaded = PermissionStore::load(path).unwrap();
+        assert!(loaded.apps.is_empty());
     }
 
     #[cfg(unix)]

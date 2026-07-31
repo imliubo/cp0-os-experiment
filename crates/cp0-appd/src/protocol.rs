@@ -37,6 +37,9 @@ pub enum AppdCommand {
     Stop {
         app_id: String,
     },
+    Uninstall {
+        app_id: String,
+    },
     Install {
         package_name: String,
     },
@@ -106,6 +109,11 @@ pub enum ResponseData {
     Stopped {
         app_id: String,
     },
+    Uninstalled {
+        app_id: String,
+        private_data_retained: bool,
+        package_cleanup_pending: bool,
+    },
     Installed {
         app_id: String,
         version: String,
@@ -160,6 +168,10 @@ pub struct AppSummary {
     pub version: String,
     pub display: cp0_manifest::DisplayMode,
     pub running: bool,
+    pub installed_at_unix_seconds: u64,
+    pub package_bytes: u64,
+    pub data_bytes: u64,
+    pub permissions: Vec<cp0_manifest::Permission>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,6 +271,7 @@ impl AppdRequest {
             }
             AppdCommand::Start { app_id }
             | AppdCommand::Stop { app_id }
+            | AppdCommand::Uninstall { app_id }
             | AppdCommand::Rollback { app_id }
             | AppdCommand::Logs { app_id, .. }
                 if !cp0_manifest::is_valid_app_id(app_id) =>
@@ -618,6 +631,10 @@ mod tests {
                     version: "0.1.0".into(),
                     display: cp0_manifest::DisplayMode::Standard,
                     running: true,
+                    installed_at_unix_seconds: 1_722_470_400,
+                    package_bytes: 65_536,
+                    data_bytes: 4_096,
+                    permissions: vec![cp0_manifest::Permission::NotificationsPost],
                 }],
                 next_offset: None,
             },
@@ -752,6 +769,10 @@ mod tests {
             version,
             display: cp0_manifest::DisplayMode::Immersive,
             running: true,
+            installed_at_unix_seconds: u64::MAX,
+            package_bytes: u64::MAX,
+            data_bytes: u64::MAX,
+            permissions: cp0_manifest::Permission::ALL.to_vec(),
         };
         let response = AppdResponse::success(
             91,

@@ -142,7 +142,30 @@ grep -q 'weston_compositor_add_key_binding' "$policy"
 grep -q 'cp0_system_shell_v1_send_action' "$policy"
 grep -q 'cp0_system_shell_v1_register_surface' "$shell_client"
 grep -q 'cp0_system_shell_v1_activate_app' "$shell_client"
-grep -q '<interface name="cp0_system_shell_v1" version="4">' "$protocol"
+grep -q '<interface name="cp0_system_shell_v1" version="5">' "$protocol"
+grep -q '<entry name="brightness_down" value="4" since="5"/>' "$protocol"
+grep -q '<entry name="screenshot" value="13" since="5"/>' "$protocol"
+for key in KEY_BRIGHTNESSDOWN KEY_BRIGHTNESSUP KEY_MUTE KEY_VOLUMEDOWN \
+    KEY_VOLUMEUP KEY_PLAYPAUSE KEY_PREVIOUSSONG KEY_NEXTSONG KEY_HELP KEY_SYSRQ
+do
+    grep -q "add_system_binding(policy, $key)" "$policy"
+done
+for key in KEY_F KEY_Z KEY_X KEY_C
+do
+    grep -q "case $key:" "$shell_client"
+done
+for key in KEY_HOME KEY_PAGEUP KEY_PAGEDOWN KEY_INSERT KEY_END KEY_DELETE \
+    KEY_F5 KEY_F6 KEY_F7 KEY_F8 KEY_F9 KEY_F10 KEY_F11 KEY_F12
+do
+    if grep -q "add_system_binding(policy, $key);" "$policy"; then
+        echo "foreground key is incorrectly registered as global: $key" >&2
+        exit 1
+    fi
+done
+if grep -q 'case KEY_HOME:' "$shell_client"; then
+    echo 'Fn+K Home is incorrectly translated to OS Home by the Shell' >&2
+    exit 1
+fi
 grep -q '<request name="activate_app" since="2">' "$protocol"
 grep -q '<request name="set_overlay_mode" since="3">' "$protocol"
 grep -q '<event name="app_display_mode" since="3">' "$protocol"

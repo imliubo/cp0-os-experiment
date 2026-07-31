@@ -5,6 +5,7 @@ use std::io::{BufReader, BufWriter, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +26,8 @@ pub struct AppAccount {
     pub installed_version: Option<String>,
     #[serde(default)]
     pub previous_versions: Vec<String>,
+    #[serde(default)]
+    pub installed_at_unix_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +121,7 @@ impl AppRegistry {
             unix_uid: account_id,
             installed_version: None,
             previous_versions: Vec::new(),
+            installed_at_unix_seconds: None,
         };
         self.apps.insert(app_id.to_owned(), account.clone());
         Ok(account)
@@ -131,6 +135,14 @@ impl AppRegistry {
             RegistryError::Invalid(format!("invalid installed manifest: {}", errors.join("; ")))
         })?;
         let mut account = self.assign(&manifest.id)?;
+        if account.installed_version.is_none() {
+            account.installed_at_unix_seconds = Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            );
+        }
         if account.installed_version.as_deref() != Some(manifest.version.as_str()) {
             account
                 .previous_versions
@@ -145,6 +157,23 @@ impl AppRegistry {
             account.installed_version = Some(manifest.version.clone());
         }
         self.apps.insert(manifest.id.clone(), account.clone());
+        Ok(account)
+    }
+
+    pub fn uninstall(&mut self, app_id: &str) -> Result<AppAccount, RegistryError> {
+        let account = self.apps.get_mut(app_id).ok_or_else(|| {
+            RegistryError::Invalid(format!("application {app_id} has no assigned account"))
+        })?;
+        if account.installed_version.is_none() {
+            return Err(RegistryError::Invalid(format!(
+                "application {app_id} is not installed"
+            )));
+        }
+        account.installed_version = None;
+        account.previous_versions.clear();
+        account.installed_at_unix_seconds = None;
+        let account = account.clone();
+        self.validate()?;
         Ok(account)
     }
 
@@ -224,6 +253,15 @@ impl AppRegistry {
             if account.previous_versions.len() > MAX_ROLLBACK_VERSIONS {
                 return Err(RegistryError::Invalid(format!(
                     "account {} retains too many rollback versions",
+                    account.account_id
+                )));
+            }
+            if account.installed_version.is_none()
+                && (account.installed_at_unix_seconds.is_some()
+                    || !account.previous_versions.is_empty())
+            {
+                return Err(RegistryError::Invalid(format!(
+                    "account {} retains metadata while uninstalled",
                     account.account_id
                 )));
             }
@@ -366,6 +404,47 @@ mod tests {
         assert_eq!(rolled_back.account_id, first.account_id);
         assert_eq!(rolled_back.installed_version, Some(first_manifest.version));
         assert_eq!(rolled_back.previous_versions, ["1.2.4"]);
+    }
+
+    #[test]
+    fn uninstall_preserves_identity_and_clears_install_metadata() {
+        let mut registry = AppRegistry::default();
+        let installed = registry.mark_installed(&crate::tests::manifest()).unwrap();
+        assert!(installed.installed_at_unix_seconds.is_some());
+        let removed = registry
+            .uninstall("dev.cardputerzero.hello")
+            .expect("uninstall application");
+        assert_eq!(removed.account_id, installed.account_id);
+        assert!(removed.installed_version.is_none());
+        assert!(removed.previous_versions.is_empty());
+        assert!(removed.installed_at_unix_seconds.is_none());
+        assert!(registry.installed_app_for_uid(removed.unix_uid).is_none());
+    }
+
+    #[test]
+    fn accepts_legacy_installed_accounts_without_an_install_timestamp() {
+        let encoded = r#"{
+          "schema_version": 1,
+          "next_account_id": 20001,
+          "apps": {
+            "dev.cardputerzero.hello": {
+              "account_id": 20000,
+              "unix_user": "cp0-app-20000",
+              "unix_uid": 20000,
+              "installed_version": "1.0.0",
+              "previous_versions": []
+            }
+          }
+        }"#;
+        let registry: AppRegistry = serde_json::from_str(encoded).unwrap();
+        registry.validate().unwrap();
+        assert_eq!(
+            registry
+                .account("dev.cardputerzero.hello")
+                .unwrap()
+                .installed_at_unix_seconds,
+            None
+        );
     }
 
     #[test]

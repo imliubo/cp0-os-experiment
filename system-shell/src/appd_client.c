@@ -17,7 +17,7 @@
 #define CP0_APPD_SOCKET "/run/cardputerzero-appd/control.sock"
 #endif
 #define CP0_APPD_FRAME_BYTES 8192U
-#define CP0_APPD_JSON_TOKENS 192U
+#define CP0_APPD_JSON_TOKENS 384U
 #define CP0_APPD_PAGE_SIZE 8U
 
 static uint64_t next_request_id = 1;
@@ -183,6 +183,33 @@ static bool valid_document_id(const char *document_id)
     return true;
 }
 
+static bool app_permission_bit(const char *document,
+                               const struct cp0_json_token *token,
+                               uint16_t *bit)
+{
+    static const struct {
+        const char *name;
+        uint16_t bit;
+    } permissions[] = {
+        {"audio.capture", CP0_APP_PERMISSION_AUDIO_CAPTURE},
+        {"audio.playback", CP0_APP_PERMISSION_AUDIO_PLAYBACK},
+        {"camera.capture", CP0_APP_PERMISSION_CAMERA_CAPTURE},
+        {"documents.open", CP0_APP_PERMISSION_DOCUMENTS_OPEN},
+        {"hardware.gpio", CP0_APP_PERMISSION_HARDWARE_GPIO},
+        {"network.client", CP0_APP_PERMISSION_NETWORK_CLIENT},
+        {"notifications.post", CP0_APP_PERMISSION_NOTIFICATIONS_POST},
+        {"radio.lora", CP0_APP_PERMISSION_RADIO_LORA},
+    };
+    for (size_t index = 0; index < sizeof(permissions) / sizeof(permissions[0]);
+         index++) {
+        if (cp0_json_string_equals(document, token, permissions[index].name)) {
+            *bit = permissions[index].bit;
+            return true;
+        }
+    }
+    return false;
+}
+
 static int parse_app_page(const char *response, size_t response_length,
                           uint64_t request_id, uint16_t offset,
                           struct cp0_app_summary *apps, size_t capacity,
@@ -214,6 +241,10 @@ static int parse_app_page(const char *response, size_t response_length,
         struct cp0_app_summary decoded = {0};
         int running;
         int display;
+        int installed_at;
+        int package_bytes;
+        int data_bytes;
+        int permissions;
         if (item < 0 || tokens[item].type != CP0_JSON_OBJECT ||
             !copy_member(response, tokens, token_count, item, "app_id",
                          decoded.app_id, sizeof(decoded.app_id)) ||
@@ -228,14 +259,43 @@ static int parse_app_page(const char *response, size_t response_length,
                                       "running");
         display = cp0_json_object_get(response, tokens, token_count, item,
                                       "display");
-        if (running < 0 || display < 0 ||
-            !cp0_json_get_bool(response, &tokens[running], &decoded.running))
+        installed_at = cp0_json_object_get(response, tokens, token_count, item,
+                                           "installed_at_unix_seconds");
+        package_bytes = cp0_json_object_get(response, tokens, token_count, item,
+                                            "package_bytes");
+        data_bytes = cp0_json_object_get(response, tokens, token_count, item,
+                                         "data_bytes");
+        permissions = cp0_json_object_get(response, tokens, token_count, item,
+                                          "permissions");
+        if (running < 0 || display < 0 || installed_at < 0 ||
+            package_bytes < 0 || data_bytes < 0 || permissions < 0 ||
+            !cp0_json_get_bool(response, &tokens[running], &decoded.running) ||
+            !cp0_json_get_u64(response, &tokens[installed_at],
+                              &decoded.installed_at_unix_seconds) ||
+            !cp0_json_get_u64(response, &tokens[package_bytes],
+                              &decoded.package_bytes) ||
+            !cp0_json_get_u64(response, &tokens[data_bytes],
+                              &decoded.data_bytes) ||
+            tokens[permissions].type != CP0_JSON_ARRAY ||
+            tokens[permissions].children > 8)
             return -1;
         if (cp0_json_string_equals(response, &tokens[display], "immersive")) {
             decoded.immersive = true;
         } else if (!cp0_json_string_equals(response, &tokens[display],
                                            "standard")) {
             return -1;
+        }
+        for (unsigned int permission_index = 0;
+             permission_index < tokens[permissions].children;
+             permission_index++) {
+            int permission = cp0_json_array_get(tokens, token_count, permissions,
+                                                permission_index);
+            uint16_t bit;
+            if (permission < 0 ||
+                !app_permission_bit(response, &tokens[permission], &bit) ||
+                (decoded.permissions & bit) != 0)
+                return -1;
+            decoded.permissions |= bit;
         }
         apps[index] = decoded;
     }
@@ -328,6 +388,41 @@ static int parse_lifecycle_response(const char *response,
                    copy_member(response, tokens, token_count, data, "app_id",
                                response_app_id, sizeof(response_app_id)) &&
                    strcmp(response_app_id, app_id) == 0
+               ? 0
+               : -1;
+}
+
+static int parse_uninstall_response(const char *response,
+                                    size_t response_length,
+                                    uint64_t request_id,
+                                    const char *app_id)
+{
+    char response_app_id[CP0_APP_ID_BYTES];
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    size_t token_count;
+    int data;
+    bool retained;
+    bool cleanup_pending;
+    if (!valid_app_id(app_id) ||
+        parse_success(response, response_length, request_id, tokens,
+                      &token_count, &data) != 0)
+        return -1;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int retained_token = cp0_json_object_get(
+        response, tokens, token_count, data, "private_data_retained");
+    int cleanup_token = cp0_json_object_get(
+        response, tokens, token_count, data, "package_cleanup_pending");
+    return kind >= 0 && retained_token >= 0 && cleanup_token >= 0 &&
+                   cp0_json_string_equals(response, &tokens[kind],
+                                          "uninstalled") &&
+                   copy_member(response, tokens, token_count, data, "app_id",
+                               response_app_id, sizeof(response_app_id)) &&
+                   strcmp(response_app_id, app_id) == 0 &&
+                   cp0_json_get_bool(response, &tokens[retained_token],
+                                     &retained) &&
+                   retained &&
+                   cp0_json_get_bool(response, &tokens[cleanup_token],
+                                     &cleanup_pending)
                ? 0
                : -1;
 }
@@ -495,6 +590,14 @@ int cp0_appd_test_parse_lifecycle_response(
                                     expected_kind, app_id);
 }
 
+int cp0_appd_test_parse_uninstall_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *app_id)
+{
+    return parse_uninstall_response(response, response_length, request_id,
+                                    app_id);
+}
+
 bool cp0_appd_test_valid_app_id(const char *app_id)
 {
     return valid_app_id(app_id);
@@ -579,6 +682,27 @@ int cp0_appd_start_app(const char *app_id)
 int cp0_appd_stop_app(const char *app_id)
 {
     return app_lifecycle_command("stop", "stopped", app_id);
+}
+
+int cp0_appd_uninstall_app(const char *app_id)
+{
+    char request[384];
+    char response[CP0_APPD_FRAME_BYTES];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    if (!valid_app_id(app_id))
+        return -1;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"uninstall\",\"app_id\":\"%s\"}}\n",
+        (unsigned long long)request_id, app_id);
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 3000) != 0)
+        return -1;
+    return parse_uninstall_response(response, response_length, request_id,
+                                    app_id);
 }
 
 int cp0_appd_take_notification(struct cp0_notification *notification)

@@ -49,34 +49,50 @@ mkdir -p "$snapshot_dir"
     -o "$work_dir/system-shell-system-info-test"
 "$work_dir/system-shell-system-info-test"
 
+snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm store-detail.ppm store.ppm system-brightness.ppm system-help.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
 if command -v sha256sum >/dev/null 2>&1; then
-    actual=$(cd "$snapshot_dir" && \
-        sha256sum app-detail.ppm apps-empty.ppm apps.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-confirm.ppm settings-policy.ppm settings.ppm store-detail.ppm store.ppm tasks.ppm)
+    actual=$(cd "$snapshot_dir" && sha256sum $snapshot_files)
 else
-    actual=$(cd "$snapshot_dir" && \
-        shasum -a 256 app-detail.ppm apps-empty.ppm apps.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-confirm.ppm settings-policy.ppm settings.ppm store-detail.ppm store.ppm tasks.ppm)
+    actual=$(cd "$snapshot_dir" && shasum -a 256 $snapshot_files)
 fi
 
-expected='9906dd2e7aa07a583b832308205635d69110dc83a1233ee7988d1dad7b0b3445  app-detail.ppm
+expected='b252a095d38eac93567ff1d5c8d2fa8edee762151cc72b442616ae59a60eeb3f  app-actions.ppm
+e96b09556b90a71d7102472be11a53abba0e916b8ce513defe2f7ca7cbb9dfb1  app-overview.ppm
+e5854e36cef4114241b0ba61cd4a7c4192e023726388c63357f31d27f982ff5f  app-permissions.ppm
+bc829a4605fdee296b28bf5949812daa3a39b455929ba0201987d856d5d1a3a2  app-storage.ppm
+2b815dc43b3ea4e80cf2211fc050c8d5350f0aa654cce5d7164214e31000f9ce  app-uninstall.ppm
 e690bfa55247afebf1858fbf0151e805f7446ed1d5ae990f5f0680f8b4b03e5a  apps-empty.ppm
 895d13c55341090c408fa658ef89aca771dc4ae32a8d741d8cefe2194cb71e70  apps.ppm
-00a3a7a87c813b3abfbea95e38d242ae5d0f749e435275ac9ee6f72c72d81a81  device-resources.ppm
+51d593360c9ec9f091537181168bc45be67270e3a09969a7b1d94ee78c74bc39  device-diagnostics.ppm
+6b3086625deb17dcad52cff31bd44c781f21535b21a12570bdbd7d4a830ca985  device-power.ppm
+b319774e90186f6bc6771144a9d766efbb19144699e54bb81c1f66178e323527  device-resources.ppm
 8fb8a471d993042126e54269fb44e9d5b52805e47310f72ebf408c60788612f4  device-unavailable.ppm
-301b8e07610fc2de5efe5284f66c5ddd1dbbb9d97ef83db7bdd4b9f022b92fd0  device.ppm
+f79f05120dbf9de95c8489d66c3020b7f4d36640829eb79d899582929c38562c  device.ppm
 b30227204599548f1de899e863e80589155694b5f3240b8c598c1396a3d21c76  document.ppm
 40258e54baae3a7a41765f2e95dc81f051765f0e1f89b4f654fd7152b0ebc3e5  home.ppm
 d0f6c4fb530e418af657af2cf5297d52cbe42b612eb1005537fc855c63be6dae  network-detail.ppm
 2962d9d9626435eb9b4dbf41a8cd80cab8c213e73bb81c3c9142ee7e411d6d5d  network-offline.ppm
 b99153076a10fd8da5eb18448a195447a4b4dd65f1422403cc3a365bc889f738  network.ppm
-8fb4e226637acb0f85027f430d4f7ff94d7ed33764a77ceac73ba0411bc2d943  notification.ppm
+5f1f3520d8c70b18b52b98c845d0ee06390ac6f30de6d44c293dc5587bbdb213  notification.ppm
 3c9f90a8bcc0c5d5ffaad46d31748dd831fface44e7615083e1e8357b63256a6  permission.ppm
 a6e5f954c77d1512c6abdd25d2b28a836983423a3ceb0990d014282915eff406  power.ppm
-b3dde2798ce27b9cd19af203d27401106e94e2351cc10773b391375683a219b5  settings-confirm.ppm
-db332ec7ed9804923ae103eb1b6fd4442a79740335ea1127f5359a70d63ca5a4  settings-policy.ppm
-e7012c258b6838bc07e19c901028ddd6fc9122a5a7830b017c1d94631fc9c149  settings.ppm
+026cbb224f9bd8b21aba74a54b6636fa568827a147fae67b72a666389791abfa  settings-apps-privacy.ppm
+a48887a13b1023ac784ed74828a2e54fb71b1fd36ca2a8d831dc4cb546e56098  settings-camera.ppm
+e215ec94d5623d91197c512594fb1b3543fe8bc483d9918c999ea9c3d12efa8f  settings-confirm.ppm
+8bf9615c80bc7bbbbda0b20323da7076db653936abfef0754d0ab77d880dbf5f  settings-connectivity.ppm
+4409d709a14a9021a4e681885996ccd59dc712967f31fa978cf008b139a3df6f  settings-display.ppm
+201fb57e7789ecd54d5fc9f09e56d63e46956aa12a09f06ba673c7e14653a234  settings-power.ppm
+6373e4850ceb18989705095fc2c6036788eb82978b7e83aa3dc9f97f4b1e1c97  settings-security.ppm
+f10e4e270371f6eaab38e4125f37e40f1fb9a17c3b5ef5473425e7b057fd3be4  settings-sound.ppm
+fb1ac2961e301b90c29719745d313c17910f4c938a7a03992abb4fc1e225e3ef  settings-system.ppm
+cc4e5bbf3f6dee26b0b6514661481c9217abe354a1dfa3459eac8cc7c7b27340  settings.ppm
 e5df489f49f025c4c7c2fdee52231cad8501f94a2f65493096b7a0394bddeca3  store-detail.ppm
 80a18453b84e8c7e565410ac1c975bad457f1bffe030d3b5f7cc304b7f933324  store.ppm
-3b71571633eb8db0f5bb38373a5fa98dc497d17a425587aec58d09966a0fc173  tasks.ppm'
+c8f03c8a917c9dfb0cecd57f32df1e6e11d913a75480e5ca11c2a35b04b0d62e  system-brightness.ppm
+34e659c664795fb8b2cef00fd6fd168c3fdf6e845421342b29cc41dc97b88558  system-help.ppm
+a6035c53a535cab44d6065cbd27f70a57d2655ee1e13baf24c87ef9176e40239  theme-high-contrast.ppm
+2bfce46d55e7ef494607fe0d42b7e0d698e2c7470427b62e3fa300462bf0f4cc  theme-light.ppm
+b382c359864c04060e4676c13c50e9578d241f132009a2840a3a9ed8324cfae2  tasks.ppm'
 
 if [ "$actual" != "$expected" ]; then
     echo "System Shell screenshot regression:" >&2
