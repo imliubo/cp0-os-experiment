@@ -22,6 +22,7 @@ required=(
     "$compositor/cardputerzero-system-shell"
     "$compositor/cardputerzero-policy.so"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-compositor.service"
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-recovery-console.service"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-system-shell.service"
     "$hello/app.json"
     "$hello/bin/hello-card.wasm"
@@ -69,7 +70,9 @@ install -m 0644 \
     "$repo_root/appd/systemd/"* \
     "$repo_root/appd/lora.conf" \
     "$repo_root/appd/store.conf" \
+    "$repo_root/appd/device-policy.json" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-compositor.service" \
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-recovery-console.service" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-system-shell.service" \
     "$output/"
 

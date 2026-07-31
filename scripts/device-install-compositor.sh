@@ -17,12 +17,18 @@ esac
 
 for file in cardputerzero-system-shell cardputerzero-policy.so \
     cardputerzero-app-runtime cardputerzero-compositor.service \
+    cardputerzero-recovery-console.service \
     cardputerzero-system-shell.service; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
         echo "error: invalid staged file: $file" >&2
         exit 1
     fi
 done
+
+if [ -e /var/lib/cardputerzero/registry/recovery-mode ]; then
+    echo "error: disable recovery mode before compositor deployment" >&2
+    exit 1
+fi
 
 if systemctl --quiet is-active 'cardputerzero-app-*.service'; then
     echo "error: stop the foreground application before compositor deployment" >&2
@@ -36,6 +42,9 @@ install -o root -g root -m 0644 \
 install -o root -g root -m 0644 \
     "$staging/cardputerzero-system-shell.service" \
     /etc/systemd/system/cardputerzero-system-shell.service
+install -o root -g root -m 0644 \
+    "$staging/cardputerzero-recovery-console.service" \
+    /etc/systemd/system/cardputerzero-recovery-console.service
 install -o root -g root -m 0755 "$staging/cardputerzero-system-shell" \
     /usr/bin/cardputerzero-system-shell
 install -o root -g root -m 0755 "$staging/cardputerzero-policy.so" \
@@ -43,6 +52,7 @@ install -o root -g root -m 0755 "$staging/cardputerzero-policy.so" \
 install -o root -g root -m 0755 "$staging/cardputerzero-app-runtime" \
     /usr/libexec/cardputerzero/app-runtime
 systemctl daemon-reload
+systemctl enable cardputerzero-recovery-console.service
 systemctl start cardputerzero-compositor.service
 
 wait_active()

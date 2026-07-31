@@ -222,6 +222,9 @@ install -D -m 0644 \
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/files/cardputerzero-system-shell.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-system-shell.service"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/files/cardputerzero-recovery-console.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-recovery-console.service"
 install -D -m 0755 "${STAGE_DIR}/01-compositor/files/start-compositor.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/start-compositor.sh"
 install -D -m 0755 "${STAGE_DIR}/01-compositor/files/wait-wayland.sh" \
@@ -248,4 +251,5 @@ else
 fi
 systemctl enable seatd.service
 systemctl enable cardputerzero-compositor.service
+systemctl enable cardputerzero-recovery-console.service
 CHROOT

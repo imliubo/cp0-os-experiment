@@ -104,6 +104,7 @@ cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
 cp "$repo_root/appd/systemd/"* "$platform_payload/systemd/"
 cp "$repo_root/appd/lora.conf" "$platform_payload/"
 cp "$repo_root/appd/store.conf" "$platform_payload/"
+cp "$repo_root/appd/device-policy.json" "$platform_payload/"
 if [[ -n ${CP0_STORE_PUBLIC_KEY:-} ]]; then
     if [[ ! -f $CP0_STORE_PUBLIC_KEY ]] || [[ $(wc -c <"$CP0_STORE_PUBLIC_KEY") -ne 32 ]]; then
         echo "error: CP0_STORE_PUBLIC_KEY must name a 32-byte raw Ed25519 public key" >&2

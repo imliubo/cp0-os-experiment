@@ -20,13 +20,14 @@ use crate::protocol::APPD_PROTOCOL_VERSION;
 use crate::{
     AppManager, AppManagerError, AppSummary, AppdCommand, AppdRequest, AppdResponse, AudioClient,
     AudioClientError, BrokerCommand, BrokerErrorCode, BrokerProtocolError, BrokerRequest,
-    BrokerResponse, CameraClient, CameraClientError, DocumentClient, DocumentClientError,
-    DocumentCoordinator, DocumentPromptError, DocumentRequestResult, ErrorCode, GpioClient,
-    GpioClientError, InstallError, IntentQueue, NetworkClient, NetworkClientError,
-    NotificationQueue, PackageInstaller, PermissionChoice, PermissionCoordinator,
-    PermissionPromptError, PermissionRequestResult, RadioClient, RadioClientError, ResponseData,
-    StorageClient, StorageClientError, TrustPaths, TrustPolicy, encode_broker_response,
-    peer_credentials, read_broker_request, read_request, write_broker_response, write_response,
+    BrokerResponse, CameraClient, CameraClientError, DevicePolicyEngine, DocumentClient,
+    DocumentClientError, DocumentCoordinator, DocumentPromptError, DocumentRequestResult,
+    ErrorCode, GpioClient, GpioClientError, InstallError, IntentQueue, NetworkClient,
+    NetworkClientError, NotificationQueue, PackageInstaller, PermissionChoice,
+    PermissionCoordinator, PermissionPromptError, PermissionRequestResult, PolicyError,
+    RadioClient, RadioClientError, ResponseData, StorageClient, StorageClientError, TrustPaths,
+    TrustPolicy, encode_broker_response, peer_credentials, read_broker_request, read_request,
+    write_broker_response, write_response,
 };
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -84,6 +85,7 @@ struct ServerState {
     notifications: NotificationQueue,
     document_prompts: DocumentCoordinator,
     intents: IntentQueue,
+    policy: DevicePolicyEngine,
 }
 
 impl AppdServer {
@@ -148,6 +150,7 @@ impl AppdServer {
                 notifications: NotificationQueue::default(),
                 document_prompts: DocumentCoordinator::default(),
                 intents: IntentQueue::default(),
+                policy: DevicePolicyEngine::unmanaged(),
             })),
             trusted_uids: trusted_uids.into_iter().collect(),
             store_installer_uids: BTreeSet::new(),
@@ -163,6 +166,14 @@ impl AppdServer {
     pub fn allow_store_installer(mut self, uid: u32) -> Self {
         self.trusted_uids.insert(uid);
         self.store_installer_uids.insert(uid);
+        self
+    }
+
+    pub fn with_device_policy(self, policy: DevicePolicyEngine) -> Self {
+        self.state
+            .lock()
+            .expect("new application server state cannot be poisoned")
+            .policy = policy;
         self
     }
 
@@ -277,8 +288,7 @@ impl AppdServer {
             }
             AppdCommand::Start { app_id } => self
                 .start_app(&state, &app_id)
-                .map(|unit| ResponseData::Started { app_id, unit })
-                .map_err(CommandError::Manager),
+                .map(|unit| ResponseData::Started { app_id, unit }),
             AppdCommand::Stop { app_id } => match state.manager.stop(&app_id) {
                 Ok(()) => {
                     state.permissions.clear_app_session(&app_id);
@@ -319,6 +329,17 @@ impl AppdServer {
                     });
                 result.map(|()| ResponseData::PermissionReset { app_id, permission })
             }
+            AppdCommand::GetDeviceSettings => state
+                .policy
+                .settings()
+                .map(|settings| ResponseData::DeviceSettings { settings })
+                .map_err(CommandError::Policy),
+            AppdCommand::SetDeviceMode { mode, enabled } => state
+                .policy
+                .set_mode(mode, enabled)
+                .and_then(|()| state.policy.settings())
+                .map(|settings| ResponseData::DeviceModeChanged { settings })
+                .map_err(CommandError::Policy),
             AppdCommand::TakeNotification => Ok(ResponseData::NextNotification {
                 notification: state.notifications.take(),
             }),
@@ -429,12 +450,21 @@ impl AppdServer {
             unreachable!("store installation requires store-install command")
         };
         let current_version = match self.state.lock() {
-            Ok(state) => state
-                .manager
-                .installed_apps()
-                .into_iter()
-                .find(|installed| installed.app_id == app_id)
-                .map(|installed| installed.version),
+            Ok(state) => {
+                if !state.policy.allows_store_install(&app_id) {
+                    return AppdResponse::error(
+                        request_id,
+                        ErrorCode::Unauthorized,
+                        "store installation is blocked by device policy",
+                    );
+                }
+                state
+                    .manager
+                    .installed_apps()
+                    .into_iter()
+                    .find(|installed| installed.app_id == app_id)
+                    .map(|installed| installed.version)
+            }
             Err(_) => {
                 return AppdResponse::error(
                     request_id,
@@ -472,8 +502,13 @@ impl AppdServer {
         self.commit_prepared_install(request_id, prepared)
     }
 
-    fn start_app(&self, state: &ServerState, app_id: &str) -> Result<String, AppManagerError> {
-        state.manager.start(app_id)
+    fn start_app(&self, state: &ServerState, app_id: &str) -> Result<String, CommandError> {
+        if !state.policy.allows_app(app_id) {
+            return Err(CommandError::Restricted(
+                "application launch is blocked by device policy",
+            ));
+        }
+        state.manager.start(app_id).map_err(CommandError::Manager)
     }
 
     fn list_apps(
@@ -1234,6 +1269,13 @@ impl AppdServer {
                 ));
             }
         };
+        if state.policy.denies_permission(permission) {
+            return Err(BrokerResponse::error(
+                request_id,
+                BrokerErrorCode::Denied,
+                "capability is blocked by device policy",
+            ));
+        }
         match state.permissions.request(&manifest, permission) {
             Ok(PermissionRequestResult::Allow) => Ok(AuthorizedApp {
                 app_id: manifest.id,
@@ -1277,6 +1319,9 @@ fn control_command_authorized(
     trusted_uids: &BTreeSet<u32>,
     store_installer_uids: &BTreeSet<u32>,
 ) -> bool {
+    if store_installer_uids.contains(&uid) {
+        return matches!(command, AppdCommand::StoreInstall { .. });
+    }
     if !trusted_uids.contains(&uid) {
         return false;
     }
@@ -1284,7 +1329,7 @@ fn control_command_authorized(
         AppdCommand::Install { .. } | AppdCommand::Rollback { .. } | AppdCommand::Logs { .. } => {
             uid == 0
         }
-        AppdCommand::StoreInstall { .. } => store_installer_uids.contains(&uid),
+        AppdCommand::StoreInstall { .. } => false,
         _ => true,
     }
 }
@@ -1345,6 +1390,8 @@ enum CommandError {
     Manager(AppManagerError),
     Permission(PermissionPromptError),
     Document(DocumentPromptError),
+    Policy(PolicyError),
+    Restricted(&'static str),
 }
 
 impl fmt::Display for CommandError {
@@ -1353,6 +1400,8 @@ impl fmt::Display for CommandError {
             Self::Manager(error) => write!(formatter, "{error}"),
             Self::Permission(error) => write!(formatter, "{error}"),
             Self::Document(error) => write!(formatter, "{error}"),
+            Self::Policy(error) => write!(formatter, "{error}"),
+            Self::Restricted(error) => formatter.write_str(error),
         }
     }
 }
@@ -1408,6 +1457,18 @@ fn command_error_response(request_id: u64, error: &CommandError) -> AppdResponse
             request_id,
             ErrorCode::NotFound,
             "no documents are available",
+        ),
+        CommandError::Policy(PolicyError::Locked(_)) | CommandError::Restricted(_) => {
+            AppdResponse::error(
+                request_id,
+                ErrorCode::Unauthorized,
+                "operation is blocked by device policy",
+            )
+        }
+        CommandError::Policy(_) => AppdResponse::error(
+            request_id,
+            ErrorCode::Internal,
+            "device policy state could not be updated",
         ),
     }
 }
@@ -1853,6 +1914,18 @@ mod tests {
         ));
         assert!(control_command_authorized(
             shell, &normal, &trusted, &stores
+        ));
+        assert!(!control_command_authorized(
+            store, &normal, &trusted, &stores
+        ));
+        assert!(!control_command_authorized(
+            store,
+            &AppdCommand::SetDeviceMode {
+                mode: crate::DeviceMode::Developer,
+                enabled: true,
+            },
+            &trusted,
+            &stores
         ));
         assert!(!control_command_authorized(999, &normal, &trusted, &stores));
     }

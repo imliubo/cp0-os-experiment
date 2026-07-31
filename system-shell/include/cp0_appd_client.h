@@ -25,6 +25,28 @@ enum cp0_permission_choice {
     CP0_PERMISSION_DENY,
 };
 
+enum cp0_management_authority {
+    CP0_AUTHORITY_PERSONAL,
+    CP0_AUTHORITY_PARENT,
+    CP0_AUTHORITY_ORGANIZATION,
+};
+
+enum cp0_device_mode {
+    CP0_DEVICE_MODE_DEVELOPER,
+    CP0_DEVICE_MODE_RECOVERY,
+};
+
+struct cp0_device_settings {
+    enum cp0_management_authority authority;
+    bool developer_mode;
+    bool developer_mode_allowed;
+    bool recovery_mode;
+    bool recovery_mode_allowed;
+    bool store_install_allowed;
+    bool app_launch_restricted;
+    uint8_t denied_permission_count;
+};
+
 struct cp0_permission_prompt {
     uint64_t prompt_id;
     char app_name[CP0_PROMPT_APP_NAME_BYTES];
@@ -77,5 +99,8 @@ int cp0_appd_resolve_permission(uint64_t prompt_id,
 int cp0_appd_get_document_prompt(struct cp0_document_prompt *prompt);
 int cp0_appd_resolve_document(uint64_t prompt_id,
                               const char *document_id);
+int cp0_appd_get_device_settings(struct cp0_device_settings *settings);
+int cp0_appd_set_device_mode(enum cp0_device_mode mode, bool enabled,
+                             struct cp0_device_settings *settings);
 
 #endif

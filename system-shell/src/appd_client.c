@@ -355,6 +355,128 @@ static int app_lifecycle_command(const char *command, const char *expected_kind,
                                     expected_kind, app_id);
 }
 
+static int parse_device_settings_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *expected_kind, struct cp0_device_settings *settings)
+{
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    struct cp0_device_settings decoded = {0};
+    size_t token_count;
+    uint64_t denied_count;
+    int data;
+
+    if (settings == NULL ||
+        parse_success(response, response_length, request_id, tokens,
+                      &token_count, &data) != 0)
+        return -1;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int value = cp0_json_object_get(response, tokens, token_count, data,
+                                    "settings");
+    if (kind < 0 || value < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind], expected_kind) ||
+        tokens[value].type != CP0_JSON_OBJECT)
+        return -1;
+
+    int authority = cp0_json_object_get(response, tokens, token_count, value,
+                                        "authority");
+    int developer = cp0_json_object_get(response, tokens, token_count, value,
+                                        "developer_mode");
+    int developer_allowed = cp0_json_object_get(
+        response, tokens, token_count, value, "developer_mode_allowed");
+    int recovery = cp0_json_object_get(response, tokens, token_count, value,
+                                       "recovery_mode");
+    int recovery_allowed = cp0_json_object_get(
+        response, tokens, token_count, value, "recovery_mode_allowed");
+    int store_allowed = cp0_json_object_get(
+        response, tokens, token_count, value, "store_install_allowed");
+    int launch_restricted = cp0_json_object_get(
+        response, tokens, token_count, value, "app_launch_restricted");
+    int denied = cp0_json_object_get(
+        response, tokens, token_count, value, "denied_permission_count");
+    if (authority < 0 || developer < 0 || developer_allowed < 0 ||
+        recovery < 0 || recovery_allowed < 0 || store_allowed < 0 ||
+        launch_restricted < 0 || denied < 0 ||
+        !cp0_json_get_bool(response, &tokens[developer],
+                           &decoded.developer_mode) ||
+        !cp0_json_get_bool(response, &tokens[developer_allowed],
+                           &decoded.developer_mode_allowed) ||
+        !cp0_json_get_bool(response, &tokens[recovery],
+                           &decoded.recovery_mode) ||
+        !cp0_json_get_bool(response, &tokens[recovery_allowed],
+                           &decoded.recovery_mode_allowed) ||
+        !cp0_json_get_bool(response, &tokens[store_allowed],
+                           &decoded.store_install_allowed) ||
+        !cp0_json_get_bool(response, &tokens[launch_restricted],
+                           &decoded.app_launch_restricted) ||
+        !cp0_json_get_u64(response, &tokens[denied], &denied_count) ||
+        denied_count > 8)
+        return -1;
+    if (cp0_json_string_equals(response, &tokens[authority], "personal"))
+        decoded.authority = CP0_AUTHORITY_PERSONAL;
+    else if (cp0_json_string_equals(response, &tokens[authority], "parent"))
+        decoded.authority = CP0_AUTHORITY_PARENT;
+    else if (cp0_json_string_equals(response, &tokens[authority],
+                                    "organization"))
+        decoded.authority = CP0_AUTHORITY_ORGANIZATION;
+    else
+        return -1;
+    decoded.denied_permission_count = (uint8_t)denied_count;
+    *settings = decoded;
+    return 0;
+}
+
+static int device_settings_command(const char *name, const char *mode,
+                                   bool enabled, const char *expected_kind,
+                                   struct cp0_device_settings *settings)
+{
+    char request[320];
+    char response[CP0_APPD_FRAME_BYTES];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int request_length;
+
+    if (mode == NULL) {
+        request_length = snprintf(
+            request, sizeof(request),
+            "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+            "\"name\":\"%s\"}}\n",
+            (unsigned long long)request_id, name);
+    } else {
+        request_length = snprintf(
+            request, sizeof(request),
+            "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+            "\"name\":\"%s\",\"mode\":\"%s\",\"enabled\":%s}}\n",
+            (unsigned long long)request_id, name, mode,
+            enabled ? "true" : "false");
+    }
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 3000) != 0)
+        return -1;
+    return parse_device_settings_response(response, response_length, request_id,
+                                          expected_kind, settings);
+}
+
+int cp0_appd_get_device_settings(struct cp0_device_settings *settings)
+{
+    return device_settings_command("get-device-settings", NULL, false,
+                                   "device-settings", settings);
+}
+
+int cp0_appd_set_device_mode(enum cp0_device_mode mode, bool enabled,
+                             struct cp0_device_settings *settings)
+{
+    const char *mode_name;
+    if (mode == CP0_DEVICE_MODE_DEVELOPER)
+        mode_name = "developer";
+    else if (mode == CP0_DEVICE_MODE_RECOVERY)
+        mode_name = "recovery";
+    else
+        return -1;
+    return device_settings_command("set-device-mode", mode_name, enabled,
+                                   "device-mode-changed", settings);
+}
+
 #ifdef CP0_APPD_CLIENT_TEST
 int cp0_appd_test_parse_app_page(
     const char *response, size_t response_length, uint64_t request_id,
@@ -381,6 +503,14 @@ bool cp0_appd_test_valid_app_id(const char *app_id)
 bool cp0_appd_test_valid_document_id(const char *document_id)
 {
     return valid_document_id(document_id);
+}
+
+int cp0_appd_test_parse_device_settings_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *expected_kind, struct cp0_device_settings *settings)
+{
+    return parse_device_settings_response(response, response_length, request_id,
+                                          expected_kind, settings);
 }
 #endif
 

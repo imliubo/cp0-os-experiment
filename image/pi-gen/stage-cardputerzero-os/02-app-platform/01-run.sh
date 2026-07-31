@@ -87,6 +87,8 @@ install -D -o root -g root -m 0644 "${payload}/lora.conf" \
     "${ROOTFS_DIR}/etc/cardputerzero/lora.conf"
 install -D -o root -g root -m 0644 "${payload}/store.conf" \
     "${ROOTFS_DIR}/etc/cardputerzero/store.conf"
+install -D -o root -g root -m 0644 "${payload}/device-policy.json" \
+    "${ROOTFS_DIR}/etc/cardputerzero/device-policy.json"
 install -D -m 0755 "${payload}/diagnostics/device-core-recovery.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-core-recovery"
 install -D -m 0755 "${payload}/diagnostics/device-stability-monitor.sh" \

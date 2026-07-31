@@ -37,6 +37,7 @@ done
 
 required_files=(
     usr/lib/aarch64-linux-gnu/weston/cardputerzero-policy.so
+    etc/cardputerzero/device-policy.json
     var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/app.json
     var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm
 )
@@ -46,11 +47,18 @@ for path in "${required_files[@]}"; do
         exit 1
     fi
 done
+for marker in developer-mode recovery-mode; do
+    if [[ -e $rootfs/var/lib/cardputerzero/registry/$marker ]]; then
+        echo "error: product image enables $marker by default" >&2
+        exit 1
+    fi
+done
 
 enabled_units=(
     multi-user.target.wants/cardputerzero-compositor.service
     multi-user.target.wants/cardputerzero-console-banner.service
     multi-user.target.wants/cardputerzero-overlay-root-status.service
+    multi-user.target.wants/cardputerzero-recovery-console.service
     sockets.target.wants/cardputerzero-appd.socket
     sockets.target.wants/cardputerzero-audiod.socket
     sockets.target.wants/cardputerzero-broker.socket

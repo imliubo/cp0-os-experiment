@@ -29,6 +29,7 @@ enum cp0_ui_screen {
     CP0_UI_STORE,
     CP0_UI_DEVICE,
     CP0_UI_NETWORK,
+    CP0_UI_SETTINGS,
     CP0_UI_TASKS,
 };
 
@@ -57,6 +58,16 @@ enum cp0_ui_event {
     CP0_UI_EVENT_DOCUMENT_CANCEL,
     CP0_UI_EVENT_STORE_REFRESH,
     CP0_UI_EVENT_STORE_INSTALL,
+    CP0_UI_EVENT_DEVELOPER_ENABLE,
+    CP0_UI_EVENT_DEVELOPER_DISABLE,
+    CP0_UI_EVENT_RECOVERY_ENABLE,
+    CP0_UI_EVENT_RECOVERY_DISABLE,
+};
+
+enum cp0_ui_authority {
+    CP0_UI_AUTHORITY_PERSONAL,
+    CP0_UI_AUTHORITY_PARENT,
+    CP0_UI_AUTHORITY_ORGANIZATION,
 };
 
 enum cp0_ui_app_state {
@@ -142,6 +153,7 @@ struct cp0_ui {
     unsigned int store_selected;
     unsigned int store_count;
     unsigned int task_action_selected;
+    unsigned int settings_selected;
     bool app_list_truncated;
     bool store_list_truncated;
     bool store_catalog_stale;
@@ -149,6 +161,17 @@ struct cp0_ui {
     enum cp0_ui_store_status store_status;
     unsigned int dialog_selected;
     bool power_dialog;
+    bool settings_available;
+    bool settings_confirm;
+    bool settings_confirm_recovery;
+    bool developer_mode;
+    bool developer_mode_allowed;
+    bool recovery_mode;
+    bool recovery_mode_allowed;
+    bool store_install_allowed;
+    bool app_launch_restricted;
+    enum cp0_ui_authority settings_authority;
+    uint8_t denied_permission_count;
     bool permission_prompt;
     bool document_prompt;
     bool notification_banner;
@@ -176,6 +199,11 @@ struct cp0_ui {
 void cp0_ui_init(struct cp0_ui *ui);
 void cp0_ui_set_status(struct cp0_ui *ui, const char *clock_text,
                        bool network_online, int battery_percent);
+void cp0_ui_set_device_settings(
+    struct cp0_ui *ui, enum cp0_ui_authority authority,
+    bool developer_mode, bool developer_mode_allowed, bool recovery_mode,
+    bool recovery_mode_allowed, bool store_install_allowed,
+    bool app_launch_restricted, uint8_t denied_permission_count);
 void cp0_ui_add_app(struct cp0_ui *ui, uint32_t token, const char *app_id);
 void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
                              const struct cp0_ui_catalog_app *apps,

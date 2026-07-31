@@ -136,6 +136,8 @@ static const char *screen_title(const struct cp0_ui *ui)
         return "DEVICE";
     case CP0_UI_NETWORK:
         return "NETWORK";
+    case CP0_UI_SETTINGS:
+        return "SETTINGS";
     case CP0_UI_TASKS:
         return "TASKS";
     }
@@ -204,18 +206,21 @@ static void draw_large_network_icon(struct canvas *canvas, int x, int y,
     fill_rect(canvas, x + 21, y, 4, 21, color);
 }
 
-static void draw_power_icon(struct canvas *canvas, int x, int y,
-                            uint32_t color)
+static void draw_settings_icon(struct canvas *canvas, int x, int y,
+                               uint32_t color)
 {
-    stroke_rect(canvas, x + 3, y + 4, 18, 18, 2, color);
-    fill_rect(canvas, x + 10, y, 4, 13, COLOR_SURFACE);
-    fill_rect(canvas, x + 11, y, 2, 12, color);
+    for (int row = 0; row < 3; row++) {
+        int y_offset = y + 2 + row * 8;
+        int knob = row == 1 ? 15 : 6;
+        fill_rect(canvas, x, y_offset + 2, 23, 2, color);
+        fill_rect(canvas, x + knob, y_offset, 4, 6, color);
+    }
 }
 
 static void draw_home(struct canvas *canvas, const struct cp0_ui *ui)
 {
     static const char *labels[] = {"APPS", "STORE", "DEVICE", "NETWORK",
-                                   "POWER"};
+                                   "SETTINGS"};
     for (unsigned int index = 0; index < 5; index++) {
         int x = 8 + (int)(index % 3) * 103;
         int y = 28 + (int)(index / 3) * 68;
@@ -239,7 +244,7 @@ static void draw_home(struct canvas *canvas, const struct cp0_ui *ui)
             draw_large_network_icon(canvas, x + 10, y + 11, icon_color);
             break;
         default:
-            draw_power_icon(canvas, x + 10, y + 11, icon_color);
+            draw_settings_icon(canvas, x + 10, y + 9, icon_color);
             break;
         }
         draw_text(canvas, x + 10, y + 44, labels[index], 1, COLOR_TEXT);
@@ -428,6 +433,74 @@ static void draw_tasks_page(struct canvas *canvas, const struct cp0_ui *ui)
     }
 }
 
+static const char *settings_state(bool enabled, bool allowed)
+{
+    if (!allowed)
+        return "LOCKED";
+    return enabled ? "ON" : "OFF";
+}
+
+static void draw_settings_page(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    static const char *titles[] = {"DEVELOPER MODE", "RECOVERY BOOT"};
+    static const char *details[] = {"INSTALL TRUSTED DEV PACKAGES",
+                                    "NEXT BOOT USES CONSOLE"};
+    static const char *authorities[] = {"PERSONAL POLICY", "PARENT POLICY",
+                                        "ORGANIZATION POLICY"};
+    if (!ui->settings_available) {
+        draw_empty_page(canvas, "SETTINGS", "SETTINGS UNAVAILABLE", COLOR_RED);
+        return;
+    }
+    for (unsigned int row = 0; row < 2; row++) {
+        int y = 30 + (int)row * 54;
+        bool selected = ui->settings_selected == row;
+        bool enabled = row == 0 ? ui->developer_mode : ui->recovery_mode;
+        bool allowed =
+            row == 0 ? ui->developer_mode_allowed : ui->recovery_mode_allowed;
+        fill_rect(canvas, 8, y, 304, 48,
+                  selected ? COLOR_SELECTED : COLOR_SURFACE);
+        stroke_rect(canvas, 8, y, 304, 48, selected ? 2 : 1,
+                    selected ? COLOR_GREEN : COLOR_BAR);
+        draw_text(canvas, 20, y + 10, titles[row], 1, COLOR_TEXT);
+        draw_text(canvas, 230, y + 10, settings_state(enabled, allowed), 1,
+                  !allowed ? COLOR_MUTED : (enabled ? COLOR_YELLOW : COLOR_GREEN));
+        draw_text(canvas, 20, y + 29, details[row], 1, COLOR_MUTED);
+    }
+    draw_text(canvas, 8, 145, authorities[ui->settings_authority], 1,
+              ui->settings_authority == CP0_UI_AUTHORITY_PERSONAL ? COLOR_MUTED
+                                                                  : COLOR_YELLOW);
+    if (!ui->store_install_allowed || ui->app_launch_restricted ||
+        ui->denied_permission_count > 0)
+        draw_text(canvas, 200, 145, "RESTRICTED", 1, COLOR_YELLOW);
+}
+
+static void draw_settings_confirm(struct canvas *canvas,
+                                  const struct cp0_ui *ui)
+{
+    static const char *labels[] = {"ENABLE", "CANCEL"};
+    fill_rect(canvas, 0, 21, CP0_UI_WIDTH, CP0_UI_HEIGHT - 21, 0x00090b0cu);
+    fill_rect(canvas, 24, 35, 272, 108, COLOR_SURFACE);
+    stroke_rect(canvas, 24, 35, 272, 108, 2, COLOR_YELLOW);
+    draw_text(canvas, 42, 50,
+              ui->settings_confirm_recovery ? "ENABLE RECOVERY BOOT"
+                                            : "ENABLE DEVELOPER MODE",
+              1, COLOR_TEXT);
+    draw_text(canvas, 42, 72,
+              ui->settings_confirm_recovery ? "NEXT BOOT OPENS CONSOLE"
+                                            : "DEV PACKAGES MAY INSTALL",
+              1, COLOR_MUTED);
+    for (unsigned int index = 0; index < 2; index++) {
+        int x = 48 + (int)index * 116;
+        bool selected = ui->dialog_selected == index;
+        fill_rect(canvas, x, 105, 104, 24,
+                  selected ? COLOR_SELECTED : COLOR_BAR);
+        stroke_rect(canvas, x, 105, 104, 24, selected ? 2 : 1,
+                    selected ? COLOR_GREEN : COLOR_MUTED);
+        draw_text(canvas, x + 28, 114, labels[index], 1,
+                  selected ? COLOR_TEXT : COLOR_MUTED);
+    }
+}
+
 static void draw_page(struct canvas *canvas, const struct cp0_ui *ui)
 {
     switch (ui->screen) {
@@ -445,6 +518,9 @@ static void draw_page(struct canvas *canvas, const struct cp0_ui *ui)
         draw_empty_page(canvas, "NETWORK",
                         ui->network_online ? "CONNECTED" : "OFFLINE",
                         ui->network_online ? COLOR_GREEN : COLOR_RED);
+        break;
+    case CP0_UI_SETTINGS:
+        draw_settings_page(canvas, ui);
         break;
     case CP0_UI_TASKS:
         draw_tasks_page(canvas, ui);
@@ -582,6 +658,26 @@ void cp0_ui_set_status(struct cp0_ui *ui, const char *clock_text,
     }
     ui->network_online = network_online;
     ui->battery_percent = battery_percent;
+}
+
+void cp0_ui_set_device_settings(
+    struct cp0_ui *ui, enum cp0_ui_authority authority,
+    bool developer_mode, bool developer_mode_allowed, bool recovery_mode,
+    bool recovery_mode_allowed, bool store_install_allowed,
+    bool app_launch_restricted, uint8_t denied_permission_count)
+{
+    if (ui == NULL || authority > CP0_UI_AUTHORITY_ORGANIZATION ||
+        denied_permission_count > 8)
+        return;
+    ui->settings_authority = authority;
+    ui->developer_mode = developer_mode && developer_mode_allowed;
+    ui->developer_mode_allowed = developer_mode_allowed;
+    ui->recovery_mode = recovery_mode && recovery_mode_allowed;
+    ui->recovery_mode_allowed = recovery_mode_allowed;
+    ui->store_install_allowed = store_install_allowed;
+    ui->app_launch_restricted = app_launch_restricted;
+    ui->denied_permission_count = denied_permission_count;
+    ui->settings_available = true;
 }
 
 static bool copy_text(char *output, size_t capacity, const char *input)
@@ -949,6 +1045,7 @@ bool cp0_ui_show_permission(struct cp0_ui *ui, uint64_t prompt_id,
     ui->prompt_selected = 0;
     ui->permission_prompt = true;
     ui->power_dialog = false;
+    ui->settings_confirm = false;
     return true;
 }
 
@@ -1007,6 +1104,7 @@ bool cp0_ui_show_documents(struct cp0_ui *ui, uint64_t prompt_id,
     ui->document_count = (unsigned int)document_count;
     ui->document_prompt = true;
     ui->power_dialog = false;
+    ui->settings_confirm = false;
     return true;
 }
 
@@ -1093,17 +1191,20 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     }
     if (action == CP0_UI_GO_HOME) {
         ui->power_dialog = false;
+        ui->settings_confirm = false;
         ui->store_detail = false;
         ui->screen = CP0_UI_HOME;
         return CP0_UI_EVENT_NONE;
     }
     if (action == CP0_UI_SHOW_TASKS) {
         ui->power_dialog = false;
+        ui->settings_confirm = false;
         ui->screen = CP0_UI_TASKS;
         ui->task_action_selected = 0;
         return CP0_UI_EVENT_NONE;
     }
     if (action == CP0_UI_SHOW_POWER) {
+        ui->settings_confirm = false;
         ui->power_dialog = true;
         ui->dialog_selected = 0;
         return CP0_UI_EVENT_NONE;
@@ -1123,6 +1224,24 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 return CP0_UI_EVENT_SLEEP;
             if (selected == 1)
                 return CP0_UI_EVENT_RESTART;
+        }
+        return CP0_UI_EVENT_NONE;
+    }
+
+    if (ui->settings_confirm) {
+        if (action == CP0_UI_LEFT)
+            ui->dialog_selected = 0;
+        else if (action == CP0_UI_RIGHT)
+            ui->dialog_selected = 1;
+        else if (action == CP0_UI_BACK) {
+            ui->settings_confirm = false;
+        } else if (action == CP0_UI_ACCEPT) {
+            bool recovery = ui->settings_confirm_recovery;
+            unsigned int selected = ui->dialog_selected;
+            ui->settings_confirm = false;
+            if (selected == 0)
+                return recovery ? CP0_UI_EVENT_RECOVERY_ENABLE
+                                : CP0_UI_EVENT_DEVELOPER_ENABLE;
         }
         return CP0_UI_EVENT_NONE;
     }
@@ -1183,6 +1302,30 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         return CP0_UI_EVENT_NONE;
     }
 
+    if (ui->screen == CP0_UI_SETTINGS) {
+        if (!ui->settings_available)
+            return CP0_UI_EVENT_NONE;
+        if (action == CP0_UI_UP)
+            ui->settings_selected = 0;
+        else if (action == CP0_UI_DOWN)
+            ui->settings_selected = 1;
+        else if (action == CP0_UI_ACCEPT) {
+            bool recovery = ui->settings_selected == 1;
+            bool allowed = recovery ? ui->recovery_mode_allowed
+                                    : ui->developer_mode_allowed;
+            bool enabled = recovery ? ui->recovery_mode : ui->developer_mode;
+            if (!allowed)
+                return CP0_UI_EVENT_NONE;
+            if (enabled)
+                return recovery ? CP0_UI_EVENT_RECOVERY_DISABLE
+                                : CP0_UI_EVENT_DEVELOPER_DISABLE;
+            ui->settings_confirm = true;
+            ui->settings_confirm_recovery = recovery;
+            ui->dialog_selected = 1;
+        }
+        return CP0_UI_EVENT_NONE;
+    }
+
     if (ui->screen != CP0_UI_HOME)
         return CP0_UI_EVENT_NONE;
 
@@ -1210,8 +1353,8 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             ui->screen = CP0_UI_NETWORK;
             break;
         default:
-            ui->power_dialog = true;
-            ui->dialog_selected = 0;
+            ui->screen = CP0_UI_SETTINGS;
+            ui->settings_selected = 0;
             break;
         }
     }
@@ -1236,10 +1379,13 @@ void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
     draw_status_bar(&canvas, ui);
     draw_page(&canvas, ui);
     if (ui->notification_banner && !ui->power_dialog &&
-        !ui->permission_prompt && !ui->document_prompt)
+        !ui->settings_confirm && !ui->permission_prompt &&
+        !ui->document_prompt)
         draw_notification_banner(&canvas, ui);
     if (ui->power_dialog)
         draw_power_dialog(&canvas, ui);
+    else if (ui->settings_confirm)
+        draw_settings_confirm(&canvas, ui);
     if (ui->permission_prompt)
         draw_permission_dialog(&canvas, ui);
     else if (ui->document_prompt)

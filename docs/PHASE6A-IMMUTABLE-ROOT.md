@@ -47,9 +47,11 @@ After switch-root, root-only diagnostics are available at:
 /run/cardputerzero-data           ext4, rw,nodev,nosuid,noexec
 ```
 
-Removing `cp0.overlay_root=volatile` from `cmdline.txt` is the explicit recovery
-mode. It boots the lower root read-write and does not mount or bind `cp0-data`.
-This is a service operation, not a normal product boot mode.
+Removing `cp0.overlay_root=volatile` from `cmdline.txt` is the explicit
+lower-root service recovery path. It boots the lower root read-write and does
+not mount or bind `cp0-data`. This is distinct from the Settings "Recovery
+Boot", which keeps the immutable/persistent layout and only selects the tty1
+console instead of the compositor.
 
 ## Persistent allowlist
 

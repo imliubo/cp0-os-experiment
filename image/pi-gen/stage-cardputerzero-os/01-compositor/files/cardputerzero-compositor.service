@@ -3,12 +3,14 @@ Description=CardputerZero single-foreground Wayland compositor
 Documentation=https://wayland.pages.freedesktop.org/weston/toc/running-weston.html
 Requires=seatd.service
 After=seatd.service systemd-user-sessions.service
+RequiresMountsFor=/var/lib/cardputerzero/registry
 Wants=cardputerzero-system-shell.service
 Before=cardputerzero-system-shell.service
 Conflicts=getty@tty1.service
 OnFailure=getty@tty1.service
 ConditionPathExists=/dev/dri/cardputer-zero-internal
 ConditionPathExists=/dev/input/cardputer-zero-internal
+ConditionPathExists=!/var/lib/cardputerzero/registry/recovery-mode
 
 [Service]
 Type=simple

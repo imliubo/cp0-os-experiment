@@ -6,7 +6,9 @@ use std::os::unix::net::UnixStream;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DocumentPrompt, Notification, PermissionChoice, PermissionPrompt};
+use crate::{
+    DeviceMode, DeviceSettings, DocumentPrompt, Notification, PermissionChoice, PermissionPrompt,
+};
 
 pub const APPD_PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024;
@@ -60,6 +62,11 @@ pub enum AppdCommand {
     ResetPermission {
         app_id: String,
         permission: cp0_manifest::Permission,
+    },
+    GetDeviceSettings,
+    SetDeviceMode {
+        mode: DeviceMode,
+        enabled: bool,
     },
     TakeNotification,
     GetDocumentPrompt,
@@ -125,6 +132,12 @@ pub enum ResponseData {
     PermissionReset {
         app_id: String,
         permission: cp0_manifest::Permission,
+    },
+    DeviceSettings {
+        settings: DeviceSettings,
+    },
+    DeviceModeChanged {
+        settings: DeviceSettings,
     },
     NextNotification {
         notification: Option<Notification>,
@@ -521,6 +534,46 @@ mod tests {
             invalid.validate(),
             Err(ProtocolError::InvalidPromptId)
         ));
+    }
+
+    #[test]
+    fn round_trips_device_mode_controls() {
+        let request = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 78,
+            command: AppdCommand::SetDeviceMode {
+                mode: DeviceMode::Recovery,
+                enabled: true,
+            },
+        };
+        let mut encoded = Vec::new();
+        write_request(&mut encoded, &request).unwrap();
+        assert_eq!(
+            read_request(&mut Cursor::new(encoded)).unwrap(),
+            Some(request)
+        );
+
+        let response = AppdResponse::success(
+            78,
+            ResponseData::DeviceSettings {
+                settings: DeviceSettings {
+                    authority: crate::ManagementAuthority::Organization,
+                    developer_mode: false,
+                    developer_mode_allowed: false,
+                    recovery_mode: true,
+                    recovery_mode_allowed: true,
+                    store_install_allowed: false,
+                    app_launch_restricted: true,
+                    denied_permission_count: 3,
+                },
+            },
+        );
+        let mut encoded = Vec::new();
+        write_response(&mut encoded, &response).unwrap();
+        assert_eq!(
+            read_response(&mut Cursor::new(encoded)).unwrap(),
+            Some(response)
+        );
     }
 
     #[test]

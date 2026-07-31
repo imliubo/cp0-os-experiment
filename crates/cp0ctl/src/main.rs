@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use cp0_appd::{
     APPD_PROTOCOL_VERSION, AppdCommand, AppdRequest, BROKER_PROTOCOL_VERSION, BrokerCommand,
-    BrokerOutcome, BrokerRequest, MAX_APP_LIST_PAGE, MAX_LOG_LINES, PermissionChoice,
+    BrokerOutcome, BrokerRequest, DeviceMode, MAX_APP_LIST_PAGE, MAX_LOG_LINES, PermissionChoice,
     ResponseOutcome, read_broker_response, read_response, write_broker_request, write_request,
 };
 use cp0_manifest::Permission;
@@ -133,6 +133,14 @@ fn main() -> ExitCode {
                 app_id: app_id.clone(),
             })
         }
+        [device, command] if device == "device" && command == "status" => {
+            send_app_command(AppdCommand::GetDeviceSettings)
+        }
+        [device, mode, enabled] if device == "device" => parse_device_mode(mode).and_then(|mode| {
+            parse_enabled(enabled).and_then(|enabled| {
+                send_app_command(AppdCommand::SetDeviceMode { mode, enabled })
+            })
+        }),
         [permission, command] if permission == "permission" && command == "pending" => {
             send_app_command(AppdCommand::GetPermissionPrompt)
         }
@@ -165,7 +173,7 @@ fn main() -> ExitCode {
             })
         }
         _ => Err(
-            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | store publish <submissions-dir> <reviews-dir> <output-dir> <base-url> <sequence> <published-unix> <expires-unix> <store-secret-key> | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
+            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | store publish <submissions-dir> <reviews-dir> <output-dir> <base-url> <sequence> <published-unix> <expires-unix> <store-secret-key> | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | device status | device <developer|recovery> <on|off> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
                 .into(),
         ),
     };
@@ -214,6 +222,22 @@ fn parse_permission(value: &str) -> Result<Permission, String> {
         .into_iter()
         .find(|permission| permission.as_str() == value)
         .ok_or_else(|| "unknown CardputerZero capability".into())
+}
+
+fn parse_device_mode(value: &str) -> Result<DeviceMode, String> {
+    match value {
+        "developer" => Ok(DeviceMode::Developer),
+        "recovery" => Ok(DeviceMode::Recovery),
+        _ => Err("device mode must be developer or recovery".into()),
+    }
+}
+
+fn parse_enabled(value: &str) -> Result<bool, String> {
+    match value {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err("device mode state must be on or off".into()),
+    }
 }
 
 fn validate_manifest(path: &str) -> Result<(), String> {
@@ -340,5 +364,15 @@ mod tests {
             assert_eq!(parse_permission(permission.as_str()), Ok(permission));
         }
         assert!(parse_permission("clipboard.read").is_err());
+    }
+
+    #[test]
+    fn cli_device_mode_parser_is_closed() {
+        assert_eq!(parse_device_mode("developer"), Ok(DeviceMode::Developer));
+        assert_eq!(parse_device_mode("recovery"), Ok(DeviceMode::Recovery));
+        assert!(parse_device_mode("factory").is_err());
+        assert_eq!(parse_enabled("on"), Ok(true));
+        assert_eq!(parse_enabled("off"), Ok(false));
+        assert!(parse_enabled("yes").is_err());
     }
 }

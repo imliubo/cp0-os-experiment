@@ -28,6 +28,7 @@ for file in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-gpiod cp0-networkd
     cardputerzero-storaged.service cardputerzero-storaged.socket \
     cardputerzero-stored.service cardputerzero-stored.socket \
     cardputerzero-storage.conf cardputerzero-store.conf store.conf \
+    device-policy.json \
     cardputerzero-trust.conf \
     device-core-recovery.sh device-stability-monitor.sh; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
@@ -217,6 +218,10 @@ install -D -o root -g root -m 0644 "$staging/lora.conf" \
 if [ ! -e /etc/cardputerzero/store.conf ]; then
     install -D -o root -g root -m 0644 "$staging/store.conf" \
         /etc/cardputerzero/store.conf
+fi
+if [ ! -e /etc/cardputerzero/device-policy.json ]; then
+    install -D -o root -g root -m 0644 "$staging/device-policy.json" \
+        /etc/cardputerzero/device-policy.json
 fi
 install -o root -g root -m 0644 "$staging/cardputerzero-gpio.conf" \
     /etc/tmpfiles.d/cardputerzero-gpio.conf

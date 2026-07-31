@@ -4,7 +4,8 @@ use std::os::unix::net::UnixListener;
 use std::process::ExitCode;
 
 use cp0_appd::{
-    AppLayout, AppManager, AppRegistry, AppdServer, DEFAULT_PERMISSION_PATH, ManagerPaths,
+    AppLayout, AppManager, AppRegistry, AppdServer, DEFAULT_DEVICE_POLICY_PATH,
+    DEFAULT_PERMISSION_PATH, DeviceModePaths, DevicePolicyEngine, ManagerPaths,
     PermissionCoordinator, PermissionEngine, PermissionError, PermissionStore, RegistryError,
     build_sandbox_plan, lookup_unix_account,
 };
@@ -118,11 +119,15 @@ fn serve() -> Result<(), String> {
     let permission_engine = PermissionEngine::new(DEFAULT_PERMISSION_PATH, permission_store)
         .map_err(|error| error.to_string())?;
     let permissions = PermissionCoordinator::new(permission_engine);
+    let policy =
+        DevicePolicyEngine::load(DEFAULT_DEVICE_POLICY_PATH, DeviceModePaths::default(), true)
+            .map_err(|error| error.to_string())?;
     let (shell_uid, _) = lookup_unix_account("cp0-shell").map_err(|error| error.to_string())?;
     let (store_uid, _) = lookup_unix_account("cp0-store").map_err(|error| error.to_string())?;
     let listeners = systemd_listeners()?;
-    let server =
-        AppdServer::new(manager, permissions, [0, shell_uid]).allow_store_installer(store_uid);
+    let server = AppdServer::new(manager, permissions, [0, shell_uid])
+        .allow_store_installer(store_uid)
+        .with_device_policy(policy);
     match listeners.broker {
         Some(broker) => server.serve_with_broker(listeners.control, broker),
         None => server.serve(listeners.control),

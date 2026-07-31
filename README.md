@@ -79,6 +79,8 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
 - Phase 5 双签名商店：审核记录精确绑定提交/权限/WASM imports，`cp0ctl store
   publish` 生成确定性签名目录，设备端 `cp0-stored` 提供 HTTPS 公网下载、断点续传、
   目录防回滚和 appd 独立复验，System Shell 提供 Store 列表、详情与安装进度。
+- Phase 5C 设备策略与 Settings：root-owned 家长/组织策略限制 Store、应用白名单和
+  全局权限，用户可二次确认切换开发者模式与下次启动的 tty1 恢复控制台。
 
 ## 快速验证
 
@@ -144,3 +146,5 @@ Rust SDK 公共 API 和真机迁移结果见
 [Rust SDK foundation](docs/PHASE4A-RUST-SDK.md)。
 应用审核、确定性发布、设备 Store 信任边界和离线行为见
 [reviewed application store](docs/PHASE5B-APPLICATION-STORE.md)。
+设备策略、Settings 开关和恢复控制台退出流程见
+[device policy and user-controlled modes](docs/PHASE5C-DEVICE-POLICY.md)。

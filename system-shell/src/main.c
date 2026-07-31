@@ -188,6 +188,37 @@ static void poll_app_catalog(struct shell *shell)
     cp0_ui_sync_app_catalog(&shell->ui, catalog, list.count, list.truncated);
 }
 
+static void apply_device_settings(
+    struct shell *shell, const struct cp0_device_settings *settings)
+{
+    enum cp0_ui_authority authority;
+    switch (settings->authority) {
+    case CP0_AUTHORITY_PERSONAL:
+        authority = CP0_UI_AUTHORITY_PERSONAL;
+        break;
+    case CP0_AUTHORITY_PARENT:
+        authority = CP0_UI_AUTHORITY_PARENT;
+        break;
+    case CP0_AUTHORITY_ORGANIZATION:
+        authority = CP0_UI_AUTHORITY_ORGANIZATION;
+        break;
+    default:
+        return;
+    }
+    cp0_ui_set_device_settings(
+        &shell->ui, authority, settings->developer_mode,
+        settings->developer_mode_allowed, settings->recovery_mode,
+        settings->recovery_mode_allowed, settings->store_install_allowed,
+        settings->app_launch_restricted, settings->denied_permission_count);
+}
+
+static void poll_device_settings(struct shell *shell)
+{
+    struct cp0_device_settings settings;
+    if (cp0_appd_get_device_settings(&settings) == 0)
+        apply_device_settings(shell, &settings);
+}
+
 static const struct cp0_app_summary *installed_app(
     const struct shell *shell, const char *app_id)
 {
@@ -252,7 +283,7 @@ static void poll_notification(struct shell *shell)
     struct cp0_notification notification;
 
     if (shell->ui.permission_prompt || shell->ui.document_prompt ||
-        shell->ui.power_dialog ||
+        shell->ui.power_dialog || shell->ui.settings_confirm ||
         shell->ui.notification_banner ||
         cp0_appd_take_notification(&notification) != 1)
         return;
@@ -648,12 +679,36 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                         app_id);
             }
         }
+    } else if (event == CP0_UI_EVENT_DEVELOPER_ENABLE ||
+               event == CP0_UI_EVENT_DEVELOPER_DISABLE ||
+               event == CP0_UI_EVENT_RECOVERY_ENABLE ||
+               event == CP0_UI_EVENT_RECOVERY_DISABLE) {
+        bool recovery = event == CP0_UI_EVENT_RECOVERY_ENABLE ||
+                        event == CP0_UI_EVENT_RECOVERY_DISABLE;
+        bool enabled = event == CP0_UI_EVENT_DEVELOPER_ENABLE ||
+                       event == CP0_UI_EVENT_RECOVERY_ENABLE;
+        struct cp0_device_settings settings;
+        enum cp0_device_mode mode = recovery ? CP0_DEVICE_MODE_RECOVERY
+                                             : CP0_DEVICE_MODE_DEVELOPER;
+        if (cp0_appd_set_device_mode(mode, enabled, &settings) == 0) {
+            apply_device_settings(shell, &settings);
+            fprintf(stderr, "system-shell: %s mode %s\n",
+                    recovery ? "recovery" : "developer",
+                    enabled ? "enabled" : "disabled");
+        } else {
+            fprintf(stderr, "system-shell: %s mode update failed\n",
+                    recovery ? "recovery" : "developer");
+            poll_device_settings(shell);
+        }
     }
     if (previous_screen != CP0_UI_STORE &&
         shell->ui.screen == CP0_UI_STORE) {
         poll_app_catalog(shell);
         poll_store_catalog(shell);
     }
+    if (previous_screen != CP0_UI_SETTINGS &&
+        shell->ui.screen == CP0_UI_SETTINGS)
+        poll_device_settings(shell);
     shell_redraw(shell);
 }
 
@@ -1165,6 +1220,10 @@ static int shell_dispatch(struct shell *shell)
                         poll_app_catalog(shell);
                         poll_store_catalog(shell);
                     }
+                    shell->catalog_ticks = 0;
+                } else if (shell->ui.screen == CP0_UI_SETTINGS &&
+                           shell->catalog_ticks >= 5) {
+                    poll_device_settings(shell);
                     shell->catalog_ticks = 0;
                 } else if (shell->catalog_ticks >= 5) {
                     poll_app_catalog(shell);

@@ -88,10 +88,12 @@ cargo run -p cp0ctl -- install /tmp/my-clock.developer.capp \
   --device pi@192.168.20.146
 ```
 
-Device installation succeeds only when the developer key is trusted or the
-device has explicitly enabled developer mode. Store distribution adds an
-independent store review signature. Trust configuration is root-owned and is
-never writable by an application.
+Device installation succeeds only when the developer key is trusted and the
+device has explicitly enabled developer mode. The mode can be inspected with
+`sudo cp0ctl device status` and changed locally with `sudo cp0ctl device developer
+on|off`, unless parent or organization policy locks it. Store distribution adds
+an independent store review signature. Trust and device policy configuration
+is root-owned and is never writable by an application.
 
 Store submission uses the developer-signed package, not an unsigned build and
 not a package that already has a store signature. Review metadata must bind the

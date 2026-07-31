@@ -43,18 +43,20 @@ mkdir -p "$snapshot_dir"
 
 if command -v sha256sum >/dev/null 2>&1; then
     actual=$(cd "$snapshot_dir" && \
-        sha256sum apps.ppm document.ppm home.ppm notification.ppm permission.ppm power.ppm store-detail.ppm store.ppm tasks.ppm)
+        sha256sum apps.ppm document.ppm home.ppm notification.ppm permission.ppm power.ppm settings-confirm.ppm settings.ppm store-detail.ppm store.ppm tasks.ppm)
 else
     actual=$(cd "$snapshot_dir" && \
-        shasum -a 256 apps.ppm document.ppm home.ppm notification.ppm permission.ppm power.ppm store-detail.ppm store.ppm tasks.ppm)
+        shasum -a 256 apps.ppm document.ppm home.ppm notification.ppm permission.ppm power.ppm settings-confirm.ppm settings.ppm store-detail.ppm store.ppm tasks.ppm)
 fi
 
 expected='895d13c55341090c408fa658ef89aca771dc4ae32a8d741d8cefe2194cb71e70  apps.ppm
 b30227204599548f1de899e863e80589155694b5f3240b8c598c1396a3d21c76  document.ppm
-58125955a1770f1458e5aff31a221f7013399413764a0aad524432cbf7a10236  home.ppm
+40258e54baae3a7a41765f2e95dc81f051765f0e1f89b4f654fd7152b0ebc3e5  home.ppm
 8fb4e226637acb0f85027f430d4f7ff94d7ed33764a77ceac73ba0411bc2d943  notification.ppm
 3c9f90a8bcc0c5d5ffaad46d31748dd831fface44e7615083e1e8357b63256a6  permission.ppm
 a6e5f954c77d1512c6abdd25d2b28a836983423a3ceb0990d014282915eff406  power.ppm
+b3dde2798ce27b9cd19af203d27401106e94e2351cc10773b391375683a219b5  settings-confirm.ppm
+de662b31860bd9a295451a2411cfeb75b21c542069ea639ed89a06ac5f252eca  settings.ppm
 e5df489f49f025c4c7c2fdee52231cad8501f94a2f65493096b7a0394bddeca3  store-detail.ppm
 80a18453b84e8c7e565410ac1c975bad457f1bffe030d3b5f7cc304b7f933324  store.ppm
 3b71571633eb8db0f5bb38373a5fa98dc497d17a425587aec58d09966a0fc173  tasks.ppm'

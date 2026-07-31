@@ -174,6 +174,16 @@ HTTPS 公网地址，验证目录序列、有效期和签名，支持有严格 `
 `/var/lib/cardputerzero/apps/<app-id>/<version>`。目录默认未配置且镜像不内置生产
 信任根；详细边界见 `docs/PHASE5B-APPLICATION-STORE.md`。
 
+root-owned `device-policy.json` 为家长/组织管理提供本地策略上限：可锁定开发者/恢复
+模式、禁用 Store 安装、限制可启动应用并全局拒绝 SDK 权限。appd 在安装、启动和
+每次 capability 请求处执行策略；全局拒绝优先于用户已有的持久允许。System Shell
+只能在策略允许时切换两个固定模式，不能提交路径、应用白名单或权限文本。
+
+开发者模式仍要求受信任开发者密钥和有效签名。恢复模式使用持久 root marker 在下次
+启动同时阻止 compositor 并拉起 `getty@tty1`，可从本地键盘控制台通过
+`sudo cp0ctl device recovery off` 关闭。详细配置和恢复步骤见
+`docs/PHASE5C-DEVICE-POLICY.md`。
+
 ## 8. 512 MB 内存预算
 
 | 模块 | 目标上限 |

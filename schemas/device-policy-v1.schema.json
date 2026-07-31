@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cardputerzero.local/schemas/device-policy-v1.schema.json",
+  "title": "CardputerZero device policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "authority",
+    "developer_mode_allowed",
+    "recovery_mode_allowed",
+    "store_install_allowed",
+    "app_launch_policy",
+    "allowed_apps",
+    "denied_permissions"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "authority": {
+      "enum": ["personal", "parent", "organization"]
+    },
+    "developer_mode_allowed": { "type": "boolean" },
+    "recovery_mode_allowed": { "type": "boolean" },
+    "store_install_allowed": { "type": "boolean" },
+    "app_launch_policy": {
+      "enum": ["allow-all", "allow-listed"]
+    },
+    "allowed_apps": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 5,
+        "maxLength": 128,
+        "pattern": "^[a-z][a-z0-9-]{0,31}(\\.[a-z][a-z0-9-]{0,31}){2,}$"
+      }
+    },
+    "denied_permissions": {
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "audio.capture",
+          "audio.playback",
+          "camera.capture",
+          "documents.open",
+          "hardware.gpio",
+          "network.client",
+          "notifications.post",
+          "radio.lora"
+        ]
+      }
+    }
+  }
+}

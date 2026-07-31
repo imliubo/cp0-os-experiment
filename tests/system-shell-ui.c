@@ -134,6 +134,19 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     assert(cp0_ui_show_documents(ui, 10, "Hello Card", documents, 2));
     cp0_ui_handle_action(ui, CP0_UI_DOWN);
     write_snapshot(directory, "document", ui, frame);
+
+    cp0_ui_clear_documents(ui);
+    cp0_ui_handle_action(ui, CP0_UI_GO_HOME);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(ui, CP0_UI_DOWN);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    cp0_ui_set_device_settings(
+        ui, CP0_UI_AUTHORITY_ORGANIZATION, false, false, false, true,
+        false, true, 3);
+    write_snapshot(directory, "settings", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_DOWN);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    write_snapshot(directory, "settings-confirm", ui, frame);
 }
 
 int main(int argc, char **argv)
@@ -157,6 +170,36 @@ int main(int argc, char **argv)
 
     cp0_ui_handle_action(&ui, CP0_UI_DOWN);
     cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    render(&ui, frame);
+    assert(ui.screen == CP0_UI_SETTINGS && !ui.settings_available);
+
+    cp0_ui_set_device_settings(
+        &ui, CP0_UI_AUTHORITY_ORGANIZATION, false, true, false, true,
+        false, true, 3);
+    render(&ui, frame);
+    assert(ui.settings_available && ui.settings_selected == 0);
+    assert(!ui.developer_mode && !ui.store_install_allowed);
+    assert(ui.app_launch_restricted && ui.denied_permission_count == 3);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+    assert(ui.settings_confirm && ui.dialog_selected == 1);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+    assert(!ui.settings_confirm);
+    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    cp0_ui_handle_action(&ui, CP0_UI_LEFT);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_DEVELOPER_ENABLE);
+    cp0_ui_set_device_settings(
+        &ui, CP0_UI_AUTHORITY_PERSONAL, true, true, false, true, true,
+        false, 0);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_DEVELOPER_DISABLE);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    cp0_ui_handle_action(&ui, CP0_UI_LEFT);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_RECOVERY_ENABLE);
+
+    cp0_ui_handle_action(&ui, CP0_UI_SHOW_POWER);
     render(&ui, frame);
     assert(ui.power_dialog);
     assert(pixel(frame, 36, 35) == GREEN);

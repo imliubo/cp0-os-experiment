@@ -13,7 +13,6 @@ use sha2::{Digest, Sha256};
 pub const DEFAULT_STORE_TRUST_DIR: &str = "/etc/cardputerzero/trust/store";
 pub const DEFAULT_DEVELOPER_TRUST_DIR: &str = "/etc/cardputerzero/trust/developers";
 pub const DEFAULT_REVOKED_KEYS_DIR: &str = "/etc/cardputerzero/trust/revoked";
-pub const DEFAULT_DEVELOPER_MODE_PATH: &str = "/etc/cardputerzero/developer-mode";
 pub const DEVICE_SDK_MAJOR: u32 = 1;
 pub const DEVICE_SDK_MINOR: u32 = 0;
 pub const LEGACY_SDK_VERSIONS: &[(u32, u32)] = &[(0, 1)];
@@ -25,6 +24,7 @@ pub struct TrustPaths {
     pub store_keys: PathBuf,
     pub developer_keys: PathBuf,
     pub revoked_keys: PathBuf,
+    pub device_policy: PathBuf,
     pub developer_mode: PathBuf,
 }
 
@@ -34,7 +34,8 @@ impl Default for TrustPaths {
             store_keys: PathBuf::from(DEFAULT_STORE_TRUST_DIR),
             developer_keys: PathBuf::from(DEFAULT_DEVELOPER_TRUST_DIR),
             revoked_keys: PathBuf::from(DEFAULT_REVOKED_KEYS_DIR),
-            developer_mode: PathBuf::from(DEFAULT_DEVELOPER_MODE_PATH),
+            device_policy: PathBuf::from(crate::DEFAULT_DEVICE_POLICY_PATH),
+            developer_mode: PathBuf::from(crate::DEFAULT_DEVELOPER_MODE_PATH),
         }
     }
 }
@@ -141,12 +142,13 @@ impl TrustPolicy {
     }
 
     fn require_developer_mode(&self) -> Result<(), InstallError> {
-        let contents = read_secure_file(
+        let enabled = crate::developer_install_allowed(
+            &self.paths.device_policy,
             &self.paths.developer_mode,
             self.enforce_root_ownership,
-            "developer mode marker",
-        )?;
-        if contents != b"enabled\n" {
+        )
+        .map_err(|error| InstallError::Untrusted(error.to_string()))?;
+        if !enabled {
             return Err(InstallError::Untrusted(
                 "developer mode is not explicitly enabled".into(),
             ));
@@ -642,6 +644,7 @@ mod tests {
                 store_keys: root.join("trust/store"),
                 developer_keys: root.join("trust/developers"),
                 revoked_keys: root.join("trust/revoked"),
+                device_policy: root.join("device-policy.json"),
                 developer_mode: root.join("developer-mode"),
             };
             for directory in [
@@ -661,6 +664,11 @@ mod tests {
                 developer_key: [7; 32],
                 store_key: [11; 32],
             };
+            fs::write(
+                &fixture.trust_paths.device_policy,
+                serde_json::to_vec_pretty(&crate::DevicePolicy::default()).unwrap(),
+            )
+            .unwrap();
             let store_public = public_key(&fixture.store_key);
             fs::write(
                 fixture
@@ -768,6 +776,20 @@ mod tests {
             fixture.installer().install(&path).unwrap().trust,
             TrustDecision::DeveloperMode
         );
+
+        let locked_policy = crate::DevicePolicy {
+            developer_mode_allowed: false,
+            ..crate::DevicePolicy::default()
+        };
+        fs::write(
+            &fixture.trust_paths.device_policy,
+            serde_json::to_vec_pretty(&locked_policy).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            fixture.installer().install(&path),
+            Err(InstallError::Untrusted(_))
+        ));
     }
 
     #[test]

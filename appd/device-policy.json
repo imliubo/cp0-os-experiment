@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "authority": "personal",
+  "developer_mode_allowed": true,
+  "recovery_mode_allowed": true,
+  "store_install_allowed": true,
+  "app_launch_policy": "allow-all",
+  "allowed_apps": [],
+  "denied_permissions": []
+}

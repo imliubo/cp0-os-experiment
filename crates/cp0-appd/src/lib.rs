@@ -16,6 +16,7 @@ mod lifecycle;
 mod network_client;
 mod permission_prompt;
 mod permissions;
+mod policy;
 mod protocol;
 mod radio_client;
 mod registry;
@@ -55,6 +56,12 @@ pub use permission_prompt::{
 pub use permissions::{
     Authorization, DEFAULT_PERMISSION_PATH, PermissionChoice, PermissionEngine, PermissionError,
     PermissionStore,
+};
+pub use policy::{
+    AppLaunchPolicy, DEFAULT_DEVELOPER_MODE_PATH, DEFAULT_DEVICE_POLICY_PATH,
+    DEFAULT_RECOVERY_MODE_PATH, DEVICE_POLICY_SCHEMA_VERSION, DeviceMode, DeviceModePaths,
+    DevicePolicy, DevicePolicyEngine, DeviceSettings, ManagementAuthority, PolicyError,
+    developer_install_allowed,
 };
 
 pub use protocol::{

@@ -2,6 +2,7 @@
 
 check: fmt
 	jq empty schemas/app-manifest-v1.schema.json schemas/store-review-v1.schema.json \
+		schemas/device-policy-v1.schema.json appd/device-policy.json \
 		examples/hello-card/app.json
 	bash -n scripts/*.sh tests/*.sh image/build-image.sh \
 		image/pi-gen/export-image-prerun.sh \

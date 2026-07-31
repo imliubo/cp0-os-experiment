@@ -20,6 +20,9 @@ int cp0_appd_test_parse_notification_response(
 int cp0_appd_test_parse_document_prompt_response(
     const char *response, size_t response_length, uint64_t request_id,
     struct cp0_document_prompt *prompt);
+int cp0_appd_test_parse_device_settings_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *expected_kind, struct cp0_device_settings *settings);
 
 int main(void)
 {
@@ -128,5 +131,40 @@ int main(void)
     assert(cp0_appd_test_valid_document_id(
         "00000000000000010000000000000002"));
     assert(!cp0_appd_test_valid_document_id("../../etc/passwd"));
+
+    static const char settings_response[] =
+        "{\"protocol_version\":1,\"request_id\":15,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"device-settings\","
+        "\"settings\":{\"authority\":\"organization\","
+        "\"developer_mode\":false,\"developer_mode_allowed\":false,"
+        "\"recovery_mode\":true,\"recovery_mode_allowed\":true,"
+        "\"store_install_allowed\":false,"
+        "\"app_launch_restricted\":true,"
+        "\"denied_permission_count\":3}}}}";
+    struct cp0_device_settings settings;
+    assert(cp0_appd_test_parse_device_settings_response(
+               settings_response, strlen(settings_response), 15,
+               "device-settings", &settings) == 0);
+    assert(settings.authority == CP0_AUTHORITY_ORGANIZATION);
+    assert(!settings.developer_mode && !settings.developer_mode_allowed);
+    assert(settings.recovery_mode && settings.recovery_mode_allowed);
+    assert(!settings.store_install_allowed && settings.app_launch_restricted);
+    assert(settings.denied_permission_count == 3);
+    assert(cp0_appd_test_parse_device_settings_response(
+               settings_response, strlen(settings_response), 16,
+               "device-settings", &settings) < 0);
+
+    static const char invalid_settings[] =
+        "{\"protocol_version\":1,\"request_id\":16,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"device-settings\","
+        "\"settings\":{\"authority\":\"remote\","
+        "\"developer_mode\":false,\"developer_mode_allowed\":false,"
+        "\"recovery_mode\":false,\"recovery_mode_allowed\":true,"
+        "\"store_install_allowed\":false,"
+        "\"app_launch_restricted\":true,"
+        "\"denied_permission_count\":9}}}}";
+    assert(cp0_appd_test_parse_device_settings_response(
+               invalid_settings, strlen(invalid_settings), 16,
+               "device-settings", &settings) < 0);
     return 0;
 }
