@@ -166,6 +166,12 @@ and protocol frame mutation, package hash failure, peer UID authorization,
 strict upgrade enforcement, review/import/permission binding, malformed Shell
 responses, Store navigation and 320x170 screenshot regression.
 
+The AArch64 Store controls were hot-deployed on 2026-07-31. With the product
+configuration intentionally empty, `sudo cp0ctl store list` reached
+`cp0-stored` and returned the expected structured `Unconfigured` error without
+starting a download or modifying application state. This verifies the device
+control path, not the online Store acceptance below.
+
 Before a product endpoint is enabled, complete a real-device run covering
 refresh, interrupted download/resume, install, launch, update, expired catalog,
 offline cached catalog and power loss during appd handoff.

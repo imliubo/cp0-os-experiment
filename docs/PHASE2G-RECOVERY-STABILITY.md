@@ -56,7 +56,11 @@ A 15-second, three-second-interval monitor smoke run completed with zero
 failures. Compositor memory stayed at 7,487,488 bytes, Shell moved from
 1,073,152 to 1,323,008 bytes, and appd moved from 1,081,344 to 1,073,152 bytes.
 
-The formal 24-hour acceptance transient service started at approximately
-2026-07-31 05:25 CST and was confirmed active. Its RAM-backed result is below
-`/run/cardputerzero-stability/acceptance`; the Roadmap remains open until the
+The first formal 24-hour acceptance run started at approximately 2026-07-31
+05:25 CST, but its RAM-backed result was lost when the device rebooted. After
+the Phase 5C platform hot deployment and Weston udev-monitor fix, a replacement
+run started at 2026-07-31 14:19:21 CST as transient unit
+`cardputerzero-stability-acceptance.service`. Its unique result is below
+`/run/cardputerzero-stability/acceptance/20260731T061921Z-75148`; the initial
+status was `RUNNING` with no failure log. The Roadmap remains open until this
 full interval finishes and the final report is inspected.

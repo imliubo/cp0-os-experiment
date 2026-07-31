@@ -57,3 +57,10 @@ sudo systemctl start getty@tty1.service
 ```
 
 Runtime logs are kept in tmpfs at `/run/cardputerzero/weston.log`.
+
+Weston's DRM backend also requires an `AF_NETLINK` udev monitor to discover and
+track the dedicated input device. The compositor unit therefore permits exactly
+`AF_UNIX AF_NETLINK`; restricting it to `AF_UNIX` makes backend creation fail
+after DRM opens successfully. This failure was reproduced and fixed on V0.6 on
+2026-07-31, after which Weston enabled `UNNAMED-1` at 320x170@30 and registered
+the `tca8418c` keyboard.

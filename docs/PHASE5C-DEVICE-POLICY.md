@@ -103,3 +103,12 @@ locked modes, allowlist and capability decisions, developer installation
 gating, Store UID command isolation, strict Shell response parsing, Settings
 navigation and 320x170 screenshot regression. Recovery boot itself still needs
 real-device acceptance after the new image or units are deployed.
+
+Phase 5C was hot-deployed to V0.6 on 2026-07-31. Device-side acceptance
+confirmed the default personal settings, developer mode on/off, recovery marker
+on/off without reboot, exact marker cleanup, Store UID denial, and active
+compositor/Shell/appd services with zero post-deployment restarts. Weston also
+confirmed the 320x170 output and physical `tca8418c` keyboard. Recovery mode was
+left off before starting the replacement 24-hour stability run. The next-boot
+tty1 selection remains intentionally untested until that run completes or a
+new image is flashed.
