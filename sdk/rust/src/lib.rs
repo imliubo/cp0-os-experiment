@@ -11,6 +11,7 @@ pub mod network;
 pub mod radio;
 pub mod storage;
 pub mod system;
+pub mod ui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {

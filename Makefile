@@ -13,6 +13,8 @@ check: fmt
 	./tests/test-appd-profile.sh
 	./tests/test-app-platform-image.sh
 	./tests/test-sdk-c.sh
+	./tests/test-sdk-lvgl.sh
+	./tests/test-sdk-examples.sh
 	./tests/test-simulator.sh
 	./tests/test-runtime-display.sh
 	./tests/test-device-diagnostics.sh

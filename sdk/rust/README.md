@@ -28,3 +28,19 @@ Linux gpiochip numbers, device paths, pin direction or pinmux configuration.
 through appd. `intents::take` returns only the next message bound to the current
 application and consumes it once. The sender cannot name a target application
 or connect to another application's process.
+
+`ui::Canvas` is the allocation-free reference renderer for the 320-pixel-wide
+display. It provides clipped RGB565 rectangles, a compact 5x7 font, buttons and
+progress bars. Applications own their frame buffer and submit it through
+`display::present_rgb565`; the SDK never creates a Linux window or exposes a
+framebuffer device.
+
+Build and run an SDK application on the PC with:
+
+```sh
+cargo run -p cp0ctl -- build examples/calculator
+cargo run -p cp0ctl -- run examples/calculator --keys 1,2,plus,3,equal
+```
+
+See `docs/DEVELOPER-GUIDE.md` for the complete package, permission, simulator,
+signing and device-install workflow.
