@@ -1,21 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ " $(cat /proc/cmdline) " != *" cp0.overlay_root=volatile "* ]]; then
+if ! command_line=$(cat /proc/cmdline); then
+    echo "cardputerzero-overlay-root: cannot read kernel command line" >&2
+    exit 1
+fi
+if [[ " $command_line " != *" cp0.overlay_root=volatile "* ]]; then
     exit 0
 fi
 
 root_type=$(findmnt -n -o FSTYPE /)
+if [[ "$root_type" != overlay ]]; then
+    echo "cardputerzero-overlay-root: root is $root_type, expected overlay" >&2
+    exit 1
+fi
+
 lower_options=$(findmnt -n -o OPTIONS /run/cardputerzero-root/lower)
 upper_type=$(findmnt -n -o FSTYPE /run/cardputerzero-root/volatile)
 upper_options=$(findmnt -n -o OPTIONS /run/cardputerzero-root/volatile)
 data_type=$(findmnt -n -o FSTYPE /run/cardputerzero-data)
 data_options=$(findmnt -n -o OPTIONS /run/cardputerzero-data)
 
-if [[ "$root_type" != overlay ]]; then
-    echo "cardputerzero-overlay-root: root is $root_type, expected overlay" >&2
-    exit 1
-fi
 if [[ ",$lower_options," != *,ro,* ]]; then
     echo "cardputerzero-overlay-root: lower root is not read-only" >&2
     exit 1

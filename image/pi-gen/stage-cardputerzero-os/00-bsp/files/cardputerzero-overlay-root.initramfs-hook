@@ -21,9 +21,3 @@ copy_exec /usr/sbin/blkid /usr/sbin
 copy_exec /usr/sbin/e2fsck /usr/sbin
 copy_exec /usr/sbin/parted /usr/sbin
 copy_exec /usr/sbin/resize2fs /usr/sbin
-mkdir -p "$DESTDIR/scripts/local-premount"
-copy_file script /usr/libexec/cardputerzero/data-grow-initramfs \
-    /scripts/local-premount/cardputerzero-data-grow
-mkdir -p "$DESTDIR/scripts/init-bottom"
-copy_file script /usr/libexec/cardputerzero/overlay-root-initramfs \
-    /scripts/init-bottom/cardputerzero-overlay-root

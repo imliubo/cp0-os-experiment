@@ -39,6 +39,8 @@ required_executables=(
     usr/libexec/cardputerzero/device-support-bundle
     usr/libexec/cardputerzero/data-grow-initramfs
     usr/libexec/cardputerzero/overlay-root-initramfs
+    etc/initramfs-tools/scripts/init-bottom/cardputerzero-overlay-root
+    etc/initramfs-tools/scripts/local-premount/cardputerzero-data-grow
 )
 for path in "${required_executables[@]}"; do
     if [[ ! -x $rootfs/$path || -L $rootfs/$path ]]; then
@@ -124,7 +126,8 @@ grep -Rqx 'Storage=volatile' \
     "$rootfs/etc/systemd/journald.conf" \
     "$rootfs/etc/systemd/journald.conf.d"
 grep -qE '^tmpfs[[:space:]]+/tmp[[:space:]]+tmpfs' "$rootfs/etc/fstab"
-grep -qE '^tmpfs[[:space:]]+/var/tmp[[:space:]]+tmpfs' "$rootfs/etc/fstab"
+grep -qE '^tmpfs[[:space:]]+/var/tmp[[:space:]]+tmpfs.*size=128M' \
+    "$rootfs/etc/fstab"
 grep -qx 'kernel.core_pattern=/dev/null' \
     "$rootfs/etc/sysctl.d/90-cardputerzero-os.conf"
 grep -qx 'kernel.unprivileged_bpf_disabled=1' \
@@ -167,6 +170,23 @@ grep -qE 'usr/lib/modules/.*/kernel/fs/overlayfs/overlay\.ko' \
     <<<"$initramfs_contents"
 grep -qx 'usr/lib/firmware/cardputerzero,st7789v_lcd.bin' \
     <<<"$initramfs_contents"
+
+verify_tmp_parent=${EXPORT_CONFIG_DIR:-$(dirname "$rootfs")}
+initramfs_extract=$(mktemp -d \
+    "$verify_tmp_parent/cardputerzero-initramfs-order.XXXXXX")
+case "$initramfs_extract" in
+    "$verify_tmp_parent"/cardputerzero-initramfs-order.*) ;;
+    *)
+        echo "error: unsafe initramfs verification directory" >&2
+        exit 1
+        ;;
+esac
+trap 'rm -rf -- "$initramfs_extract"' EXIT
+unmkinitramfs "$bootfs/initramfs8" "$initramfs_extract"
+grep -Fqx '/scripts/init-bottom/cardputerzero-overlay-root "$@"' \
+    "$initramfs_extract/scripts/init-bottom/ORDER"
+grep -Fqx '/scripts/local-premount/cardputerzero-data-grow "$@"' \
+    "$initramfs_extract/scripts/local-premount/ORDER"
 
 data_root="$rootfs/var/lib/cardputerzero-persist"
 if [[ $(findmnt -n -o FSTYPE --target "$data_root") != ext4 ]]; then

@@ -138,6 +138,10 @@ install -D -m 0755 "${STAGE_DIR}/00-bsp/files/overlay-root-initramfs" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/overlay-root-initramfs"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/data-grow-initramfs" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/data-grow-initramfs"
+install -D -m 0755 "${STAGE_DIR}/00-bsp/files/overlay-root-initramfs" \
+    "${ROOTFS_DIR}/etc/initramfs-tools/scripts/init-bottom/cardputerzero-overlay-root"
+install -D -m 0755 "${STAGE_DIR}/00-bsp/files/data-grow-initramfs" \
+    "${ROOTFS_DIR}/etc/initramfs-tools/scripts/local-premount/cardputerzero-data-grow"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/cardputerzero-overlay-root.initramfs-hook" \
     "${ROOTFS_DIR}/etc/initramfs-tools/hooks/cardputerzero-overlay-root"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/overlay-root-status.sh" \
@@ -265,7 +269,7 @@ if ! grep -q '^# BEGIN CardputerZero volatile filesystems$' /etc/fstab; then
 
 # BEGIN CardputerZero volatile filesystems
 tmpfs /tmp tmpfs nodev,nosuid,noatime,mode=1777,size=32M 0 0
-tmpfs /var/tmp tmpfs nodev,nosuid,noatime,mode=1777,size=8M 0 0
+tmpfs /var/tmp tmpfs nodev,nosuid,noatime,mode=1777,size=128M 0 0
 # END CardputerZero volatile filesystems
 FSTAB
 fi

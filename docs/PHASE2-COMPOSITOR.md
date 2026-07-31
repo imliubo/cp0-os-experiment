@@ -30,6 +30,13 @@ The compositor service selects both the stable DRM alias and the custom seat.
 This excludes HDMI, IR and unrelated external input devices from the trusted
 system-shell input path.
 
+The aliases appear about ten seconds into CM0 coldplug. The compositor unit
+therefore requires the corresponding systemd device units instead of using
+one-shot `ConditionPathExists` checks. The keyboard udev rule carries the
+`systemd` tag so its stable alias also receives a device unit. This prevents an
+early multi-user target transaction from permanently skipping the compositor
+before the LCD and keyboard aliases exist.
+
 V0.6 hardware validation passed with Weston 14.0.2, the DRM atomic backend,
 Pixman shadow framebuffer, kiosk shell and `weston-simple-shm` at
 `320x170@30Hz`. Libinput selected `tca8418c` when the custom seat was active.

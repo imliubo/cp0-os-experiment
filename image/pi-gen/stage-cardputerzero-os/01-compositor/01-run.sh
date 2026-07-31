@@ -240,6 +240,9 @@ install -D -m 0755 "${STAGE_DIR}/01-compositor/files/wait-wayland.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/wait-wayland.sh"
 install -D -m 0755 "${STAGE_DIR}/01-compositor/files/unblank-display.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/unblank-display.sh"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/files/99-cardputerzero-systemd.rules" \
+    "${ROOTFS_DIR}/usr/lib/udev/rules.d/99-cardputerzero-systemd.rules"
 
 on_chroot <<'CHROOT'
 set -e

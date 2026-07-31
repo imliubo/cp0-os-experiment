@@ -10,6 +10,7 @@ recovery_service="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/f
 launcher="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/start-compositor.sh"
 waiter="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/wait-wayland.sh"
 unblanker="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/unblank-display.sh"
+udev_rules="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/99-cardputerzero-systemd.rules"
 config="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/weston.ini"
 version="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/weston.env"
 policy="$repo_root/compositor-policy/cardputerzero-policy.c"
@@ -71,6 +72,15 @@ grep -q -- '--seat=seat-cardputer-zero' "$launcher"
 grep -q -- '--renderer=pixman' "$launcher"
 grep -q '^Conflicts=getty@tty1.service$' "$service"
 grep -q '^OnFailure=getty@tty1.service$' "$service"
+grep -Fq 'dev-dri-cardputer\x2dzero\x2dinternal.device' "$service"
+grep -Fq 'dev-input-cardputer\x2dzero\x2dinternal.device' "$service"
+grep -q '^JobTimeoutSec=30s$' "$service"
+if grep -q '^ConditionPathExists=/dev/' "$service"; then
+    echo "error: compositor hardware conditions race udev coldplug" >&2
+    exit 1
+fi
+grep -q 'TAG+="systemd"' "$udev_rules"
+grep -q 'files/99-cardputerzero-systemd.rules' "$stage"
 grep -q '^ConditionPathExists=/var/lib/cardputerzero/registry/recovery-mode$' "$recovery_service"
 grep -q '^Conflicts=cardputerzero-compositor.service$' "$recovery_service"
 grep -q '^Wants=getty@tty1.service$' "$recovery_service"

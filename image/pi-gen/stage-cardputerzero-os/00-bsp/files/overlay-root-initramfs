@@ -1,5 +1,16 @@
 #!/bin/sh
 
+prereqs() {
+    :
+}
+
+case "${1:-}" in
+    prereqs)
+        prereqs
+        exit 0
+        ;;
+esac
+
 overlay_requested() {
     command_line=$1
     for argument in $command_line; do
@@ -55,6 +66,10 @@ mount -n -t ext4 \
 [ -f "$data/layout-version" ] && [ ! -L "$data/layout-version" ] && \
     [ "$(cat "$data/layout-version")" = cp0-data-layout-v1 ] || \
     overlay_fail "persistent data layout is invalid"
+[ -f "$data/etc-cardputerzero/image-profile" ] && \
+    [ ! -L "$data/etc-cardputerzero/image-profile" ] && \
+    [ "$(cat "$data/etc-cardputerzero/image-profile")" = product ] || \
+    overlay_fail "persistent image profile is not product"
 
 if ! grep -Eq '^[0-9a-f]{32}$' "$data/machine-id" 2>/dev/null; then
     machine_id=$(tr -d '-' </proc/sys/kernel/random/uuid) || \

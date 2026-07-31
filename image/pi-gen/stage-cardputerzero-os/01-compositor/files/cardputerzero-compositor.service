@@ -1,16 +1,15 @@
 [Unit]
 Description=CardputerZero single-foreground Wayland compositor
 Documentation=https://wayland.pages.freedesktop.org/weston/toc/running-weston.html
-Requires=seatd.service
-After=seatd.service systemd-user-sessions.service
+Requires=seatd.service dev-dri-cardputer\x2dzero\x2dinternal.device dev-input-cardputer\x2dzero\x2dinternal.device
+After=seatd.service systemd-user-sessions.service dev-dri-cardputer\x2dzero\x2dinternal.device dev-input-cardputer\x2dzero\x2dinternal.device
 RequiresMountsFor=/var/lib/cardputerzero/registry
 Wants=cardputerzero-system-shell.service
 Before=cardputerzero-system-shell.service
 Conflicts=getty@tty1.service
 OnFailure=getty@tty1.service
-ConditionPathExists=/dev/dri/cardputer-zero-internal
-ConditionPathExists=/dev/input/cardputer-zero-internal
 ConditionPathExists=!/var/lib/cardputerzero/registry/recovery-mode
+JobTimeoutSec=30s
 
 [Service]
 Type=simple

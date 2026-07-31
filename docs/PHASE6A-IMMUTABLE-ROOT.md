@@ -87,7 +87,9 @@ storage broker; appd and brokers retain their existing systemd path allowlists.
 after final initramfs generation and immediately before the image is unmounted
 and compressed. It verifies the actual mounted boot, root and data filesystems,
 enabled units, persistent seed, default kernel arguments, proxy removal and
-exact initramfs entries.
+exact initramfs entries. It also extracts the generated initramfs and verifies
+that both CardputerZero boot scripts are called from their phase `ORDER` files;
+having an executable present in the archive is not sufficient.
 
 The integrated development candidate is:
 
@@ -115,6 +117,15 @@ Final acceptance still requires flashing the integrated image, verifying the
 first boot on V0.6, reboot persistence, interrupted-write recovery and the full
 24-hour SD write budget. Until those hardware checks pass, the corresponding
 Roadmap acceptance item remains open.
+
+The 2026-07-31 hardware follow-up found that the `d19d1ca` image contained both
+custom scripts but omitted them from initramfs-tools' generated `ORDER` files,
+so the root remained writable ext4 and `cp0-data` remained unmounted. It also
+found that the status unit hid `/proc/cmdline` and incorrectly returned success,
+and that the compositor could be skipped before udev coldplug completed. That
+artifact and later images inheriting the same initramfs registration are not
+release candidates. The corrected image must pass the new `ORDER` gate and a
+fresh V0.6 boot before replacing the candidate listed above.
 
 ## Write and service controls
 
