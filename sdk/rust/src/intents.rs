@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{Error, host_imports};
 
 pub const MAX_ACTION_BYTES: usize = 96;
 pub const MAX_PAYLOAD_BYTES: usize = 1024;
@@ -13,7 +13,12 @@ pub fn send(action: &str, payload: &[u8]) -> Result<(), Error> {
     if !valid_action(action) || payload.len() > MAX_PAYLOAD_BYTES {
         return Err(Error::InvalidArgument);
     }
-    Error::from_host(host::send(action.as_bytes(), payload))
+    Error::from_host(host_imports::cp0_intent_send(
+        action.as_ptr(),
+        action.len() as u32,
+        payload.as_ptr(),
+        payload.len() as u32,
+    ))
 }
 
 pub fn take(action: &mut [u8], payload: &mut [u8]) -> Result<Option<Message>, Error> {
@@ -24,7 +29,12 @@ pub fn take(action: &mut [u8], payload: &mut [u8]) -> Result<Option<Message>, Er
     {
         return Err(Error::InvalidArgument);
     }
-    let result = host::take(action, payload);
+    let result = host_imports::cp0_intent_take(
+        action.as_mut_ptr(),
+        action.len() as u32,
+        payload.as_mut_ptr(),
+        payload.len() as u32,
+    );
     if result < 0 {
         return Error::from_host(result as i32).map(|()| None);
     }
@@ -68,60 +78,6 @@ pub fn valid_action(action: &str) -> bool {
         }
     }
     parts >= 3
-}
-
-#[cfg(target_arch = "wasm32")]
-mod host {
-    #[link(wasm_import_module = "cardputerzero")]
-    unsafe extern "C" {
-        #[link_name = "cp0_intent_send"]
-        fn raw_send(
-            action: *const u8,
-            action_length: u32,
-            payload: *const u8,
-            payload_length: u32,
-        ) -> i32;
-        #[link_name = "cp0_intent_take"]
-        fn raw_take(
-            action: *mut u8,
-            action_capacity: u32,
-            payload: *mut u8,
-            payload_capacity: u32,
-        ) -> i64;
-    }
-
-    pub fn send(action: &[u8], payload: &[u8]) -> i32 {
-        unsafe {
-            raw_send(
-                action.as_ptr(),
-                action.len() as u32,
-                payload.as_ptr(),
-                payload.len() as u32,
-            )
-        }
-    }
-
-    pub fn take(action: &mut [u8], payload: &mut [u8]) -> i64 {
-        unsafe {
-            raw_take(
-                action.as_mut_ptr(),
-                action.len() as u32,
-                payload.as_mut_ptr(),
-                payload.len() as u32,
-            )
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-mod host {
-    pub const fn send(_action: &[u8], _payload: &[u8]) -> i32 {
-        -2
-    }
-
-    pub const fn take(_action: &mut [u8], _payload: &mut [u8]) -> i64 {
-        -2
-    }
 }
 
 #[cfg(test)]

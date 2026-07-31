@@ -10,7 +10,8 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 - [x] 定义 app manifest v1、权限词表和校验器。
 - [x] 建立 WIT SDK ABI 草案与示例应用清单。
 - [x] 增加基础 CI、SDK/manifest 版本策略和架构测试。
-- [ ] 在 WIT 工具链确定后加入 ABI 解析和兼容性测试。
+- [x] 加入扁平 ABI 契约解析、三端生成和已发布签名兼容性测试。
+- [ ] 工具链网络恢复后增加标准 `wasm-tools` WIT 完整语法解析。
 
 完成条件：`make check` 可重复通过，manifest 和 ABI 的兼容规则有自动化测试。
 
@@ -98,8 +99,8 @@ Shell 和其他应用数据。
 - [x] 建立首个 `no_std` Rust SDK，封装系统时钟、事件等待、通知 capability 和
   稳定错误类型；Hello 示例已移除私有 FFI。
 - [x] 建立 freestanding C11/C++17 SDK 头文件并加入 wasm32 双语言编译测试。
-- [ ] 发布完整 Rust 和 C/C++ SDK，生成 WIT bindings 并提供 LVGL 320x170 组件
-  （Rust UI 和 LVGL 9 适配层已完成，bindings 待冻结）。
+- [x] 发布完整 Rust 和 C/C++ SDK，从统一 ABI 契约生成 WAMR/C/Rust bindings，
+  并提供 LVGL 9 320x170 适配层。
 - [x] 实现 `cp0ctl new/build` 的 SDK-only 项目生成、Cargo metadata 解析和规范产物树。
 - [x] 实现 `cp0ctl run/package/sign/install/logs`，包含 PC 到真机的 SSH 安装/日志路径。
 - [x] 建立 PC WASM 模拟器、权限模拟、evdev 输入映射和 JSON 性能分析工具。

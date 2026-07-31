@@ -65,7 +65,8 @@ socket；第三方应用不加入该组。可信 Shell 协议以 Wayland peer UI
 ## 5. 应用运行时
 
 设备端采用 WAMR AOT，原因是其常驻内存比完整 JIT/Component Model 运行时更适合
-512 MB 设备。WIT 是 SDK 的源级 ABI 描述，由代码生成器映射为 WAMR host calls；
+512 MB 设备。WIT 是 SDK 的源级类型描述；机器可读的 flat ABI 契约生成 WAMR
+注册表与 C/Rust 私有导入，并逐项映射回 WIT 公共操作；
 首版不要求设备运行时原生实现 WASM Component Model。
 
 每个运行中的应用由 `appd` 启动到独立沙箱：

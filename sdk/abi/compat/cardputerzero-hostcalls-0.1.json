@@ -1,0 +1,28 @@
+{
+  "abi_version": "0.1",
+  "module": "cardputerzero",
+  "imports": [
+    { "name": "cp0_monotonic_milliseconds", "wamr_signature": "()I" },
+    { "name": "cp0_wait_event", "wamr_signature": "(i)i" },
+    { "name": "cp0_display_dimensions", "wamr_signature": "()i" },
+    { "name": "cp0_present_rgb565", "wamr_signature": "(*~*~)i" },
+    { "name": "cp0_poll_key_event", "wamr_signature": "(*~i)i" },
+    { "name": "cp0_post_notification", "wamr_signature": "(*~*~)i" },
+    { "name": "cp0_http_get", "wamr_signature": "(*~*~)I" },
+    { "name": "cp0_document_open", "wamr_signature": "()I" },
+    { "name": "cp0_document_read", "wamr_signature": "(iI*~)I" },
+    { "name": "cp0_document_close", "wamr_signature": "(i)i" },
+    { "name": "cp0_audio_play_pcm_s16le", "wamr_signature": "(*~)i" },
+    { "name": "cp0_audio_capture_pcm_s16le", "wamr_signature": "(*~)i" },
+    { "name": "cp0_camera_capture_rgb565", "wamr_signature": "(*~)i" },
+    { "name": "cp0_gpio_read", "wamr_signature": "(i)i" },
+    { "name": "cp0_gpio_write", "wamr_signature": "(ii)i" },
+    { "name": "cp0_lora_send", "wamr_signature": "(*~)i" },
+    { "name": "cp0_lora_receive", "wamr_signature": "(*~*~i)i" },
+    { "name": "cp0_storage_put", "wamr_signature": "(*~*~)i" },
+    { "name": "cp0_storage_get", "wamr_signature": "(*~*~)i" },
+    { "name": "cp0_storage_delete", "wamr_signature": "(*~)i" },
+    { "name": "cp0_intent_send", "wamr_signature": "(*~*~)i" },
+    { "name": "cp0_intent_take", "wamr_signature": "(*~*~)I" }
+  ]
+}

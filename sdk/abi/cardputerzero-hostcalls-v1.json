@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "abi_version": "0.1",
+  "module": "cardputerzero",
+  "imports": [
+    {
+      "name": "cp0_monotonic_milliseconds",
+      "runtime_function": "cp0_monotonic_milliseconds",
+      "c_name": "cp0_monotonic_milliseconds",
+      "wamr_signature": "()I",
+      "result": "u64",
+      "parameters": [],
+      "native_fallback": 0,
+      "wit": "system.monotonic-milliseconds"
+    },
+    {
+      "name": "cp0_wait_event",
+      "runtime_function": "cp0_wait_event",
+      "c_name": "cp0_wait_event",
+      "wamr_signature": "(i)i",
+      "result": "result",
+      "parameters": [{ "name": "timeout_milliseconds", "type": "i32" }],
+      "native_fallback": -2,
+      "wit": "system.wait-event"
+    },
+    {
+      "name": "cp0_display_dimensions",
+      "runtime_function": "cp0_get_display_dimensions",
+      "c_name": "cp0_display_dimensions",
+      "wamr_signature": "()i",
+      "result": "u32",
+      "parameters": [],
+      "native_fallback": 9830720,
+      "wit": "display.dimensions"
+    },
+    {
+      "name": "cp0_present_rgb565",
+      "runtime_function": "cp0_present_rgb565",
+      "c_name": "cp0_present_rgb565",
+      "wamr_signature": "(*~*~)i",
+      "result": "result",
+      "parameters": [
+        { "name": "pixels", "type": "const-u8-ptr" },
+        { "name": "pixel_bytes", "type": "u32" },
+        { "name": "damage", "type": "const-rect-ptr" },
+        { "name": "damage_bytes", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "display.present-rgb565"
+    },
+    {
+      "name": "cp0_poll_key_event",
+      "runtime_function": "cp0_poll_key_event",
+      "c_name": "cp0_poll_key_event",
+      "wamr_signature": "(*~i)i",
+      "result": "i32",
+      "parameters": [
+        { "name": "event", "type": "mut-key-event-ptr" },
+        { "name": "event_bytes", "type": "u32" },
+        { "name": "timeout_milliseconds", "type": "i32" }
+      ],
+      "native_fallback": 0,
+      "wit": "input.poll-key-event"
+    },
+    {
+      "name": "cp0_post_notification",
+      "runtime_function": "cp0_post_notification",
+      "c_name": "cp0_post_notification",
+      "wamr_signature": "(*~*~)i",
+      "result": "result",
+      "parameters": [
+        { "name": "title", "type": "const-u8-ptr" },
+        { "name": "title_length", "type": "u32" },
+        { "name": "body", "type": "const-u8-ptr" },
+        { "name": "body_length", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "system.post-notification"
+    },
+    {
+      "name": "cp0_http_get",
+      "runtime_function": "cp0_http_get",
+      "c_name": "cp0_http_get_raw",
+      "wamr_signature": "(*~*~)I",
+      "result": "i64",
+      "parameters": [
+        { "name": "url", "type": "const-u8-ptr" },
+        { "name": "url_length", "type": "u32" },
+        { "name": "body", "type": "mut-u8-ptr" },
+        { "name": "body_capacity", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "network.http-get"
+    },
+    {
+      "name": "cp0_document_open",
+      "runtime_function": "cp0_open_document",
+      "c_name": "cp0_document_open_raw",
+      "wamr_signature": "()I",
+      "result": "i64",
+      "parameters": [],
+      "native_fallback": -2,
+      "wit": "documents.open"
+    },
+    {
+      "name": "cp0_document_read",
+      "runtime_function": "cp0_read_document",
+      "c_name": "cp0_document_read_raw",
+      "wamr_signature": "(iI*~)I",
+      "result": "i64",
+      "parameters": [
+        { "name": "handle", "type": "i32" },
+        { "name": "offset", "type": "u64" },
+        { "name": "buffer", "type": "mut-u8-ptr" },
+        { "name": "capacity", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "documents.read"
+    },
+    {
+      "name": "cp0_document_close",
+      "runtime_function": "cp0_close_document",
+      "c_name": "cp0_document_close_raw",
+      "wamr_signature": "(i)i",
+      "result": "result",
+      "parameters": [{ "name": "handle", "type": "i32" }],
+      "native_fallback": -2,
+      "wit": "documents.close"
+    },
+    {
+      "name": "cp0_audio_play_pcm_s16le",
+      "runtime_function": "cp0_audio_play_pcm_s16le",
+      "c_name": "cp0_audio_play_pcm_s16le_raw",
+      "wamr_signature": "(*~)i",
+      "result": "result",
+      "parameters": [
+        { "name": "samples", "type": "const-u8-ptr" },
+        { "name": "sample_bytes", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "audio.play-pcm-s16le"
+    },
+    {
+      "name": "cp0_audio_capture_pcm_s16le",
+      "runtime_function": "cp0_audio_capture_pcm_s16le",
+      "c_name": "cp0_audio_capture_pcm_s16le_raw",
+      "wamr_signature": "(*~)i",
+      "result": "i32",
+      "parameters": [
+        { "name": "samples", "type": "mut-u8-ptr" },
+        { "name": "sample_capacity", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "audio.capture-pcm-s16le"
+    },
+    {
+      "name": "cp0_camera_capture_rgb565",
+      "runtime_function": "cp0_capture_camera_rgb565",
+      "c_name": "cp0_camera_capture_rgb565_raw",
+      "wamr_signature": "(*~)i",
+      "result": "result",
+      "parameters": [
+        { "name": "pixels", "type": "mut-u8-ptr" },
+        { "name": "pixel_bytes", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "camera.capture-rgb565"
+    },
+    {
+      "name": "cp0_gpio_read",
+      "runtime_function": "cp0_gpio_read",
+      "c_name": "cp0_gpio_read_raw",
+      "wamr_signature": "(i)i",
+      "result": "i32",
+      "parameters": [{ "name": "line", "type": "u32" }],
+      "native_fallback": -2,
+      "wit": "gpio.read"
+    },
+    {
+      "name": "cp0_gpio_write",
+      "runtime_function": "cp0_gpio_write",
+      "c_name": "cp0_gpio_write_raw",
+      "wamr_signature": "(ii)i",
+      "result": "result",
+      "parameters": [
+        { "name": "line", "type": "u32" },
+        { "name": "value", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "gpio.write"
+    },
+    {
+      "name": "cp0_lora_send",
+      "runtime_function": "cp0_lora_send",
+      "c_name": "cp0_lora_send_raw",
+      "wamr_signature": "(*~)i",
+      "result": "result",
+      "parameters": [
+        { "name": "payload", "type": "const-u8-ptr" },
+        { "name": "payload_length", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "radio.send-lora"
+    },
+    {
+      "name": "cp0_lora_receive",
+      "runtime_function": "cp0_lora_receive",
+      "c_name": "cp0_lora_receive_raw",
+      "wamr_signature": "(*~*~i)i",
+      "result": "i32",
+      "parameters": [
+        { "name": "payload", "type": "mut-u8-ptr" },
+        { "name": "payload_capacity", "type": "u32" },
+        { "name": "metadata", "type": "mut-u8-ptr" },
+        { "name": "metadata_bytes", "type": "u32" },
+        { "name": "timeout_ms", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "radio.receive-lora"
+    },
+    {
+      "name": "cp0_storage_put",
+      "runtime_function": "cp0_storage_put",
+      "c_name": "cp0_storage_put_raw",
+      "wamr_signature": "(*~*~)i",
+      "result": "result",
+      "parameters": [
+        { "name": "key", "type": "const-u8-ptr" },
+        { "name": "key_length", "type": "u32" },
+        { "name": "value", "type": "const-u8-ptr" },
+        { "name": "value_length", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "storage.put"
+    },
+    {
+      "name": "cp0_storage_get",
+      "runtime_function": "cp0_storage_get",
+      "c_name": "cp0_storage_get_raw",
+      "wamr_signature": "(*~*~)i",
+      "result": "i32",
+      "parameters": [
+        { "name": "key", "type": "const-u8-ptr" },
+        { "name": "key_length", "type": "u32" },
+        { "name": "value", "type": "mut-u8-ptr" },
+        { "name": "value_capacity", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "storage.get"
+    },
+    {
+      "name": "cp0_storage_delete",
+      "runtime_function": "cp0_storage_delete",
+      "c_name": "cp0_storage_delete_raw",
+      "wamr_signature": "(*~)i",
+      "result": "i32",
+      "parameters": [
+        { "name": "key", "type": "const-u8-ptr" },
+        { "name": "key_length", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "storage.delete"
+    },
+    {
+      "name": "cp0_intent_send",
+      "runtime_function": "cp0_intent_send",
+      "c_name": "cp0_intent_send_raw",
+      "wamr_signature": "(*~*~)i",
+      "result": "result",
+      "parameters": [
+        { "name": "action", "type": "const-u8-ptr" },
+        { "name": "action_length", "type": "u32" },
+        { "name": "payload", "type": "const-u8-ptr" },
+        { "name": "payload_length", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "intents.send"
+    },
+    {
+      "name": "cp0_intent_take",
+      "runtime_function": "cp0_intent_take",
+      "c_name": "cp0_intent_take_raw",
+      "wamr_signature": "(*~*~)I",
+      "result": "i64",
+      "parameters": [
+        { "name": "action", "type": "mut-u8-ptr" },
+        { "name": "action_capacity", "type": "u32" },
+        { "name": "payload", "type": "mut-u8-ptr" },
+        { "name": "payload_capacity", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "intents.take"
+    }
+  ]
+}

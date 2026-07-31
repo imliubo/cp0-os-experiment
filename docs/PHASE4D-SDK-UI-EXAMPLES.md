@@ -33,5 +33,5 @@ JSON profiles stay under ignored `target/` output.
 - Capability profiling verifies that only Camera calls `camera.capture`.
 - Visual inspection confirms both reference layouts fit the 320x150 surface.
 
-The next SDK milestone freezes the flat WAMR ABI, generates language bindings
-from one machine-readable contract and validates WIT syntax/compatibility.
+Phase 4E freezes the flat WAMR ABI, generates Runtime/C/Rust bindings from one
+machine-readable contract and validates WIT mapping and signature compatibility.

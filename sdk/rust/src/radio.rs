@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{Error, host_imports};
 
 pub const MAX_PAYLOAD_BYTES: usize = 64;
 pub const MAX_RECEIVE_TIMEOUT_MS: u32 = 1000;
@@ -19,7 +19,10 @@ pub fn send(payload: &[u8]) -> Result<(), Error> {
     if payload.is_empty() || payload.len() > MAX_PAYLOAD_BYTES {
         return Err(Error::InvalidArgument);
     }
-    Error::from_host(host::send(payload))
+    Error::from_host(host_imports::cp0_lora_send(
+        payload.as_ptr(),
+        payload.len() as u32,
+    ))
 }
 
 pub fn receive(payload: &mut [u8], timeout_ms: u32) -> Result<Option<Packet>, Error> {
@@ -31,7 +34,13 @@ pub fn receive(payload: &mut [u8], timeout_ms: u32) -> Result<Option<Packet>, Er
         return Err(Error::InvalidArgument);
     }
     let mut metadata = [0_u8; 4];
-    let result = host::receive(payload, &mut metadata, timeout_ms);
+    let result = host_imports::cp0_lora_receive(
+        payload.as_mut_ptr(),
+        payload.len() as u32,
+        metadata.as_mut_ptr(),
+        metadata.len() as u32,
+        timeout_ms,
+    );
     if result < 0 {
         return Error::from_host(result).map(|()| None);
     }
@@ -49,50 +58,6 @@ pub fn receive(payload: &mut [u8], timeout_ms: u32) -> Result<Option<Packet>, Er
             snr_quarter_db: metadata[2] as i8,
         },
     }))
-}
-
-#[cfg(target_arch = "wasm32")]
-mod host {
-    #[link(wasm_import_module = "cardputerzero")]
-    unsafe extern "C" {
-        #[link_name = "cp0_lora_send"]
-        fn raw_send(payload: *const u8, payload_length: u32) -> i32;
-        #[link_name = "cp0_lora_receive"]
-        fn raw_receive(
-            payload: *mut u8,
-            payload_capacity: u32,
-            metadata: *mut u8,
-            metadata_bytes: u32,
-            timeout_ms: u32,
-        ) -> i32;
-    }
-
-    pub fn send(payload: &[u8]) -> i32 {
-        unsafe { raw_send(payload.as_ptr(), payload.len() as u32) }
-    }
-
-    pub fn receive(payload: &mut [u8], metadata: &mut [u8; 4], timeout_ms: u32) -> i32 {
-        unsafe {
-            raw_receive(
-                payload.as_mut_ptr(),
-                payload.len() as u32,
-                metadata.as_mut_ptr(),
-                metadata.len() as u32,
-                timeout_ms,
-            )
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-mod host {
-    pub const fn send(_payload: &[u8]) -> i32 {
-        -2
-    }
-
-    pub const fn receive(_payload: &mut [u8], _metadata: &mut [u8; 4], _timeout_ms: u32) -> i32 {
-        -2
-    }
 }
 
 #[cfg(test)]

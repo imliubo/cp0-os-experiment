@@ -1,6 +1,6 @@
 use core::mem::size_of;
 
-use crate::Error;
+use crate::{Error, host_imports};
 
 pub const WIDTH: u16 = 320;
 pub const STANDARD_HEIGHT: u16 = 150;
@@ -17,7 +17,7 @@ pub struct Rect {
 }
 
 pub fn dimensions() -> (u16, u16) {
-    let packed = host::dimensions();
+    let packed = host_imports::cp0_display_dimensions();
     (packed as u16, (packed >> 16) as u16)
 }
 
@@ -46,61 +46,12 @@ pub fn present_rgb565(pixels: &[u8], damage: &[Rect]) -> Result<(), Error> {
         .checked_mul(size_of::<Rect>())
         .and_then(|bytes| u32::try_from(bytes).ok())
         .ok_or(Error::InvalidArgument)?;
-    Error::from_host(host::present_rgb565(
+    Error::from_host(host_imports::cp0_present_rgb565(
         pixels.as_ptr(),
         pixels.len() as u32,
         damage.as_ptr(),
         damage_bytes,
     ))
-}
-
-#[cfg(target_arch = "wasm32")]
-mod host {
-    use super::Rect;
-
-    #[link(wasm_import_module = "cardputerzero")]
-    unsafe extern "C" {
-        #[link_name = "cp0_display_dimensions"]
-        fn raw_dimensions() -> u32;
-        #[link_name = "cp0_present_rgb565"]
-        fn raw_present_rgb565(
-            pixels: *const u8,
-            pixel_bytes: u32,
-            damage: *const Rect,
-            damage_bytes: u32,
-        ) -> i32;
-    }
-
-    pub fn dimensions() -> u32 {
-        unsafe { raw_dimensions() }
-    }
-
-    pub fn present_rgb565(
-        pixels: *const u8,
-        pixel_bytes: u32,
-        damage: *const Rect,
-        damage_bytes: u32,
-    ) -> i32 {
-        unsafe { raw_present_rgb565(pixels, pixel_bytes, damage, damage_bytes) }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-mod host {
-    use super::{Rect, STANDARD_HEIGHT, WIDTH};
-
-    pub const fn dimensions() -> u32 {
-        (WIDTH as u32) | ((STANDARD_HEIGHT as u32) << 16)
-    }
-
-    pub const fn present_rgb565(
-        _pixels: *const u8,
-        _pixel_bytes: u32,
-        _damage: *const Rect,
-        _damage_bytes: u32,
-    ) -> i32 {
-        -2
-    }
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@ pub mod camera;
 pub mod display;
 pub mod documents;
 pub mod gpio;
+mod host_imports;
 pub mod input;
 pub mod intents;
 pub mod network;

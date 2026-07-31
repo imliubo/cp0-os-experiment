@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{Error, host_imports};
 
 pub const MAX_DOCUMENT_BYTES: u32 = 16 * 1024 * 1024;
 pub const MAX_READ_BYTES: usize = 4096;
@@ -22,7 +22,7 @@ impl Document {
         if buffer.is_empty() || buffer.len() > MAX_READ_BYTES {
             return Err(Error::InvalidArgument);
         }
-        let result = host::read(
+        let result = host_imports::cp0_document_read(
             self.handle,
             offset,
             buffer.as_mut_ptr(),
@@ -39,12 +39,12 @@ impl Document {
     }
 
     pub fn close(self) -> Result<(), Error> {
-        Error::from_host(host::close(self.handle))
+        Error::from_host(host_imports::cp0_document_close(self.handle))
     }
 }
 
 pub fn open() -> Result<Document, Error> {
-    let packed = host::open();
+    let packed = host_imports::cp0_document_open();
     if packed < 0 {
         return decode_error(packed);
     }
@@ -63,46 +63,6 @@ fn decode_error<T>(value: i64) -> Result<T, Error> {
     match Error::from_host(value as i32) {
         Ok(()) => unreachable!(),
         Err(error) => Err(error),
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-mod host {
-    #[link(wasm_import_module = "cardputerzero")]
-    unsafe extern "C" {
-        #[link_name = "cp0_document_open"]
-        fn raw_open() -> i64;
-        #[link_name = "cp0_document_read"]
-        fn raw_read(handle: i32, offset: u64, buffer: *mut u8, capacity: u32) -> i64;
-        #[link_name = "cp0_document_close"]
-        fn raw_close(handle: i32) -> i32;
-    }
-
-    pub fn open() -> i64 {
-        unsafe { raw_open() }
-    }
-
-    pub fn read(handle: i32, offset: u64, buffer: *mut u8, capacity: u32) -> i64 {
-        unsafe { raw_read(handle, offset, buffer, capacity) }
-    }
-
-    pub fn close(handle: i32) -> i32 {
-        unsafe { raw_close(handle) }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-mod host {
-    pub const fn open() -> i64 {
-        -2
-    }
-
-    pub const fn read(_handle: i32, _offset: u64, _buffer: *mut u8, _capacity: u32) -> i64 {
-        -2
-    }
-
-    pub const fn close(_handle: i32) -> i32 {
-        -2
     }
 }
 

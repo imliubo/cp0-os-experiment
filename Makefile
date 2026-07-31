@@ -12,6 +12,7 @@ check: fmt
 	./tests/test-system-shell-ui.sh
 	./tests/test-appd-profile.sh
 	./tests/test-app-platform-image.sh
+	./tests/test-sdk-abi.sh
 	./tests/test-sdk-c.sh
 	./tests/test-sdk-lvgl.sh
 	./tests/test-sdk-examples.sh

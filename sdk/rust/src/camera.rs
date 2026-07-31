@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{Error, host_imports};
 
 pub const WIDTH: u16 = 320;
 pub const HEIGHT: u16 = 170;
@@ -9,30 +9,10 @@ pub fn capture_rgb565(pixels: &mut [u16]) -> Result<(), Error> {
     if pixels.len() != PIXEL_COUNT {
         return Err(Error::InvalidArgument);
     }
-    Error::from_host(host::capture(
+    Error::from_host(host_imports::cp0_camera_capture_rgb565(
         pixels.as_mut_ptr().cast(),
         core::mem::size_of_val(pixels) as u32,
     ))
-}
-
-#[cfg(target_arch = "wasm32")]
-mod host {
-    #[link(wasm_import_module = "cardputerzero")]
-    unsafe extern "C" {
-        #[link_name = "cp0_camera_capture_rgb565"]
-        fn raw_capture(pixels: *mut u8, pixel_bytes: u32) -> i32;
-    }
-
-    pub fn capture(pixels: *mut u8, pixel_bytes: u32) -> i32 {
-        unsafe { raw_capture(pixels, pixel_bytes) }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-mod host {
-    pub const fn capture(_pixels: *mut u8, _pixel_bytes: u32) -> i32 {
-        -2
-    }
 }
 
 #[cfg(test)]

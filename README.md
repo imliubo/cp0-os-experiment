@@ -15,7 +15,7 @@ Phase 3 已贯通 WAMR 强隔离运行时、权限系统和首个 capability bro
 
 - 系统架构与资源预算；
 - 分阶段 Roadmap 和初始 ADR；
-- CardputerZero SDK 的 WIT ABI 草案；
+- CardputerZero SDK 的 WIT 公共契约与可生成 flat WAMR ABI；
 - 应用 manifest v1 和 Rust 校验库；
 - `cp0ctl manifest validate` 开发工具。
 - 固定版本的 CM0 V0.6 BSP 和 `pi-gen` 外部构建阶段；

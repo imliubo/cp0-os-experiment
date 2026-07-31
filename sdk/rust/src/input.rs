@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{Error, host_imports};
 
 pub const MAX_POLL_MILLISECONDS: u32 = 1000;
 pub const MODIFIER_SHIFT: u8 = 1 << 0;
@@ -19,7 +19,7 @@ pub fn poll_key_event(timeout_milliseconds: u32) -> Result<Option<KeyEvent>, Err
         return Err(Error::InvalidArgument);
     }
     let mut wire = [0_u8; 8];
-    match host::poll_key_event(
+    match host_imports::cp0_poll_key_event(
         wire.as_mut_ptr(),
         wire.len() as u32,
         timeout_milliseconds as i32,
@@ -32,26 +32,6 @@ pub fn poll_key_event(timeout_milliseconds: u32) -> Result<Option<KeyEvent>, Err
             modifiers: wire[4],
         })),
         status => Error::from_host(status).map(|()| None),
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-mod host {
-    #[link(wasm_import_module = "cardputerzero")]
-    unsafe extern "C" {
-        #[link_name = "cp0_poll_key_event"]
-        fn raw_poll_key_event(event: *mut u8, event_bytes: u32, timeout_milliseconds: i32) -> i32;
-    }
-
-    pub fn poll_key_event(event: *mut u8, event_bytes: u32, timeout_milliseconds: i32) -> i32 {
-        unsafe { raw_poll_key_event(event, event_bytes, timeout_milliseconds) }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-mod host {
-    pub fn poll_key_event(_event: *mut u8, _event_bytes: u32, _timeout_milliseconds: i32) -> i32 {
-        0
     }
 }
 

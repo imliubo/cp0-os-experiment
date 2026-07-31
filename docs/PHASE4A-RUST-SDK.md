@@ -26,9 +26,9 @@ Hello Card now depends only on `cp0-sdk`. Its source has no raw
 
 The Runtime adds `cp0_monotonic_milliseconds: () -> i64`, implemented with
 `CLOCK_MONOTONIC`. It complements the existing bounded wait and typed
-notification calls. The WIT file remains the source-level contract; Phase 4
-code generation will replace the small hand-maintained private binding module
-while preserving the public Rust API.
+notification calls. WIT remains the source-level contract. Phase 4E replaced
+all hand-maintained private imports with bindings generated from the canonical
+flat WAMR ABI contract while preserving the public Rust API.
 
 ## Validation
 

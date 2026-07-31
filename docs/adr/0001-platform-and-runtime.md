@@ -9,7 +9,8 @@
 2. 图形栈采用 DRM/KMS + Wayland，首个 compositor 使用 Weston kiosk shell。
 3. 系统只支持单前台应用，不提供重叠桌面窗口。
 4. 第三方应用必须使用新 SDK 并运行在 WASM 中，不兼容传统 Linux GUI 应用。
-5. 设备运行时采用 WAMR AOT；WIT 作为 SDK ABI 的唯一源描述。
+5. 设备运行时采用 WAMR interpreter/AOT；WIT 描述公共类型接口，独立的机器可读
+   flat ABI 契约作为 Runtime 与语言导入的唯一生成源。
 6. 原生进程只用于可信系统组件，不开放原生第三方应用安装。
 
 ## 理由
@@ -23,4 +24,3 @@ Wayland 路径而不立即承担 compositor 维护成本。WAMR 的嵌入式资�
 现有 LVGL framebuffer 应用需要迁移或重写。SDK 必须提供足够完整的 UI、媒体和硬件
 能力，否则开发者会要求原生逃生通道。若 Weston 后续无法实现产品交互，再以真实
 测试结果决定是否维护 wlroots compositor。
-

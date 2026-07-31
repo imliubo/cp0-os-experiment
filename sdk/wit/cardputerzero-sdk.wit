@@ -1,13 +1,6 @@
 package cardputerzero:sdk@0.1.0;
 
 interface types {
-    enum lifecycle-state {
-        foreground,
-        background,
-        suspended,
-        terminating,
-    }
-
     record rect {
         x: u16,
         y: u16,
@@ -20,12 +13,6 @@ interface types {
         pressed: bool,
         repeated: bool,
         modifiers: u8,
-    }
-
-    variant app-event {
-        key(key-event),
-        lifecycle(lifecycle-state),
-        render,
     }
 
     enum error-code {
@@ -41,8 +28,14 @@ interface system {
     use types.{error-code};
 
     monotonic-milliseconds: func() -> u64;
-    log: func(level: u8, message: string);
+    wait-event: func(timeout-ms: u32) -> result<_, error-code>;
     post-notification: func(title: string, body: string) -> result<_, error-code>;
+}
+
+interface input {
+    use types.{error-code, key-event};
+
+    poll-key-event: func(timeout-ms: u32) -> result<option<key-event>, error-code>;
 }
 
 interface display {
@@ -117,14 +110,14 @@ interface radio {
     }
 
     send-lora: func(payload: list<u8>) -> result<_, error-code>;
-    receive-lora: func(timeout-ms: u16) -> result<option<packet>, error-code>;
+    receive-lora: func(timeout-ms: u32) -> result<option<packet>, error-code>;
 }
 
 interface storage {
     use types.{error-code};
 
     put: func(key: string, value: list<u8>) -> result<_, error-code>;
-    get: func(key: string, maximum: u16) -> result<option<list<u8>>, error-code>;
+    get: func(key: string, maximum: u32) -> result<option<list<u8>>, error-code>;
     delete: func(key: string) -> result<bool, error-code>;
 }
 
@@ -141,15 +134,13 @@ interface intents {
 }
 
 interface application {
-    use types.{app-event, error-code};
-
-    initialize: func() -> result<_, error-code>;
-    handle-event: func(event: app-event) -> result<_, error-code>;
+    run: func() -> s32;
 }
 
 world cardputer-application {
     import system;
     import display;
+    import input;
     import network;
     import documents;
     import audio;

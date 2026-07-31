@@ -5,6 +5,12 @@ project targeting `wasm32-unknown-unknown`. The header declares only the public
 CardputerZero Runtime imports; it does not expose WASI, Linux syscalls or native
 linking.
 
+The raw import declarations in `include/cardputerzero_imports.h` are generated
+from `sdk/abi/cardputerzero-hostcalls-v1.json`. Applications include only
+`cardputerzero.h`; direct use of the generated raw functions is unsupported.
+`tests/test-sdk-abi.sh` guarantees that the C declarations, Rust imports and
+Runtime registration table remain byte-for-byte synchronized with the contract.
+
 Strings are UTF-8 byte buffers with explicit lengths. Applications should keep
 notification titles at 32 Unicode characters and bodies at 160; the Runtime and
 broker enforce byte, encoding and character limits again across the trust

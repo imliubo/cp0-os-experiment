@@ -27,3 +27,7 @@ WIT package 版本使用语义化版本。应用在 manifest 中声明所需的 
 每个已发布 SDK minor 都应保留一个最小测试应用。CI 必须使用当前工具验证其 manifest，
 并在 App Runtime 可用后启动这些应用执行 ABI smoke test。
 
+扁平 ABI 以 `sdk/abi/cardputerzero-hostcalls-v1.json` 为唯一生成源。每个已发布 minor
+必须在 `sdk/abi/compat` 保存不可自动更新的名称/签名快照；当前契约可以增加 hostcall，
+但不能删除或改变历史快照中的 module、name 或 WAMR signature。Runtime 注册表、C
+导入和 Rust 私有导入均由该契约生成，CI 拒绝任何手工漂移。
