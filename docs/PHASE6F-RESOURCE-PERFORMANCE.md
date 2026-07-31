@@ -29,6 +29,12 @@ and been retrieved:
 sudo /usr/libexec/cardputerzero/device-performance-acceptance
 ```
 
+If the Phase 6F services were installed with the hot-deployment scripts, reboot
+the device once and wait for Home before running the gate. Hot deployment
+restarts System Shell late in the current boot, so its monotonic activation
+timestamp is not valid boot-readiness evidence. The post-deployment reboot also
+proves that the installed unit limits survive a normal boot.
+
 The default run samples an idle Home screen for 60 seconds at five-second
 intervals. It refuses to run while the stability unit or any application is
 active. Each invocation writes a new root-only directory below
