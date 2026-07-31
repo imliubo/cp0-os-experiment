@@ -12,6 +12,7 @@ grep -q '^pub const MAX_BOOT_ATTEMPTS: u8 = 3;' "$library"
 grep -q 'Callers must not treat successful JSON validation as signature verification' \
     "$library"
 grep -q 'persisted before transferring' "$library"
+grep -q 'booted slot and sequence do not match the pending release' "$library"
 grep -q 'one_hundred_interrupted_updates_always_retain_a_bootable_slot' "$library"
 grep -q -- '--data-block-size=4096' "$verifier"
 grep -q -- '--hash-block-size=4096' "$verifier"

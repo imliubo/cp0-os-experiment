@@ -26,9 +26,10 @@ The eventual production update design is a signed A/B system:
    boot metadata, not in an independently mutable command line.
 3. Use RAUC bundles signed by a dedicated offline OS-update key. The Store key
    cannot authorize OS images, recovery media or boot metadata.
-4. Mark a new slot pending, require compositor/appd/data-mount health checks,
-   then commit it. A bounded boot-attempt counter reverts to the previous slot
-   when the health ceremony does not finish.
+4. Mark a new slot pending, require the signed boot context to identify that
+   exact slot and release sequence plus compositor/appd/data-mount health
+   checks, then commit it. A bounded boot-attempt counter reverts to the
+   previous slot when the health ceremony does not finish.
 5. Keep `cp0-data` outside slot replacement. Schema migrations must be
    forward-compatible with the previous OS slot or stage a separately
    recoverable data migration before the new slot is committed.

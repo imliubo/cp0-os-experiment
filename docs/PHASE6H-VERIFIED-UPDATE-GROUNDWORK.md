@@ -41,9 +41,10 @@ The eventual RAUC integration must perform these steps in order:
 7. Before every transfer to a pending slot, decrement its remaining attempts,
    write and re-read the new state, then boot. A power loss after selection
    therefore consumes an attempt instead of creating an infinite retry loop.
-8. Confirm the slot only after compositor, appd and `cp0-data` mount health all
-   succeed. A fourth selection after three unconfirmed attempts clears pending
-   state and boots the last confirmed slot.
+8. Confirm the slot only when the signed boot context reports the exact pending
+   slot and release sequence and compositor, appd and `cp0-data` mount health
+   all succeed. A fourth selection after three unconfirmed attempts clears
+   pending state and boots the last confirmed slot.
 
 Each state record contains a generation and a domain-separated SHA-256
 checksum. On recovery, the boot chooser selects the highest valid generation;

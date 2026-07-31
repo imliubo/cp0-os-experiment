@@ -247,6 +247,8 @@ pub struct BootDecision {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HealthReport {
+    pub booted_slot: BootSlot,
+    pub booted_sequence: u64,
     pub compositor: bool,
     pub appd: bool,
     pub data_mount: bool,
@@ -370,6 +372,11 @@ impl BootState {
             .pending
             .as_ref()
             .ok_or_else(|| UpdateError::new("there is no pending slot to confirm"))?;
+        if health.booted_slot != pending.slot || health.booted_sequence != pending.sequence {
+            return Err(UpdateError::new(
+                "booted slot and sequence do not match the pending release",
+            ));
+        }
         if self.last_attempted != Some(pending.slot) {
             return Err(UpdateError::new(
                 "the pending slot has not completed a recorded boot attempt",
@@ -519,8 +526,10 @@ mod tests {
         }
     }
 
-    fn healthy() -> HealthReport {
+    fn healthy(booted_slot: BootSlot, booted_sequence: u64) -> HealthReport {
         HealthReport {
+            booted_slot,
+            booted_sequence,
             compositor: true,
             appd: true,
             data_mount: true,
@@ -560,18 +569,20 @@ mod tests {
     fn only_a_booted_healthy_pending_slot_can_be_confirmed() {
         let factory = BootState::factory(BootSlot::A, 4);
         let staged = factory.stage(BootSlot::B, 5).unwrap();
-        assert!(staged.confirm(healthy()).is_err());
+        assert!(staged.confirm(healthy(BootSlot::B, 5)).is_err());
 
         let (attempted, decision) = staged.prepare_boot().unwrap();
         assert_eq!(decision.slot, BootSlot::B);
         assert!(decision.pending);
         assert_eq!(attempted.pending.as_ref().unwrap().attempts_remaining, 2);
 
-        let mut incomplete = healthy();
+        let mut incomplete = healthy(BootSlot::B, 5);
         incomplete.appd = false;
         assert!(attempted.confirm(incomplete).is_err());
+        assert!(attempted.confirm(healthy(BootSlot::A, 4)).is_err());
+        assert!(attempted.confirm(healthy(BootSlot::B, 4)).is_err());
 
-        let confirmed = attempted.confirm(healthy()).unwrap();
+        let confirmed = attempted.confirm(healthy(BootSlot::B, 5)).unwrap();
         assert_eq!(confirmed.confirmed_slot, BootSlot::B);
         assert_eq!(confirmed.confirmed_sequence, 5);
         assert!(confirmed.pending.is_none());
