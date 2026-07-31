@@ -13,7 +13,7 @@ if [[ ! -d $run_dir || -L $run_dir ]]; then
 fi
 run_dir=$(cd "$run_dir" && pwd -P)
 
-for name in status summary.env samples.tsv block-io.tsv; do
+for name in status summary.env samples.tsv block-io.tsv foreground.tsv; do
     path="$run_dir/$name"
     if [[ ! -f $path || -L $path ]]; then
         echo "error: required stability evidence is missing or symbolic: $name" >&2
@@ -268,10 +268,56 @@ sample_timeline=$(awk -F '\t' '
 ' "$run_dir/samples.tsv")
 block_timeline=$(awk -F '\t' 'NR > 1 { print $1 "\t" $2 }' \
     "$run_dir/block-io.tsv")
-if [[ $sample_timeline != "$block_timeline" ]]; then
-    echo "error: block-I/O and service sampling timelines do not match" >&2
+foreground_timeline=$(awk -F '\t' 'NR > 1 { print $1 "\t" $2 }' \
+    "$run_dir/foreground.tsv")
+if [[ $sample_timeline != "$block_timeline" ||
+      $sample_timeline != "$foreground_timeline" ]]; then
+    echo "error: service, block-I/O and foreground sampling timelines do not match" >&2
     exit 1
 fi
+
+awk -F '\t' \
+    -v expected_count="$sample_count" \
+    -v expected_first_epoch="$sample_first_epoch" \
+    -v expected_last_epoch="$sample_last_epoch" \
+    -v expected_first_uptime="$sample_first_uptime" \
+    -v expected_last_uptime="$sample_last_uptime" '
+    function reject(message) {
+        print "error: foreground.tsv " message > "/dev/stderr"
+        bad = 1
+        exit 1
+    }
+    NR == 1 {
+        if ($0 != "epoch\tuptime\trunning_apps")
+            reject("has an invalid header")
+        next
+    }
+    {
+        if (NF != 3 || $1 !~ /^[0-9]+$/ ||
+            $2 !~ /^[0-9]+([.][0-9]+)?$/ || $3 !~ /^[0-9]+$/)
+            reject("contains a malformed row")
+        if (($3 + 0) != 0)
+            reject("records a running foreground application")
+        if (rows > 0 && (($1 + 0) <= last_epoch || ($2 + 0) < last_uptime))
+            reject("contains a non-monotonic or duplicate sample")
+        if (rows == 0) {
+            first_epoch = $1 + 0
+            first_uptime = $2 + 0
+        }
+        last_epoch = $1 + 0
+        last_uptime = $2 + 0
+        rows++
+    }
+    END {
+        if (bad)
+            exit 1
+        if (rows != expected_count || first_epoch != expected_first_epoch ||
+            last_epoch != expected_last_epoch ||
+            first_uptime != expected_first_uptime ||
+            last_uptime != expected_last_uptime)
+            reject("does not align one-to-one with service samples")
+    }
+' "$run_dir/foreground.tsv"
 
 awk -F '\t' \
     -v expected_count="$sample_count" \

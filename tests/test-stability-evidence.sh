@@ -60,6 +60,12 @@ epoch	uptime	sectors_written	bytes_written
 160	1060.00	1010	517120
 220	1120.00	1020	522240
 BLOCKS
+    cat >"$fixture/foreground.tsv" <<'FOREGROUND'
+epoch	uptime	running_apps
+100	1000.00	0
+160	1060.00	0
+220	1120.00	0
+FOREGROUND
 }
 
 expect_rejection() {
@@ -136,6 +142,43 @@ awk -F '\t' 'BEGIN { OFS = "\t" } NR == 3 { $1 = 161 } { print }' \
     "$timeline_mismatch/block-io.tsv" >"$timeline_mismatch/block-io.tsv.new"
 mv "$timeline_mismatch/block-io.tsv.new" "$timeline_mismatch/block-io.tsv"
 expect_rejection "$timeline_mismatch" sampling-timeline-mismatch
+
+foreground_running="$test_root/foreground-running"
+cp -R "$valid" "$foreground_running"
+awk -F '\t' 'BEGIN { OFS = "\t" } NR == 3 { $3 = 1 } { print }' \
+    "$foreground_running/foreground.tsv" >"$foreground_running/foreground.tsv.new"
+mv "$foreground_running/foreground.tsv.new" "$foreground_running/foreground.tsv"
+expect_rejection "$foreground_running" foreground-running-app
+
+foreground_missing_sample="$test_root/foreground-missing-sample"
+cp -R "$valid" "$foreground_missing_sample"
+awk 'NR != 3' "$foreground_missing_sample/foreground.tsv" \
+    >"$foreground_missing_sample/foreground.tsv.new"
+mv "$foreground_missing_sample/foreground.tsv.new" \
+    "$foreground_missing_sample/foreground.tsv"
+expect_rejection "$foreground_missing_sample" foreground-missing-sample
+
+foreground_bad_time="$test_root/foreground-bad-time"
+cp -R "$valid" "$foreground_bad_time"
+awk -F '\t' 'BEGIN { OFS = "\t" } NR == 3 { $1 = 161 } { print }' \
+    "$foreground_bad_time/foreground.tsv" >"$foreground_bad_time/foreground.tsv.new"
+mv "$foreground_bad_time/foreground.tsv.new" \
+    "$foreground_bad_time/foreground.tsv"
+expect_rejection "$foreground_bad_time" foreground-timeline-mismatch
+
+foreground_malformed="$test_root/foreground-malformed"
+cp -R "$valid" "$foreground_malformed"
+awk -F '\t' 'BEGIN { OFS = "\t" } NR == 3 { $3 = -1 } { print }' \
+    "$foreground_malformed/foreground.tsv" >"$foreground_malformed/foreground.tsv.new"
+mv "$foreground_malformed/foreground.tsv.new" \
+    "$foreground_malformed/foreground.tsv"
+expect_rejection "$foreground_malformed" foreground-malformed-count
+
+linked_foreground="$test_root/linked-foreground"
+cp -R "$valid" "$linked_foreground"
+rm "$linked_foreground/foreground.tsv"
+ln -s "$valid/foreground.tsv" "$linked_foreground/foreground.tsv"
+expect_rejection "$linked_foreground" linked-foreground-samples
 
 duplicate="$test_root/duplicate"
 cp -R "$valid" "$duplicate"

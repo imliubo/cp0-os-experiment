@@ -32,10 +32,12 @@ samples="$run_dir/samples.tsv"
 failures="$run_dir/failures.log"
 status_file="$run_dir/status"
 block_samples="$run_dir/block-io.tsv"
+foreground_samples="$run_dir/foreground.tsv"
 printf 'RUNNING\n' >"$status_file"
 printf 'epoch\tuptime\tunit\tactive\tsub\tpid\trestarts\tmemory_bytes\n' \
     >"$samples"
 printf 'epoch\tuptime\tsectors_written\tbytes_written\n' >"$block_samples"
+printf 'epoch\tuptime\trunning_apps\n' >"$foreground_samples"
 
 units=(
     cardputerzero-compositor.service
@@ -93,6 +95,58 @@ read_unit_properties() {
        $property_memory =~ ^[0-9]+$ ]]
 }
 
+query_foreground_apps() {
+    local offset=0 pages=0 response page_fields page_running next_offset remainder
+    foreground_count=0
+    foreground_error=
+    while true; do
+        if ! response=$(/usr/bin/cp0ctl app list "$offset" 8 2>/dev/null); then
+            foreground_error="cp0ctl-app-list-failed-offset=$offset"
+            return 1
+        fi
+        if ! page_fields=$(printf '%s\n' "$response" | /usr/bin/jq -er '
+            .outcome.data as $data |
+            if .outcome.status == "ok" and
+               $data.kind == "applications" and
+               ($data.apps | type) == "array" and
+               ($data.apps | all(.[];
+                   type == "object" and (.running | type) == "boolean")) and
+               ($data.next_offset == null or
+                   (($data.next_offset | type) == "number" and
+                    ($data.next_offset | floor) == $data.next_offset))
+            then
+                [([$data.apps[] | select(.running)] | length),
+                 ($data.next_offset // -1)] | @tsv
+            else
+                error("malformed application list response")
+            end
+        ' 2>/dev/null); then
+            foreground_error="app-list-json-invalid-offset=$offset"
+            return 1
+        fi
+        IFS=$'\t' read -r page_running next_offset remainder <<<"$page_fields"
+        if [[ -n ${remainder:-} || ! $page_running =~ ^[0-9]+$ ||
+              ! $next_offset =~ ^(-1|0|[1-9][0-9]*)$ ]]; then
+            foreground_error="app-list-page-fields-invalid-offset=$offset"
+            return 1
+        fi
+        foreground_count=$((foreground_count + page_running))
+        if [[ $next_offset == -1 ]]; then
+            return 0
+        fi
+        if ((next_offset <= offset || next_offset > 65535)); then
+            foreground_error="app-list-pagination-invalid-offset=$offset-next=$next_offset"
+            return 1
+        fi
+        pages=$((pages + 1))
+        if ((pages > 64)); then
+            foreground_error="app-list-pagination-exceeded-64-pages"
+            return 1
+        fi
+        offset=$next_offset
+    done
+}
+
 sample_once() {
     local epoch uptime unit sectors_written store_unit
     epoch=$(date +%s)
@@ -103,6 +157,14 @@ sample_once() {
     if ! /usr/bin/cp0ctl app ping >/dev/null; then
         record_failure "appd-ping-failed"
     fi
+    if ! query_foreground_apps; then
+        record_failure "foreground-query-failed $foreground_error"
+        foreground_count=-1
+    elif ((foreground_count != 0)); then
+        record_failure "foreground-running-apps=$foreground_count"
+    fi
+    printf '%s\t%s\t%s\n' "$epoch" "$uptime" "$foreground_count" \
+        >>"$foreground_samples"
     sectors_written=$(awk '{ print $7 }' /sys/block/mmcblk0/stat 2>/dev/null || true)
     if [[ $sectors_written =~ ^[0-9]+$ ]]; then
         if [[ -z $baseline_sectors_written ]]; then

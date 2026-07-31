@@ -26,15 +26,20 @@ Each sample records:
 - `ActiveState`, `SubState`, `MainPID`, `NRestarts` and `MemoryCurrent` for
   compositor, System Shell and appd;
 - an authenticated appd ping;
+- a paginated, schema-checked application list and the number of running
+  foreground applications;
 - the private Wayland, appd control and runtime broker sockets.
 - cumulative SD-card sectors written from `/sys/block/mmcblk0/stat`, sampled to
   RAM without causing measured SD writes.
 
 Unexpected restarts, missing processes/sockets, failed pings and cgroup memory
-above 32 MiB for compositor/Shell or 24 MiB for appd are failures. The final
+above 32 MiB for compositor/Shell or 24 MiB for appd are failures. A failed or
+malformed application-list query, invalid pagination, or any running application
+also fails the idle run. The final
 sample may grow by at most 4 MiB, 2 MiB and 4 MiB respectively from the idle
 baseline. Results contain `samples.tsv`, `summary.env`, `status` and, only on
-failure, `failures.log`. `block-io.tsv` contains the raw write counter. The
+failure, `failures.log`. `block-io.tsv` contains the raw write counter and
+`foreground.tsv` contains the running-application count at every sample. The
 default idle acceptance permits at most 64 MiB of SD writes over the run; a
 fourth argument can set a stricter byte limit.
 
@@ -47,7 +52,9 @@ without sourcing `summary.env`. It requires an exact field set, one block-I/O
 row and exactly three distinct core-service rows per epoch, monotonic wall and
 uptime coverage for the requested duration, constant service PIDs/restart
 counts, memory limits/growth, summary-to-raw agreement and the SD write bound.
-When the optional stored service is present, it must appear in every epoch with
+The foreground, block-I/O and service timelines must agree exactly, and every
+foreground count must be zero. When the optional stored service is present, it
+must appear in every epoch with
 a stable PID/restart count and remain below its memory limit.
 Unknown/duplicate fields, a non-empty failure log, missing samples, oversized
 gaps or a forged summary fail closed. Its mutation tests run in `make check`.
@@ -81,11 +88,26 @@ directory with SHA-256
 `88ecc5d2414710d3dc60ce63dbbd046e7bc0e010bccc29f609409edaba23c2bf`.
 
 Neon Snake was then stopped and developer mode was disabled. Disabling that
-mode restarted appd before the replacement baseline. The current uninterrupted
-run started at 2026-08-01 00:43:19 CST in
+mode restarted appd before the replacement baseline. A replacement run started
+at 2026-08-01 00:43:19 CST in
 `/run/cardputerzero-stability/acceptance/20260731T164319Z-9619`. Its first sample
 recorded compositor PID `909`, System Shell PID `926`, appd PID `9465` and
-stored PID `8480`, all active with zero restarts; 4K Camera2 showed idle Home.
-The Roadmap remains open until approximately 2026-08-02 00:43 CST, when this
-complete directory must be retrieved and independently verified before any
-platform deployment, app launch or reboot.
+stored PID `8480`, all active with zero restarts; 4K Camera2 showed Home.
+However, a read-only application-list query at 00:49 found Neon Snake still
+marked running, so that run is also invalid idle evidence. The replacement
+run was stopped without restarting a core service and retained as
+`target/device-evidence/invalid-20260731T164319Z-9619.tar.gz`, SHA-256
+`9608197a5520cea281054a3ede9d0047362c0cb70135fbe915d643a93120d8fd`.
+
+The foreground-aware monitor was then hot-deployed with SHA-256
+`5219e5b33982c598914378c127694fc491f2186b0bca0df952b639dbb3b42797`.
+A three-second hardware smoke run passed with three zero-foreground samples,
+zero failures, zero SD writes and unchanged core service PIDs. The formal
+replacement started at 2026-08-01 01:02:28 CST in
+`/run/cardputerzero-stability/acceptance/20260731T170228Z-10620`. Its first
+sample recorded zero running applications and compositor PID `909`, System
+Shell PID `926`, appd PID `9465` and stored PID `8480`, all active with zero
+restarts; 4K Camera2 showed idle Home after startup. The Roadmap remains open
+until approximately 2026-08-02 01:02 CST, when the complete uninterrupted
+directory must be retrieved and independently verified before any platform
+deployment, app launch or reboot.

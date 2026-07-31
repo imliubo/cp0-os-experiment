@@ -214,8 +214,9 @@ appd 和 compositor 使用 `Restart=on-failure`，System Shell 使用
 新 PID、预期重启计数、Shell 对新 Wayland socket 的重绑以及 appd 控制路径，不能只
 检查 systemd 的 `active` 字符串。
 
-24 小时验收按分钟将核心服务状态、重启数、cgroup 内存和 socket/ping 健康写入
-`/run` 的独立结果目录，避免持续写入 SD 卡。监控工具有固定的 32/32/24 MiB 内存
+24 小时验收按分钟将核心服务状态、重启数、cgroup 内存、前台应用计数和
+socket/ping 健康写入 `/run` 的独立结果目录，避免持续写入 SD 卡。监控工具要求
+每次采样都没有运行中的应用，并有固定的 32/32/24 MiB 内存
 上限和结束增长阈值，但不会在产品启动时常驻。
 
 Phase 6 性能门禁同样只写 `/run`，并在无前台应用时统一记录 systemd 单调启动时间、

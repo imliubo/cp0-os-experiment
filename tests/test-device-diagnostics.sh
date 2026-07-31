@@ -31,6 +31,10 @@ grep -q '/run/cardputerzero-stability' "$monitor"
 grep -q 'MemoryCurrent' "$monitor"
 grep -q 'NRestarts' "$monitor"
 grep -q '/usr/bin/cp0ctl app ping' "$monitor"
+grep -q '/usr/bin/cp0ctl app list' "$monitor"
+grep -q 'foreground.tsv' "$monitor"
+grep -q 'foreground-running-apps=' "$monitor"
+grep -q '/usr/bin/jq -er' "$monitor"
 grep -q 'memory-growth' "$monitor"
 grep -q '/sys/block/mmcblk0/stat' "$monitor"
 grep -q 'sd_write_bytes' "$monitor"
@@ -38,6 +42,8 @@ grep -q 'maximum_sd_write_bytes' "$monitor"
 grep -q 'store_unit=cardputerzero-stored.service' "$monitor"
 grep -q 'systemctl is-active --quiet.*store_unit' "$monitor"
 grep -q '/run/cardputerzero-store/control.sock' "$monitor"
+grep -q 'service, block-I/O and foreground sampling timelines' \
+    "$repo_root/scripts/verify-stability-evidence.sh"
 if grep -Eq '(^|[[:space:]])rm([[:space:]]|$)' "$monitor"; then
     echo "error: stability monitor must never delete result data" >&2
     exit 1
