@@ -87,10 +87,10 @@ The integrated development candidate is:
 
 ```text
 deploy/image_2026-07-31-cardputerzero-os-d19d1ca-cp0-os-dev.img.xz
-SHA-256 5367f2f3de04ede3da7fb29d9ea2bfe6a79cf7c74f9fd2a6d8d965ef963bfb9f
+SHA-256 e965d4dc6b9d42bb03a37e70ea700c7e128b5a10c15ddb54f8a91cb20e448c05
 ```
 
-It is 243,713,044 bytes compressed and 2,097,152,000 bytes uncompressed.
+It is 244,050,632 bytes compressed and 2,097,152,000 bytes uncompressed.
 Independent read-only inspection confirmed an MBR containing 512 MiB
 `bootfs`, 1,283,457,024-byte `rootfs` and 256 MiB `cp0-data` partitions.
 The root filesystem uses about 770 MiB, bootfs uses about 49 MiB and the seeded

@@ -38,6 +38,8 @@ fi
 grep -q 'export-image-prerun.sh' "$build_script"
 grep -q 'scripts/init-bottom/cardputerzero-overlay-root' "$rootfs_verifier"
 grep -q 'build proxy configuration leaked' "$rootfs_verifier"
+grep -q 'unencrypted Debian or Raspberry Pi apt source' "$rootfs_verifier"
+grep -q 'https://archive.raspberrypi.com' "$stage"
 sh -n "$firmware_hook"
 grep -q 'systemctl set-default multi-user.target' "$stage"
 grep -q '/pi-gen/stage0 /pi-gen/stage1 /pi-gen/stage-cardputerzero-os' "$build_script"

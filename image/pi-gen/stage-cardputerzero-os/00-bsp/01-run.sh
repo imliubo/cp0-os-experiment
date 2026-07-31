@@ -5,6 +5,13 @@ BSP_COMMIT="c3b254819307c177a34100b66fe19e52059ce8c4"
 
 on_chroot <<CHROOT
 set -e
+for source in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+    [ -f "\$source" ] || continue
+    sed -i \
+        -e 's|http://deb.debian.org|https://deb.debian.org|g' \
+        -e 's|http://archive.raspberrypi.com|https://archive.raspberrypi.com|g' \
+        "\$source"
+done
 apt-get update
 apt-get install -y --no-install-recommends \
     build-essential \

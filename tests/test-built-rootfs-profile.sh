@@ -127,6 +127,13 @@ if [[ -e $rootfs/etc/apt/apt.conf.d/51cache ]]; then
     echo "error: build proxy configuration leaked into the image" >&2
     exit 1
 fi
+if grep -R -E \
+    '^[[:space:]]*(deb[[:space:]]+|URIs:[[:space:]]*)http://(deb\.debian\.org|archive\.raspberrypi\.com)' \
+    "$rootfs/etc/apt/sources.list" "$rootfs/etc/apt/sources.list.d" \
+    2>/dev/null; then
+    echo "error: unencrypted Debian or Raspberry Pi apt source in image" >&2
+    exit 1
+fi
 if find "$rootfs" -xdev -type f -perm /0002 -print -quit | grep -q .; then
     echo "error: image contains a world-writable regular file" >&2
     exit 1
