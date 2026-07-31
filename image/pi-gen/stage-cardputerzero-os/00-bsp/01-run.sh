@@ -34,6 +34,15 @@ http_proxy="$APT_PROXY" https_proxy="$APT_PROXY" \
 git -C /tmp/cardputerzero-bsp checkout "${BSP_COMMIT}"
 test "\$(git -C /tmp/cardputerzero-bsp rev-parse HEAD)" = "${BSP_COMMIT}"
 
+# M5Stack validated 20 MHz on its display-stability branch. Keep the newer
+# keyboard fixes from the pinned mainline BSP while applying that narrow LCD
+# electrical limit here.
+panel_overlay=/tmp/cardputerzero-bsp/modules/CardputerZero/cardputerzero-v5-overlay.dts
+test "\$(grep -Fc 'spi-max-frequency = <60000000>;' "\$panel_overlay")" = 1
+sed -i 's/spi-max-frequency = <60000000>;/spi-max-frequency = <20000000>;/' \
+    "\$panel_overlay"
+grep -Fq 'spi-max-frequency = <20000000>;' "\$panel_overlay"
+
 KVER=\$(find /lib/modules -mindepth 1 -maxdepth 1 -type d -name '*rpi-v8*' \
     -printf '%f\n' | sort -V | tail -1)
 test -n "\$KVER"

@@ -22,6 +22,8 @@ required=(
     "$compositor/cardputerzero-system-shell"
     "$compositor/cardputerzero-policy.so"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-compositor.service"
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-retry.service"
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/retry-display-once.sh"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-generator"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-recovery-console.service"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-system-shell.service"
@@ -65,6 +67,7 @@ install -m 0755 \
     "$repo_root/scripts/device-core-recovery.sh" \
     "$repo_root/scripts/device-stability-monitor.sh" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-generator" \
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/retry-display-once.sh" \
     "$output/"
 install -m 0644 "$hello/app.json" "$output/app.json"
 install -m 0644 "$hello/bin/hello-card.wasm" "$output/hello-card.wasm"
@@ -74,6 +77,7 @@ install -m 0644 \
     "$repo_root/appd/store.conf" \
     "$repo_root/appd/device-policy.json" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-compositor.service" \
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-retry.service" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-recovery-console.service" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-system-shell.service" \
     "$output/"

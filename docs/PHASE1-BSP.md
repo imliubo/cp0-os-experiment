@@ -32,7 +32,14 @@ profile:    CONFIG_CARDPUTERO_V0_5=y
 ```
 
 上游用 V0.5 编译开关生成 `cardputerzero-v5-overlay`，该 overlay 也是 V0.6 真机当前
-使用的硬件描述。构建脚本必须校验 commit，不允许使用浮动 HEAD。
+使用的硬件描述。构建脚本必须校验 commit，不允许使用浮动 HEAD。镜像在这个固定提交
+上应用上游 `origin/test` 的显示稳定性参数，将 LCD SPI 从 60 MHz 限制为 20 MHz，
+同时保留主线更新的键盘修复。
+
+V0.6 冷启动真机还观察到早期 fbdev 初始化未被面板接受，而后续 compositor
+disable/enable 会可靠发送完整的 ST7789 soft-reset、sleep-out 和 display-on 序列。
+产品镜像因此在 System Shell 首次就绪后执行一次有界的 compositor 重启；服务为
+oneshot，不在 recovery 镜像启用，也不会形成重启循环。
 
 ## 构建最小镜像
 

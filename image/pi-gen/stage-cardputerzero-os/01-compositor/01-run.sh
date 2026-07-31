@@ -234,6 +234,9 @@ install -D -m 0644 \
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/files/cardputerzero-recovery-console.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-recovery-console.service"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/files/cardputerzero-display-retry.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-display-retry.service"
 install -D -m 0755 \
     "${STAGE_DIR}/01-compositor/files/cardputerzero-display-generator" \
     "${ROOTFS_DIR}/usr/lib/systemd/system-generators/cardputerzero-display-generator"
@@ -243,6 +246,9 @@ install -D -m 0755 "${STAGE_DIR}/01-compositor/files/wait-wayland.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/wait-wayland.sh"
 install -D -m 0755 "${STAGE_DIR}/01-compositor/files/unblank-display.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/unblank-display.sh"
+install -D -m 0755 \
+    "${STAGE_DIR}/01-compositor/files/retry-display-once.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/retry-display-once.sh"
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/files/99-cardputerzero-systemd.rules" \
     "${ROOTFS_DIR}/usr/lib/udev/rules.d/99-cardputerzero-systemd.rules"
@@ -275,13 +281,14 @@ CHROOT
 if [[ $image_profile == product ]]; then
     on_chroot <<'CHROOT'
 set -e
-systemctl enable seatd.service
+systemctl enable seatd.service cardputerzero-display-retry.service
 CHROOT
 else
     on_chroot <<'CHROOT'
 set -e
 systemctl disable seatd.service 2>/dev/null || true
 systemctl mask cardputerzero-compositor.service \
-    cardputerzero-system-shell.service
+    cardputerzero-system-shell.service \
+    cardputerzero-display-retry.service
 CHROOT
 fi

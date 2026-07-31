@@ -18,6 +18,7 @@ esac
 for file in cardputerzero-system-shell cardputerzero-policy.so \
     cardputerzero-app-runtime cardputerzero-compositor.service \
     cardputerzero-display-generator \
+    cardputerzero-display-retry.service retry-display-once.sh \
     cardputerzero-recovery-console.service \
     cardputerzero-system-shell.service; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
@@ -46,6 +47,12 @@ install -o root -g root -m 0644 \
 install -o root -g root -m 0644 \
     "$staging/cardputerzero-recovery-console.service" \
     /etc/systemd/system/cardputerzero-recovery-console.service
+install -o root -g root -m 0644 \
+    "$staging/cardputerzero-display-retry.service" \
+    /etc/systemd/system/cardputerzero-display-retry.service
+install -o root -g root -m 0755 \
+    "$staging/retry-display-once.sh" \
+    /usr/libexec/cardputerzero/retry-display-once.sh
 install -D -o root -g root -m 0755 \
     "$staging/cardputerzero-display-generator" \
     /usr/lib/systemd/system-generators/cardputerzero-display-generator
@@ -75,6 +82,9 @@ wait_active()
     return 1
 }
 
+wait_active cardputerzero-compositor.service
+wait_active cardputerzero-system-shell.service
+systemctl start cardputerzero-display-retry.service
 wait_active cardputerzero-compositor.service
 wait_active cardputerzero-system-shell.service
 sha256sum \
