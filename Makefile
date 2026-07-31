@@ -1,4 +1,4 @@
-.PHONY: check test fmt fuzz-check fuzz-smoke compositor app-runtime appd example-app malicious-apps devkit image verify-image
+.PHONY: check test fmt fuzz-check fuzz-smoke portal-check compositor app-runtime appd example-app malicious-apps devkit image verify-image
 
 check: fmt
 	jq empty schemas/app-manifest-v1.schema.json schemas/os-release-v1.schema.json \
@@ -62,6 +62,9 @@ fuzz-check:
 
 fuzz-smoke:
 	./scripts/fuzz-smoke.sh
+
+portal-check:
+	npm --prefix developer-portal run check
 
 compositor:
 	docker run --rm \
