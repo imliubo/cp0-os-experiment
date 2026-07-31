@@ -8,7 +8,7 @@ use std::process::Command;
 
 use cp0_manifest::AppManifest;
 
-use crate::{AppLayout, AppRegistry, RegistryError, SandboxPlan, build_sandbox_plan};
+use crate::{AppAccount, AppLayout, AppRegistry, RegistryError, SandboxPlan, build_sandbox_plan};
 
 pub const DEFAULT_REGISTRY_PATH: &str = "/var/lib/cardputerzero/registry/apps.json";
 const SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
@@ -50,6 +50,7 @@ pub enum AppManagerError {
     AlreadyRunning(String),
     ForegroundBusy(String),
     NotRunning(String),
+    NoRollback(String),
     UnitFailed(&'static str),
     Plan(crate::PlanError),
 }
@@ -88,6 +89,9 @@ impl fmt::Display for AppManagerError {
             }
             Self::NotRunning(app_id) => {
                 write!(formatter, "application {app_id} is not running")
+            }
+            Self::NoRollback(app_id) => {
+                write!(formatter, "application {app_id} has no rollback version")
             }
             Self::UnitFailed(action) => {
                 write!(formatter, "application systemd unit failed to {action}")
@@ -150,11 +154,47 @@ impl AppManager {
         if installed_manifest != *manifest {
             return Err(AppManagerError::IdentityMismatch);
         }
-        let account = self.registry.mark_installed(manifest)?;
-        self.registry.save_atomic(&self.paths.registry_path)?;
+        let mut next_registry = self.registry.clone();
+        let account = next_registry.mark_installed(manifest)?;
+        next_registry.save_atomic(&self.paths.registry_path)?;
+        self.registry = next_registry;
         Ok(InstalledApp {
             app_id: manifest.id.clone(),
             version: manifest.version.clone(),
+            account_user: account.unix_user,
+            account_uid: account.unix_uid,
+        })
+    }
+
+    pub fn prepare_account(&mut self, app_id: &str) -> Result<AppAccount, AppManagerError> {
+        Ok(self.registry.assign(app_id)?)
+    }
+
+    pub fn rollback(&mut self, app_id: &str) -> Result<InstalledApp, AppManagerError> {
+        let account = self
+            .registry
+            .account(app_id)
+            .filter(|account| account.installed_version.is_some())
+            .ok_or_else(|| AppManagerError::NotInstalled(app_id.into()))?;
+        if unit_is_active(&format!("cardputerzero-app-{}.service", account.account_id))? {
+            return Err(AppManagerError::AlreadyRunning(app_id.into()));
+        }
+        let version = account
+            .previous_versions
+            .first()
+            .ok_or_else(|| AppManagerError::NoRollback(app_id.into()))?
+            .clone();
+        let manifest = self.load_package_manifest(app_id, &version)?;
+        if manifest.id != app_id || manifest.version != version {
+            return Err(AppManagerError::IdentityMismatch);
+        }
+        let mut next_registry = self.registry.clone();
+        let account = next_registry.rollback(app_id)?;
+        next_registry.save_atomic(&self.paths.registry_path)?;
+        self.registry = next_registry;
+        Ok(InstalledApp {
+            app_id: app_id.into(),
+            version,
             account_user: account.unix_user,
             account_uid: account.unix_uid,
         })

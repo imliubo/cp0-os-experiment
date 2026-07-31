@@ -79,6 +79,7 @@ cp "$repo_root/compositor-policy/cardputerzero-policy.c" \
 "$repo_root/scripts/build-example-app.sh"
 platform_payload="$pi_gen_dir/stage-cardputerzero-os/02-app-platform/payload"
 mkdir -p "$platform_payload/systemd" "$platform_payload/hello/bin" \
+    "$platform_payload/trust/store" \
     "$platform_payload/diagnostics"
 cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-audiod" \
@@ -93,6 +94,14 @@ cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
     "$platform_payload/"
 cp "$repo_root/appd/systemd/"* "$platform_payload/systemd/"
 cp "$repo_root/appd/lora.conf" "$platform_payload/"
+if [[ -n ${CP0_STORE_PUBLIC_KEY:-} ]]; then
+    if [[ ! -f $CP0_STORE_PUBLIC_KEY ]] || [[ $(wc -c <"$CP0_STORE_PUBLIC_KEY") -ne 32 ]]; then
+        echo "error: CP0_STORE_PUBLIC_KEY must name a 32-byte raw Ed25519 public key" >&2
+        exit 1
+    fi
+    store_key_id=$(shasum -a 256 "$CP0_STORE_PUBLIC_KEY" | awk '{print $1}')
+    cp "$CP0_STORE_PUBLIC_KEY" "$platform_payload/trust/store/$store_key_id.pub"
+fi
 cp "$repo_root/scripts/device-core-recovery.sh" \
     "$repo_root/scripts/device-stability-monitor.sh" \
     "$platform_payload/diagnostics/"

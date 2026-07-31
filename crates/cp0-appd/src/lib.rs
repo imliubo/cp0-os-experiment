@@ -10,6 +10,7 @@ mod camera_client;
 mod document_client;
 mod document_prompt;
 mod gpio_client;
+mod installer;
 mod intent;
 mod lifecycle;
 mod network_client;
@@ -38,6 +39,9 @@ pub use document_prompt::{
     DocumentCoordinator, DocumentPrompt, DocumentPromptError, DocumentRequestResult,
 };
 pub use gpio_client::{DEFAULT_GPIO_SOCKET, GpioClient, GpioClientError};
+pub use installer::{
+    InstallError, PackageInstaller, PreparedInstall, TrustDecision, TrustPaths, TrustPolicy,
+};
 pub use intent::{
     IntentQueue, IntentQueueError, MAX_INTENT_PAYLOAD_BYTES, MAX_PENDING_INTENTS, PendingIntent,
 };

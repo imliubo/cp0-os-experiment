@@ -18,6 +18,7 @@ const APPD_SOCKET: &str = "/run/cardputerzero-appd/control.sock";
 const BROKER_SOCKET: &str = "/run/cardputerzero-broker/runtime.sock";
 const REQUEST_ID: u64 = 1;
 const TIMEOUT: Duration = Duration::from_secs(5);
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = env::args().skip(1).collect();
@@ -48,6 +49,7 @@ fn main() -> ExitCode {
         [command, input, store_public] if command == "verify" => {
             package::verify_package(input, Some(store_public))
         }
+        [command, input] if command == "install" => install_package(input),
         [app, command] if app == "app" && command == "ping" => send_app_command(AppdCommand::Ping),
         [app, command] if app == "app" && command == "list" => send_app_command(
             AppdCommand::List {
@@ -75,6 +77,11 @@ fn main() -> ExitCode {
         }
         [app, command, app_id] if app == "app" && command == "stop" => {
             send_app_command(AppdCommand::Stop {
+                app_id: app_id.clone(),
+            })
+        }
+        [app, command, app_id] if app == "app" && command == "rollback" => {
+            send_app_command(AppdCommand::Rollback {
                 app_id: app_id.clone(),
             })
         }
@@ -110,7 +117,7 @@ fn main() -> ExitCode {
             })
         }
         _ => Err(
-            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
+            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | install <package.capp> | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
                 .into(),
         ),
     };
@@ -121,6 +128,19 @@ fn main() -> ExitCode {
             eprintln!("cp0ctl: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn install_package(path: &str) -> Result<(), String> {
+    let (name, staged) = package::stage_for_install(path)?;
+    let result =
+        send_app_command_with_timeout(AppdCommand::Install { package_name: name }, INSTALL_TIMEOUT);
+    let cleanup = std::fs::remove_file(&staged)
+        .map_err(|error| format!("cannot remove staged package {}: {error}", staged.display()));
+    match (result, cleanup) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
     }
 }
 
@@ -170,14 +190,18 @@ fn validate_manifest(path: &str) -> Result<(), String> {
 }
 
 fn send_app_command(command: AppdCommand) -> Result<(), String> {
+    send_app_command_with_timeout(command, TIMEOUT)
+}
+
+fn send_app_command_with_timeout(command: AppdCommand, timeout: Duration) -> Result<(), String> {
     let socket = env::var("CP0_APPD_SOCKET").unwrap_or_else(|_| APPD_SOCKET.into());
     let mut stream = UnixStream::connect(&socket)
         .map_err(|error| format!("cannot connect to appd at {socket}: {error}"))?;
     stream
-        .set_read_timeout(Some(TIMEOUT))
+        .set_read_timeout(Some(timeout))
         .map_err(|error| format!("cannot set appd timeout: {error}"))?;
     stream
-        .set_write_timeout(Some(TIMEOUT))
+        .set_write_timeout(Some(timeout))
         .map_err(|error| format!("cannot set appd timeout: {error}"))?;
     let request = AppdRequest {
         protocol_version: APPD_PROTOCOL_VERSION,

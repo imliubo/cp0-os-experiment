@@ -101,7 +101,7 @@ Shell 和其他应用数据。
 - [ ] 发布完整 Rust 和 C/C++ SDK，生成 WIT bindings 并提供 LVGL 320x170 组件。
 - [x] 实现 `cp0ctl new/build` 的 SDK-only 项目生成、Cargo metadata 解析和规范产物树。
 - [ ] 实现 `cp0ctl run/package/sign/install/logs`（`package`、双层 Ed25519 `sign`、
-  `key generate` 和 `verify` 已完成）。
+  `key generate`、`verify`、设备端 `install` 和 `rollback` 已完成）。
 - 建立 PC 模拟器、权限模拟、输入映射和性能分析工具。
 - 迁移 Calculator、Camera 等示例，不提供传统 Linux 应用兼容层。
 - 冻结 SDK 1.0 ABI、兼容策略和开发者文档。
@@ -111,8 +111,9 @@ Shell 和其他应用数据。
 ## Phase 5：应用包与商店
 
 - [x] 冻结 `.capp` v1 可复现容器，实现开发者签名和独立商店审核签名。
-- 完成信任目录、吊销机制和设备端验签策略。
-- 实现设备端商店、下载恢复、原子安装、升级和回滚。
+- [x] 完成 root-owned 信任目录、双身份吊销和显式开发者模式验签策略。
+- [x] 实现 `.capp` 原子安装、升级历史、断电恢复式重试和双向回滚。
+- 实现设备端商店 UI、下载恢复和发布后台。
 - 建立静态扫描、权限审查、恶意样本测试和发布后台。
 - 增加家长/组织策略、开发者模式开关和恢复模式。
 

@@ -61,6 +61,7 @@ dependencies = [
  "cp0-gpio-protocol",
  "cp0-manifest",
  "cp0-network-protocol",
+ "cp0-package",
  "cp0-radio-protocol",
  "cp0-storage-protocol",
  "libc",
@@ -211,6 +212,7 @@ dependencies = [
  "cp0-appd",
  "cp0-manifest",
  "cp0-package",
+ "libc",
  "serde_json",
 ]
 

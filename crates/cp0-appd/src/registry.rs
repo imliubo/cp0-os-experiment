@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const FIRST_APP_ACCOUNT_ID: u32 = 20_000;
-pub const LAST_APP_ACCOUNT_ID: u32 = 59_999;
+pub const LAST_APP_ACCOUNT_ID: u32 = 20_063;
+pub const MAX_ROLLBACK_VERSIONS: usize = 2;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -22,6 +23,8 @@ pub struct AppAccount {
     pub unix_uid: u32,
     #[serde(default)]
     pub installed_version: Option<String>,
+    #[serde(default)]
+    pub previous_versions: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +117,7 @@ impl AppRegistry {
             unix_user: format!("cp0-app-{account_id}"),
             unix_uid: account_id,
             installed_version: None,
+            previous_versions: Vec::new(),
         };
         self.apps.insert(app_id.to_owned(), account.clone());
         Ok(account)
@@ -127,8 +131,44 @@ impl AppRegistry {
             RegistryError::Invalid(format!("invalid installed manifest: {}", errors.join("; ")))
         })?;
         let mut account = self.assign(&manifest.id)?;
-        account.installed_version = Some(manifest.version.clone());
+        if account.installed_version.as_deref() != Some(manifest.version.as_str()) {
+            account
+                .previous_versions
+                .retain(|version| version != &manifest.version);
+            if let Some(current) = account.installed_version.take() {
+                account
+                    .previous_versions
+                    .retain(|version| version != &current);
+                account.previous_versions.insert(0, current);
+                account.previous_versions.truncate(MAX_ROLLBACK_VERSIONS);
+            }
+            account.installed_version = Some(manifest.version.clone());
+        }
         self.apps.insert(manifest.id.clone(), account.clone());
+        Ok(account)
+    }
+
+    pub fn rollback(&mut self, app_id: &str) -> Result<AppAccount, RegistryError> {
+        let account = self.apps.get_mut(app_id).ok_or_else(|| {
+            RegistryError::Invalid(format!("application {app_id} has no assigned account"))
+        })?;
+        let current = account.installed_version.clone().ok_or_else(|| {
+            RegistryError::Invalid(format!("application {app_id} is not installed"))
+        })?;
+        if account.previous_versions.is_empty() {
+            return Err(RegistryError::Invalid(format!(
+                "application {app_id} has no rollback version"
+            )));
+        }
+        let target = account.previous_versions.remove(0);
+        account
+            .previous_versions
+            .retain(|version| version != &current);
+        account.previous_versions.insert(0, current);
+        account.previous_versions.truncate(MAX_ROLLBACK_VERSIONS);
+        account.installed_version = Some(target);
+        let account = account.clone();
+        self.validate()?;
         Ok(account)
     }
 
@@ -180,6 +220,24 @@ impl AppRegistry {
                     "account {} has an invalid installed version",
                     account.account_id
                 )));
+            }
+            if account.previous_versions.len() > MAX_ROLLBACK_VERSIONS {
+                return Err(RegistryError::Invalid(format!(
+                    "account {} retains too many rollback versions",
+                    account.account_id
+                )));
+            }
+            let mut versions = BTreeSet::new();
+            for version in &account.previous_versions {
+                if !cp0_manifest::is_valid_app_version(version)
+                    || account.installed_version.as_ref() == Some(version)
+                    || !versions.insert(version)
+                {
+                    return Err(RegistryError::Invalid(format!(
+                        "account {} has invalid rollback history",
+                        account.account_id
+                    )));
+                }
             }
             highest_account_id = Some(
                 highest_account_id.map_or(account.account_id, |highest: u32| {
@@ -285,6 +343,7 @@ mod tests {
 
         assert_eq!(first.account_id, second.account_id);
         assert_eq!(second.installed_version.as_deref(), Some("1.2.4"));
+        assert_eq!(second.previous_versions, ["1.2.3"]);
         assert_eq!(
             registry
                 .installed_app_for_uid(second.unix_uid)
@@ -292,6 +351,21 @@ mod tests {
             Some("dev.cardputerzero.hello")
         );
         assert!(registry.installed_app_for_uid(0).is_none());
+    }
+
+    #[test]
+    fn rolls_back_without_changing_identity() {
+        let mut registry = AppRegistry::default();
+        let first_manifest = crate::tests::manifest();
+        let first = registry.mark_installed(&first_manifest).unwrap();
+        let mut upgraded = first_manifest.clone();
+        upgraded.version = "1.2.4".into();
+        registry.mark_installed(&upgraded).unwrap();
+
+        let rolled_back = registry.rollback(&first_manifest.id).unwrap();
+        assert_eq!(rolled_back.account_id, first.account_id);
+        assert_eq!(rolled_back.installed_version, Some(first_manifest.version));
+        assert_eq!(rolled_back.previous_versions, ["1.2.4"]);
     }
 
     #[test]

@@ -22,11 +22,11 @@ use crate::{
     AudioClientError, BrokerCommand, BrokerErrorCode, BrokerProtocolError, BrokerRequest,
     BrokerResponse, CameraClient, CameraClientError, DocumentClient, DocumentClientError,
     DocumentCoordinator, DocumentPromptError, DocumentRequestResult, ErrorCode, GpioClient,
-    GpioClientError, IntentQueue, NetworkClient, NetworkClientError, NotificationQueue,
-    PermissionChoice, PermissionCoordinator, PermissionPromptError, PermissionRequestResult,
-    RadioClient, RadioClientError, ResponseData, StorageClient, StorageClientError,
-    encode_broker_response, peer_credentials, read_broker_request, read_request,
-    write_broker_response, write_response,
+    GpioClientError, InstallError, IntentQueue, NetworkClient, NetworkClientError,
+    NotificationQueue, PackageInstaller, PermissionChoice, PermissionCoordinator,
+    PermissionPromptError, PermissionRequestResult, RadioClient, RadioClientError, ResponseData,
+    StorageClient, StorageClientError, TrustPaths, TrustPolicy, encode_broker_response,
+    peer_credentials, read_broker_request, read_request, write_broker_response, write_response,
 };
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -62,6 +62,7 @@ pub struct AppdServer {
     state: Arc<Mutex<ServerState>>,
     trusted_uids: BTreeSet<u32>,
     capabilities: CapabilityServices,
+    installer: PackageInstaller,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -149,6 +150,11 @@ impl AppdServer {
             })),
             trusted_uids: trusted_uids.into_iter().collect(),
             capabilities,
+            installer: PackageInstaller::new(
+                crate::DEFAULT_APPS_ROOT,
+                TrustPolicy::new(TrustPaths::default(), true),
+                true,
+            ),
         }
     }
 
@@ -220,6 +226,23 @@ impl AppdServer {
             return Ok(());
         }
 
+        if matches!(
+            &request.command,
+            AppdCommand::Install { .. } | AppdCommand::Rollback { .. }
+        ) && credentials.uid != 0
+        {
+            write_response(
+                &mut stream,
+                &AppdResponse::error(
+                    request.request_id,
+                    ErrorCode::Unauthorized,
+                    "application installation commands require root",
+                ),
+            )
+            .map_err(protocol_io)?;
+            return Ok(());
+        }
+
         let response = self.dispatch(request);
         write_response(&mut stream, &response).map_err(protocol_io)?;
         Ok(())
@@ -228,6 +251,12 @@ impl AppdServer {
     fn dispatch(&self, request: AppdRequest) -> AppdResponse {
         let request_id = request.request_id;
         debug_assert_eq!(request.protocol_version, APPD_PROTOCOL_VERSION);
+        let command = match request.command {
+            AppdCommand::Install { package_name } => {
+                return self.install_package(request_id, &package_name);
+            }
+            command => command,
+        };
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(_) => {
@@ -238,7 +267,8 @@ impl AppdServer {
                 );
             }
         };
-        let result: Result<ResponseData, CommandError> = match request.command {
+        let result: Result<ResponseData, CommandError> = match command {
+            AppdCommand::Install { .. } => unreachable!("install returned before state lock"),
             AppdCommand::Ping => Ok(ResponseData::Pong),
             AppdCommand::List { offset, limit } => {
                 Self::list_apps(&state, offset, limit).map_err(CommandError::Manager)
@@ -255,6 +285,14 @@ impl AppdServer {
                 }
                 Err(error) => Err(CommandError::Manager(error)),
             },
+            AppdCommand::Rollback { app_id } => state
+                .manager
+                .rollback(&app_id)
+                .map(|installed| ResponseData::RolledBack {
+                    app_id: installed.app_id,
+                    version: installed.version,
+                })
+                .map_err(CommandError::Manager),
             AppdCommand::GetPermissionPrompt => Ok(ResponseData::PendingPermission {
                 prompt: state.permissions.pending().cloned(),
             }),
@@ -299,6 +337,63 @@ impl AppdServer {
                 eprintln!("cp0-appd: control request failed: {error}");
                 command_error_response(request_id, &error)
             }
+        }
+    }
+
+    fn install_package(&self, request_id: u64, package_name: &str) -> AppdResponse {
+        let path = std::path::Path::new("/run/cardputerzero-appd").join(package_name);
+        let prepared = match self.installer.install(path) {
+            Ok(prepared) => prepared,
+            Err(error) => return install_error_response(request_id, &error),
+        };
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application service state is unavailable",
+                );
+            }
+        };
+        let result = (|| -> Result<ResponseData, CommandError> {
+            let already_registered = state
+                .manager
+                .registry()
+                .account(&prepared.manifest.id)
+                .is_some_and(|account| account.installed_version.is_some());
+            if already_registered && state.manager.is_running(&prepared.manifest.id)? {
+                return Err(AppManagerError::AlreadyRunning(prepared.manifest.id.clone()).into());
+            }
+            let previous_version = state
+                .manager
+                .registry()
+                .account(&prepared.manifest.id)
+                .and_then(|account| account.installed_version.clone());
+            let account = state.manager.prepare_account(&prepared.manifest.id)?;
+            let (uid, gid) = crate::lookup_unix_account(&account.unix_user)?;
+            if uid != account.unix_uid || gid != account.unix_uid {
+                return Err(AppManagerError::InvalidHostIdentity(format!(
+                    "{} must resolve to UID/GID {}/{}",
+                    account.unix_user, account.unix_uid, account.unix_uid
+                ))
+                .into());
+            }
+            let installed = state.manager.mark_installed(&prepared.manifest)?;
+            Ok(ResponseData::Installed {
+                app_id: installed.app_id,
+                version: installed.version,
+                previous_version,
+                trust: match prepared.trust {
+                    crate::TrustDecision::Store => "store",
+                    crate::TrustDecision::DeveloperMode => "developer-mode",
+                }
+                .into(),
+            })
+        })();
+        match result {
+            Ok(data) => AppdResponse::success(request_id, data),
+            Err(error) => command_error_response(request_id, &error),
         }
     }
 
@@ -1242,6 +1337,10 @@ fn manager_error_response(request_id: u64, error: &AppManagerError) -> AppdRespo
             ErrorCode::NotRunning,
             format!("application {app_id} is not running"),
         ),
+        AppManagerError::NoRollback(app_id) => (
+            ErrorCode::NotFound,
+            format!("application {app_id} has no rollback version"),
+        ),
         AppManagerError::Registry(crate::RegistryError::Exhausted) => (
             ErrorCode::ResourceExhausted,
             "application identity range is exhausted".into(),
@@ -1250,6 +1349,21 @@ fn manager_error_response(request_id: u64, error: &AppManagerError) -> AppdRespo
             ErrorCode::Internal,
             "application lifecycle operation failed".into(),
         ),
+    };
+    AppdResponse::error(request_id, code, message)
+}
+
+fn install_error_response(request_id: u64, error: &InstallError) -> AppdResponse {
+    let (code, message) = match error {
+        InstallError::Untrusted(_) => (ErrorCode::Untrusted, "package trust verification failed"),
+        InstallError::AlreadyInstalled(_) => (
+            ErrorCode::Conflict,
+            "the same application version already has different content",
+        ),
+        InstallError::Invalid(_) | InstallError::Package(_) | InstallError::Manifest(_) => {
+            (ErrorCode::InvalidRequest, "application package is invalid")
+        }
+        InstallError::Io(_) => (ErrorCode::Internal, "application installation failed"),
     };
     AppdResponse::error(request_id, code, message)
 }

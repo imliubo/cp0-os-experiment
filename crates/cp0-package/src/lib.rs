@@ -170,8 +170,8 @@ impl CApp {
         validate_entries(&self.entries)?;
         validate_signature_state(self)?;
         let payload = self.encode_payload()?;
-        let flags = u16::from(self.developer_signature.is_some()) * FLAG_DEVELOPER_SIGNATURE
-            | u16::from(self.store_signature.is_some()) * FLAG_STORE_SIGNATURE;
+        let flags = (u16::from(self.developer_signature.is_some()) * FLAG_DEVELOPER_SIGNATURE)
+            | (u16::from(self.store_signature.is_some()) * FLAG_STORE_SIGNATURE);
         let mut output = Vec::with_capacity(FIXED_HEADER_BYTES + payload.len());
         output.extend_from_slice(MAGIC);
         output.extend_from_slice(&FORMAT_VERSION.to_le_bytes());

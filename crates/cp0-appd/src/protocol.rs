@@ -34,6 +34,12 @@ pub enum AppdCommand {
     Stop {
         app_id: String,
     },
+    Install {
+        package_name: String,
+    },
+    Rollback {
+        app_id: String,
+    },
     GetPermissionPrompt,
     ResolvePermission {
         prompt_id: u64,
@@ -81,6 +87,16 @@ pub enum ResponseData {
     Stopped {
         app_id: String,
     },
+    Installed {
+        app_id: String,
+        version: String,
+        previous_version: Option<String>,
+        trust: String,
+    },
+    RolledBack {
+        app_id: String,
+        version: String,
+    },
     PendingPermission {
         prompt: Option<PermissionPrompt>,
     },
@@ -126,6 +142,8 @@ pub enum ErrorCode {
     AlreadyRunning,
     NotRunning,
     ResourceExhausted,
+    Untrusted,
+    Conflict,
     Internal,
 }
 
@@ -140,6 +158,7 @@ pub enum ProtocolError {
     InvalidPagination,
     InvalidPromptId,
     InvalidDocumentId,
+    InvalidPackageName,
 }
 
 impl fmt::Display for ProtocolError {
@@ -168,6 +187,7 @@ impl fmt::Display for ProtocolError {
             }
             Self::InvalidPromptId => formatter.write_str("permission prompt ID must be non-zero"),
             Self::InvalidDocumentId => formatter.write_str("invalid document ID"),
+            Self::InvalidPackageName => formatter.write_str("invalid incoming package name"),
         }
     }
 }
@@ -202,7 +222,9 @@ impl AppdRequest {
             AppdCommand::List { limit, .. } if !(1..=MAX_APP_LIST_PAGE).contains(limit) => {
                 Err(ProtocolError::InvalidPagination)
             }
-            AppdCommand::Start { app_id } | AppdCommand::Stop { app_id }
+            AppdCommand::Start { app_id }
+            | AppdCommand::Stop { app_id }
+            | AppdCommand::Rollback { app_id }
                 if !cp0_manifest::is_valid_app_id(app_id) =>
             {
                 Err(ProtocolError::InvalidAppId)
@@ -224,9 +246,22 @@ impl AppdRequest {
             } if !cp0_document_protocol::is_valid_document_id(document_id) => {
                 Err(ProtocolError::InvalidDocumentId)
             }
+            AppdCommand::Install { package_name } if !is_valid_package_name(package_name) => {
+                Err(ProtocolError::InvalidPackageName)
+            }
             _ => Ok(()),
         }
     }
+}
+
+fn is_valid_package_name(name: &str) -> bool {
+    (6..=128).contains(&name.len())
+        && name.ends_with(".capp")
+        && !name.starts_with('.')
+        && !name.contains("..")
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 impl AppdResponse {
@@ -552,6 +587,20 @@ mod tests {
             oversized_page.validate(),
             Err(ProtocolError::InvalidPagination)
         ));
+
+        for package_name in ["../escape.capp", ".hidden.capp", "nested/app.capp", "x"] {
+            let request = AppdRequest {
+                protocol_version: APPD_PROTOCOL_VERSION,
+                request_id: 5,
+                command: AppdCommand::Install {
+                    package_name: package_name.into(),
+                },
+            };
+            assert!(matches!(
+                request.validate(),
+                Err(ProtocolError::InvalidPackageName)
+            ));
+        }
     }
 
     #[test]

@@ -63,6 +63,18 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-appd.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-appd.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-storage.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-storage.conf"
+install -D -m 0644 "${payload}/systemd/cardputerzero-trust.conf" \
+    "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-trust.conf"
+install -d -o root -g root -m 0755 \
+    "${ROOTFS_DIR}/etc/cardputerzero/trust/store" \
+    "${ROOTFS_DIR}/etc/cardputerzero/trust/developers" \
+    "${ROOTFS_DIR}/etc/cardputerzero/trust/revoked"
+for store_key in "${payload}"/trust/store/*.pub; do
+    if [ -f "$store_key" ] && [ ! -L "$store_key" ]; then
+        install -o root -g root -m 0644 "$store_key" \
+            "${ROOTFS_DIR}/etc/cardputerzero/trust/store/$(basename "$store_key")"
+    fi
+done
 install -D -o root -g root -m 0644 "${payload}/lora.conf" \
     "${ROOTFS_DIR}/etc/cardputerzero/lora.conf"
 install -D -m 0755 "${payload}/diagnostics/device-core-recovery.sh" \
@@ -129,13 +141,18 @@ if ! id cp0-storage >/dev/null 2>&1; then
     useradd --system --gid cp0-storage --home-dir /nonexistent \
         --shell /usr/sbin/nologin cp0-storage
 fi
-if ! getent group cp0-app-20000 >/dev/null 2>&1; then
-    groupadd --system --gid 20000 cp0-app-20000
-fi
-if ! id cp0-app-20000 >/dev/null 2>&1; then
-    useradd --system --uid 20000 --gid 20000 --home-dir /nonexistent \
-        --shell /usr/sbin/nologin cp0-app-20000
-fi
+app_account_id=20000
+while [ "$app_account_id" -le 20063 ]; do
+    app_account="cp0-app-$app_account_id"
+    if ! getent group "$app_account" >/dev/null 2>&1; then
+        groupadd --system --gid "$app_account_id" "$app_account"
+    fi
+    if ! id "$app_account" >/dev/null 2>&1; then
+        useradd --system --uid "$app_account_id" --gid "$app_account_id" \
+            --home-dir /nonexistent --shell /usr/sbin/nologin "$app_account"
+    fi
+    app_account_id=$((app_account_id + 1))
+done
 
 install -d -o root -g root -m 0755 \
     /var/lib/cardputerzero \
@@ -161,6 +178,7 @@ chmod -R go-w /var/lib/cardputerzero/apps/dev.cardputerzero.hello
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-appd.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-gpio.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-storage.conf
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-trust.conf
 systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
     cardputerzero-audiod.socket cardputerzero-camerad.socket \

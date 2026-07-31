@@ -24,7 +24,7 @@ for file in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-gpiod cp0-networkd
     cardputerzero-gpiod.socket cardputerzero-gpio.conf \
     cardputerzero-radiod.service cardputerzero-radiod.socket lora.conf \
     cardputerzero-storaged.service cardputerzero-storaged.socket \
-    cardputerzero-storage.conf; do
+    cardputerzero-storage.conf cardputerzero-trust.conf; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
         echo "error: invalid staged file: $file" >&2
         exit 1
@@ -89,6 +89,18 @@ if ! id cp0-storage >/dev/null 2>&1; then
     useradd --system --gid cp0-storage --home-dir /nonexistent \
         --shell /usr/sbin/nologin cp0-storage
 fi
+app_account_id=20000
+while [ "$app_account_id" -le 20063 ]; do
+    app_account="cp0-app-$app_account_id"
+    if ! getent group "$app_account" >/dev/null 2>&1; then
+        groupadd --system --gid "$app_account_id" "$app_account"
+    fi
+    if ! id "$app_account" >/dev/null 2>&1; then
+        useradd --system --uid "$app_account_id" --gid "$app_account_id" \
+            --home-dir /nonexistent --shell /usr/sbin/nologin "$app_account"
+    fi
+    app_account_id=$((app_account_id + 1))
+done
 install -d -o cp0-storage -g cp0-storage -m 0700 \
     /var/lib/cardputerzero/data
 chown -R cp0-storage:cp0-storage /var/lib/cardputerzero/data
@@ -158,6 +170,9 @@ install -o root -g root -m 0644 "$staging/cardputerzero-storaged.socket" \
 install -o root -g root -m 0644 "$staging/cardputerzero-storage.conf" \
     /etc/tmpfiles.d/cardputerzero-storage.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-storage.conf
+install -o root -g root -m 0644 "$staging/cardputerzero-trust.conf" \
+    /etc/tmpfiles.d/cardputerzero-trust.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-trust.conf
 install -D -o root -g root -m 0644 "$staging/lora.conf" \
     /etc/cardputerzero/lora.conf
 install -o root -g root -m 0644 "$staging/cardputerzero-gpio.conf" \

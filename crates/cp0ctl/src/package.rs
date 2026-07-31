@@ -2,8 +2,11 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cp0_package::{CApp, public_key};
+
+static INCOMING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn generate_key(secret_path: &str, public_path: &str) -> Result<(), String> {
     let mut secret = [0_u8; 32];
@@ -148,6 +151,20 @@ pub fn default_package_path(project_path: &str) -> Result<PathBuf, String> {
     let manifest = cp0_manifest::load_and_validate(project.join("app.json"))
         .map_err(|error| format!("invalid project manifest: {error}"))?;
     Ok(project.join(format!("{}-{}.capp", manifest.id, manifest.version)))
+}
+
+pub fn stage_for_install(path: &str) -> Result<(String, PathBuf), String> {
+    if unsafe { libc::geteuid() } != 0 {
+        return Err("install requires root on the CardputerZero device".into());
+    }
+    let encoded = fs::read(path).map_err(|error| format!("cannot read package {path}: {error}"))?;
+    let package = CApp::decode(&encoded).map_err(|error| error.to_string())?;
+    manifest_from_package(&package)?;
+    let sequence = INCOMING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let name = format!("incoming-{}-{sequence}.capp", std::process::id());
+    let staged = Path::new("/run/cardputerzero-appd").join(&name);
+    write_new(&staged, &encoded, 0o600)?;
+    Ok((name, staged))
 }
 
 #[cfg(test)]
