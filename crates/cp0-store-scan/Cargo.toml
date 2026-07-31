@@ -1,0 +1,15 @@
+[package]
+name = "cp0-store-scan"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+cp0-manifest = { path = "../cp0-manifest" }
+cp0-package = { path = "../cp0-package" }
+cp0-store-metadata = { path = "../cp0-store-metadata" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+wasmparser.workspace = true

@@ -977,6 +977,7 @@ pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool,
         .await
 }
 
+/// Applies the App, Submission upload, and isolated scan-worker schema.
 pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
     sqlx::migrate!().run(pool).await
 }

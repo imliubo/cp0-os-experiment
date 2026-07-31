@@ -23,6 +23,8 @@ members = [
     "crates/cp0-store-control-server",
     "crates/cp0-store-metadata",
     "crates/cp0-store-protocol",
+    "crates/cp0-store-scan",
+    "crates/cp0-store-scan-worker",
     "crates/cp0-stored",
     "crates/cp0ctl",
     "sdk/rust",
@@ -45,6 +47,7 @@ sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-toki
 tokio = { version = "=1.47.1", features = ["macros", "rt-multi-thread", "net", "signal", "fs", "io-util"] }
 tower = "=0.5.2"
 uuid = { version = "=1.18.0", features = ["v4"] }
+wasmparser = "=0.245.1"
 
 [profile.release]
 codegen-units = 1

@@ -27,6 +27,12 @@ chunk, recomputes every declared object digest and the frozen Submission content
 digest, then atomically changes `uploading` to `processing` and emits the scan
 request through the transaction outbox.
 
+`cp0-store-scan-worker` consumes that event through an expiring database lease.
+It independently reopens the read-only objects, binds the package key to an
+active team Developer Key, performs bounded package/WASM/Listing/PNG checks,
+and atomically records an append-only result before advancing the Submission.
+See `STORE-SCAN-WORKER.md` for its separate trust boundary and host profile.
+
 A database rollback after an object write can leave an unreachable
 content-addressed chunk. It grants no Submission state and can be removed by a
 future mark-and-sweep maintenance worker. Production replication and garbage
@@ -66,6 +72,6 @@ revision allocation, live RBAC/2FA/scope checks, 256 KiB chunk boundaries,
 stale ETags, non-contiguous ranges, digest mismatches, finalize replay, injected
 transaction rollback and append-only database triggers.
 
-OAuth Device Flow, withdraw/messages, Scan Worker, Review, Release, production
-object storage, outbox delivery, garbage collection and transparency logging are
-not implemented by this slice.
+OAuth Device Flow, withdraw/messages, dynamic malware intelligence, Review,
+Release, production object storage, general outbox delivery, garbage collection
+and transparency logging are not implemented by this slice.

@@ -90,7 +90,9 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
 - S5B PostgreSQL/HTTP 首个纵向切片：App 注册/读取、实时身份与 2FA/scope 校验、
   SERIALIZABLE 原子审计/outbox、ETag 和有界 Problem；该服务仍与设备镜像隔离开发。
 - S5C Submission 上传纵向切片：并发 revision、256 KiB 连续分片、内容寻址对象、
-  finalize 独立摘要复算和精确幂等恢复；生产对象存储、Scanner/Review/Release 仍未完成。
+  finalize 独立摘要复算和精确幂等恢复。
+- S5D 隔离 Scanner 纵向切片：outbox 租约领取、只读对象双重摘要、开发者密钥绑定、
+  WASM/权限/Listing/PNG 检查和原子结果推进；动态恶意样本、Review/Release 仍未完成。
 - Phase 5C 设备策略与 Settings：root-owned 家长/组织策略限制 Store、应用白名单和
   全局权限，用户可二次确认切换开发者模式与下次启动的 tty1 恢复控制台。
 - Phase 6B 本地诊断与量产门禁：默认脱敏且不联网的 RAM-only 支持包、显式同意的

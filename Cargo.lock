@@ -445,6 +445,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp0-store-scan"
+version = "0.1.0"
+dependencies = [
+ "cp0-manifest",
+ "cp0-package",
+ "cp0-store-metadata",
+ "serde",
+ "serde_json",
+ "sha2",
+ "wasmparser",
+]
+
+[[package]]
+name = "cp0-store-scan-worker"
+version = "0.1.0"
+dependencies = [
+ "cp0-manifest",
+ "cp0-package",
+ "cp0-store-metadata",
+ "cp0-store-scan",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "cp0-stored"
 version = "0.1.0"
 dependencies = [

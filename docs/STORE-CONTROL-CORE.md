@@ -31,7 +31,10 @@ mutation maps to one PostgreSQL serializable transaction containing resource
 state, idempotency result, audit row and outbox row. Uploaded bytes use an
 owner-only content-addressed backend and the database references only declared
 sizes, SHA-256 digests and immutable chunk descriptors. Runtime details and
-remaining gaps are documented in `STORE-CONTROL-SERVER.md`.
+remaining gaps are documented in `STORE-CONTROL-SERVER.md`. The isolated
+`cp0-store-scan-worker` consumes the finalize outbox event with expiring leases,
+revalidates bytes and commits one append-only result as described in
+`STORE-SCAN-WORKER.md`.
 
 The adapter hashes bearer tokens before lookup and validates token expiry,
 revocation, current team role, current 2FA state and scope inside the database
