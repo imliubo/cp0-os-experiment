@@ -13,12 +13,38 @@ use a Clang-compatible freestanding wasm32 toolchain and
 `sdk/c/include/cardputerzero.h`. Traditional Raspberry Pi desktop or Linux
 applications are intentionally not compatible.
 
-## Create and build
+## DevKit and AI Skill
 
-Install the Rust wasm target, then create a project with the repository tool:
+The recommended distribution is a versioned host-native DevKit archive or the
+full toolchain image described in `docs/APP-DEVKIT-DISTRIBUTION.md`. Verify the
+release checksum before extraction, then set the root and run its doctor:
 
 ```sh
-rustup target add wasm32-unknown-unknown
+export CP0_DEVKIT_ROOT=/path/to/cardputerzero-app-devkit-1.0.0-HOST
+export PATH="$CP0_DEVKIT_ROOT/bin:$PATH"
+"$CP0_DEVKIT_ROOT/skills/cardputerzero-build-app/scripts/doctor.sh" \
+  "$CP0_DEVKIT_ROOT" rust
+```
+
+The bundled `$cardputerzero-build-app` Skill gives an AI agent the platform
+contract, project workflow, permission boundaries, deterministic verifier and
+failure routing needed to complete an application without private Runtime or
+Linux APIs. Keep the Skill, SDK, simulator and `cp0ctl` from the same DevKit.
+
+## Create and build
+
+With the released DevKit, create and build directly with `cp0ctl`:
+
+```sh
+cp0ctl new /tmp/my-clock dev.example.clock "Clock"
+cp0ctl build /tmp/my-clock
+```
+
+In an OS source checkout, install the pinned Rust wasm target and use the
+workspace tool:
+
+```sh
+rustup target add --toolchain 1.85.1 wasm32-unknown-unknown
 cargo run -p cp0ctl -- new /tmp/my-clock dev.example.clock "Clock"
 cargo run -p cp0ctl -- build /tmp/my-clock
 ```

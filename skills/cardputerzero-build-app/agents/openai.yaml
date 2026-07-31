@@ -1,0 +1,4 @@
+interface:
+  display_name: "CardputerZero App Developer"
+  short_description: "Build, test, package, and ship CardputerZero apps"
+  default_prompt: "Use $cardputerzero-build-app to create and verify a CardputerZero application."

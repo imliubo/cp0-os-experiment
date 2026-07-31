@@ -1,0 +1,69 @@
+# CardputerZero App DevKit distribution
+
+## Release contract
+
+Every App SDK release has one version across the manifest contract, Rust/C/C++
+SDKs, simulator, `cp0ctl`, Skill and DevKit. `devkit/toolchain.toml` pins the
+compiler environment used for acceptance. A release must not mix files from
+different commits or SDK versions.
+
+Public distribution is blocked until the project owner selects and records a
+license for `cp0ctl` and the repository content included in the DevKit, then
+ships the required license and third-party notices. The Rust `cp0-sdk` crate
+declares Apache-2.0, but that declaration alone does not license the other
+bundled files or executable. Internal acceptance archives may be built before
+this decision; do not publish them as public release assets.
+
+Rust is the only release-ready end-to-end App workflow in DevKit 1.0. The
+C/C++ headers, ABI contract and LVGL adapter are shipped for advanced
+integration, but `cp0ctl` does not yet generate, finally link, simulate or
+package those projects. Upstream LVGL sources are not bundled. Release notes
+must preserve this distinction.
+
+Run `make devkit` to produce a host-native archive under `target/app-devkit`.
+The archive contains:
+
+- a relocatable `bin/cp0ctl` for its named host target;
+- Rust, C/C++, WIT, ABI and LVGL SDK sources;
+- the deterministic PC simulator;
+- the `cardputerzero-build-app` Skill and a verified game example;
+- a machine-readable `devkit.json`, per-file `SHA256SUMS` and archive checksum.
+
+Publish a separate native archive for each supported host. Native archives do
+not silently download compilers. A developer must use the versions in
+`devkit/toolchain.toml`, or use the full toolchain image.
+
+## Full toolchain image
+
+`devkit/Dockerfile` builds the canonical environment from the pinned Emscripten
+SDK multi-platform digest and Rust toolchain. It includes Rust
+`wasm32-unknown-unknown`, Node, Emscripten, `cp0ctl`, every SDK and the
+simulator. Build and export it with:
+
+```sh
+docker build -f devkit/Dockerfile -t cardputerzero/app-devkit:1.0.0 .
+docker save cardputerzero/app-devkit:1.0.0 | xz -T0 > cardputerzero-app-devkit-1.0.0.oci.tar.xz
+shasum -a 256 cardputerzero-app-devkit-1.0.0.oci.tar.xz > cardputerzero-app-devkit-1.0.0.oci.tar.xz.sha256
+```
+
+Release the OCI archive and checksum for offline use. Developers load it with
+`docker load` and launch it through `devkit/cp0-dev`. Do not instruct AI agents
+to fetch an unversioned SDK, compiler installer or container tag.
+
+## Release acceptance
+
+Before publishing, verify all of the following on every host artifact:
+
+1. The archive checksum and internal `SHA256SUMS` pass.
+2. `bin/cp0ctl new` creates a project whose SDK path resolves inside the
+   extracted DevKit.
+3. The generated project builds without the source repository.
+4. Neon Snake builds and the simulator produces a 320x150 frame and profile.
+5. The Skill passes its structural validator and its `doctor.sh` reports the
+   expected toolchain.
+6. `make check` passes at the release commit.
+7. The release contains the owner-approved license and third-party notices.
+
+Signing and publishing release artifacts belongs to the release pipeline. The
+Skill may verify published checksums, but must not bypass a missing checksum or
+substitute files from another version.

@@ -127,10 +127,10 @@ impl From<serde_json::Error> for DocumentProtocolError {
 impl DocumentRequest {
     pub fn validate(&self) -> Result<(), DocumentProtocolError> {
         validate_version(self.protocol_version)?;
-        if let DocumentCommand::Open { document_id } = &self.command
-            && !is_valid_document_id(document_id)
-        {
-            return Err(DocumentProtocolError::InvalidDocumentId);
+        if let DocumentCommand::Open { document_id } = &self.command {
+            if !is_valid_document_id(document_id) {
+                return Err(DocumentProtocolError::InvalidDocumentId);
+            }
         }
         Ok(())
     }

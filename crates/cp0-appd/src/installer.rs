@@ -301,11 +301,12 @@ impl PackageInstaller {
         if let IncomingPolicy::Store {
             expected_sha256, ..
         } = incoming
-            && Sha256::digest(&encoded).as_slice() != expected_sha256
         {
-            return Err(InstallError::Invalid(
-                "store package hash does not match the signed catalog".into(),
-            ));
+            if Sha256::digest(&encoded).as_slice() != expected_sha256 {
+                return Err(InstallError::Invalid(
+                    "store package hash does not match the signed catalog".into(),
+                ));
+            }
         }
         let package = CApp::decode(&encoded)?;
         let trust = self.trust.verify(&package)?;
@@ -320,11 +321,12 @@ impl PackageInstaller {
             expected_version,
             ..
         } = incoming
-            && (manifest.id != expected_app_id || manifest.version != expected_version)
         {
-            return Err(InstallError::Invalid(
-                "store package identity does not match the signed catalog".into(),
-            ));
+            if manifest.id != expected_app_id || manifest.version != expected_version {
+                return Err(InstallError::Invalid(
+                    "store package identity does not match the signed catalog".into(),
+                ));
+            }
         }
         if package.entry(&manifest.entrypoint).is_none() {
             return Err(InstallError::Invalid(format!(
@@ -432,6 +434,7 @@ fn extract_package(root: &Path, package: &CApp) -> Result<(), InstallError> {
             .mode(0o644)
             .open(&destination)?;
         file.write_all(&entry.contents)?;
+        file.set_permissions(fs::Permissions::from_mode(0o644))?;
         file.sync_all()?;
     }
     Ok(())
@@ -460,6 +463,7 @@ fn create_directories(root: &Path, target: &Path) -> Result<(), InstallError> {
             }
             Err(error) => return Err(InstallError::Io(error)),
         }
+        fs::set_permissions(&current, fs::Permissions::from_mode(0o755))?;
     }
     Ok(())
 }
@@ -550,7 +554,9 @@ fn ensure_secure_directory(path: &Path, enforce_root: bool) -> Result<(), Instal
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(InstallError::Io(error)),
     }
-    validate_secure_directory(path, enforce_root, "application directory")
+    validate_secure_directory(path, enforce_root, "application directory")?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    Ok(())
 }
 
 fn validate_secure_directory(
@@ -750,6 +756,56 @@ mod tests {
         let recovered = fixture.installer().install(&path).unwrap();
         assert!(!recovered.newly_extracted);
         assert_eq!(recovered.package_dir, first.package_dir);
+    }
+
+    #[test]
+    fn installed_tree_modes_ignore_restrictive_umask() {
+        const CHILD_MARKER: &str = "CP0_INSTALLER_RESTRICTIVE_UMASK_CHILD";
+
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("installed_tree_modes_ignore_restrictive_umask")
+                .arg("--nocapture")
+                .env(CHILD_MARKER, "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "restrictive umask child test failed");
+            return;
+        }
+
+        // umask is process-global, so exercise it only in the isolated child process.
+        unsafe {
+            libc::umask(0o077);
+        }
+        let fixture = Fixture::new("restrictive-umask");
+        let path =
+            fixture.write_package("app.capp", &fixture.signed_package(b"trusted wasm", true));
+        let installed = fixture.installer().install(&path).unwrap();
+        let app_dir = installed.package_dir.parent().unwrap();
+
+        for directory in [
+            app_dir.to_path_buf(),
+            installed.package_dir.clone(),
+            installed.package_dir.join("bin"),
+        ] {
+            assert_eq!(
+                fs::symlink_metadata(&directory).unwrap().mode() & 0o777,
+                0o755,
+                "wrong installed directory mode for {}",
+                directory.display()
+            );
+        }
+        for file in [
+            installed.package_dir.join("app.json"),
+            installed.package_dir.join("bin/app.wasm"),
+        ] {
+            assert_eq!(
+                fs::symlink_metadata(&file).unwrap().mode() & 0o777,
+                0o644,
+                "wrong installed file mode for {}",
+                file.display()
+            );
+        }
     }
 
     #[test]

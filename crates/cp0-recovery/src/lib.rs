@@ -619,12 +619,12 @@ fn parse_backup_reader<R: Read>(
 
     for _ in 0..entry_count {
         let entry = read_entry(&mut payload)?;
-        if let Some(previous) = &previous_path
-            && entry.path <= *previous
-        {
-            return Err(BackupError::Invalid(
-                "entry paths are not strictly sorted".into(),
-            ));
+        if let Some(previous) = &previous_path {
+            if entry.path <= *previous {
+                return Err(BackupError::Invalid(
+                    "entry paths are not strictly sorted".into(),
+                ));
+            }
         }
         previous_path = Some(entry.path.clone());
         if kinds.insert(entry.path.clone(), entry.kind).is_some() {

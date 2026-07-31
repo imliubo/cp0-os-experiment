@@ -5,6 +5,48 @@ use std::process::Command;
 
 use cp0_manifest::{AppManifest, DisplayMode, ResourceLimits, Runtime, SCHEMA_VERSION, validate};
 
+const DEVKIT_ROOT_ENV: &str = "CP0_DEVKIT_ROOT";
+
+fn validate_devkit_root(path: PathBuf) -> Result<PathBuf, String> {
+    let root = fs::canonicalize(&path).map_err(|error| {
+        format!(
+            "cannot open CardputerZero DevKit {}: {error}",
+            path.display()
+        )
+    })?;
+    let sdk = root.join("sdk/rust/Cargo.toml");
+    let simulator = root.join("simulator/cp0-simulator.mjs");
+    if !sdk.is_file() || !simulator.is_file() {
+        return Err(format!(
+            "CardputerZero DevKit {} is incomplete; expected sdk/rust and simulator",
+            root.display()
+        ));
+    }
+    Ok(root)
+}
+
+fn devkit_root() -> Result<PathBuf, String> {
+    if let Some(configured) = std::env::var_os(DEVKIT_ROOT_ENV) {
+        if configured.is_empty() {
+            return Err(format!("{DEVKIT_ROOT_ENV} must not be empty"));
+        }
+        return validate_devkit_root(PathBuf::from(configured));
+    }
+
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(root) = executable.parent().and_then(Path::parent) {
+            let installed = root.to_path_buf();
+            if installed.join("sdk/rust/Cargo.toml").is_file()
+                && installed.join("simulator/cp0-simulator.mjs").is_file()
+            {
+                return validate_devkit_root(installed);
+            }
+        }
+    }
+
+    validate_devkit_root(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
+}
+
 pub fn new_project(path: impl AsRef<Path>, app_id: &str, name: &str) -> Result<(), String> {
     let path = path.as_ref();
     if path.exists() {
@@ -36,9 +78,7 @@ pub fn new_project(path: impl AsRef<Path>, app_id: &str, name: &str) -> Result<(
 
     fs::create_dir_all(path.join("src"))
         .map_err(|error| format!("cannot create project directory: {error}"))?;
-    let sdk_path =
-        fs::canonicalize(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../sdk/rust"))
-            .map_err(|error| format!("cannot locate bundled Rust SDK: {error}"))?;
+    let sdk_path = devkit_root()?.join("sdk/rust");
     let sdk_path = toml_string(&sdk_path.to_string_lossy());
     let cargo = format!(
         "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\ncp0-sdk = {{ path = \"{sdk_path}\" }}\n\n[profile.release]\nopt-level = \"s\"\nlto = true\ncodegen-units = 1\npanic = \"abort\"\nstrip = true\n\n[workspace]\n"
@@ -195,8 +235,7 @@ pub fn run_project(arguments: &[String]) -> Result<(), String> {
         index += 2;
     }
 
-    let bundled_script =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../simulator/cp0-simulator.mjs");
+    let bundled_script = devkit_root()?.join("simulator/cp0-simulator.mjs");
     let script = std::env::var_os("CP0_SIMULATOR_SCRIPT")
         .map(PathBuf::from)
         .unwrap_or(bundled_script);

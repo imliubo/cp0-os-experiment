@@ -75,5 +75,17 @@ started at 2026-07-31 20:42:15 CST as transient unit
 compositor, System Shell and appd were all `active/running` with zero restarts.
 That run was explicitly invalidated at 2026-08-01 00:26 CST by the owner's
 requested developer-mode key and Neon Snake package installation. Its eventual
-status must not be accepted as idle evidence. The Roadmap remains open until a
-new uninterrupted 24-hour run is retrieved and independently verified.
+status must not be accepted as idle evidence. It was stopped at 00:43 CST and
+its `FAILED` archive was retained under the host `target/device-evidence`
+directory with SHA-256
+`88ecc5d2414710d3dc60ce63dbbd046e7bc0e010bccc29f609409edaba23c2bf`.
+
+Neon Snake was then stopped and developer mode was disabled. Disabling that
+mode restarted appd before the replacement baseline. The current uninterrupted
+run started at 2026-08-01 00:43:19 CST in
+`/run/cardputerzero-stability/acceptance/20260731T164319Z-9619`. Its first sample
+recorded compositor PID `909`, System Shell PID `926`, appd PID `9465` and
+stored PID `8480`, all active with zero restarts; 4K Camera2 showed idle Home.
+The Roadmap remains open until approximately 2026-08-02 00:43 CST, when this
+complete directory must be retrieved and independently verified before any
+platform deployment, app launch or reboot.

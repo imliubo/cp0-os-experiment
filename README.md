@@ -71,6 +71,9 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
   和稳定错误类型；Hello 示例不再使用 Runtime 私有 FFI。
 - `cp0ctl new/build` SDK-only 项目脚手架、结构化 Cargo metadata 构建和规范应用
   产物目录。
+- 可重定位 App DevKit：固定 Rust/Emscripten 工具链、原生 `cp0ctl`、完整 SDK、
+  模拟器、Neon Snake 示例和 `cardputerzero-build-app` AI Skill，发布归档带逐文件及
+  整包 SHA-256 校验。
 - `pi-gen` app platform stage：构建并安装 appd、broker sockets、静态 Runtime、
   稳定测试身份与 SDK 版 Hello，开发镜像默认进入 System Shell。
 - Freestanding C11/C++17 SDK 1.0 头文件与 wasm32 编译检查，不暴露 WASI/Linux ABI。
@@ -102,6 +105,7 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
 ```sh
 cargo run -p cp0ctl -- manifest validate examples/hello-card/app.json
 make check
+make devkit
 ```
 
 构建开发镜像需要 Docker：
@@ -119,6 +123,8 @@ make verify-image
 ```
 
 详细设计见 [系统架构](docs/ARCHITECTURE.md) 和 [Roadmap](docs/ROADMAP.md)。
+App 开发与分发见 [Developer Guide](docs/DEVELOPER-GUIDE.md) 和
+[App DevKit distribution](docs/APP-DEVKIT-DISTRIBUTION.md)。
 
 Phase 1 构建和真机验证方法见 [BSP 与镜像说明](docs/PHASE1-BSP.md)，Phase 2
 compositor 基线见 [Compositor bring-up](docs/PHASE2-COMPOSITOR.md)。

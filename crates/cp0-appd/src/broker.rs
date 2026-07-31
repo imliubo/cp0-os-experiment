@@ -512,10 +512,12 @@ impl BrokerResponse {
             document_id,
             size_bytes,
         } = &self.outcome
-            && (!cp0_document_protocol::is_valid_document_id(document_id)
-                || *size_bytes > cp0_document_protocol::MAX_DOCUMENT_BYTES)
         {
-            return Err(BrokerProtocolError::InvalidDocumentResponse);
+            if !cp0_document_protocol::is_valid_document_id(document_id)
+                || *size_bytes > cp0_document_protocol::MAX_DOCUMENT_BYTES
+            {
+                return Err(BrokerProtocolError::InvalidDocumentResponse);
+            }
         }
         match &self.outcome {
             BrokerOutcome::AudioPlayed { frames }

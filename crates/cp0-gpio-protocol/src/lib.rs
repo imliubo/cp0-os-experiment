@@ -173,12 +173,13 @@ impl GpioResponse {
 
     pub fn validate(&self) -> Result<(), GpioProtocolError> {
         validate_version(self.protocol_version)?;
-        if let GpioOutcome::Error { message, .. } = &self.outcome
-            && (message.is_empty()
+        if let GpioOutcome::Error { message, .. } = &self.outcome {
+            if message.is_empty()
                 || message.chars().count() > MAX_GPIO_ERROR_CHARS
-                || message.chars().any(char::is_control))
-        {
-            return Err(GpioProtocolError::InvalidErrorMessage);
+                || message.chars().any(char::is_control)
+            {
+                return Err(GpioProtocolError::InvalidErrorMessage);
+            }
         }
         Ok(())
     }

@@ -1,4 +1,4 @@
-.PHONY: check test fmt fuzz-check fuzz-smoke compositor app-runtime appd example-app malicious-apps image verify-image
+.PHONY: check test fmt fuzz-check fuzz-smoke compositor app-runtime appd example-app malicious-apps devkit image verify-image
 
 check: fmt
 	jq empty schemas/app-manifest-v1.schema.json schemas/os-release-v1.schema.json \
@@ -32,6 +32,8 @@ check: fmt
 	./tests/test-sdk-c.sh
 	./tests/test-sdk-lvgl.sh
 	./tests/test-sdk-examples.sh
+	./tests/test-app-skill.sh
+	./tests/test-app-devkit.sh
 	./tests/test-simulator.sh
 	./tests/test-runtime-display.sh
 	./tests/test-device-diagnostics.sh
@@ -76,6 +78,9 @@ example-app:
 
 malicious-apps:
 	./scripts/build-malicious-apps.sh
+
+devkit:
+	./scripts/package-app-devkit.sh
 
 image:
 	./image/build-image.sh

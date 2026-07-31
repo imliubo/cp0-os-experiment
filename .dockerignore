@@ -1,0 +1,7 @@
+.git
+.github
+target
+*.capp
+*.img
+*.tar
+*.tar.xz

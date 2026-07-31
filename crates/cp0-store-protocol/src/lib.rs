@@ -296,12 +296,12 @@ impl StoreRequest {
                 "store request ID must be non-zero".into(),
             ));
         }
-        if let StoreCommand::Install { app_id } = &self.command
-            && !cp0_manifest::is_valid_app_id(app_id)
-        {
-            return Err(StoreProtocolError::Invalid(
-                "store install application ID is invalid".into(),
-            ));
+        if let StoreCommand::Install { app_id } = &self.command {
+            if !cp0_manifest::is_valid_app_id(app_id) {
+                return Err(StoreProtocolError::Invalid(
+                    "store install application ID is invalid".into(),
+                ));
+            }
         }
         Ok(())
     }
