@@ -129,6 +129,20 @@ The Shell reconciles catalog entries with appd's installed-version list:
 Version ordering is deliberately absent from the Shell. appd is the security
 authority for strict upgrade semantics.
 
+The same bounded control path is available for hardware acceptance without
+giving an operator a URL, package path, hash or signature override:
+
+```sh
+sudo cp0ctl store list
+sudo cp0ctl store refresh
+sudo cp0ctl store install dev.cardputerzero.example
+```
+
+`cp0ctl` rejects a response whose kind does not match the request, an install
+response for a different application ID, an uncorrelated request ID or any
+malformed protocol field. These commands do not change the product Store
+configuration or trust roots.
+
 ## Offline and unconfigured operation
 
 Product images ship with an empty `catalog_url` and no production trust key.
