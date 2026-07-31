@@ -37,5 +37,14 @@ int32_t cp0_broker_gpio_read(uint32_t line);
 int32_t cp0_broker_gpio_write(uint32_t line, uint32_t value);
 int32_t cp0_broker_decode_gpio_response(const char *response, uint32_t line,
                                         int written, uint32_t expected_value);
+int32_t cp0_broker_lora_send(const uint8_t *payload, size_t payload_length);
+int32_t cp0_broker_lora_receive(uint8_t *payload, size_t payload_capacity,
+                                uint8_t *metadata, size_t metadata_bytes,
+                                uint32_t timeout_ms);
+int32_t cp0_broker_decode_lora_response(const char *response,
+                                        uint8_t *payload,
+                                        size_t payload_capacity,
+                                        uint8_t *metadata,
+                                        size_t metadata_bytes);
 
 #endif

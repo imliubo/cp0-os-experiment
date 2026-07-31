@@ -15,13 +15,14 @@ case "$staging" in
         ;;
 esac
 
-for file in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-gpiod cp0-networkd cp0ctl cardputerzero-app-runtime app.json hello-card.wasm \
+for file in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-gpiod cp0-networkd cp0-radiod cp0ctl cardputerzero-app-runtime app.json hello-card.wasm \
     cardputerzero-appd.service cardputerzero-documentd.service \
     cardputerzero-documentd.socket cardputerzero-networkd.service \
     cardputerzero-networkd.socket cardputerzero-audiod.service \
     cardputerzero-audiod.socket cardputerzero-camerad.service \
     cardputerzero-camerad.socket cardputerzero-gpiod.service \
-    cardputerzero-gpiod.socket cardputerzero-gpio.conf; do
+    cardputerzero-gpiod.socket cardputerzero-gpio.conf \
+    cardputerzero-radiod.service cardputerzero-radiod.socket lora.conf; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
         echo "error: invalid staged file: $file" >&2
         exit 1
@@ -35,6 +36,7 @@ systemctl stop cardputerzero-documentd.service 2>/dev/null || :
 systemctl stop cardputerzero-audiod.service 2>/dev/null || :
 systemctl stop cardputerzero-camerad.service 2>/dev/null || :
 systemctl stop cardputerzero-gpiod.service 2>/dev/null || :
+systemctl stop cardputerzero-radiod.service 2>/dev/null || :
 if ! getent group cp0-network >/dev/null 2>&1; then
     groupadd --system cp0-network
 fi
@@ -70,6 +72,13 @@ if ! id cp0-gpio >/dev/null 2>&1; then
     useradd --system --gid cp0-gpio --home-dir /nonexistent \
         --shell /usr/sbin/nologin cp0-gpio
 fi
+if ! getent group cp0-radio >/dev/null 2>&1; then
+    groupadd --system cp0-radio
+fi
+if ! id cp0-radio >/dev/null 2>&1; then
+    useradd --system --gid cp0-radio --groups spi --home-dir /nonexistent \
+        --shell /usr/sbin/nologin cp0-radio
+fi
 install -d -o cp0-document -g cp0-document -m 0750 \
     /var/lib/cardputerzero/documents
 if [ ! -e /var/lib/cardputerzero/documents/welcome.txt ]; then
@@ -91,6 +100,8 @@ install -o root -g root -m 0755 "$staging/cp0-camerad" \
     /usr/libexec/cardputerzero/cp0-camerad
 install -o root -g root -m 0755 "$staging/cp0-gpiod" \
     /usr/libexec/cardputerzero/cp0-gpiod
+install -o root -g root -m 0755 "$staging/cp0-radiod" \
+    /usr/libexec/cardputerzero/cp0-radiod
 install -o root -g root -m 0755 "$staging/cp0ctl" /usr/bin/cp0ctl
 install -o root -g root -m 0755 "$staging/cardputerzero-app-runtime" \
     /usr/libexec/cardputerzero/app-runtime
@@ -120,6 +131,12 @@ install -o root -g root -m 0644 "$staging/cardputerzero-gpiod.service" \
     /etc/systemd/system/cardputerzero-gpiod.service
 install -o root -g root -m 0644 "$staging/cardputerzero-gpiod.socket" \
     /etc/systemd/system/cardputerzero-gpiod.socket
+install -o root -g root -m 0644 "$staging/cardputerzero-radiod.service" \
+    /etc/systemd/system/cardputerzero-radiod.service
+install -o root -g root -m 0644 "$staging/cardputerzero-radiod.socket" \
+    /etc/systemd/system/cardputerzero-radiod.socket
+install -D -o root -g root -m 0644 "$staging/lora.conf" \
+    /etc/cardputerzero/lora.conf
 install -o root -g root -m 0644 "$staging/cardputerzero-gpio.conf" \
     /etc/tmpfiles.d/cardputerzero-gpio.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-gpio.conf
@@ -129,6 +146,7 @@ systemctl enable --now cardputerzero-documentd.socket
 systemctl enable --now cardputerzero-audiod.socket
 systemctl enable --now cardputerzero-camerad.socket
 systemctl enable --now cardputerzero-gpiod.socket
+systemctl enable --now cardputerzero-radiod.socket
 systemctl start cardputerzero-appd.service
 
 systemctl is-active --quiet cardputerzero-appd.service
@@ -137,6 +155,7 @@ systemctl is-active --quiet cardputerzero-documentd.socket
 systemctl is-active --quiet cardputerzero-audiod.socket
 systemctl is-active --quiet cardputerzero-camerad.socket
 systemctl is-active --quiet cardputerzero-gpiod.socket
+systemctl is-active --quiet cardputerzero-radiod.socket
 systemctl is-active --quiet cardputerzero-compositor.service
 systemctl is-active --quiet cardputerzero-system-shell.service
 sha256sum \
@@ -145,6 +164,7 @@ sha256sum \
     /usr/libexec/cardputerzero/cp0-audiod \
     /usr/libexec/cardputerzero/cp0-camerad \
     /usr/libexec/cardputerzero/cp0-gpiod \
+    /usr/libexec/cardputerzero/cp0-radiod \
     /usr/libexec/cardputerzero/cp0-networkd \
     /usr/bin/cp0ctl \
     /usr/libexec/cardputerzero/app-runtime \

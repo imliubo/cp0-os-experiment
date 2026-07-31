@@ -27,6 +27,8 @@
 #define CP0_CAMERA_WIDTH 320U
 #define CP0_CAMERA_HEIGHT 170U
 #define CP0_CAMERA_PIXEL_COUNT (CP0_CAMERA_WIDTH * CP0_CAMERA_HEIGHT)
+#define CP0_MAX_LORA_PAYLOAD_BYTES 64U
+#define CP0_LORA_METADATA_BYTES 4U
 
 #if !defined(__wasm32__)
 #error "CardputerZero applications must target wasm32"
@@ -84,6 +86,12 @@ typedef enum cp0_gpio_line {
     CP0_GPIO_EXTERNAL_5V_POWER = 3,
 } cp0_gpio_line_t;
 
+typedef struct cp0_lora_metadata {
+    int16_t rssi_dbm;
+    int8_t snr_quarter_db;
+    uint8_t reserved;
+} cp0_lora_metadata_t;
+
 CP0_IMPORT("cp0_monotonic_milliseconds")
 uint64_t cp0_monotonic_milliseconds(void);
 
@@ -137,6 +145,15 @@ int32_t cp0_gpio_read_raw(uint32_t line);
 
 CP0_IMPORT("cp0_gpio_write")
 cp0_result_t cp0_gpio_write_raw(uint32_t line, uint32_t value);
+
+CP0_IMPORT("cp0_lora_send")
+cp0_result_t cp0_lora_send_raw(const uint8_t *payload,
+                               uint32_t payload_length);
+
+CP0_IMPORT("cp0_lora_receive")
+int32_t cp0_lora_receive_raw(uint8_t *payload, uint32_t payload_capacity,
+                             uint8_t *metadata, uint32_t metadata_bytes,
+                             uint32_t timeout_milliseconds);
 
 static inline cp0_result_t cp0_http_get(const uint8_t *url,
                                         uint32_t url_length, uint8_t *body,
@@ -284,6 +301,38 @@ static inline cp0_result_t cp0_gpio_write(cp0_gpio_line_t line,
     if ((uint32_t)line > (uint32_t)CP0_GPIO_EXTERNAL_5V_POWER || value > 1U)
         return CP0_ERROR_INVALID_ARGUMENT;
     return cp0_gpio_write_raw((uint32_t)line, value);
+}
+
+static inline cp0_result_t cp0_lora_send(const uint8_t *payload,
+                                         uint32_t payload_length) {
+    if (payload == NULL || payload_length == 0U ||
+        payload_length > CP0_MAX_LORA_PAYLOAD_BYTES)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    return cp0_lora_send_raw(payload, payload_length);
+}
+
+static inline cp0_result_t cp0_lora_receive(
+    uint8_t *payload, uint32_t payload_capacity, cp0_lora_metadata_t *metadata,
+    uint32_t timeout_milliseconds, uint32_t *payload_length) {
+    int32_t result;
+
+    if (payload == NULL || payload_capacity == 0U ||
+        payload_capacity > CP0_MAX_LORA_PAYLOAD_BYTES || metadata == NULL ||
+        timeout_milliseconds == 0U ||
+        timeout_milliseconds > CP0_MAX_WAIT_MILLISECONDS ||
+        payload_length == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    result = cp0_lora_receive_raw(payload, payload_capacity,
+                                  (uint8_t *)metadata,
+                                  CP0_LORA_METADATA_BYTES,
+                                  timeout_milliseconds);
+    if (result < 0)
+        return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
+                                           : CP0_ERROR_INTERNAL;
+    if ((uint32_t)result > payload_capacity)
+        return CP0_ERROR_INTERNAL;
+    *payload_length = (uint32_t)result;
+    return CP0_OK;
 }
 
 #ifdef __cplusplus

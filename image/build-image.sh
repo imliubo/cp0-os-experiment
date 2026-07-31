@@ -86,10 +86,12 @@ cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-documentd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-gpiod" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-networkd" \
+    "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-radiod" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0ctl" \
     "$repo_root/target/app-runtime-aarch64/cardputerzero-app-runtime" \
     "$platform_payload/"
 cp "$repo_root/appd/systemd/"* "$platform_payload/systemd/"
+cp "$repo_root/appd/lora.conf" "$platform_payload/"
 cp "$repo_root/scripts/device-core-recovery.sh" \
     "$repo_root/scripts/device-stability-monitor.sh" \
     "$platform_payload/diagnostics/"

@@ -1,0 +1,15 @@
+[Unit]
+Description=CardputerZero privileged LoRa radio broker socket
+
+[Socket]
+ListenStream=/run/cardputerzero-radiod/radio.sock
+FileDescriptorName=radio
+Service=cardputerzero-radiod.service
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

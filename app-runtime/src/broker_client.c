@@ -25,6 +25,8 @@
 #define CP0_CAMERA_WIDTH 320U
 #define CP0_CAMERA_HEIGHT 170U
 #define CP0_CAMERA_FRAME_BYTES (CP0_CAMERA_WIDTH * CP0_CAMERA_HEIGHT * 2U)
+#define CP0_LORA_MAX_PAYLOAD_BYTES 64U
+#define CP0_LORA_METADATA_BYTES 4U
 
 static bool append_bytes(char *output, size_t capacity, size_t *offset,
                          const char *value, size_t length) {
@@ -309,6 +311,30 @@ static bool json_u32_field(const char *response, const char *field,
         (*end != ',' && *end != '}'))
         return false;
     *value = (uint32_t)parsed;
+    return true;
+}
+
+static bool json_signed_field(const char *response, const char *field,
+                              long minimum, long maximum, long *value) {
+    char key[64];
+    const char *start;
+    char *end;
+    long parsed;
+    int written;
+
+    written = snprintf(key, sizeof(key), "\"%s\":", field);
+    if (written <= 0 || (size_t)written >= sizeof(key))
+        return false;
+    start = strstr(response, key);
+    if (start == NULL)
+        return false;
+    start += (size_t)written;
+    errno = 0;
+    parsed = strtol(start, &end, 10);
+    if (errno != 0 || end == start || parsed < minimum || parsed > maximum ||
+        (*end != ',' && *end != '}'))
+        return false;
+    *value = parsed;
     return true;
 }
 
@@ -751,4 +777,102 @@ int32_t cp0_broker_gpio_write(uint32_t line, uint32_t value) {
     if (result != CP0_BROKER_OK)
         return result;
     return cp0_broker_decode_gpio_response(response, line, 1, value);
+}
+
+int32_t cp0_broker_lora_send(const uint8_t *payload, size_t payload_length) {
+    static const char prefix[] =
+        "{\"protocol_version\":1,\"request_id\":9,\"command\":{"
+        "\"name\":\"send-lora\",\"payload_base64\":\"";
+    static const char suffix[] = "\"}}\n";
+    char request[256];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    size_t offset = 0;
+    uint16_t bytes;
+    int32_t result;
+
+    if (payload == NULL || payload_length == 0U ||
+        payload_length > CP0_LORA_MAX_PAYLOAD_BYTES)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    if (!append_bytes(request, sizeof(request), &offset, prefix,
+                      sizeof(prefix) - 1U) ||
+        !append_base64(request, sizeof(request), &offset, payload,
+                       payload_length) ||
+        !append_bytes(request, sizeof(request), &offset, suffix,
+                      sizeof(suffix) - 1U))
+        return CP0_BROKER_INTERNAL;
+    result = broker_exchange(request, offset, response, sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    if (strstr(response, "\"status\":\"lora-sent\"") == NULL)
+        return decode_result(response);
+    if (!json_u16_field(response, "bytes", &bytes) ||
+        (size_t)bytes != payload_length)
+        return CP0_BROKER_INTERNAL;
+    return CP0_BROKER_OK;
+}
+
+int32_t cp0_broker_decode_lora_response(const char *response,
+                                        uint8_t *payload,
+                                        size_t payload_capacity,
+                                        uint8_t *metadata,
+                                        size_t metadata_bytes) {
+    const char *encoded;
+    size_t encoded_length;
+    size_t payload_length;
+    long rssi_dbm;
+    long snr_quarter_db;
+    uint16_t encoded_rssi;
+
+    if (response == NULL || payload == NULL || payload_capacity == 0U ||
+        payload_capacity > CP0_LORA_MAX_PAYLOAD_BYTES || metadata == NULL ||
+        metadata_bytes != CP0_LORA_METADATA_BYTES)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    memset(metadata, 0, metadata_bytes);
+    if (strstr(response, "\"status\":\"lora-no-packet\"") != NULL)
+        return 0;
+    if (strstr(response, "\"status\":\"lora-packet\"") == NULL)
+        return decode_result(response);
+    encoded = json_string_field(response, "payload_base64", &encoded_length);
+    if (encoded == NULL ||
+        !decode_base64(encoded, encoded_length, payload, payload_capacity,
+                       &payload_length) ||
+        payload_length == 0U ||
+        !json_signed_field(response, "rssi_dbm", -200, 50, &rssi_dbm) ||
+        !json_signed_field(response, "snr_quarter_db", INT8_MIN, INT8_MAX,
+                           &snr_quarter_db))
+        return CP0_BROKER_INTERNAL;
+    encoded_rssi = (uint16_t)(int16_t)rssi_dbm;
+    metadata[0] = (uint8_t)encoded_rssi;
+    metadata[1] = (uint8_t)(encoded_rssi >> 8);
+    metadata[2] = (uint8_t)(int8_t)snr_quarter_db;
+    metadata[3] = 0U;
+    return (int32_t)payload_length;
+}
+
+int32_t cp0_broker_lora_receive(uint8_t *payload, size_t payload_capacity,
+                                uint8_t *metadata, size_t metadata_bytes,
+                                uint32_t timeout_ms) {
+    char request[192];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int written;
+    int32_t result;
+
+    if (payload == NULL || payload_capacity == 0U ||
+        payload_capacity > CP0_LORA_MAX_PAYLOAD_BYTES || metadata == NULL ||
+        metadata_bytes != CP0_LORA_METADATA_BYTES || timeout_ms == 0U ||
+        timeout_ms > 1000U)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    written = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":10,\"command\":{"
+        "\"name\":\"receive-lora\",\"timeout_ms\":%u}}\n",
+        timeout_ms);
+    if (written <= 0 || (size_t)written >= sizeof(request))
+        return CP0_BROKER_INTERNAL;
+    result = broker_exchange(request, (size_t)written, response,
+                             sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_lora_response(
+        response, payload, payload_capacity, metadata, metadata_bytes);
 }

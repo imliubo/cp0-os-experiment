@@ -103,6 +103,23 @@ interface gpio {
     write: func(line: line, value: bool) -> result<_, error-code>;
 }
 
+interface radio {
+    use types.{error-code};
+
+    record metadata {
+        rssi-dbm: s16,
+        snr-quarter-db: s8,
+    }
+
+    record packet {
+        payload: list<u8>,
+        metadata: metadata,
+    }
+
+    send-lora: func(payload: list<u8>) -> result<_, error-code>;
+    receive-lora: func(timeout-ms: u16) -> result<option<packet>, error-code>;
+}
+
 interface application {
     use types.{app-event, error-code};
 
@@ -118,5 +135,6 @@ world cardputer-application {
     import audio;
     import camera;
     import gpio;
+    import radio;
     export application;
 }

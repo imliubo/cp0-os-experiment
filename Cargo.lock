@@ -40,6 +40,7 @@ dependencies = [
  "cp0-gpio-protocol",
  "cp0-manifest",
  "cp0-network-protocol",
+ "cp0-radio-protocol",
  "libc",
  "serde",
  "serde_json",
@@ -134,6 +135,22 @@ dependencies = [
  "cp0-network-protocol",
  "libc",
  "ureq",
+]
+
+[[package]]
+name = "cp0-radio-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cp0-radiod"
+version = "0.1.0"
+dependencies = [
+ "cp0-radio-protocol",
+ "libc",
 ]
 
 [[package]]

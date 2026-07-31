@@ -1,7 +1,7 @@
 #![no_std]
 
 use core::panic::PanicInfo;
-use cp0_sdk::{Error, audio, camera, display, documents, gpio, input, network, system};
+use cp0_sdk::{Error, audio, camera, display, documents, gpio, input, network, radio, system};
 
 const FRAME_BYTES: usize =
     display::WIDTH as usize * display::STANDARD_HEIGHT as usize * 2;
@@ -10,12 +10,14 @@ static mut NETWORK_BODY: [u8; network::MAX_RESPONSE_BODY_BYTES] =
     [0; network::MAX_RESPONSE_BODY_BYTES];
 static mut AUDIO_SAMPLES: [i16; audio::MAX_FRAMES] = [0; audio::MAX_FRAMES];
 static mut CAMERA_PIXELS: [u16; camera::PIXEL_COUNT] = [0; camera::PIXEL_COUNT];
+static mut LORA_PAYLOAD: [u8; radio::MAX_PAYLOAD_BYTES] = [0; radio::MAX_PAYLOAD_BYTES];
 const KEY_N: u16 = 49;
 const KEY_D: u16 = 32;
 const KEY_P: u16 = 25;
 const KEY_R: u16 = 19;
 const KEY_C: u16 = 46;
 const KEY_G: u16 = 34;
+const KEY_L: u16 = 38;
 
 fn prepare_frame() -> &'static mut [u8] {
     // The frame lives in the WASM data section rather than the 64 KiB call
@@ -177,6 +179,23 @@ fn request_gpio(frame: &mut [u8]) {
     show_action_status(frame, color);
 }
 
+fn request_lora_receive(frame: &mut [u8]) {
+    let payload = unsafe {
+        core::slice::from_raw_parts_mut(
+            core::ptr::addr_of_mut!(LORA_PAYLOAD).cast::<u8>(),
+            radio::MAX_PAYLOAD_BYTES,
+        )
+    };
+    let color = match radio::receive(payload, 250) {
+        Ok(Some(packet)) if packet.length > 0 => 0x07e0,
+        Ok(_) => 0xffe0,
+        Err(Error::Denied) => 0xf800,
+        Err(Error::Unavailable) => 0xffe0,
+        Err(_) => 0xf81f,
+    };
+    show_action_status(frame, color);
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
     const TITLE: &str = "Hello Card";
@@ -219,6 +238,9 @@ pub extern "C" fn main() -> i32 {
                 }
                 if event.code == KEY_G {
                     request_gpio(frame);
+                }
+                if event.code == KEY_L {
+                    request_lora_receive(frame);
                 }
                 show_key(frame, event.code);
                 rendered = false;

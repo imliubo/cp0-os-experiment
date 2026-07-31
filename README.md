@@ -57,6 +57,8 @@ Phase 3 已贯通 WAMR 强隔离运行时、权限系统和首个 capability bro
   memfd 传递、V4L2/Media/dma-heap 设备白名单及三语言 SDK API。
 - Phase 3J GPIO 能力：独立 `cp0-gpiod`、V0.6 四路固定逻辑输出、root/appd 身份认证、
   BSP sysfs 权限收紧及三语言 SDK API，不暴露 gpiochip、路径或 BCM 引脚编号。
+- Phase 3K LoRa 能力：外接 SX1276 使用固定 SPI0 CS1、独立 `cp0-radiod`、地区/频点
+  root 配置、15 秒发送限速、64 字节报文上限及三语言 SDK API，镜像默认禁用发射。
 - Phase 4A dependency-free `no_std` Rust SDK，封装时钟、事件等待、通知 capability
   和稳定错误类型；Hello 示例不再使用 Runtime 私有 FFI。
 - `cp0ctl new/build` SDK-only 项目脚手架、结构化 Cargo metadata 构建和规范应用
@@ -117,5 +119,7 @@ Runtime host call ABI 与真机结果见
 [restricted camera broker](docs/PHASE3I-CAMERA-BROKER.md)。
 V0.6 逻辑输出映射、GPIO 隔离和 sysfs 权限收紧见
 [restricted GPIO broker](docs/PHASE3J-GPIO-BROKER.md)。
+外接 SX1276 的固定无线参数、地区配置和 SPI 隔离见
+[restricted LoRa broker](docs/PHASE3K-LORA-BROKER.md)。
 Rust SDK 公共 API 和真机迁移结果见
 [Rust SDK foundation](docs/PHASE4A-RUST-SDK.md)。

@@ -121,6 +121,22 @@ static int32_t cp0_gpio_write(wasm_exec_env_t execution_environment,
     return cp0_broker_gpio_write(line, value);
 }
 
+static int32_t cp0_lora_send(wasm_exec_env_t execution_environment,
+                             const uint8_t *payload,
+                             uint32_t payload_length) {
+    (void)execution_environment;
+    return cp0_broker_lora_send(payload, (size_t)payload_length);
+}
+
+static int32_t cp0_lora_receive(wasm_exec_env_t execution_environment,
+                                uint8_t *payload, uint32_t payload_capacity,
+                                uint8_t *metadata, uint32_t metadata_bytes,
+                                uint32_t timeout_ms) {
+    (void)execution_environment;
+    return cp0_broker_lora_receive(payload, (size_t)payload_capacity, metadata,
+                                   (size_t)metadata_bytes, timeout_ms);
+}
+
 static NativeSymbol symbols[] = {
     {"cp0_monotonic_milliseconds", (void *)cp0_monotonic_milliseconds, "()I",
      NULL},
@@ -142,6 +158,8 @@ static NativeSymbol symbols[] = {
      NULL},
     {"cp0_gpio_read", (void *)cp0_gpio_read, "(i)i", NULL},
     {"cp0_gpio_write", (void *)cp0_gpio_write, "(ii)i", NULL},
+    {"cp0_lora_send", (void *)cp0_lora_send, "(*~)i", NULL},
+    {"cp0_lora_receive", (void *)cp0_lora_receive, "(*~*~i)i", NULL},
 };
 
 NativeSymbol *cp0_host_symbols(uint32_t *count) {

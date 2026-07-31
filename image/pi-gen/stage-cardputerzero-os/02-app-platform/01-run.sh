@@ -15,6 +15,8 @@ install -D -m 0755 "${payload}/cp0-camerad" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-camerad"
 install -D -m 0755 "${payload}/cp0-gpiod" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-gpiod"
+install -D -m 0755 "${payload}/cp0-radiod" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-radiod"
 install -D -m 0755 "${payload}/cp0ctl" \
     "${ROOTFS_DIR}/usr/bin/cp0ctl"
 install -D -m 0755 "${payload}/cardputerzero-app-runtime" \
@@ -45,10 +47,16 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-gpiod.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-gpiod.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-gpiod.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-gpiod.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-radiod.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-radiod.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-radiod.socket" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-radiod.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-gpio.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-gpio.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-appd.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-appd.conf"
+install -D -o root -g root -m 0644 "${payload}/lora.conf" \
+    "${ROOTFS_DIR}/etc/cardputerzero/lora.conf"
 install -D -m 0755 "${payload}/diagnostics/device-core-recovery.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-core-recovery"
 install -D -m 0755 "${payload}/diagnostics/device-stability-monitor.sh" \
@@ -99,6 +107,13 @@ if ! id cp0-gpio >/dev/null 2>&1; then
     useradd --system --gid cp0-gpio --home-dir /nonexistent \
         --shell /usr/sbin/nologin cp0-gpio
 fi
+if ! getent group cp0-radio >/dev/null 2>&1; then
+    groupadd --system cp0-radio
+fi
+if ! id cp0-radio >/dev/null 2>&1; then
+    useradd --system --gid cp0-radio --groups spi --home-dir /nonexistent \
+        --shell /usr/sbin/nologin cp0-radio
+fi
 if ! getent group cp0-app-20000 >/dev/null 2>&1; then
     groupadd --system --gid 20000 cp0-app-20000
 fi
@@ -134,5 +149,5 @@ systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-gpio.conf
 systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
     cardputerzero-audiod.socket cardputerzero-camerad.socket \
-    cardputerzero-gpiod.socket
+    cardputerzero-gpiod.socket cardputerzero-radiod.socket
 CHROOT

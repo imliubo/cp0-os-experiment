@@ -223,7 +223,10 @@ fn send_broker_command(command: BrokerCommand) -> Result<(), String> {
         | BrokerOutcome::AudioCaptured { .. }
         | BrokerOutcome::CameraCaptured { .. }
         | BrokerOutcome::GpioValue { .. }
-        | BrokerOutcome::GpioWritten { .. } => {
+        | BrokerOutcome::GpioWritten { .. }
+        | BrokerOutcome::LoraSent { .. }
+        | BrokerOutcome::LoraPacket { .. }
+        | BrokerOutcome::LoraNoPacket => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&response)

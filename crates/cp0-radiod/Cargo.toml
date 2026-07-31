@@ -1,0 +1,10 @@
+[package]
+name = "cp0-radiod"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+cp0-radio-protocol = { path = "../cp0-radio-protocol" }
+libc.workspace = true

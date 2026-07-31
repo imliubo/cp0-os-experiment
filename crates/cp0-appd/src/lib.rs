@@ -15,6 +15,7 @@ mod network_client;
 mod permission_prompt;
 mod permissions;
 mod protocol;
+mod radio_client;
 mod registry;
 mod server;
 
@@ -52,6 +53,7 @@ pub use protocol::{
     MAX_APP_LIST_PAGE, PeerCredentials, ProtocolError, ResponseData, ResponseOutcome,
     peer_credentials, read_request, read_response, write_request, write_response,
 };
+pub use radio_client::{DEFAULT_RADIO_SOCKET, RadioClient, RadioClientError, ReceivedRadioPacket};
 pub use registry::{
     AppAccount, AppRegistry, FIRST_APP_ACCOUNT_ID, LAST_APP_ACCOUNT_ID, RegistryError,
 };

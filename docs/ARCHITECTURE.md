@@ -135,6 +135,13 @@ Grove 5V 电源和外部 5V 电源。`cp0-gpiod` 是唯一可写对应四个 LED
 账户；app-platform 阶段将 BSP 原有的全局 `0666` 模式覆盖为 `0660 root:cp0-gpio`。
 LCD、SPI 片选、音频、红外、键盘、耳机检测和系统电源相关 GPIO 永不进入 SDK。
 
+LoRa 能力仅面向外接 SX1276 系列模块；V0.6 本身没有板载 LoRa。`cp0-radiod` 是
+唯一可访问 SPI0 CS1 (`/dev/spidev0.1`) 的账户，应用和 Runtime 不能选择设备节点、
+频点、调制参数、发射功率或寄存器。镜像默认 `enabled=false`，只有 root-owned 配置
+能选择受支持地区及该地区范围内的频点。首版固定 125 kHz、SF7、CR4/5、CRC、
+8 字节前导码、私有同步字 `0x12` 和 14 dBm；报文最多 64 字节，每次发送至少间隔
+15 秒，单次接收等待不超过 1000 ms。
+
 应用间调用通过 Intent Broker 路由，接收方必须显式声明 Intent，不提供任意应用间
 socket。
 

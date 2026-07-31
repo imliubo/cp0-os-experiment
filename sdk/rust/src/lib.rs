@@ -7,6 +7,7 @@ pub mod documents;
 pub mod gpio;
 pub mod input;
 pub mod network;
+pub mod radio;
 pub mod system;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

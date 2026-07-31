@@ -96,5 +96,24 @@ int main(void) {
     assert(cp0_broker_decode_gpio_response(gpio_value, 0, 0, 0) == 1);
     assert(cp0_broker_decode_gpio_response(wrong_gpio_line, 0, 0, 0) ==
            CP0_BROKER_INTERNAL);
+
+    static const char lora_packet[] =
+        "{\"protocol_version\":1,\"request_id\":10,\"outcome\":{"
+        "\"status\":\"lora-packet\",\"payload_base64\":\"AAH+/w==\","
+        "\"rssi_dbm\":-92,\"snr_quarter_db\":-5}}\n";
+    static const char no_lora_packet[] =
+        "{\"protocol_version\":1,\"request_id\":10,\"outcome\":{"
+        "\"status\":\"lora-no-packet\"}}\n";
+    uint8_t lora[8] = {0};
+    uint8_t metadata[4] = {0};
+    assert(cp0_broker_decode_lora_response(lora_packet, lora, sizeof(lora),
+                                           metadata, sizeof(metadata)) == 4);
+    assert(memcmp(lora, "\x00\x01\xfe\xff", 4U) == 0);
+    assert(metadata[0] == 0xa4U && metadata[1] == 0xffU &&
+           metadata[2] == 0xfbU && metadata[3] == 0U);
+    assert(cp0_broker_decode_lora_response(no_lora_packet, lora,
+                                           sizeof(lora), metadata,
+                                           sizeof(metadata)) == 0);
+    assert(memcmp(metadata, "\x00\x00\x00\x00", sizeof(metadata)) == 0);
     return 0;
 }

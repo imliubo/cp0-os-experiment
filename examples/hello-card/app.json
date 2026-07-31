@@ -39,6 +39,10 @@
     {
       "name": "hardware.gpio",
       "reason": "Toggle the logical Grove function output after the user presses G"
+    },
+    {
+      "name": "radio.lora",
+      "reason": "Receive a bounded LoRa packet after the user presses L"
     }
   ]
 }

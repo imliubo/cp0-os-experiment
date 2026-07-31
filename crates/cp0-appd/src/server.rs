@@ -13,6 +13,7 @@ use cp0_document_protocol::{DocumentErrorCode as ServiceDocumentErrorCode, send_
 use cp0_gpio_protocol::GpioErrorCode as ServiceGpioErrorCode;
 use cp0_manifest::Permission;
 use cp0_network_protocol::NetworkErrorCode as ServiceNetworkErrorCode;
+use cp0_radio_protocol::RadioErrorCode as ServiceRadioErrorCode;
 
 use crate::protocol::APPD_PROTOCOL_VERSION;
 use crate::{
@@ -21,9 +22,9 @@ use crate::{
     BrokerResponse, CameraClient, CameraClientError, DocumentClient, DocumentClientError,
     DocumentCoordinator, DocumentPromptError, DocumentRequestResult, ErrorCode, GpioClient,
     GpioClientError, NetworkClient, NetworkClientError, NotificationQueue, PermissionChoice,
-    PermissionCoordinator, PermissionPromptError, PermissionRequestResult, ResponseData,
-    encode_broker_response, peer_credentials, read_broker_request, read_request,
-    write_broker_response, write_response,
+    PermissionCoordinator, PermissionPromptError, PermissionRequestResult, RadioClient,
+    RadioClientError, ResponseData, encode_broker_response, peer_credentials, read_broker_request,
+    read_request, write_broker_response, write_response,
 };
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -68,6 +69,7 @@ pub struct CapabilityServices {
     pub audio: AudioClient,
     pub camera: CameraClient,
     pub gpio: GpioClient,
+    pub radio: RadioClient,
 }
 
 #[derive(Debug)]
@@ -504,6 +506,50 @@ impl AppdServer {
                     Err(error) => {
                         eprintln!("cp0-appd: GPIO write request failed: {error}");
                         gpio_error_response(request_id, &error)
+                    }
+                }
+            }
+            BrokerCommand::SendLora { payload_base64 } => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::RadioLora)
+                {
+                    return response;
+                }
+                let payload = match cp0_radio_protocol::decode_payload(&payload_base64) {
+                    Ok(payload) => payload,
+                    Err(_) => {
+                        return BrokerResponse::error(
+                            request_id,
+                            BrokerErrorCode::InvalidRequest,
+                            "invalid bounded LoRa payload",
+                        );
+                    }
+                };
+                match self.capabilities.radio.send(request_id, &payload) {
+                    Ok(bytes) => BrokerResponse::lora_sent(request_id, bytes),
+                    Err(error) => {
+                        eprintln!("cp0-appd: LoRa send request failed: {error}");
+                        radio_error_response(request_id, &error)
+                    }
+                }
+            }
+            BrokerCommand::ReceiveLora { timeout_ms } => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::RadioLora)
+                {
+                    return response;
+                }
+                match self.capabilities.radio.receive(request_id, timeout_ms) {
+                    Ok(Some(packet)) => BrokerResponse::lora_packet(
+                        request_id,
+                        &packet.payload,
+                        packet.rssi_dbm,
+                        packet.snr_quarter_db,
+                    ),
+                    Ok(None) => BrokerResponse::lora_no_packet(request_id),
+                    Err(error) => {
+                        eprintln!("cp0-appd: LoRa receive request failed: {error}");
+                        radio_error_response(request_id, &error)
                     }
                 }
             }
@@ -1052,6 +1098,35 @@ fn gpio_error_response(request_id: u64, error: &GpioClientError) -> BrokerRespon
         | GpioClientError::Service(ServiceGpioErrorCode::Internal) => (
             BrokerErrorCode::Internal,
             "GPIO service returned an invalid response",
+        ),
+    };
+    BrokerResponse::error(request_id, code, message)
+}
+
+fn radio_error_response(request_id: u64, error: &RadioClientError) -> BrokerResponse {
+    let (code, message) = match error {
+        RadioClientError::Service(ServiceRadioErrorCode::InvalidRequest) => {
+            (BrokerErrorCode::InvalidRequest, "LoRa request is invalid")
+        }
+        RadioClientError::Service(ServiceRadioErrorCode::Busy)
+        | RadioClientError::Service(ServiceRadioErrorCode::RateLimited) => (
+            BrokerErrorCode::ResourceExhausted,
+            "LoRa radio is busy or transmission is rate limited",
+        ),
+        RadioClientError::Service(ServiceRadioErrorCode::Disabled)
+        | RadioClientError::Service(ServiceRadioErrorCode::Unavailable)
+        | RadioClientError::Service(ServiceRadioErrorCode::Device)
+        | RadioClientError::Io(_)
+        | RadioClientError::EmptyResponse => {
+            (BrokerErrorCode::Unavailable, "LoRa radio is unavailable")
+        }
+        RadioClientError::Protocol(_)
+        | RadioClientError::MismatchedRequestId
+        | RadioClientError::MismatchedOutcome
+        | RadioClientError::Service(ServiceRadioErrorCode::Unauthorized)
+        | RadioClientError::Service(ServiceRadioErrorCode::Internal) => (
+            BrokerErrorCode::Internal,
+            "radio service returned an invalid response",
         ),
     };
     BrokerResponse::error(request_id, code, message)

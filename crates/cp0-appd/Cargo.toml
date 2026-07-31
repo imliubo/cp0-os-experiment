@@ -11,6 +11,7 @@ cp0-document-protocol = { path = "../cp0-document-protocol" }
 cp0-gpio-protocol = { path = "../cp0-gpio-protocol" }
 cp0-manifest = { path = "../cp0-manifest" }
 cp0-network-protocol = { path = "../cp0-network-protocol" }
+cp0-radio-protocol = { path = "../cp0-radio-protocol" }
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true

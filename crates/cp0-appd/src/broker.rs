@@ -43,6 +43,12 @@ pub enum BrokerCommand {
         line: cp0_gpio_protocol::GpioLine,
         value: bool,
     },
+    SendLora {
+        payload_base64: String,
+    },
+    ReceiveLora {
+        timeout_ms: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +99,15 @@ pub enum BrokerOutcome {
         line: cp0_gpio_protocol::GpioLine,
         value: bool,
     },
+    LoraSent {
+        bytes: u8,
+    },
+    LoraPacket {
+        payload_base64: String,
+        rssi_dbm: i16,
+        snr_quarter_db: i8,
+    },
+    LoraNoPacket,
     Error {
         code: BrokerErrorCode,
         message: String,
@@ -140,6 +155,7 @@ pub enum BrokerProtocolError {
     InvalidDocumentResponse,
     InvalidAudio,
     InvalidCameraResponse,
+    InvalidRadio,
 }
 
 impl fmt::Display for BrokerProtocolError {
@@ -169,6 +185,7 @@ impl fmt::Display for BrokerProtocolError {
             Self::InvalidCameraResponse => {
                 formatter.write_str("invalid fixed camera frame metadata")
             }
+            Self::InvalidRadio => formatter.write_str("invalid bounded LoRa operation"),
         }
     }
 }
@@ -214,6 +231,17 @@ impl BrokerRequest {
                 if *frames == 0 || usize::from(*frames) > cp0_audio_protocol::MAX_AUDIO_FRAMES =>
             {
                 Err(BrokerProtocolError::InvalidAudio)
+            }
+            BrokerCommand::SendLora { payload_base64 }
+                if cp0_radio_protocol::decode_payload(payload_base64).is_err() =>
+            {
+                Err(BrokerProtocolError::InvalidRadio)
+            }
+            BrokerCommand::ReceiveLora { timeout_ms }
+                if *timeout_ms == 0
+                    || *timeout_ms > cp0_radio_protocol::MAX_LORA_RECEIVE_TIMEOUT_MS =>
+            {
+                Err(BrokerProtocolError::InvalidRadio)
             }
             _ => Ok(()),
         }
@@ -312,6 +340,34 @@ impl BrokerResponse {
         }
     }
 
+    pub fn lora_sent(request_id: u64, bytes: u8) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::LoraSent { bytes },
+        }
+    }
+
+    pub fn lora_packet(request_id: u64, payload: &[u8], rssi_dbm: i16, snr_quarter_db: i8) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::LoraPacket {
+                payload_base64: cp0_radio_protocol::encode_base64(payload),
+                rssi_dbm,
+                snr_quarter_db,
+            },
+        }
+    }
+
+    pub fn lora_no_packet(request_id: u64) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::LoraNoPacket,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), BrokerProtocolError> {
         if self.protocol_version != BROKER_PROTOCOL_VERSION {
             return Err(BrokerProtocolError::UnsupportedVersion(
@@ -360,6 +416,21 @@ impl BrokerResponse {
                 || *size_bytes != cp0_camera_protocol::CAMERA_FRAME_BYTES as u32 =>
             {
                 return Err(BrokerProtocolError::InvalidCameraResponse);
+            }
+            BrokerOutcome::LoraSent { bytes }
+                if *bytes == 0
+                    || usize::from(*bytes) > cp0_radio_protocol::MAX_LORA_PAYLOAD_BYTES =>
+            {
+                return Err(BrokerProtocolError::InvalidRadio);
+            }
+            BrokerOutcome::LoraPacket {
+                payload_base64,
+                rssi_dbm,
+                ..
+            } if cp0_radio_protocol::decode_payload(payload_base64).is_err()
+                || !(-200..=50).contains(rssi_dbm) =>
+            {
+                return Err(BrokerProtocolError::InvalidRadio);
             }
             _ => {}
         }
@@ -725,6 +796,36 @@ mod tests {
             BrokerResponse::gpio_value(7, cp0_gpio_protocol::GpioLine::External5vPower, false)
                 .validate()
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn round_trips_bounded_lora_packets_and_metadata() {
+        let request = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 10,
+            command: BrokerCommand::ReceiveLora { timeout_ms: 250 },
+        };
+        let mut frame = Vec::new();
+        write_broker_request(&mut frame, &request).unwrap();
+        assert_eq!(
+            read_broker_request(&mut Cursor::new(frame)).unwrap(),
+            Some(request)
+        );
+        assert!(
+            BrokerResponse::lora_packet(10, b"hello", -92, -5)
+                .validate()
+                .is_ok()
+        );
+        assert!(BrokerResponse::lora_no_packet(10).validate().is_ok());
+        assert!(
+            BrokerRequest {
+                protocol_version: BROKER_PROTOCOL_VERSION,
+                request_id: 10,
+                command: BrokerCommand::ReceiveLora { timeout_ms: 0 },
+            }
+            .validate()
+            .is_err()
         );
     }
 }
