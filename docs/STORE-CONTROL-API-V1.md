@@ -8,6 +8,9 @@ Console 和 Release Service 的首版控制面契约。设备上的 System Shell
 
 - `cp0ctl` 使用 OAuth Device Authorization Grant，access token 最长有效 1 小时且只授予
   `store.submit` scope；CLI 不保存或上传开发者私钥。
+- 当前服务端纵向切片实际签发 15 分钟 token；设备码有效 10 分钟，初始轮询间隔 5 秒，
+  过快轮询每次增加 5 秒、上限 30 秒。审批要求实时 owner/developer、`store.submit` 和 2FA，
+  并以幂等事务写入 audit/outbox；详见 `STORE-OAUTH-DEVICE-FLOW.md`。
 - `/v1` 下所有 POST/PUT 都要求 16-128 字节的 `Idempotency-Key`。
 - 修改已有状态的操作同时要求 `If-Match`，服务以 ETag/resource version 拒绝并发覆盖。
 - App ID 永久归属一个 team；已删除名称不能自动供其他开发者重新注册。

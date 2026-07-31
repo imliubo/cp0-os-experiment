@@ -33,6 +33,14 @@ pub const MAX_REQUEST_BYTES: usize = 32 * 1024;
 pub const MAX_UPLOAD_CHUNK_BYTES: usize = 256 * 1024;
 const IDEMPOTENCY_TTL_SECONDS: i64 = 24 * 60 * 60;
 const MAX_TRANSACTION_ATTEMPTS: usize = 4;
+const DEVICE_CODE_TTL_SECONDS: i64 = 10 * 60;
+const DEVICE_POLL_INTERVAL_SECONDS: i16 = 5;
+const ACCESS_TOKEN_TTL_SECONDS: i64 = 15 * 60;
+const MAX_ACTIVE_DEVICE_AUTHORIZATIONS: i64 = 10_000;
+const DEVICE_VERIFICATION_URI: &str = "https://developer.cardputerzero.dev/activate";
+const DEVICE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
+const DEVICE_CLIENT_ID: &str = "cp0ctl";
+const DEVICE_SCOPE: &str = "store.submit";
 
 #[derive(Clone, Debug)]
 struct ContentObjectStore {
@@ -208,6 +216,366 @@ impl StoreControlService {
 
     fn object_store(&self) -> Result<&ContentObjectStore, ApiError> {
         self.object_store.as_ref().ok_or_else(ApiError::unavailable)
+    }
+
+    async fn create_device_authorization(
+        &self,
+        request: &DeviceCodeRequest,
+    ) -> Result<DeviceCodeResponse, ApiError> {
+        if request.client_id != DEVICE_CLIENT_ID || request.scope != DEVICE_SCOPE {
+            return Err(ApiError::invalid_request());
+        }
+        for _ in 0..MAX_TRANSACTION_ATTEMPTS {
+            let device_code = random_secret("cp0_dc_");
+            let user_code = random_user_code();
+            let mut transaction = self
+                .pool
+                .begin()
+                .await
+                .map_err(|_| ApiError::unavailable())?;
+            sqlx::query(
+                "SELECT pg_advisory_xact_lock(\
+                 hashtextextended('cp0.oauth-device.active-cap.v1', 0))",
+            )
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+            let now: i64 =
+                sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
+                    .fetch_one(&mut *transaction)
+                    .await
+                    .map_err(|_| ApiError::unavailable())?;
+            let active: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM oauth_device_authorizations \
+                 WHERE state = 'pending' AND expires_unix_seconds > $1",
+            )
+            .bind(now)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+            if active >= MAX_ACTIVE_DEVICE_AUTHORIZATIONS {
+                return Err(ApiError::unavailable());
+            }
+            let inserted = sqlx::query(
+                "INSERT INTO oauth_device_authorizations (device_code_sha256, user_code, \
+                 client_id, scopes, state, requested_unix_seconds, expires_unix_seconds, \
+                 poll_interval_seconds, next_poll_unix_seconds) \
+                 VALUES ($1, $2, $3, ARRAY[$4], 'pending', $5, $6, $7, $8) \
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(sha256_hex(device_code.as_bytes()))
+            .bind(&user_code)
+            .bind(DEVICE_CLIENT_ID)
+            .bind(DEVICE_SCOPE)
+            .bind(now)
+            .bind(now + DEVICE_CODE_TTL_SECONDS)
+            .bind(DEVICE_POLL_INTERVAL_SECONDS)
+            .bind(now + i64::from(DEVICE_POLL_INTERVAL_SECONDS))
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| ApiError::unavailable())?
+            .rows_affected();
+            if inserted == 1 {
+                transaction
+                    .commit()
+                    .await
+                    .map_err(|_| ApiError::unavailable())?;
+                return Ok(DeviceCodeResponse {
+                    device_code,
+                    user_code,
+                    verification_uri: DEVICE_VERIFICATION_URI,
+                    expires_in: DEVICE_CODE_TTL_SECONDS as u64,
+                    interval: DEVICE_POLL_INTERVAL_SECONDS as u64,
+                });
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    async fn decide_device_authorization(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+        request_id: &str,
+        request: &DeviceAuthorizationDecisionRequest,
+    ) -> Result<(), ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let key_sha256 = sha256_hex(idempotency_key.as_bytes());
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self
+                .decide_device_authorization_once(&token_sha256, &key_sha256, request_id, request)
+                .await
+            {
+                Err(TxError::Sql(error)) if is_retryable_transaction_error(&error) => {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(error) => return Err(ApiError::from_transaction(error)),
+                Ok(()) => return Ok(()),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    async fn decide_device_authorization_once(
+        &self,
+        token_sha256: &str,
+        key_sha256: &str,
+        request_id: &str,
+        request: &DeviceAuthorizationDecisionRequest,
+    ) -> Result<(), TxError> {
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let identity = authenticate(&mut transaction, token_sha256).await?;
+        require_device_authorization(&identity)?;
+        let now = database_now(&mut transaction).await?;
+        let request_sha256 = oauth_decision_request_sha256(request);
+        match reserve_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            &request_sha256,
+            now,
+        )
+        .await?
+        {
+            IdempotencyReservation::Replay { status, body }
+                if status == StatusCode::NO_CONTENT.as_u16() as i16 && body == json!({}) =>
+            {
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(());
+            }
+            IdempotencyReservation::Replay { .. } => return Err(ApiError::internal().into()),
+            IdempotencyReservation::Fresh => {}
+        }
+        let row = sqlx::query(
+            "SELECT device_code_sha256, state, expires_unix_seconds \
+             FROM oauth_device_authorizations WHERE user_code = $1 FOR UPDATE",
+        )
+        .bind(&request.user_code)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .ok_or_else(ApiError::not_found)?;
+        if row.get::<i64, _>("expires_unix_seconds") <= now {
+            return Err(ApiError::expired_token().into());
+        }
+        if row.get::<String, _>("state") != "pending" {
+            return Err(ApiError::conflict().into());
+        }
+        let next_state = match request.decision.as_str() {
+            "approve" => "approved",
+            "deny" => "denied",
+            _ => return Err(ApiError::invalid_request().into()),
+        };
+        let device_code_sha256: String = row.get("device_code_sha256");
+        let changed = sqlx::query(
+            "UPDATE oauth_device_authorizations SET state = $1, member_id = $2, \
+             decided_unix_seconds = $3 WHERE device_code_sha256 = $4 AND state = 'pending'",
+        )
+        .bind(next_state)
+        .bind(&identity.member_id)
+        .bind(now)
+        .bind(&device_code_sha256)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .rows_affected();
+        if changed != 1 {
+            return Err(ApiError::conflict().into());
+        }
+        complete_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            StatusCode::NO_CONTENT,
+            &json!({}),
+        )
+        .await?;
+        append_mutation(
+            &mut transaction,
+            MutationEvent {
+                now,
+                actor_id: &identity.member_id,
+                action: "oauth-device.decided",
+                topic: "oauth-device.decided",
+                object_kind: "oauth-device",
+                object_id: &device_code_sha256,
+                before_state: Some("pending"),
+                after_state: Some(next_state),
+                resource_version: 1,
+                request_id,
+                request_sha256: &request_sha256,
+                key_sha256,
+                payload: json!({
+                    "device_code_sha256": device_code_sha256,
+                    "decision": request.decision,
+                    "member_id": identity.member_id
+                }),
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)
+    }
+
+    async fn exchange_device_authorization(
+        &self,
+        request: &DeviceTokenRequest,
+    ) -> Result<DeviceTokenResponse, ApiError> {
+        if request.grant_type != DEVICE_GRANT_TYPE
+            || request.client_id != DEVICE_CLIENT_ID
+            || !is_valid_device_code(&request.device_code)
+        {
+            return Err(ApiError::invalid_request());
+        }
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self.exchange_device_authorization_once(request).await {
+                Err(TxError::Sql(error)) if is_retryable_transaction_error(&error) => {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(error) => return Err(ApiError::from_transaction(error)),
+                Ok(response) => return Ok(response),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    async fn exchange_device_authorization_once(
+        &self,
+        request: &DeviceTokenRequest,
+    ) -> Result<DeviceTokenResponse, TxError> {
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let now = database_now(&mut transaction).await?;
+        let device_code_sha256 = sha256_hex(request.device_code.as_bytes());
+        let row = sqlx::query(
+            "SELECT state, member_id, expires_unix_seconds, poll_interval_seconds, \
+             next_poll_unix_seconds FROM oauth_device_authorizations \
+             WHERE device_code_sha256 = $1 AND client_id = $2 FOR UPDATE",
+        )
+        .bind(&device_code_sha256)
+        .bind(&request.client_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .ok_or_else(ApiError::expired_token)?;
+        if row.get::<i64, _>("expires_unix_seconds") <= now {
+            return Err(ApiError::expired_token().into());
+        }
+        let state: String = row.get("state");
+        if state == "pending" {
+            let interval: i16 = row.get("poll_interval_seconds");
+            let too_soon = now < row.get::<i64, _>("next_poll_unix_seconds");
+            let next_interval = if too_soon {
+                (interval + 5).min(30)
+            } else {
+                interval
+            };
+            sqlx::query(
+                "UPDATE oauth_device_authorizations SET poll_interval_seconds = $1, \
+                 last_poll_unix_seconds = $2, next_poll_unix_seconds = $3 \
+                 WHERE device_code_sha256 = $4 AND state = 'pending'",
+            )
+            .bind(next_interval)
+            .bind(now)
+            .bind(now + i64::from(next_interval))
+            .bind(&device_code_sha256)
+            .execute(&mut *transaction)
+            .await
+            .map_err(TxError::Sql)?;
+            transaction.commit().await.map_err(TxError::Sql)?;
+            return Err(if too_soon {
+                ApiError::slow_down()
+            } else {
+                ApiError::authorization_pending()
+            }
+            .into());
+        }
+        if state != "approved" {
+            return Err(ApiError::access_denied().into());
+        }
+        let member_id: String = row
+            .get::<Option<String>, _>("member_id")
+            .ok_or_else(ApiError::access_denied)?;
+        let member =
+            sqlx::query("SELECT role, two_factor_enabled FROM team_members WHERE member_id = $1")
+                .bind(&member_id)
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(TxError::Sql)?
+                .ok_or_else(ApiError::access_denied)?;
+        if !matches!(
+            member.get::<String, _>("role").as_str(),
+            "owner" | "developer"
+        ) || !member.get::<bool, _>("two_factor_enabled")
+        {
+            return Err(ApiError::access_denied().into());
+        }
+        let access_token = random_secret("cp0_at_");
+        let access_token_sha256 = sha256_hex(access_token.as_bytes());
+        sqlx::query(
+            "INSERT INTO access_tokens (token_sha256, member_id, scopes, \
+             expires_unix_seconds, revoked, created_unix_seconds) \
+             VALUES ($1, $2, ARRAY[$3], $4, FALSE, $5)",
+        )
+        .bind(&access_token_sha256)
+        .bind(&member_id)
+        .bind(DEVICE_SCOPE)
+        .bind(now + ACCESS_TOKEN_TTL_SECONDS)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+        let changed = sqlx::query(
+            "UPDATE oauth_device_authorizations SET state = 'consumed', \
+             consumed_unix_seconds = $1, issued_token_sha256 = $2 \
+             WHERE device_code_sha256 = $3 AND state = 'approved'",
+        )
+        .bind(now)
+        .bind(&access_token_sha256)
+        .bind(&device_code_sha256)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .rows_affected();
+        if changed != 1 {
+            return Err(ApiError::access_denied().into());
+        }
+        let request_sha256 = oauth_exchange_request_sha256(&device_code_sha256);
+        let exchange_request_id = request_id();
+        append_mutation(
+            &mut transaction,
+            MutationEvent {
+                now,
+                actor_id: &member_id,
+                action: "oauth-device.consumed",
+                topic: "oauth-device.consumed",
+                object_kind: "oauth-device",
+                object_id: &device_code_sha256,
+                before_state: Some("approved"),
+                after_state: Some("consumed"),
+                resource_version: 2,
+                request_id: &exchange_request_id,
+                request_sha256: &request_sha256,
+                key_sha256: &request_sha256,
+                payload: json!({
+                    "device_code_sha256": device_code_sha256,
+                    "member_id": member_id,
+                    "scope": DEVICE_SCOPE
+                }),
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)?;
+        Ok(DeviceTokenResponse {
+            access_token,
+            token_type: "Bearer",
+            expires_in: ACCESS_TOKEN_TTL_SECONDS as u64,
+            scope: DEVICE_SCOPE,
+        })
     }
 
     async fn create_app(
@@ -1900,6 +2268,18 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
 pub fn router(service: StoreControlService) -> Router {
     Router::new()
         .route(
+            "/oauth/device/code",
+            post(post_device_code).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/oauth/device/authorize",
+            post(post_device_authorization).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/oauth/token",
+            post(post_device_token).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
             "/v1/apps",
             post(post_app).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
         )
@@ -1944,6 +2324,47 @@ pub fn router(service: StoreControlService) -> Router {
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(fallback)
         .with_state(service)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeviceCodeRequest {
+    client_id: String,
+    scope: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeviceCodeResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: &'static str,
+    expires_in: u64,
+    interval: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeviceAuthorizationDecisionRequest {
+    user_code: String,
+    decision: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeviceTokenRequest {
+    grant_type: String,
+    device_code: String,
+    client_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeviceTokenResponse {
+    access_token: String,
+    token_type: &'static str,
+    expires_in: u64,
+    scope: &'static str,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2151,6 +2572,10 @@ struct Problem {
 #[derive(Debug, Clone, Copy)]
 enum ApiErrorKind {
     InvalidRequest,
+    AuthorizationPending,
+    SlowDown,
+    AccessDenied,
+    ExpiredToken,
     Unauthorized,
     Forbidden,
     TwoFactorRequired,
@@ -2176,6 +2601,30 @@ impl ApiError {
     const fn invalid_request() -> Self {
         Self {
             kind: ApiErrorKind::InvalidRequest,
+        }
+    }
+
+    const fn authorization_pending() -> Self {
+        Self {
+            kind: ApiErrorKind::AuthorizationPending,
+        }
+    }
+
+    const fn slow_down() -> Self {
+        Self {
+            kind: ApiErrorKind::SlowDown,
+        }
+    }
+
+    const fn access_denied() -> Self {
+        Self {
+            kind: ApiErrorKind::AccessDenied,
+        }
+    }
+
+    const fn expired_token() -> Self {
+        Self {
+            kind: ApiErrorKind::ExpiredToken,
         }
     }
 
@@ -2277,6 +2726,30 @@ impl ApiError {
                 "invalid-request",
                 "Invalid request",
                 Some("The request does not match the Store API contract."),
+            ),
+            ApiErrorKind::AuthorizationPending => (
+                StatusCode::BAD_REQUEST,
+                "authorization-pending",
+                "Authorization pending",
+                Some("The developer has not completed device authorization."),
+            ),
+            ApiErrorKind::SlowDown => (
+                StatusCode::BAD_REQUEST,
+                "slow-down",
+                "Polling too quickly",
+                Some("Increase the polling interval before retrying."),
+            ),
+            ApiErrorKind::AccessDenied => (
+                StatusCode::BAD_REQUEST,
+                "access-denied",
+                "Authorization denied",
+                Some("The device authorization was denied or is no longer permitted."),
+            ),
+            ApiErrorKind::ExpiredToken => (
+                StatusCode::BAD_REQUEST,
+                "expired-token",
+                "Device code expired",
+                Some("Start a new device authorization request."),
             ),
             ApiErrorKind::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
@@ -2494,6 +2967,18 @@ async fn retry_delay(attempt: usize) {
 fn require_developer_write(identity: &Identity) -> Result<(), ApiError> {
     if !matches!(identity.role.as_str(), "owner" | "developer")
         || !identity.has_any_scope(&["store.submit", "store.control"])
+    {
+        return Err(ApiError::forbidden());
+    }
+    if !identity.two_factor_enabled {
+        return Err(ApiError::two_factor_required());
+    }
+    Ok(())
+}
+
+fn require_device_authorization(identity: &Identity) -> Result<(), ApiError> {
+    if !matches!(identity.role.as_str(), "owner" | "developer")
+        || !identity.has_any_scope(&[DEVICE_SCOPE])
     {
         return Err(ApiError::forbidden());
     }
@@ -2928,6 +3413,20 @@ fn mutation_request_sha256(domain: &str, fields: &[&str]) -> String {
     lower_hex(&hasher.finalize())
 }
 
+fn oauth_decision_request_sha256(request: &DeviceAuthorizationDecisionRequest) -> String {
+    mutation_request_sha256(
+        "oauth-device.decision.v1",
+        &[&request.user_code, &request.decision],
+    )
+}
+
+fn oauth_exchange_request_sha256(device_code_sha256: &str) -> String {
+    mutation_request_sha256(
+        "oauth-device.exchange.v1",
+        &[device_code_sha256, DEVICE_CLIENT_ID],
+    )
+}
+
 fn release_mutation_request_sha256(
     release_id: &str,
     expected_version: u64,
@@ -3159,6 +3658,74 @@ async fn reserve_idempotency(
     match (status, body) {
         (Some(status), Some(body)) => Ok(IdempotencyReservation::Replay { status, body }),
         _ => Err(ApiError::unavailable().into()),
+    }
+}
+
+async fn post_device_code(
+    State(service): State<StoreControlService>,
+    payload: Result<Json<DeviceCodeRequest>, JsonRejection>,
+) -> Response {
+    let response_request_id = request_id();
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return oauth_error_response(json_rejection(rejection), response_request_id);
+        }
+    };
+    match service.create_device_authorization(&request).await {
+        Ok(response) => oauth_json_response(StatusCode::OK, response, response_request_id),
+        Err(error) => oauth_error_response(error, response_request_id),
+    }
+}
+
+async fn post_device_authorization(
+    State(service): State<StoreControlService>,
+    headers: HeaderMap,
+    payload: Result<Json<DeviceAuthorizationDecisionRequest>, JsonRejection>,
+) -> Response {
+    let response_request_id = request_id();
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return oauth_error_response(error, response_request_id),
+    };
+    let idempotency_key = match idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(error) => return oauth_error_response(error, response_request_id),
+    };
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return oauth_error_response(json_rejection(rejection), response_request_id);
+        }
+    };
+    if !is_valid_user_code(&request.user_code)
+        || !matches!(request.decision.as_str(), "approve" | "deny")
+    {
+        return oauth_error_response(ApiError::invalid_request(), response_request_id);
+    }
+    match service
+        .decide_device_authorization(&token, &idempotency_key, &response_request_id, &request)
+        .await
+    {
+        Ok(()) => oauth_empty_response(response_request_id),
+        Err(error) => oauth_error_response(error, response_request_id),
+    }
+}
+
+async fn post_device_token(
+    State(service): State<StoreControlService>,
+    payload: Result<Json<DeviceTokenRequest>, JsonRejection>,
+) -> Response {
+    let response_request_id = request_id();
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return oauth_error_response(json_rejection(rejection), response_request_id);
+        }
+    };
+    match service.exchange_device_authorization(&request).await {
+        Ok(response) => oauth_json_response(StatusCode::OK, response, response_request_id),
+        Err(error) => oauth_error_response(error, response_request_id),
     }
 }
 
@@ -3749,6 +4316,40 @@ fn json_response<T: Serialize>(status: StatusCode, resource: T, request_id: Stri
     response
 }
 
+fn oauth_json_response<T: Serialize>(
+    status: StatusCode,
+    resource: T,
+    request_id: String,
+) -> Response {
+    let mut response = json_response(status, resource, request_id);
+    add_oauth_cache_headers(&mut response);
+    response
+}
+
+fn oauth_empty_response(request_id: String) -> Response {
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert("x-request-id", value);
+    }
+    add_oauth_cache_headers(&mut response);
+    response
+}
+
+fn oauth_error_response(error: ApiError, request_id: String) -> Response {
+    let mut response = error.response(request_id);
+    add_oauth_cache_headers(&mut response);
+    response
+}
+
+fn add_oauth_cache_headers(response: &mut Response) {
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert("pragma", HeaderValue::from_static("no-cache"));
+}
+
 async fn fallback() -> Response {
     ApiError::not_found().response(request_id())
 }
@@ -3887,6 +4488,23 @@ fn is_valid_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
+fn is_valid_device_code(value: &str) -> bool {
+    value.strip_prefix("cp0_dc_").is_some_and(|suffix| {
+        suffix.len() == 64
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    })
+}
+
+fn is_valid_user_code(value: &str) -> bool {
+    value.len() == 14
+        && value.bytes().enumerate().all(|(index, byte)| match index {
+            4 | 9 => byte == b'-',
+            _ => byte.is_ascii_hexdigit() && !byte.is_ascii_lowercase(),
+        })
+}
+
 fn is_valid_submission_id(value: &str) -> bool {
     valid_prefixed_hex_id(value, "sub_")
 }
@@ -4007,6 +4625,19 @@ fn request_id() -> String {
 
 fn prefixed_uuid(prefix: &str) -> String {
     format!("{prefix}{}", Uuid::new_v4().simple())
+}
+
+fn random_secret(prefix: &str) -> String {
+    format!(
+        "{prefix}{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    )
+}
+
+fn random_user_code() -> String {
+    let random = Uuid::new_v4().simple().to_string().to_ascii_uppercase();
+    format!("{}-{}-{}", &random[0..4], &random[4..8], &random[8..12])
 }
 
 fn sha256_hex(value: &[u8]) -> String {

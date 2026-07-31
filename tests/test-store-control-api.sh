@@ -8,6 +8,12 @@ jq -e '
   .openapi == "3.1.0" and
   .info.version == "1.0.0" and
   .paths["/oauth/device/code"].post.operationId == "createDeviceCode" and
+  .paths["/oauth/device/authorize"].post.operationId == "authorizeDeviceCode" and
+  .paths["/oauth/token"].post.operationId == "exchangeDeviceCode" and
+  .paths["/oauth/device/code"].post.security == [] and
+  .paths["/oauth/token"].post.security == [] and
+  (.paths["/oauth/device/authorize"].post | has("security") | not) and
+  (.paths["/oauth/token"].post.responses | has("428") | not) and
   .paths["/v1/apps/{app_id}/submissions"].post.operationId == "createSubmission" and
   .paths["/v1/submissions/{submission_id}:finalize"].post.operationId == "finalizeSubmission" and
   .paths["/v1/submissions/{submission_id}/messages"].post.operationId == "postReviewMessage" and
@@ -30,8 +36,9 @@ jq -e '
   ] and
   all(
     .components.schemas[
-      "Problem", "DeviceCodeRequest", "DeviceCodeResponse", "DeviceTokenRequest",
-      "DeviceTokenResponse", "CreateAppRequest", "App", "AssetDescriptor",
+      "Problem", "DeviceCodeRequest", "DeviceCodeResponse",
+      "DeviceAuthorizationDecisionRequest", "DeviceTokenRequest", "DeviceTokenResponse",
+      "CreateAppRequest", "App", "AssetDescriptor",
       "CreateSubmissionRequest", "FinalizeSubmissionRequest", "Submission",
       "ReviewMessageRequest", "ReviewMessage", "ReviewDecisionRequest",
       "CreateReleaseRequest", "ScheduleReleaseRequest", "RemovalRequest", "Release"
@@ -44,6 +51,8 @@ jq -e '
 
 jq -e '
   def refs($operation): [($operation.parameters // [])[] | .["$ref"]];
+  (refs(.paths["/oauth/device/authorize"].post) |
+    index("#/components/parameters/IdempotencyKey") != null) and
   (refs(.paths["/v1/review/submissions/{submission_id}:begin"].post) |
     index("#/components/parameters/IdempotencyKey") != null and
     index("#/components/parameters/IfMatch") != null) and

@@ -6,6 +6,7 @@ part of the CardputerZero device image.
 
 ## Implemented API slice
 
+- `POST /oauth/device/code`, `/oauth/device/authorize`, and `/oauth/token`;
 - `POST /v1/apps` and `GET /v1/apps/{app_id}`;
 - `POST /v1/apps/{app_id}/submissions`;
 - `PUT /v1/submissions/{submission_id}/parts/{part_name}`;
@@ -24,6 +25,13 @@ require `store.apps.write`; Submission writes require `store.submit`. The
 internal `store.control` scope can perform either operation. Exact idempotent
 retries return the stored status/body/ETag, while a key reused for another
 request fails with `idempotency-conflict`.
+
+The developer OAuth Device Flow issues only 15-minute `store.submit` tokens.
+Device codes and access tokens are stored only as hashes; approval requires a
+live owner/developer identity with the exact scope and enabled 2FA. Poll timing,
+one-time exchange, approval idempotency, state transitions, audit, and outbox
+are enforced transactionally. See `STORE-OAUTH-DEVICE-FLOW.md` for the protocol
+and the remaining production Identity/Teams boundary.
 
 The upload endpoint accepts one contiguous chunk of at most 256 KiB and checks
 `If-Match`, `Content-Range` and `Content-SHA256`. Chunks are hashed again and
@@ -98,8 +106,9 @@ developer/reviewer messages, approved-only Release creation, concurrent Release
 uniqueness, scheduling, publication queueing, pause/resume/removal, publication
 retry, injected transaction rollback and append-only database triggers.
 
-OAuth Device Flow, withdraw, dynamic malware intelligence, independent second
-review, double approval, Review Console UI, production object storage, general
-outbox delivery and garbage collection are not implemented by this HTTP slice.
+Identity/Teams account and session management, withdraw, dynamic malware
+intelligence, independent second review, double approval, Review Console UI,
+production object storage, general outbox delivery and garbage collection are
+not implemented by this HTTP slice.
 Isolated signing/Catalog publication and transparency logging are implemented by
 the S5G/S5H Publisher boundary described in `STORE-PUBLISHER.md`.

@@ -74,6 +74,7 @@ async fn postgres_http_transaction_acceptance() {
     verify_concurrent_submission_revisions(&application, &pool).await;
     verify_review_backend(&application, &pool).await;
     verify_release_backend(&application, &pool).await;
+    verify_oauth_device_flow(&application, &pool).await;
     verify_database_immutability(&pool).await;
     tokio::fs::remove_dir_all(object_root)
         .await
@@ -1576,6 +1577,405 @@ async fn verify_release_backend(application: &Router, pool: &PgPool) {
     );
 }
 
+async fn verify_oauth_device_flow(application: &Router, pool: &PgPool) {
+    let invalid = call(
+        application.clone(),
+        Method::POST,
+        "/oauth/device/code",
+        None,
+        None,
+        Some(json!({"client_id": "other", "scope": "store.submit"})),
+    )
+    .await;
+    assert_problem(&invalid, StatusCode::BAD_REQUEST, "invalid-request");
+    assert_oauth_headers(&invalid);
+
+    let authorization = create_device_code(application).await;
+    let device_code = authorization["device_code"].as_str().unwrap().to_owned();
+    let user_code = authorization["user_code"].as_str().unwrap().to_owned();
+    assert!(device_code.starts_with("cp0_dc_"));
+    assert_eq!(device_code.len(), 71);
+    assert_eq!(user_code.len(), 14);
+    assert_eq!(
+        authorization["verification_uri"],
+        "https://developer.cardputerzero.dev/activate"
+    );
+    assert_eq!(authorization["expires_in"], 600);
+    assert_eq!(authorization["interval"], 5);
+
+    let stored_digest: String = sqlx::query_scalar(
+        "SELECT device_code_sha256 FROM oauth_device_authorizations WHERE user_code = $1",
+    )
+    .bind(&user_code)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_digest, sha256_hex(device_code.as_bytes()));
+    assert_ne!(stored_digest, device_code);
+
+    let early_poll = exchange_device_code(application, &device_code).await;
+    assert_problem(&early_poll, StatusCode::BAD_REQUEST, "slow-down");
+    assert_oauth_headers(&early_poll);
+    let interval: i16 = sqlx::query_scalar(
+        "SELECT poll_interval_seconds FROM oauth_device_authorizations WHERE user_code = $1",
+    )
+    .bind(&user_code)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(interval, 10);
+
+    for (token, key, status, code) in [
+        (
+            None,
+            "oauth-missing-auth-01",
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+        ),
+        (
+            Some(EXPIRED_TOKEN),
+            "oauth-expired-auth-1",
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+        ),
+        (
+            Some(REVOKED_TOKEN),
+            "oauth-revoked-auth-1",
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+        ),
+        (
+            Some(NO_2FA_TOKEN),
+            "oauth-no2fa-auth-01",
+            StatusCode::FORBIDDEN,
+            "two-factor-required",
+        ),
+        (
+            Some(VIEWER_TOKEN),
+            "oauth-viewer-auth-1",
+            StatusCode::FORBIDDEN,
+            "forbidden",
+        ),
+        (
+            Some(READ_ONLY_TOKEN),
+            "oauth-scope-auth-01",
+            StatusCode::FORBIDDEN,
+            "forbidden",
+        ),
+    ] {
+        let result = authorize_device_code(application, token, key, &user_code, "approve").await;
+        assert_problem(&result, status, code);
+        assert_oauth_headers(&result);
+    }
+
+    let approved = authorize_device_code(
+        application,
+        Some(OWNER_A_TOKEN),
+        "oauth-approve-main-01",
+        &user_code,
+        "approve",
+    )
+    .await;
+    assert_eq!(approved.status, StatusCode::NO_CONTENT);
+    assert_oauth_headers(&approved);
+    let replay = authorize_device_code(
+        application,
+        Some(OWNER_A_TOKEN),
+        "oauth-approve-main-01",
+        &user_code,
+        "approve",
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::NO_CONTENT);
+    let conflicting_replay = authorize_device_code(
+        application,
+        Some(OWNER_A_TOKEN),
+        "oauth-approve-main-01",
+        &user_code,
+        "deny",
+    )
+    .await;
+    assert_problem(
+        &conflicting_replay,
+        StatusCode::CONFLICT,
+        "idempotency-conflict",
+    );
+
+    let exchange_a = exchange_device_code(application, &device_code);
+    let exchange_b = exchange_device_code(application, &device_code);
+    let (exchange_a, exchange_b) = tokio::join!(exchange_a, exchange_b);
+    let (issued, rejected) = if exchange_a.status == StatusCode::OK {
+        (exchange_a, exchange_b)
+    } else {
+        (exchange_b, exchange_a)
+    };
+    assert_eq!(issued.status, StatusCode::OK);
+    assert_oauth_headers(&issued);
+    assert_problem(&rejected, StatusCode::BAD_REQUEST, "access-denied");
+    let token_response: Value = serde_json::from_slice(&issued.body).unwrap();
+    let access_token = token_response["access_token"].as_str().unwrap().to_owned();
+    assert!(access_token.starts_with("cp0_at_"));
+    assert_eq!(access_token.len(), 71);
+    assert_eq!(token_response["token_type"], "Bearer");
+    assert_eq!(token_response["expires_in"], 900);
+    assert_eq!(token_response["scope"], "store.submit");
+
+    let token_digest = sha256_hex(access_token.as_bytes());
+    let issued_row = sqlx::query(
+        "SELECT device_auth.state, device_auth.issued_token_sha256, token.scopes, \
+         token.revoked FROM oauth_device_authorizations device_auth \
+         JOIN access_tokens token ON token.token_sha256 = device_auth.issued_token_sha256 \
+         WHERE device_auth.device_code_sha256 = $1",
+    )
+    .bind(sha256_hex(device_code.as_bytes()))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(issued_row.get::<String, _>("state"), "consumed");
+    assert_eq!(
+        issued_row.get::<String, _>("issued_token_sha256"),
+        token_digest
+    );
+    assert_eq!(
+        issued_row.get::<Vec<String>, _>("scopes"),
+        vec!["store.submit"]
+    );
+    assert!(!issued_row.get::<bool, _>("revoked"));
+
+    let submission = call(
+        application.clone(),
+        Method::POST,
+        "/v1/apps/dev.cardputerzero.notes/submissions",
+        Some(&access_token),
+        Some("oauth-created-submission-01"),
+        Some(json!({
+            "version": "90.0.0",
+            "package_sha256": "a".repeat(64),
+            "package_bytes": 100,
+            "listing_sha256": "b".repeat(64),
+            "listing_bytes": 100,
+            "assets": [
+                {"path": "icon.png", "sha256": "c".repeat(64), "bytes": 100,
+                 "width": 48, "height": 48},
+                {"path": "screens/main.png", "sha256": "d".repeat(64), "bytes": 100,
+                 "width": 320, "height": 170}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(submission.status, StatusCode::CREATED);
+
+    sqlx::query("UPDATE access_tokens SET revoked = TRUE WHERE token_sha256 = $1")
+        .bind(&token_digest)
+        .execute(pool)
+        .await
+        .unwrap();
+    let revoked = call(
+        application.clone(),
+        Method::GET,
+        "/v1/apps/dev.cardputerzero.notes",
+        Some(&access_token),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&revoked, StatusCode::UNAUTHORIZED, "unauthorized");
+
+    let pending_code = format!("cp0_dc_{}", "1".repeat(64));
+    insert_device_authorization(pool, &pending_code, "1111-2222-3333", -1, 600, -1).await;
+    let pending = exchange_device_code(application, &pending_code).await;
+    assert_problem(&pending, StatusCode::BAD_REQUEST, "authorization-pending");
+
+    let denied_authorization = create_device_code(application).await;
+    let denied_code = denied_authorization["device_code"].as_str().unwrap();
+    let denied_user_code = denied_authorization["user_code"].as_str().unwrap();
+    let denied = authorize_device_code(
+        application,
+        Some(OWNER_A_TOKEN),
+        "oauth-deny-device-001",
+        denied_user_code,
+        "deny",
+    )
+    .await;
+    assert_eq!(denied.status, StatusCode::NO_CONTENT);
+    let denied_exchange = exchange_device_code(application, denied_code).await;
+    assert_problem(&denied_exchange, StatusCode::BAD_REQUEST, "access-denied");
+
+    let role_authorization = create_device_code(application).await;
+    sqlx::query("UPDATE team_members SET role = 'developer' WHERE member_id = $1")
+        .bind(VIEWER_MEMBER)
+        .execute(pool)
+        .await
+        .unwrap();
+    let role_approved = authorize_device_code(
+        application,
+        Some(VIEWER_TOKEN),
+        "oauth-role-change-001",
+        role_authorization["user_code"].as_str().unwrap(),
+        "approve",
+    )
+    .await;
+    assert_eq!(role_approved.status, StatusCode::NO_CONTENT);
+    sqlx::query("UPDATE team_members SET role = 'viewer' WHERE member_id = $1")
+        .bind(VIEWER_MEMBER)
+        .execute(pool)
+        .await
+        .unwrap();
+    let role_changed = exchange_device_code(
+        application,
+        role_authorization["device_code"].as_str().unwrap(),
+    )
+    .await;
+    assert_problem(&role_changed, StatusCode::BAD_REQUEST, "access-denied");
+
+    let factor_authorization = create_device_code(application).await;
+    sqlx::query("UPDATE team_members SET two_factor_enabled = TRUE WHERE member_id = $1")
+        .bind(NO_2FA_MEMBER)
+        .execute(pool)
+        .await
+        .unwrap();
+    let factor_approved = authorize_device_code(
+        application,
+        Some(NO_2FA_TOKEN),
+        "oauth-factor-change-1",
+        factor_authorization["user_code"].as_str().unwrap(),
+        "approve",
+    )
+    .await;
+    assert_eq!(factor_approved.status, StatusCode::NO_CONTENT);
+    sqlx::query("UPDATE team_members SET two_factor_enabled = FALSE WHERE member_id = $1")
+        .bind(NO_2FA_MEMBER)
+        .execute(pool)
+        .await
+        .unwrap();
+    let factor_changed = exchange_device_code(
+        application,
+        factor_authorization["device_code"].as_str().unwrap(),
+    )
+    .await;
+    assert_problem(&factor_changed, StatusCode::BAD_REQUEST, "access-denied");
+
+    let expired_code = format!("cp0_dc_{}", "2".repeat(64));
+    insert_device_authorization(pool, &expired_code, "AAAA-BBBB-CCCC", -10, -1, -10).await;
+    let expired = exchange_device_code(application, &expired_code).await;
+    assert_problem(&expired, StatusCode::BAD_REQUEST, "expired-token");
+    let expired_decision = authorize_device_code(
+        application,
+        Some(OWNER_A_TOKEN),
+        "oauth-expired-code-01",
+        "AAAA-BBBB-CCCC",
+        "approve",
+    )
+    .await;
+    assert_problem(&expired_decision, StatusCode::BAD_REQUEST, "expired-token");
+
+    for secret in [&device_code, &access_token] {
+        let outbox_matches: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM outbox_events WHERE payload::TEXT LIKE '%' || $1 || '%'",
+        )
+        .bind(secret)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let audit_matches: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audit_events WHERE to_jsonb(audit_events)::TEXT LIKE '%' || $1 || '%'",
+        )
+        .bind(secret)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let idempotency_matches: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM idempotency_records \
+             WHERE COALESCE(response_body::TEXT, '') LIKE '%' || $1 || '%'",
+        )
+        .bind(secret)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (outbox_matches, audit_matches, idempotency_matches),
+            (0, 0, 0)
+        );
+    }
+}
+
+async fn create_device_code(application: &Router) -> Value {
+    let result = call(
+        application.clone(),
+        Method::POST,
+        "/oauth/device/code",
+        None,
+        None,
+        Some(json!({"client_id": "cp0ctl", "scope": "store.submit"})),
+    )
+    .await;
+    assert_eq!(result.status, StatusCode::OK);
+    assert_oauth_headers(&result);
+    serde_json::from_slice(&result.body).unwrap()
+}
+
+async fn authorize_device_code(
+    application: &Router,
+    token: Option<&str>,
+    idempotency_key: &str,
+    user_code: &str,
+    decision: &str,
+) -> HttpResult {
+    call(
+        application.clone(),
+        Method::POST,
+        "/oauth/device/authorize",
+        token,
+        Some(idempotency_key),
+        Some(json!({"user_code": user_code, "decision": decision})),
+    )
+    .await
+}
+
+async fn exchange_device_code(application: &Router, device_code: &str) -> HttpResult {
+    call(
+        application.clone(),
+        Method::POST,
+        "/oauth/token",
+        None,
+        None,
+        Some(json!({
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            "device_code": device_code,
+            "client_id": "cp0ctl"
+        })),
+    )
+    .await
+}
+
+async fn insert_device_authorization(
+    pool: &PgPool,
+    device_code: &str,
+    user_code: &str,
+    requested_offset: i64,
+    expires_offset: i64,
+    next_poll_offset: i64,
+) {
+    let now: i64 = sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO oauth_device_authorizations (device_code_sha256, user_code, client_id, \
+         scopes, state, requested_unix_seconds, expires_unix_seconds, poll_interval_seconds, \
+         next_poll_unix_seconds) VALUES ($1, $2, 'cp0ctl', ARRAY['store.submit'], 'pending', \
+         $3, $4, 5, $5)",
+    )
+    .bind(sha256_hex(device_code.as_bytes()))
+    .bind(user_code)
+    .bind(now + requested_offset)
+    .bind(now + expires_offset)
+    .bind(now + next_poll_offset)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 async fn seed_review_submission(
     pool: &PgPool,
     submission_id: &str,
@@ -1617,6 +2017,27 @@ async fn seed_review_submission(
 }
 
 async fn verify_database_immutability(pool: &PgPool) {
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE oauth_device_authorizations SET state = 'approved' WHERE state = 'consumed'",
+        )
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM oauth_device_authorizations WHERE state = 'denied'")
+            .execute(pool)
+            .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM access_tokens WHERE token_sha256 = $1")
+            .bind(sha256_hex(OWNER_A_TOKEN.as_bytes()))
+            .execute(pool)
+            .await,
+        "55000",
+    );
     assert_sqlstate(
         sqlx::query("UPDATE apps SET owner_team_id = $1 WHERE app_id = 'dev.cardputerzero.notes'")
             .bind(TEAM_B)
@@ -1798,7 +2219,8 @@ async fn verify_database_immutability(pool: &PgPool) {
 
 async fn reset_database(pool: &PgPool) {
     pool.execute(
-        "TRUNCATE outbox_events, audit_events, idempotency_records, release_operations, \
+        "TRUNCATE outbox_events, audit_events, idempotency_records, oauth_device_authorizations, \
+         release_operations, \
          submission_upload_chunks, submission_upload_parts, releases, \
          review_decisions, review_messages, review_assignments, submissions, apps, developer_keys, \
          reviewer_access_tokens, reviewers, access_tokens, team_members, teams, catalog_sequence \
@@ -2164,6 +2586,11 @@ fn assert_problem(result: &HttpResult, status: StatusCode, code: &str) {
     assert_eq!(value["code"], code);
     assert!(value["request_id"].as_str().unwrap().starts_with("req_"));
     assert!(result.body.len() <= 1024);
+}
+
+fn assert_oauth_headers(result: &HttpResult) {
+    assert_eq!(result.headers.get("cache-control").unwrap(), "no-store");
+    assert_eq!(result.headers.get("pragma").unwrap(), "no-cache");
 }
 
 fn assert_sqlstate<T: std::fmt::Debug>(result: Result<T, sqlx::Error>, expected: &str) {

@@ -47,7 +47,23 @@
             }
           },
           "400": { "$ref": "#/components/responses/Problem" },
-          "428": { "$ref": "#/components/responses/Problem" }
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/oauth/device/authorize": {
+      "post": {
+        "operationId": "authorizeDeviceCode",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/DeviceAuthorizationDecisionRequest" } }
+          }
+        },
+        "responses": {
+          "204": { "description": "Device authorization decision recorded" },
+          "default": { "$ref": "#/components/responses/Problem" }
         }
       }
     },
@@ -616,6 +632,15 @@
           "verification_uri": { "const": "https://developer.cardputerzero.dev/activate" },
           "expires_in": { "type": "integer", "minimum": 60, "maximum": 900 },
           "interval": { "type": "integer", "minimum": 5, "maximum": 30 }
+        }
+      },
+      "DeviceAuthorizationDecisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["user_code", "decision"],
+        "properties": {
+          "user_code": { "type": "string", "pattern": "^[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$" },
+          "decision": { "enum": ["approve", "deny"] }
         }
       },
       "DeviceTokenRequest": {
