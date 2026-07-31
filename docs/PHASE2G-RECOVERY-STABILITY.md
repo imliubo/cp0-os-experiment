@@ -73,6 +73,7 @@ The first formal 24-hour acceptance run started at approximately 2026-07-31
 started at 2026-07-31 20:42:15 CST as transient unit
 `cardputerzero-stability-acceptance.service`; at the 21:58 read-only check it and
 compositor, System Shell and appd were all `active/running` with zero restarts.
-The Roadmap remains open until approximately 2026-08-01 20:42 CST, when the
-complete RAM-backed result must be retrieved and inspected before any platform
-deployment or reboot.
+That run was explicitly invalidated at 2026-08-01 00:26 CST by the owner's
+requested developer-mode key and Neon Snake package installation. Its eventual
+status must not be accepted as idle evidence. The Roadmap remains open until a
+new uninterrupted 24-hour run is retrieved and independently verified.
