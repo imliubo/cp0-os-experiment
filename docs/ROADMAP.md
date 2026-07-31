@@ -100,9 +100,8 @@ Shell 和其他应用数据。
 - [x] 建立 freestanding C11/C++17 SDK 头文件并加入 wasm32 双语言编译测试。
 - [ ] 发布完整 Rust 和 C/C++ SDK，生成 WIT bindings 并提供 LVGL 320x170 组件。
 - [x] 实现 `cp0ctl new/build` 的 SDK-only 项目生成、Cargo metadata 解析和规范产物树。
-- [ ] 实现 `cp0ctl run/package/sign/install/logs`（`package`、双层 Ed25519 `sign`、
-  `key generate`、`verify`、设备端 `install` 和 `rollback` 已完成）。
-- 建立 PC 模拟器、权限模拟、输入映射和性能分析工具。
+- [x] 实现 `cp0ctl run/package/sign/install/logs`，包含 PC 到真机的 SSH 安装/日志路径。
+- [x] 建立 PC WASM 模拟器、权限模拟、evdev 输入映射和 JSON 性能分析工具。
 - 迁移 Calculator、Camera 等示例，不提供传统 Linux 应用兼容层。
 - 冻结 SDK 1.0 ABI、兼容策略和开发者文档。
 

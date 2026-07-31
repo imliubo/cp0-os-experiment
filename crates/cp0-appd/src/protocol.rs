@@ -11,6 +11,7 @@ use crate::{DocumentPrompt, Notification, PermissionChoice, PermissionPrompt};
 pub const APPD_PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024;
 pub const MAX_APP_LIST_PAGE: u8 = 8;
+pub const MAX_LOG_LINES: u16 = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -39,6 +40,10 @@ pub enum AppdCommand {
     },
     Rollback {
         app_id: String,
+    },
+    Logs {
+        app_id: String,
+        limit: u16,
     },
     GetPermissionPrompt,
     ResolvePermission {
@@ -96,6 +101,10 @@ pub enum ResponseData {
     RolledBack {
         app_id: String,
         version: String,
+    },
+    Logs {
+        app_id: String,
+        lines: Vec<String>,
     },
     PendingPermission {
         prompt: Option<PermissionPrompt>,
@@ -159,6 +168,7 @@ pub enum ProtocolError {
     InvalidPromptId,
     InvalidDocumentId,
     InvalidPackageName,
+    InvalidLogLimit,
 }
 
 impl fmt::Display for ProtocolError {
@@ -188,6 +198,9 @@ impl fmt::Display for ProtocolError {
             Self::InvalidPromptId => formatter.write_str("permission prompt ID must be non-zero"),
             Self::InvalidDocumentId => formatter.write_str("invalid document ID"),
             Self::InvalidPackageName => formatter.write_str("invalid incoming package name"),
+            Self::InvalidLogLimit => {
+                formatter.write_str("application log limit must be between 1 and 100")
+            }
         }
     }
 }
@@ -225,6 +238,7 @@ impl AppdRequest {
             AppdCommand::Start { app_id }
             | AppdCommand::Stop { app_id }
             | AppdCommand::Rollback { app_id }
+            | AppdCommand::Logs { app_id, .. }
                 if !cp0_manifest::is_valid_app_id(app_id) =>
             {
                 Err(ProtocolError::InvalidAppId)
@@ -248,6 +262,9 @@ impl AppdRequest {
             }
             AppdCommand::Install { package_name } if !is_valid_package_name(package_name) => {
                 Err(ProtocolError::InvalidPackageName)
+            }
+            AppdCommand::Logs { limit, .. } if !(1..=MAX_LOG_LINES).contains(limit) => {
+                Err(ProtocolError::InvalidLogLimit)
             }
             _ => Ok(()),
         }

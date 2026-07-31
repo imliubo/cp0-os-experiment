@@ -59,8 +59,8 @@ pub use permissions::{
 
 pub use protocol::{
     APPD_PROTOCOL_VERSION, AppSummary, AppdCommand, AppdRequest, AppdResponse, ErrorCode,
-    MAX_APP_LIST_PAGE, PeerCredentials, ProtocolError, ResponseData, ResponseOutcome,
-    peer_credentials, read_request, read_response, write_request, write_response,
+    MAX_APP_LIST_PAGE, MAX_LOG_LINES, PeerCredentials, ProtocolError, ResponseData,
+    ResponseOutcome, peer_credentials, read_request, read_response, write_request, write_response,
 };
 pub use radio_client::{DEFAULT_RADIO_SOCKET, RadioClient, RadioClientError, ReceivedRadioPacket};
 pub use registry::{

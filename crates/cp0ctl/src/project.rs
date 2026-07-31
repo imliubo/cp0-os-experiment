@@ -152,6 +152,78 @@ pub fn build_project(path: impl AsRef<Path>) -> Result<PathBuf, String> {
     Ok(output)
 }
 
+pub fn run_project(arguments: &[String]) -> Result<(), String> {
+    let project_path = arguments
+        .first()
+        .ok_or("run requires a project directory")?;
+    let build = build_project(project_path)?;
+    let manifest_path = build.join("app.json");
+    let manifest = cp0_manifest::load_and_validate(&manifest_path)
+        .map_err(|error| format!("invalid built manifest: {error}"))?;
+    let wasm = build.join(&manifest.entrypoint);
+    let simulator_output = build.join("simulator");
+    let mut duration = "1000".to_owned();
+    let mut permissions = "deny".to_owned();
+    let mut keys = String::new();
+    let mut output = simulator_output.join("frame.ppm");
+    let mut profile = simulator_output.join("profile.json");
+
+    let mut index = 1;
+    while index < arguments.len() {
+        let option = &arguments[index];
+        let value = arguments
+            .get(index + 1)
+            .ok_or_else(|| format!("run option {option} requires a value"))?;
+        match option.as_str() {
+            "--duration" => {
+                let milliseconds = value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|value| (100..=30_000).contains(value))
+                    .ok_or("run duration must be between 100 and 30000 milliseconds")?;
+                duration = milliseconds.to_string();
+            }
+            "--permissions" if matches!(value.as_str(), "allow" | "deny") => {
+                permissions.clone_from(value);
+            }
+            "--permissions" => return Err("run permissions must be allow or deny".into()),
+            "--keys" => keys.clone_from(value),
+            "--output" => output = PathBuf::from(value),
+            "--profile" => profile = PathBuf::from(value),
+            _ => return Err(format!("unknown run option {option}")),
+        }
+        index += 2;
+    }
+
+    let bundled_script =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../simulator/cp0-simulator.mjs");
+    let script = std::env::var_os("CP0_SIMULATOR_SCRIPT")
+        .map(PathBuf::from)
+        .unwrap_or(bundled_script);
+    if !script.is_file() {
+        return Err(format!(
+            "CardputerZero simulator is missing: {}",
+            script.display()
+        ));
+    }
+    let node = std::env::var_os("CP0_NODE").unwrap_or_else(|| "node".into());
+    let status = Command::new(node)
+        .arg(script)
+        .args(["--wasm", &wasm.to_string_lossy()])
+        .args(["--manifest", &manifest_path.to_string_lossy()])
+        .args(["--duration", &duration])
+        .args(["--permissions", &permissions])
+        .args(["--keys", &keys])
+        .args(["--output", &output.to_string_lossy()])
+        .args(["--profile", &profile.to_string_lossy()])
+        .status()
+        .map_err(|error| format!("cannot execute CardputerZero simulator: {error}"))?;
+    if !status.success() {
+        return Err("CardputerZero simulator failed".into());
+    }
+    Ok(())
+}
+
 fn toml_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }

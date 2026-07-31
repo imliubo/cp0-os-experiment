@@ -314,6 +314,46 @@ impl AppManager {
         Ok(())
     }
 
+    pub fn logs(&self, app_id: &str, limit: u16) -> Result<Vec<String>, AppManagerError> {
+        let unit = self.unit_for_app(app_id)?;
+        let limit = limit.to_string();
+        let output = Command::new("/usr/bin/journalctl")
+            .args([
+                "--unit",
+                &unit,
+                "--lines",
+                &limit,
+                "--output",
+                "cat",
+                "--no-pager",
+                "--quiet",
+            ])
+            .output()
+            .map_err(|error| AppManagerError::CommandIo("journalctl", error))?;
+        if !output.status.success() {
+            return Err(AppManagerError::UnitFailed("read logs"));
+        }
+        let mut encoded_bytes = 0_usize;
+        let lines = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| {
+                let line: String = line
+                    .chars()
+                    .filter(|character| !character.is_control() || *character == '\t')
+                    .take(256)
+                    .collect();
+                let next = encoded_bytes.saturating_add(line.len());
+                if line.is_empty() || next > 3 * 1024 {
+                    None
+                } else {
+                    encoded_bytes = next;
+                    Some(line)
+                }
+            })
+            .collect();
+        Ok(lines)
+    }
+
     pub(crate) fn unit_for_app(&self, app_id: &str) -> Result<String, AppManagerError> {
         let account = self
             .registry

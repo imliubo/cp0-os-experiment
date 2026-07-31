@@ -6,13 +6,14 @@ use std::time::Duration;
 
 use cp0_appd::{
     APPD_PROTOCOL_VERSION, AppdCommand, AppdRequest, BROKER_PROTOCOL_VERSION, BrokerCommand,
-    BrokerOutcome, BrokerRequest, MAX_APP_LIST_PAGE, PermissionChoice, ResponseOutcome,
-    read_broker_response, read_response, write_broker_request, write_request,
+    BrokerOutcome, BrokerRequest, MAX_APP_LIST_PAGE, MAX_LOG_LINES, PermissionChoice,
+    ResponseOutcome, read_broker_response, read_response, write_broker_request, write_request,
 };
 use cp0_manifest::Permission;
 
 mod package;
 mod project;
+mod remote;
 
 const APPD_SOCKET: &str = "/run/cardputerzero-appd/control.sock";
 const BROKER_SOCKET: &str = "/run/cardputerzero-broker/runtime.sock";
@@ -31,6 +32,7 @@ fn main() -> ExitCode {
             project::new_project(path, app_id, name)
         }
         [command, path] if command == "build" => project::build_project(path).map(|_| ()),
+        [command, rest @ ..] if command == "run" => project::run_project(rest),
         [key, command, secret, public] if key == "key" && command == "generate" => {
             package::generate_key(secret, public)
         }
@@ -50,6 +52,37 @@ fn main() -> ExitCode {
             package::verify_package(input, Some(store_public))
         }
         [command, input] if command == "install" => install_package(input),
+        [command, input, flag, device] if command == "install" && flag == "--device" => {
+            remote::install(input, device)
+        }
+        [command, app_id] if command == "logs" => send_app_command(AppdCommand::Logs {
+            app_id: app_id.clone(),
+            limit: 50,
+        }),
+        [command, app_id, limit] if command == "logs" => limit
+            .parse::<u16>()
+            .ok()
+            .filter(|limit| (1..=MAX_LOG_LINES).contains(limit))
+            .ok_or_else(|| "log line limit must be between 1 and 100".to_owned())
+            .and_then(|limit| {
+                send_app_command(AppdCommand::Logs {
+                    app_id: app_id.clone(),
+                    limit,
+                })
+            }),
+        [command, app_id, flag, device] if command == "logs" && flag == "--device" => {
+            remote::logs(device, app_id, 50)
+        }
+        [command, app_id, limit, flag, device]
+            if command == "logs" && flag == "--device" =>
+        {
+            limit
+                .parse::<u16>()
+                .ok()
+                .filter(|limit| (1..=MAX_LOG_LINES).contains(limit))
+                .ok_or_else(|| "log line limit must be between 1 and 100".to_owned())
+                .and_then(|limit| remote::logs(device, app_id, limit))
+        }
         [app, command] if app == "app" && command == "ping" => send_app_command(AppdCommand::Ping),
         [app, command] if app == "app" && command == "list" => send_app_command(
             AppdCommand::List {
@@ -117,7 +150,7 @@ fn main() -> ExitCode {
             })
         }
         _ => Err(
-            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | install <package.capp> | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
+            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
                 .into(),
         ),
     };

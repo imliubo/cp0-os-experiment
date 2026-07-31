@@ -228,7 +228,7 @@ impl AppdServer {
 
         if matches!(
             &request.command,
-            AppdCommand::Install { .. } | AppdCommand::Rollback { .. }
+            AppdCommand::Install { .. } | AppdCommand::Rollback { .. } | AppdCommand::Logs { .. }
         ) && credentials.uid != 0
         {
             write_response(
@@ -292,6 +292,11 @@ impl AppdServer {
                     app_id: installed.app_id,
                     version: installed.version,
                 })
+                .map_err(CommandError::Manager),
+            AppdCommand::Logs { app_id, limit } => state
+                .manager
+                .logs(&app_id, limit)
+                .map(|lines| ResponseData::Logs { app_id, lines })
                 .map_err(CommandError::Manager),
             AppdCommand::GetPermissionPrompt => Ok(ResponseData::PendingPermission {
                 prompt: state.permissions.pending().cloned(),
