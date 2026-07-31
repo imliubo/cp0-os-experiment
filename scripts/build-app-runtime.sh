@@ -45,7 +45,7 @@ if [ ! -x "$libffi_dir/configure" ]; then
 fi
 mkdir -p "$libffi_build"
 if [ ! -f "$libffi_build/Makefile" ]; then
-    build_triplet=$($libffi_dir/config.guess)
+    build_triplet=$(sh "$libffi_dir/config.guess")
     (cd "$libffi_build" && "$libffi_dir/configure" \
         --build="$build_triplet" \
         --host=aarch64-linux-gnu \

@@ -5,9 +5,11 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 build="$repo_root/image/build-image.sh"
 stage="$repo_root/image/pi-gen/stage-cardputerzero-os/02-app-platform/01-run.sh"
 compositor="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/01-run.sh"
+runtime_builder="$repo_root/scripts/build-app-runtime.sh"
 
 grep -q 'scripts/build-appd.sh' "$build"
 grep -q 'scripts/build-app-runtime.sh' "$build"
+grep -Fq 'build_triplet=$(sh "$libffi_dir/config.guess")' "$runtime_builder"
 grep -q 'scripts/build-example-app.sh' "$build"
 grep -q '02-app-platform/payload' "$build"
 grep -q 'cp0-appd register-installed' "$stage"
