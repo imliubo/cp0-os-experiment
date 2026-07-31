@@ -1,5 +1,14 @@
 #!/bin/bash -e
 
+image_profile=$(cat "${STAGE_DIR}/image-profile")
+case "$image_profile" in
+    product | recovery) ;;
+    *)
+        echo "error: invalid CardputerZero image profile: $image_profile" >&2
+        exit 1
+        ;;
+esac
+
 source "${STAGE_DIR}/01-compositor/weston.env"
 
 shell_source="${ROOTFS_DIR}/tmp/cardputerzero-system-shell"
@@ -249,7 +258,21 @@ if ! id cp0-shell >/dev/null 2>&1; then
 else
     usermod -G cp0-wayland cp0-shell
 fi
+CHROOT
+
+if [[ $image_profile == product ]]; then
+    on_chroot <<'CHROOT'
+set -e
 systemctl enable seatd.service
 systemctl enable cardputerzero-compositor.service
 systemctl enable cardputerzero-recovery-console.service
 CHROOT
+else
+    on_chroot <<'CHROOT'
+set -e
+systemctl disable seatd.service cardputerzero-recovery-console.service \
+    2>/dev/null || true
+systemctl mask cardputerzero-compositor.service \
+    cardputerzero-system-shell.service
+CHROOT
+fi

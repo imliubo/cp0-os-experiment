@@ -76,6 +76,12 @@ else
     record FAIL hardware-smoke "${smoke_summary:-device-smoke failed}"
 fi
 
+if [[ $(cat /etc/cardputerzero/image-profile 2>/dev/null || true) == product ]]; then
+    record PASS image-profile product
+else
+    record FAIL image-profile "factory gate requires a product image"
+fi
+
 cmdline=" $(cat /proc/cmdline 2>/dev/null) "
 if [[ $cmdline == *" cp0.overlay_root=volatile "* ]] &&
     [[ $(findmnt -n -o FSTYPE / 2>/dev/null) == overlay ]] &&

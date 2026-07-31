@@ -3,6 +3,11 @@ set -u
 
 display=FAIL
 keyboard=FAIL
+profile=DEV
+
+if [ "$(cat /etc/cardputerzero/image-profile 2>/dev/null)" = recovery ]; then
+    profile=RECOVERY
+fi
 
 if find /sys/class/drm -maxdepth 1 -type l -name 'card*-SPI-*' 2>/dev/null |
     grep -q .; then
@@ -20,7 +25,7 @@ if [ -z "$ipv4" ]; then
     ipv4='not assigned'
 fi
 
-printf '\nCardputerZero OS DEV\n'
+printf '\nCardputerZero OS %s\n' "$profile"
 printf 'Boot:     READY\n'
 printf 'LCD:      %s\n' "$display"
 printf 'Keyboard: %s\n' "$keyboard"

@@ -8,6 +8,14 @@ if [[ -z $rootfs || ! -d $rootfs ]]; then
 fi
 rootfs=$(cd "$rootfs" && pwd -P)
 bootfs="$rootfs/boot/firmware"
+image_profile=$(cat "$rootfs/etc/cardputerzero/image-profile" 2>/dev/null || true)
+case "$image_profile" in
+    product | recovery) ;;
+    *)
+        echo "error: missing or invalid image profile: ${image_profile:-missing}" >&2
+        exit 1
+        ;;
+esac
 
 required_executables=(
     usr/bin/cardputerzero-system-shell
@@ -51,33 +59,63 @@ for path in "${required_files[@]}"; do
 done
 for marker in developer-mode recovery-mode; do
     if [[ -e $rootfs/var/lib/cardputerzero/registry/$marker ]]; then
-        echo "error: product image enables $marker by default" >&2
+        echo "error: image enables $marker by default" >&2
         exit 1
     fi
 done
 
 enabled_units=(
-    multi-user.target.wants/cardputerzero-compositor.service
     multi-user.target.wants/cardputerzero-console-banner.service
-    multi-user.target.wants/cardputerzero-overlay-root-status.service
-    multi-user.target.wants/cardputerzero-recovery-console.service
-    sockets.target.wants/cardputerzero-appd.socket
-    sockets.target.wants/cardputerzero-audiod.socket
-    sockets.target.wants/cardputerzero-broker.socket
-    sockets.target.wants/cardputerzero-camerad.socket
-    sockets.target.wants/cardputerzero-documentd.socket
-    sockets.target.wants/cardputerzero-gpiod.socket
-    sockets.target.wants/cardputerzero-networkd.socket
-    sockets.target.wants/cardputerzero-radiod.socket
-    sockets.target.wants/cardputerzero-storaged.socket
-    sockets.target.wants/cardputerzero-stored.socket
+    getty.target.wants/getty@tty1.service
 )
+if [[ $image_profile == product ]]; then
+    enabled_units+=(
+        multi-user.target.wants/cardputerzero-compositor.service
+        multi-user.target.wants/cardputerzero-overlay-root-status.service
+        multi-user.target.wants/cardputerzero-recovery-console.service
+        multi-user.target.wants/seatd.service
+        sockets.target.wants/cardputerzero-appd.socket
+        sockets.target.wants/cardputerzero-audiod.socket
+        sockets.target.wants/cardputerzero-broker.socket
+        sockets.target.wants/cardputerzero-camerad.socket
+        sockets.target.wants/cardputerzero-documentd.socket
+        sockets.target.wants/cardputerzero-gpiod.socket
+        sockets.target.wants/cardputerzero-networkd.socket
+        sockets.target.wants/cardputerzero-radiod.socket
+        sockets.target.wants/cardputerzero-storaged.socket
+        sockets.target.wants/cardputerzero-stored.socket
+    )
+fi
 for path in "${enabled_units[@]}"; do
     if [[ ! -L $rootfs/etc/systemd/system/$path ]]; then
         echo "error: required unit is not enabled: $path" >&2
         exit 1
     fi
 done
+if [[ $image_profile == recovery ]]; then
+    masked_units=(
+        cardputerzero-compositor.service
+        cardputerzero-system-shell.service
+        cardputerzero-appd.service
+        cardputerzero-appd.socket
+        cardputerzero-audiod.socket
+        cardputerzero-broker.socket
+        cardputerzero-camerad.socket
+        cardputerzero-documentd.socket
+        cardputerzero-gpiod.socket
+        cardputerzero-networkd.socket
+        cardputerzero-radiod.socket
+        cardputerzero-storaged.socket
+        cardputerzero-stored.socket
+    )
+    for unit in "${masked_units[@]}"; do
+        mask="$rootfs/etc/systemd/system/$unit"
+        if [[ ! -L $mask || $(readlink "$mask") != /dev/null ]]; then
+            echo "error: recovery image unit is not masked: $unit" >&2
+            exit 1
+        fi
+    done
+fi
 
 grep -Rqx 'Storage=volatile' \
     "$rootfs/etc/systemd/journald.conf" \
@@ -91,8 +129,13 @@ grep -qx 'kernel.unprivileged_bpf_disabled=1' \
 
 test -s "$bootfs/initramfs8"
 grep -qx 'auto_initramfs=1' "$bootfs/config.txt"
-if ! grep -qw 'cp0.overlay_root=volatile' "$bootfs/cmdline.txt"; then
-    echo "error: immutable root is not enabled in the final image" >&2
+if [[ $image_profile == product ]]; then
+    if ! grep -qw 'cp0.overlay_root=volatile' "$bootfs/cmdline.txt"; then
+        echo "error: immutable root is not enabled in the product image" >&2
+        exit 1
+    fi
+elif grep -qw 'cp0.overlay_root=volatile' "$bootfs/cmdline.txt"; then
+    echo "error: recovery image unexpectedly enables immutable root" >&2
     exit 1
 fi
 if grep -qw 'resize' "$bootfs/cmdline.txt"; then
@@ -121,6 +164,8 @@ if [[ $(blkid -s LABEL -o value "$data_device") != cp0-data ]]; then
     exit 1
 fi
 grep -qx 'cp0-data-layout-v1' "$data_root/layout-version"
+grep -qx "$image_profile" \
+    "$data_root/etc-cardputerzero/image-profile"
 for path in cardputerzero etc-cardputerzero network-connections \
     network-state ssh; do
     if [[ ! -d $data_root/$path || -L $data_root/$path ]]; then
@@ -155,4 +200,4 @@ if find "$data_root" -xdev -type f -perm /0002 -print -quit | grep -q .; then
     exit 1
 fi
 
-echo "PASS built rootfs and initramfs profile"
+echo "PASS built rootfs and initramfs profile: $image_profile"

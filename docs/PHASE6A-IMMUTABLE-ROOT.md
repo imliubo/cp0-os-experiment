@@ -53,6 +53,10 @@ not mount or bind `cp0-data`. This is distinct from the Settings "Recovery
 Boot", which keeps the immutable/persistent layout and only selects the tty1
 console instead of the compositor.
 
+Phase 6C formalizes that lower-root path as a separately named `recovery` image
+profile. It also masks compositor and application activation rather than relying
+only on an edited command line; see `docs/PHASE6C-RECOVERY-IMAGE.md`.
+
 ## Persistent allowlist
 
 The exported image seeds a versioned `cp0-data-layout-v1` layout. Only these

@@ -222,3 +222,8 @@ Phase 6 的设备诊断同样不常驻且不自动上传。默认支持包只导
 加入，并在包内标为敏感。量产验收只读检查不可变根、`cp0-data`、固定服务和 socket
 权限，结果仅写入 `/run`。详细数据边界见
 `docs/PHASE6B-DIAGNOSTICS-FACTORY.md`。
+
+独立恢复镜像使用 root-owned `image-profile=recovery` 标记，显式移除 OverlayFS
+参数并 mask compositor、System Shell、appd 和全部 capability socket，只保留 tty1、
+LCD 启动摘要、网络和 SSH。恢复启动不会自动扩容、挂载或绑定 `cp0-data`，避免把
+待修复的安全状态隐式带入可写维修根；详见 `docs/PHASE6C-RECOVERY-IMAGE.md`。

@@ -83,6 +83,8 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
   全局权限，用户可二次确认切换开发者模式与下次启动的 tty1 恢复控制台。
 - Phase 6B 本地诊断与量产门禁：默认脱敏且不联网的 RAM-only 支持包、显式同意的
   原始服务日志，以及只读检查 V0.6 硬件、不可变根、服务与 socket 的工厂验收器。
+- Phase 6C 独立恢复镜像 profile：默认 tty1/LCD/SSH 维修环境、可写 lower root、
+  compositor/appd/broker 全部禁用，以及与产品镜像分离的发布门禁和产物名称。
 
 ## 快速验证
 
@@ -152,3 +154,5 @@ Rust SDK 公共 API 和真机迁移结果见
 [device policy and user-controlled modes](docs/PHASE5C-DEVICE-POLICY.md)。
 不可识别诊断数据边界、敏感日志同意和量产门禁见
 [privacy-preserving diagnostics and factory acceptance](docs/PHASE6B-DIAGNOSTICS-FACTORY.md)。
+独立维修介质的构建、启动约束和发布门禁见
+[independent recovery image profile](docs/PHASE6C-RECOVERY-IMAGE.md)。

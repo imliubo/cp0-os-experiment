@@ -1,5 +1,14 @@
 #!/bin/bash -e
 
+image_profile=$(cat "${STAGE_DIR}/image-profile")
+case "$image_profile" in
+    product | recovery) ;;
+    *)
+        echo "error: invalid CardputerZero image profile: $image_profile" >&2
+        exit 1
+        ;;
+esac
+
 BSP_REPOSITORY="https://github.com/m5stack/m5stack-linux-dtoverlays.git"
 BSP_COMMIT="c3b254819307c177a34100b66fe19e52059ce8c4"
 
@@ -97,13 +106,25 @@ for token in quiet splash fbcon=map:off fbcon=map:0; do
     sed -i -E "s/(^|[[:space:]])${token}([[:space:]]|$)/ /g" "$cmdline"
 done
 sed -i -E 's/(^|[[:space:]])resize([[:space:]]|$)/ /g' "$cmdline"
+sed -i -E \
+    's/(^|[[:space:]])cp0\.overlay_root=volatile([[:space:]]|$)/ /g' \
+    "$cmdline"
 sed -i -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' "$cmdline"
 
-for token in cgroup_memory=1 cgroup_enable=memory apparmor=1 security=apparmor loglevel=6 consoleblank=0 fbcon=map:1 cp0.overlay_root=volatile; do
+for token in cgroup_memory=1 cgroup_enable=memory apparmor=1 security=apparmor loglevel=6 consoleblank=0 fbcon=map:1; do
     if ! grep -qw "$token" "$cmdline"; then
         sed -i "s|$| $token|" "$cmdline"
     fi
 done
+if [[ $image_profile == product ]]; then
+    sed -i 's|$| cp0.overlay_root=volatile|' "$cmdline"
+fi
+
+install -d -o root -g root -m 0755 \
+    "${ROOTFS_DIR}/etc/cardputerzero"
+printf '%s\n' "$image_profile" \
+    >"${ROOTFS_DIR}/etc/cardputerzero/image-profile"
+chmod 0644 "${ROOTFS_DIR}/etc/cardputerzero/image-profile"
 
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/device-smoke.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-smoke.sh"

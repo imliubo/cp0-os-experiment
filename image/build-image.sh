@@ -12,6 +12,15 @@ deploy_dir="$repo_root/deploy"
 apt_proxy=${CP0_APT_PROXY:-${http_proxy:-}}
 resume_build=${CP0_RESUME_BUILD:-0}
 image_name=${CP0_IMAGE_NAME:-}
+image_profile=${CP0_IMAGE_PROFILE:-product}
+
+case "$image_profile" in
+    product | recovery) ;;
+    *)
+        echo "error: CP0_IMAGE_PROFILE must be product or recovery" >&2
+        exit 2
+        ;;
+esac
 
 if [[ $(uname -s) == Darwin && -n "$apt_proxy" ]]; then
     apt_proxy=${apt_proxy/127.0.0.1/host.docker.internal}
@@ -66,6 +75,8 @@ printf '%s\n' \
 rm -rf "$pi_gen_dir/stage-cardputerzero-os"
 cp -R "$repo_root/image/pi-gen/stage-cardputerzero-os" \
     "$pi_gen_dir/stage-cardputerzero-os"
+printf '%s\n' "$image_profile" \
+    >"$pi_gen_dir/stage-cardputerzero-os/image-profile"
 mkdir -p "$pi_gen_dir/stage-cardputerzero-os/01-compositor/system-shell"
 cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$repo_root/system-shell/include/cp0_json.h" \
@@ -106,6 +117,10 @@ cp "$repo_root/appd/lora.conf" "$platform_payload/"
 cp "$repo_root/appd/store.conf" "$platform_payload/"
 cp "$repo_root/appd/device-policy.json" "$platform_payload/"
 if [[ -n ${CP0_STORE_PUBLIC_KEY:-} ]]; then
+    if [[ $image_profile == recovery ]]; then
+        echo "error: a recovery image cannot embed a Store trust key" >&2
+        exit 2
+    fi
     if [[ ! -f $CP0_STORE_PUBLIC_KEY ]] || [[ $(wc -c <"$CP0_STORE_PUBLIC_KEY") -ne 32 ]]; then
         echo "error: CP0_STORE_PUBLIC_KEY must name a 32-byte raw Ed25519 public key" >&2
         exit 1

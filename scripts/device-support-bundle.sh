@@ -53,10 +53,12 @@ model=$(tr -d '\000' 2>/dev/null </proc/device-tree/model || true)
 os_version=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release 2>/dev/null | head -1)
 os_version=${os_version#\"}
 os_version=${os_version%\"}
+image_profile=$(cat /etc/cardputerzero/image-profile 2>/dev/null || true)
 {
     printf 'schema=cardputerzero-support-v1\n'
     printf 'created_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'journal_included=%s\n' "$include_journal"
+    printf 'image_profile=%s\n' "$(single_line "${image_profile:-unknown}")"
     printf 'model=%s\n' "$(single_line "$model")"
     printf 'os=%s\n' "$(single_line "$os_version")"
     printf 'kernel=%s\n' "$(uname -r)"

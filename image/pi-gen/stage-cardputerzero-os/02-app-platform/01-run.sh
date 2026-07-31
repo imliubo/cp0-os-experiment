@@ -2,6 +2,14 @@
 
 payload="${STAGE_DIR}/02-app-platform/payload"
 hello_root="${ROOTFS_DIR}/var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0"
+image_profile=$(cat "${STAGE_DIR}/image-profile")
+case "$image_profile" in
+    product | recovery) ;;
+    *)
+        echo "error: invalid CardputerZero image profile: $image_profile" >&2
+        exit 1
+        ;;
+esac
 
 install -D -m 0755 "${payload}/cp0-appd" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-appd"
@@ -205,9 +213,25 @@ systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-gpio.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-storage.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-trust.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-store.conf
+CHROOT
+
+if [[ $image_profile == product ]]; then
+    on_chroot <<'CHROOT'
+set -e
 systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
     cardputerzero-audiod.socket cardputerzero-camerad.socket \
     cardputerzero-gpiod.socket cardputerzero-radiod.socket \
     cardputerzero-storaged.socket cardputerzero-stored.socket
 CHROOT
+else
+    on_chroot <<'CHROOT'
+set -e
+systemctl mask cardputerzero-appd.service \
+    cardputerzero-appd.socket cardputerzero-broker.socket \
+    cardputerzero-networkd.socket cardputerzero-documentd.socket \
+    cardputerzero-audiod.socket cardputerzero-camerad.socket \
+    cardputerzero-gpiod.socket cardputerzero-radiod.socket \
+    cardputerzero-storaged.socket cardputerzero-stored.socket
+CHROOT
+fi
