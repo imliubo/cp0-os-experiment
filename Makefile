@@ -15,6 +15,7 @@ check: fmt
 	./tests/test-sdk-c.sh
 	./tests/test-runtime-display.sh
 	./tests/test-device-diagnostics.sh
+	./tests/test-malicious-apps.sh
 	./tests/test-patch-cm0-dtb.sh
 	cargo check --workspace --all-targets
 	cargo test --workspace

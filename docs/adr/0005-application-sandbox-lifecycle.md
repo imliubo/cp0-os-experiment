@@ -24,11 +24,11 @@ into a running application. Its launch sequence is:
    immutable package location.
 2. Resolve the package ID through a root-owned registry to a stable system
    account named `cp0-app-N`. The caller cannot choose this mapping.
-3. Create or verify the application's private data directory, owned only by its
-   assigned account, and enforce its storage quota.
+3. Resolve the application's private storage quota. Persistent data remains
+   owned by `cp0-storaged` and is not mounted into the application sandbox.
 4. Start a transient systemd unit with a memory cgroup and process hardening.
 5. Enter a bubblewrap PID, mount, IPC, UTS, cgroup and network namespace. The
-   package is mounted read-only at `/app`; only the private `/data` is writable.
+   package is mounted read-only at `/app`; `/data` is namespace-local and empty.
 6. Execute the static, root-owned App Runtime. The runtime loads the validated
    WASM/AOT entrypoint and receives only pre-opened Wayland and broker channels.
 

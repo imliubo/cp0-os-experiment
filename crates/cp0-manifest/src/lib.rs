@@ -320,6 +320,14 @@ mod tests {
     }
 
     #[test]
+    fn rejects_malicious_path_escape_fixture() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/malicious/path-escape-app.json");
+        let error = load_and_validate(path).expect_err("path escape fixture should be rejected");
+        assert!(error.to_string().contains("entrypoint"));
+    }
+
+    #[test]
     fn rejects_duplicate_permissions() {
         let mut manifest = valid_manifest();
         manifest.permissions.push(manifest.permissions[0].clone());

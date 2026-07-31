@@ -372,6 +372,41 @@ mod tests {
             );
         }
         assert!(!plan.arguments.iter().any(|value| value == "/usr"));
+        let read_only_sources: Vec<&str> = plan
+            .arguments
+            .windows(3)
+            .filter(|values| values[0] == "--ro-bind")
+            .map(|values| values[1].as_str())
+            .collect();
+        assert_eq!(
+            read_only_sources,
+            [
+                DEFAULT_RUNTIME,
+                "/var/lib/cardputerzero/apps/dev.cardputerzero.hello/1.2.3",
+                DEFAULT_BROKER_SOCKET,
+            ]
+        );
+        for forbidden in [
+            "--bind",
+            "--bind-try",
+            "--dev-bind",
+            "/run/dbus",
+            "/dev/dri",
+            "/dev/input",
+            "/dev/gpiochip0",
+            "/dev/snd",
+            "/proc/self/root",
+        ] {
+            assert!(
+                !plan.arguments.iter().any(|value| value == forbidden),
+                "sandbox exposes forbidden argument {forbidden}"
+            );
+        }
+        assert!(
+            plan.arguments
+                .windows(2)
+                .any(|values| values == ["--dev", "/dev"])
+        );
         assert!(
             plan.systemd_properties
                 .contains(&"RestrictAddressFamilies=AF_UNIX AF_NETLINK".into())
@@ -381,6 +416,17 @@ mod tests {
                 .contains(&"CapabilityBoundingSet=".into())
         );
         assert!(plan.systemd_properties.contains(&"MemorySwapMax=0".into()));
+        assert!(
+            plan.systemd_properties
+                .contains(&"PrivateDevices=yes".into())
+        );
+        assert_eq!(
+            plan.systemd_properties
+                .iter()
+                .filter(|property| property.starts_with("OpenFile="))
+                .count(),
+            1
+        );
         assert!(
             plan.systemd_properties
                 .contains(&"PrivateDevices=yes".into())

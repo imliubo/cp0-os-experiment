@@ -43,7 +43,8 @@ resulting ELF is aarch64 and has no dynamic library dependencies.
 - `MemoryMax` equal to the manifest budget and `MemorySwapMax=0`;
 - an empty bubblewrap root, PID/mount/network/IPC/UTS/cgroup namespaces;
 - a read-only package at `/app` and runtime at `/runtime`;
-- the application's sole writable directory at `/data`;
+- an empty namespace-local `/data`; persistent data is available only through
+  the private storage SDK broker;
 - an empty private `/dev`, private `/tmp`, no host `/usr`, `/run` or D-Bus.
 
 The outer unit permits `AF_NETLINK` only because bubblewrap needs
@@ -60,8 +61,11 @@ Validation on the 512 MB V0.6 device used Debian 13, kernel
 - A minimal WASM module completed through the full systemd, bubblewrap, seccomp
   and WAMR path with status 0.
 - The successful unit peaked at 9.3 MB and used no swap.
-- The seccomp negative probe confirmed `openat`, IPv4 `socket`, `mount` and
-  `ptrace` all returned `EPERM`.
+- The original seccomp negative probe confirmed `openat`, IPv4 `socket`,
+  `mount` and `ptrace` all returned `EPERM`. The expanded probe additionally
+  covers path escape, device nodes, IPv6/netlink/socketpair, process creation,
+  execution and signalling; its next physical run waits for the active 24-hour
+  stability monitor.
 - A module that committed 40 MB of linear memory was terminated with systemd
   result `oom-kill`; the cgroup peaked at exactly 24 MB and used 0 bytes swap.
 - `cardputerzero-compositor.service` and

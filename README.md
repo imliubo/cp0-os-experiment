@@ -63,6 +63,8 @@ Phase 3 已贯通 WAMR 强隔离运行时、权限系统和首个 capability bro
   256 键上限及三语言 SDK；Runtime 不再挂载宿主应用数据目录。
 - Phase 3M Intent Broker：manifest 显式 action、唯一接收方路由、8 条/1 KiB 有界
   队列、确认后单前台切换和一次性 Rust/C/C++ SDK `take` API，无任意应用间 socket。
+- Phase 3N 恶意应用回归：WASI ambient authority、路径逃逸、设备节点、任意 IPC、
+  seccomp 和 cgroup 资源耗尽样本及自动化隔离契约检查。
 - Phase 4A dependency-free `no_std` Rust SDK，封装时钟、事件等待、通知 capability
   和稳定错误类型；Hello 示例不再使用 Runtime 私有 FFI。
 - `cp0ctl new/build` SDK-only 项目脚手架、结构化 Cargo metadata 构建和规范应用
@@ -129,5 +131,7 @@ V0.6 逻辑输出映射、GPIO 隔离和 sysfs 权限收紧见
 [quota-enforced private storage](docs/PHASE3L-PRIVATE-STORAGE.md)。
 应用间受控路由、确认顺序和单前台切换见
 [isolated Intent Broker](docs/PHASE3M-INTENT-BROKER.md)。
+恶意样本、Runtime 失陷边界和负向验收见
+[malicious application regression set](docs/PHASE3N-MALICIOUS-APPLICATIONS.md)。
 Rust SDK 公共 API 和真机迁移结果见
 [Rust SDK foundation](docs/PHASE4A-RUST-SDK.md)。
