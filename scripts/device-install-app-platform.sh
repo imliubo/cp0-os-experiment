@@ -17,6 +17,8 @@ esac
 
 for file in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-gpiod cp0-networkd cp0-radiod cp0-storaged cp0ctl cardputerzero-app-runtime app.json hello-card.wasm \
     cardputerzero-appd.service cardputerzero-documentd.service \
+    cardputerzero-appd.socket cardputerzero-broker.socket \
+    cardputerzero-appd.conf \
     cardputerzero-documentd.socket cardputerzero-networkd.service \
     cardputerzero-networkd.socket cardputerzero-audiod.service \
     cardputerzero-audiod.socket cardputerzero-camerad.service \
@@ -24,15 +26,19 @@ for file in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-gpiod cp0-networkd
     cardputerzero-gpiod.socket cardputerzero-gpio.conf \
     cardputerzero-radiod.service cardputerzero-radiod.socket lora.conf \
     cardputerzero-storaged.service cardputerzero-storaged.socket \
-    cardputerzero-storage.conf cardputerzero-trust.conf; do
+    cardputerzero-storage.conf cardputerzero-trust.conf \
+    device-core-recovery.sh device-stability-monitor.sh; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
         echo "error: invalid staged file: $file" >&2
         exit 1
     fi
 done
 
-systemctl stop cardputerzero-app-20000.service 2>/dev/null || :
-systemctl stop cardputerzero-appd.service
+systemctl stop cardputerzero-system-shell.service 2>/dev/null || :
+systemctl stop 'cardputerzero-app-*.service' 2>/dev/null || :
+systemctl stop cardputerzero-appd.service 2>/dev/null || :
+systemctl stop cardputerzero-appd.socket cardputerzero-broker.socket \
+    2>/dev/null || :
 systemctl stop cardputerzero-networkd.service 2>/dev/null || :
 systemctl stop cardputerzero-documentd.service 2>/dev/null || :
 systemctl stop cardputerzero-audiod.service 2>/dev/null || :
@@ -40,6 +46,10 @@ systemctl stop cardputerzero-camerad.service 2>/dev/null || :
 systemctl stop cardputerzero-gpiod.service 2>/dev/null || :
 systemctl stop cardputerzero-radiod.service 2>/dev/null || :
 systemctl stop cardputerzero-storaged.service 2>/dev/null || :
+if ! getent group cp0-control >/dev/null 2>&1; then
+    groupadd --system cp0-control
+fi
+usermod -a -G cp0-control cp0-shell
 if ! getent group cp0-network >/dev/null 2>&1; then
     groupadd --system cp0-network
 fi
@@ -139,6 +149,10 @@ install -o root -g root -m 0644 "$staging/app.json" \
     /var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/app.json
 install -o root -g root -m 0644 "$staging/cardputerzero-appd.service" \
     /etc/systemd/system/cardputerzero-appd.service
+install -o root -g root -m 0644 "$staging/cardputerzero-appd.socket" \
+    /etc/systemd/system/cardputerzero-appd.socket
+install -o root -g root -m 0644 "$staging/cardputerzero-broker.socket" \
+    /etc/systemd/system/cardputerzero-broker.socket
 install -o root -g root -m 0644 "$staging/cardputerzero-networkd.service" \
     /etc/systemd/system/cardputerzero-networkd.service
 install -o root -g root -m 0644 "$staging/cardputerzero-networkd.socket" \
@@ -173,12 +187,20 @@ systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-storage.conf
 install -o root -g root -m 0644 "$staging/cardputerzero-trust.conf" \
     /etc/tmpfiles.d/cardputerzero-trust.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-trust.conf
+install -o root -g root -m 0644 "$staging/cardputerzero-appd.conf" \
+    /etc/tmpfiles.d/cardputerzero-appd.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-appd.conf
 install -D -o root -g root -m 0644 "$staging/lora.conf" \
     /etc/cardputerzero/lora.conf
 install -o root -g root -m 0644 "$staging/cardputerzero-gpio.conf" \
     /etc/tmpfiles.d/cardputerzero-gpio.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-gpio.conf
+install -o root -g root -m 0755 "$staging/device-core-recovery.sh" \
+    /usr/libexec/cardputerzero/device-core-recovery
+install -o root -g root -m 0755 "$staging/device-stability-monitor.sh" \
+    /usr/libexec/cardputerzero/device-stability-monitor
 systemctl daemon-reload
+systemctl enable --now cardputerzero-appd.socket cardputerzero-broker.socket
 systemctl enable --now cardputerzero-networkd.socket
 systemctl enable --now cardputerzero-documentd.socket
 systemctl enable --now cardputerzero-audiod.socket
@@ -187,8 +209,11 @@ systemctl enable --now cardputerzero-gpiod.socket
 systemctl enable --now cardputerzero-radiod.socket
 systemctl enable --now cardputerzero-storaged.socket
 systemctl start cardputerzero-appd.service
+systemctl start cardputerzero-system-shell.service
 
 systemctl is-active --quiet cardputerzero-appd.service
+systemctl is-active --quiet cardputerzero-appd.socket
+systemctl is-active --quiet cardputerzero-broker.socket
 systemctl is-active --quiet cardputerzero-networkd.socket
 systemctl is-active --quiet cardputerzero-documentd.socket
 systemctl is-active --quiet cardputerzero-audiod.socket

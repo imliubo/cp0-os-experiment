@@ -16,7 +16,8 @@ case "$staging" in
 esac
 
 for file in cardputerzero-system-shell cardputerzero-policy.so \
-    cardputerzero-app-runtime cardputerzero-system-shell.service; do
+    cardputerzero-app-runtime cardputerzero-compositor.service \
+    cardputerzero-system-shell.service; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
         echo "error: invalid staged file: $file" >&2
         exit 1
@@ -29,6 +30,9 @@ if systemctl --quiet is-active 'cardputerzero-app-*.service'; then
 fi
 
 systemctl stop cardputerzero-compositor.service
+install -o root -g root -m 0644 \
+    "$staging/cardputerzero-compositor.service" \
+    /etc/systemd/system/cardputerzero-compositor.service
 install -o root -g root -m 0644 \
     "$staging/cardputerzero-system-shell.service" \
     /etc/systemd/system/cardputerzero-system-shell.service
@@ -58,7 +62,6 @@ wait_active()
 
 wait_active cardputerzero-compositor.service
 wait_active cardputerzero-system-shell.service
-wait_active cardputerzero-appd.service
 sha256sum \
     /usr/bin/cardputerzero-system-shell \
     /usr/lib/aarch64-linux-gnu/weston/cardputerzero-policy.so \
