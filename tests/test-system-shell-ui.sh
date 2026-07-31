@@ -49,7 +49,7 @@ mkdir -p "$snapshot_dir"
     -o "$work_dir/system-shell-system-info-test"
 "$work_dir/system-shell-system-info-test"
 
-snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm store-detail.ppm store.ppm system-brightness.ppm system-help.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
+snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm store-detail.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
 if command -v sha256sum >/dev/null 2>&1; then
     actual=$(cd "$snapshot_dir" && sha256sum $snapshot_files)
 else
@@ -86,8 +86,14 @@ e215ec94d5623d91197c512594fb1b3543fe8bc483d9918c999ea9c3d12efa8f  settings-confi
 f10e4e270371f6eaab38e4125f37e40f1fb9a17c3b5ef5473425e7b057fd3be4  settings-sound.ppm
 fb1ac2961e301b90c29719745d313c17910f4c938a7a03992abb4fc1e225e3ef  settings-system.ppm
 cc4e5bbf3f6dee26b0b6514661481c9217abe354a1dfa3459eac8cc7c7b27340  settings.ppm
-e5df489f49f025c4c7c2fdee52231cad8501f94a2f65493096b7a0394bddeca3  store-detail.ppm
-80a18453b84e8c7e565410ac1c975bad457f1bffe030d3b5f7cc304b7f933324  store.ppm
+3566116ffa2ebe78868194532f11430b8283e81c7da0a35206fda0f4a864fcc2  store-detail.ppm
+af89fb4cc3c6ef1271a16f426ca466bd61f356b3341f93d8986b4427091545e3  store-search-empty.ppm
+6704a2c898e02428dd74b19825352c7fb99eca065cab9a960e2ca884d0ec127b  store-search-max.ppm
+68e125d3d5654ebc8c69820403b6d5bcc14862856eac0b69228920d63a213b0a  store-search-none.ppm
+47628325924e59aa26ab5bbd6f7277cba302b32f05de959d6150bf5c9dd460ac  store-search-recent.ppm
+db5707db2c655a8a5c890156eb604ee4792111f86bdb28c3ccb6012ed5bf93b6  store-search.ppm
+13d88acffe0adbf9e0332db078e5c1881592f1954ad6ebed83556b98392608fc  store-updates.ppm
+2e9ee3534bc552bac94eb91bacb4ca004ad75304b41af988d8ef7259ee03033f  store.ppm
 c8f03c8a917c9dfb0cecd57f32df1e6e11d913a75480e5ca11c2a35b04b0d62e  system-brightness.ppm
 34e659c664795fb8b2cef00fd6fd168c3fdf6e845421342b29cc41dc97b88558  system-help.ppm
 a6035c53a535cab44d6065cbd27f70a57d2655ee1e13baf24c87ef9176e40239  theme-high-contrast.ppm

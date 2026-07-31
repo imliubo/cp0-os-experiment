@@ -19,6 +19,7 @@
 #define CP0_STORE_FRAME_BYTES (64U * 1024U)
 #define CP0_STORE_JSON_TOKENS 4096U
 #define CP0_STORE_CATALOG_LIMIT 64U
+#define CP0_STORE_SEARCH_QUERY_CHARS 32U
 #define CP0_STORE_MAX_PACKAGE_BYTES (32U * 1024U * 1024U + 4096U)
 
 static uint64_t next_request_id = 1;
@@ -507,6 +508,134 @@ static int parse_catalog_response(const char *response, size_t response_length,
     return CP0_STORE_RESULT_OK;
 }
 
+static bool valid_search_query(const char *query)
+{
+    size_t length;
+
+    if (!valid_text(query, CP0_STORE_SEARCH_QUERY_CHARS,
+                    CP0_STORE_SEARCH_QUERY_BYTES - 1U))
+        return false;
+    length = strlen(query);
+    if (query[0] == ' ' || query[length - 1U] == ' ')
+        return false;
+    for (size_t index = 0; index < length; index++) {
+        unsigned char byte = (unsigned char)query[index];
+        if (!((byte >= 'a' && byte <= 'z') ||
+              (byte >= 'A' && byte <= 'Z') ||
+              (byte >= '0' && byte <= '9') || byte == ' ' || byte == '.' ||
+              byte == '-' || byte == '_'))
+            return false;
+    }
+    return true;
+}
+
+static int parse_search_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *expected_query, uint16_t expected_offset,
+    uint8_t expected_limit, struct cp0_store_search_results *results)
+{
+    struct cp0_json_token *tokens =
+        calloc(CP0_STORE_JSON_TOKENS, sizeof(*tokens));
+    struct cp0_store_search_results decoded = {0};
+    size_t token_count;
+    int data;
+    int result;
+
+    if (tokens == NULL || results == NULL ||
+        !valid_search_query(expected_query) || expected_offset > 64U ||
+        expected_limit == 0 || expected_limit > CP0_STORE_SEARCH_MAX_APPS) {
+        free(tokens);
+        return CP0_STORE_RESULT_ERROR;
+    }
+    result = parse_envelope(response, response_length, request_id, tokens,
+                            CP0_STORE_JSON_TOKENS, &token_count, &data);
+    if (result != CP0_STORE_RESULT_OK) {
+        free(tokens);
+        return result;
+    }
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int query = cp0_json_object_get(response, tokens, token_count, data, "query");
+    int offset = cp0_json_object_get(response, tokens, token_count, data, "offset");
+    int limit = cp0_json_object_get(response, tokens, token_count, data, "limit");
+    int total = cp0_json_object_get(response, tokens, token_count, data, "total");
+    int next = cp0_json_object_get(response, tokens, token_count, data,
+                                   "next_offset");
+    int sequence = cp0_json_object_get(response, tokens, token_count, data,
+                                       "sequence");
+    int expires = cp0_json_object_get(response, tokens, token_count, data,
+                                      "expires_unix_seconds");
+    int stale = cp0_json_object_get(response, tokens, token_count, data, "stale");
+    int apps = cp0_json_object_get(response, tokens, token_count, data, "apps");
+    uint64_t parsed_offset;
+    uint64_t parsed_limit;
+    uint64_t parsed_total;
+    uint64_t parsed_next = 0;
+
+    if (tokens[data].children != 20 || kind < 0 || query < 0 || offset < 0 ||
+        limit < 0 || total < 0 || next < 0 || sequence < 0 || expires < 0 ||
+        stale < 0 || apps < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind], "search-results") ||
+        !cp0_json_copy_string(response, &tokens[query], decoded.query,
+                              sizeof(decoded.query)) ||
+        strcmp(decoded.query, expected_query) != 0 ||
+        !cp0_json_get_u64(response, &tokens[offset], &parsed_offset) ||
+        !cp0_json_get_u64(response, &tokens[limit], &parsed_limit) ||
+        !cp0_json_get_u64(response, &tokens[total], &parsed_total) ||
+        parsed_offset != expected_offset || parsed_limit != expected_limit ||
+        parsed_total > CP0_STORE_CATALOG_LIMIT ||
+        !cp0_json_get_u64(response, &tokens[sequence], &decoded.sequence) ||
+        decoded.sequence == 0 ||
+        !cp0_json_get_u64(response, &tokens[expires],
+                          &decoded.expires_unix_seconds) ||
+        decoded.expires_unix_seconds == 0 ||
+        !cp0_json_get_bool(response, &tokens[stale], &decoded.stale) ||
+        tokens[apps].type != CP0_JSON_ARRAY ||
+        tokens[apps].children > CP0_STORE_SEARCH_MAX_APPS) {
+        free(tokens);
+        return CP0_STORE_RESULT_ERROR;
+    }
+    decoded.offset = (uint16_t)parsed_offset;
+    decoded.limit = (uint8_t)parsed_limit;
+    decoded.total = (uint16_t)parsed_total;
+    uint16_t remaining = decoded.total > decoded.offset
+                             ? (uint16_t)(decoded.total - decoded.offset)
+                             : 0;
+    uint16_t expected_count = remaining < decoded.limit ? remaining
+                                                        : decoded.limit;
+    uint16_t expected_next = (uint16_t)(decoded.offset + expected_count);
+    bool should_have_next = expected_next < decoded.total;
+    if (tokens[apps].children != expected_count ||
+        (should_have_next
+             ? (!cp0_json_get_u64(response, &tokens[next], &parsed_next) ||
+                parsed_next != expected_next)
+             : !cp0_json_is_null(response, &tokens[next]))) {
+        free(tokens);
+        return CP0_STORE_RESULT_ERROR;
+    }
+    decoded.has_next = should_have_next;
+    decoded.next_offset = should_have_next ? expected_next : 0;
+    decoded.count = expected_count;
+    for (unsigned int index = 0; index < tokens[apps].children; index++) {
+        int item = cp0_json_array_get(tokens, token_count, apps, index);
+        if (item < 0 ||
+            !parse_app(response, tokens, token_count, item,
+                       &decoded.apps[index])) {
+            free(tokens);
+            return CP0_STORE_RESULT_ERROR;
+        }
+        for (unsigned int previous = 0; previous < index; previous++) {
+            if (strcmp(decoded.apps[previous].app_id,
+                       decoded.apps[index].app_id) == 0) {
+                free(tokens);
+                return CP0_STORE_RESULT_ERROR;
+            }
+        }
+    }
+    free(tokens);
+    *results = decoded;
+    return CP0_STORE_RESULT_OK;
+}
+
 static int parse_accepted(const char *response, size_t response_length,
                           uint64_t request_id, const char *expected_kind,
                           const char *expected_app_id)
@@ -561,6 +690,15 @@ int cp0_store_test_parse_install_response(const char *response,
     return parse_accepted(response, response_length, request_id,
                           "install-accepted", app_id);
 }
+
+int cp0_store_test_parse_search_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *query, uint16_t offset, uint8_t limit,
+    struct cp0_store_search_results *results)
+{
+    return parse_search_response(response, response_length, request_id, query,
+                                 offset, limit, results);
+}
 #endif
 
 int cp0_store_list(struct cp0_store_catalog *catalog)
@@ -582,6 +720,37 @@ int cp0_store_list(struct cp0_store_catalog *catalog)
                  CP0_STORE_FRAME_BYTES, &response_length, 500) == 0)
         result = parse_catalog_response(response, response_length, request_id,
                                         catalog);
+    free(response);
+    return result;
+}
+
+int cp0_store_search(const char *query, uint16_t offset, uint8_t limit,
+                     struct cp0_store_search_results *results)
+{
+    char request[384];
+    char *response = malloc(CP0_STORE_FRAME_BYTES);
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int result = CP0_STORE_RESULT_ERROR;
+
+    if (response == NULL || results == NULL || !valid_search_query(query) ||
+        offset > CP0_STORE_CATALOG_LIMIT || limit == 0 ||
+        limit > CP0_STORE_SEARCH_MAX_APPS) {
+        free(response);
+        return CP0_STORE_RESULT_ERROR;
+    }
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"search\",\"query\":\"%s\",\"offset\":%u,"
+        "\"limit\":%u}}\n",
+        (unsigned long long)request_id, query, (unsigned int)offset,
+        (unsigned int)limit);
+    if (request_length > 0 && (size_t)request_length < sizeof(request) &&
+        exchange(request, (size_t)request_length, response,
+                 CP0_STORE_FRAME_BYTES, &response_length, 500) == 0)
+        result = parse_search_response(response, response_length, request_id,
+                                       query, offset, limit, results);
     free(response);
     return result;
 }

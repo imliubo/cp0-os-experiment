@@ -464,51 +464,225 @@ static const char *store_state_label(const struct cp0_ui_store_app *app,
     return states[app->state];
 }
 
-static void draw_store_list(struct canvas *canvas, const struct cp0_ui *ui)
+static bool store_update_state(enum cp0_ui_store_state state)
 {
-    if (ui->store_status != CP0_UI_STORE_READY) {
-        static const char *messages[] = {"LOADING CATALOG", "", "NOT CONFIGURED",
-                                         "STORE UNAVAILABLE"};
-        draw_empty_page(canvas, "STORE", messages[ui->store_status],
-                        ui->store_status == CP0_UI_STORE_UNAVAILABLE
-                            ? COLOR_RED
-                            : COLOR_YELLOW);
-        return;
-    }
-    if (ui->store_count == 0) {
-        draw_empty_page(canvas, "STORE", "NO APPS AVAILABLE", COLOR_GREEN);
-        return;
-    }
+    return state == CP0_UI_STORE_UPDATE || state == CP0_UI_STORE_QUEUED ||
+           state == CP0_UI_STORE_DOWNLOADING ||
+           state == CP0_UI_STORE_INSTALLING;
+}
 
-    unsigned int first =
-        ui->store_selected > 3 ? ui->store_selected - 3 : 0;
-    unsigned int visible = ui->store_count - first;
-    if (visible > 4)
-        visible = 4;
+static unsigned int store_update_count(const struct cp0_ui *ui)
+{
+    unsigned int count = 0;
+    for (unsigned int index = 0; index < ui->store_count; index++)
+        count += store_update_state(ui->store_apps[index].state);
+    return count;
+}
+
+static const struct cp0_ui_store_app *store_update_at(
+    const struct cp0_ui *ui, unsigned int selected)
+{
+    for (unsigned int index = 0; index < ui->store_count; index++) {
+        if (!store_update_state(ui->store_apps[index].state))
+            continue;
+        if (selected == 0)
+            return &ui->store_apps[index];
+        selected--;
+    }
+    return NULL;
+}
+
+static unsigned int store_section_count(const struct cp0_ui *ui)
+{
+    switch (ui->store_section) {
+    case CP0_UI_STORE_TODAY:
+        return ui->store_count == 0 ? 0 : 1;
+    case CP0_UI_STORE_APPS:
+        return ui->store_count;
+    case CP0_UI_STORE_SEARCH:
+        return ui->store_search_count;
+    case CP0_UI_STORE_UPDATES:
+        return store_update_count(ui);
+    default:
+        return 0;
+    }
+}
+
+static const struct cp0_ui_store_app *store_section_app(
+    const struct cp0_ui *ui, unsigned int index)
+{
+    if (ui->store_section == CP0_UI_STORE_SEARCH)
+        return index < ui->store_search_count ? &ui->store_search_apps[index]
+                                              : NULL;
+    if (ui->store_section == CP0_UI_STORE_UPDATES)
+        return store_update_at(ui, index);
+    return index < store_section_count(ui) ? &ui->store_apps[index] : NULL;
+}
+
+static unsigned int store_section_selected(const struct cp0_ui *ui)
+{
+    return ui->store_section == CP0_UI_STORE_SEARCH
+               ? ui->store_search_selected
+               : ui->store_selected;
+}
+
+static const struct cp0_ui_store_app *selected_store_app(
+    const struct cp0_ui *ui)
+{
+    return store_section_app(ui, store_section_selected(ui));
+}
+
+static void draw_store_tabs(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    static const char *labels[] = {"TODAY", "APPS", "SEARCH", "UPDATES"};
+    for (unsigned int tab = 0; tab < 4; tab++) {
+        int x = (int)tab * 80;
+        bool selected = tab == ui->store_section;
+        fill_rect(canvas, x, 22, 80, 18,
+                  selected ? COLOR_SELECTED : COLOR_BAR);
+        if (selected)
+            fill_rect(canvas, x, 38, 80, 2, COLOR_GREEN);
+        draw_text(canvas, x + 10, 28, labels[tab], 1,
+                  selected ? COLOR_TEXT : COLOR_MUTED);
+    }
+}
+
+static void draw_store_rows(struct canvas *canvas, const struct cp0_ui *ui,
+                            int top, unsigned int maximum_rows)
+{
+    unsigned int count = store_section_count(ui);
+    unsigned int selected = store_section_selected(ui);
+    unsigned int first = selected >= maximum_rows
+                             ? selected - maximum_rows + 1U
+                             : 0;
+    unsigned int visible = count > first ? count - first : 0;
+    if (visible > maximum_rows)
+        visible = maximum_rows;
     for (unsigned int row = 0; row < visible; row++) {
         unsigned int index = first + row;
-        const struct cp0_ui_store_app *app = &ui->store_apps[index];
-        int y = 28 + (int)row * 32;
-        bool selected = index == ui->store_selected;
+        const struct cp0_ui_store_app *app = store_section_app(ui, index);
+        int y = top + (int)row * 27;
+        bool row_selected = index == selected;
         char state[16];
 
-        fill_rect(canvas, 8, y, 304, 28,
-                  selected ? COLOR_SELECTED : COLOR_SURFACE);
-        stroke_rect(canvas, 8, y, 304, 28, selected ? 2 : 1,
-                    selected ? COLOR_GREEN : COLOR_BAR);
-        fill_rect(canvas, 17, y + 9, 10, 10,
+        if (app == NULL)
+            continue;
+        fill_rect(canvas, 8, y, 304, 24,
+                  row_selected ? COLOR_SELECTED : COLOR_SURFACE);
+        stroke_rect(canvas, 8, y, 304, 24, row_selected ? 2 : 1,
+                    row_selected ? COLOR_GREEN : COLOR_BAR);
+        fill_rect(canvas, 17, y + 7, 9, 9,
                   app->state == CP0_UI_STORE_INSTALLED
                       ? COLOR_GREEN
                       : (app->state == CP0_UI_STORE_FAILED ? COLOR_RED
                                                            : COLOR_YELLOW));
-        draw_prompt_line(canvas, y + 6, app->name, 0, 27);
-        draw_text(canvas, 218, y + 17, store_state_label(app, state), 1,
+        draw_prompt_line(canvas, y + 5, app->name, 0, 27);
+        draw_text(canvas, 218, y + 14, store_state_label(app, state), 1,
                   app->state == CP0_UI_STORE_FAILED ? COLOR_RED : COLOR_MUTED);
+    }
+}
+
+static void draw_store_message(struct canvas *canvas, const char *message,
+                               uint32_t color)
+{
+    draw_text(canvas, 18, 84, message, 1, color);
+}
+
+static void draw_store_list(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    if (ui->store_status != CP0_UI_STORE_READY) {
+        static const char *messages[] = {"LOADING CATALOG", "",
+                                         "NOT CONFIGURED",
+                                         "STORE UNAVAILABLE"};
+        draw_store_message(canvas, messages[ui->store_status],
+                           ui->store_status == CP0_UI_STORE_UNAVAILABLE
+                               ? COLOR_RED
+                               : COLOR_YELLOW);
+        return;
+    }
+    if (store_section_count(ui) == 0) {
+        draw_store_message(canvas,
+                           ui->store_section == CP0_UI_STORE_UPDATES
+                               ? "ALL APPS UP TO DATE"
+                               : "NO APPS AVAILABLE",
+                           COLOR_GREEN);
+        return;
+    }
+
+    if (ui->store_section == CP0_UI_STORE_TODAY) {
+        const struct cp0_ui_store_app *app = &ui->store_apps[0];
+        draw_text(canvas, 14, 50, "FEATURED", 1, COLOR_GREEN);
+        fill_rect(canvas, 8, 63, 304, 74, COLOR_SURFACE);
+        fill_rect(canvas, 8, 63, 4, 74, COLOR_GREEN);
+        draw_prompt_line(canvas, 73, app->name, 0, 42);
+        draw_prompt_line(canvas, 91, app->summary, 0, 46);
+        draw_prompt_line(canvas, 104, app->summary, 46, 46);
+        char state[16];
+        draw_text(canvas, 20, 121, store_state_label(app, state), 1,
+                  COLOR_YELLOW);
+    } else {
+        draw_store_rows(canvas, ui, 44, 4);
     }
     if (ui->store_catalog_stale)
         draw_text(canvas, 8, 159, "STALE", 1, COLOR_YELLOW);
     if (ui->store_list_truncated)
         draw_text(canvas, 284, 159, "32+", 1, COLOR_YELLOW);
+}
+
+static void draw_store_search(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    char query[48];
+    const char *shown = ui->store_search_query[0] == '\0'
+                            ? "SEARCH"
+                            : ui->store_search_query;
+    snprintf(query, sizeof(query), "> %.40s%s", shown,
+             ui->store_search_input ? "_" : "");
+    fill_rect(canvas, 8, 44, 304, 23,
+              ui->store_search_input ? COLOR_SELECTED : COLOR_SURFACE);
+    stroke_rect(canvas, 8, 44, 304, 23,
+                ui->store_search_input ? 2 : 1,
+                ui->store_search_input ? COLOR_GREEN : COLOR_BAR);
+    draw_text(canvas, 16, 52, query, 1,
+              ui->store_search_input ? COLOR_TEXT : COLOR_MUTED);
+
+    if (ui->store_search_query[0] == '\0') {
+        if (ui->store_recent_count == 0) {
+            draw_store_message(canvas, "NO RECENT SEARCHES", COLOR_MUTED);
+            return;
+        }
+        for (unsigned int row = 0; row < ui->store_recent_count; row++) {
+            int y = 72 + (int)row * 21;
+            bool selected = !ui->store_search_input &&
+                            row == ui->store_recent_selected;
+            fill_rect(canvas, 12, y, 296, 18,
+                      selected ? COLOR_SELECTED : COLOR_SURFACE);
+            draw_text(canvas, 20, y + 6, ui->store_recent_queries[row], 1,
+                      selected ? COLOR_TEXT : COLOR_MUTED);
+        }
+        return;
+    }
+    if (ui->store_search_status != CP0_UI_STORE_READY) {
+        static const char *messages[] = {"SEARCHING", "", "NOT CONFIGURED",
+                                         "SEARCH UNAVAILABLE"};
+        draw_store_message(canvas, messages[ui->store_search_status],
+                           ui->store_search_status == CP0_UI_STORE_UNAVAILABLE
+                               ? COLOR_RED
+                               : COLOR_YELLOW);
+        return;
+    }
+    if (ui->store_search_count == 0) {
+        draw_store_message(canvas, "NO RESULTS", COLOR_MUTED);
+        return;
+    }
+    draw_store_rows(canvas, ui, 72, 3);
+    char page[24];
+    snprintf(page, sizeof(page), "%u-%u / %u",
+             (unsigned int)ui->store_search_offset + 1U,
+             (unsigned int)ui->store_search_offset + ui->store_search_count,
+             (unsigned int)ui->store_search_total);
+    draw_text(canvas, 236, 159, page, 1, COLOR_MUTED);
+    if (ui->store_search_stale)
+        draw_text(canvas, 8, 159, "STALE", 1, COLOR_YELLOW);
 }
 
 static void draw_store_detail(struct canvas *canvas, const struct cp0_ui *ui)
@@ -517,7 +691,7 @@ static void draw_store_detail(struct canvas *canvas, const struct cp0_ui *ui)
         "AUDIO CAPTURE",  "AUDIO PLAYBACK", "CAMERA CAPTURE", "DOCUMENTS OPEN",
         "HARDWARE GPIO",  "NETWORK CLIENT", "NOTIFICATIONS",  "RADIO LORA",
     };
-    const struct cp0_ui_store_app *app = &ui->store_apps[ui->store_selected];
+    const struct cp0_ui_store_app *app = selected_store_app(ui);
     char version[76];
     char state[16];
     unsigned int visible_permission = 0;
@@ -545,8 +719,13 @@ static void draw_store_detail(struct canvas *canvas, const struct cp0_ui *ui)
 
 static void draw_store_page(struct canvas *canvas, const struct cp0_ui *ui)
 {
-    if (ui->store_detail && ui->store_selected < ui->store_count)
+    if (ui->store_detail && selected_store_app(ui) != NULL) {
         draw_store_detail(canvas, ui);
+        return;
+    }
+    draw_store_tabs(canvas, ui);
+    if (ui->store_section == CP0_UI_STORE_SEARCH)
+        draw_store_search(canvas, ui);
     else
         draw_store_list(canvas, ui);
 }
@@ -1238,6 +1417,7 @@ void cp0_ui_init(struct cp0_ui *ui)
     memset(ui, 0, sizeof(*ui));
     ui->screen = CP0_UI_HOME;
     ui->store_status = CP0_UI_STORE_LOADING;
+    ui->store_search_status = CP0_UI_STORE_LOADING;
     ui->battery_percent = -1;
     ui->temperature_millicelsius = -1;
     ui->wifi_enabled = true;
@@ -1528,6 +1708,168 @@ static int store_app_index_by_id(const struct cp0_ui *ui, const char *app_id)
     return -1;
 }
 
+struct semver_slice {
+    const char *text;
+    size_t length;
+};
+
+struct semver_view {
+    struct semver_slice core[3];
+    struct semver_slice prerelease;
+};
+
+static bool parse_semver_view(const char *version, struct semver_view *view)
+{
+    const char *logical_end;
+    const char *prerelease;
+    const char *cursor;
+
+    if (version == NULL || view == NULL || version[0] == '\0')
+        return false;
+    logical_end = strchr(version, '+');
+    if (logical_end == NULL)
+        logical_end = version + strlen(version);
+    prerelease = memchr(version, '-', (size_t)(logical_end - version));
+    const char *core_end = prerelease == NULL ? logical_end : prerelease;
+    cursor = version;
+    for (unsigned int index = 0; index < 3; index++) {
+        const char *end = index == 2
+                              ? core_end
+                              : memchr(cursor, '.',
+                                       (size_t)(core_end - cursor));
+        if (end == NULL || end == cursor)
+            return false;
+        view->core[index] = (struct semver_slice){
+            .text = cursor,
+            .length = (size_t)(end - cursor),
+        };
+        cursor = end + (index == 2 ? 0 : 1);
+    }
+    if (cursor != core_end)
+        return false;
+    view->prerelease = (struct semver_slice){0};
+    if (prerelease != NULL) {
+        if (prerelease + 1 == logical_end)
+            return false;
+        view->prerelease.text = prerelease + 1;
+        view->prerelease.length =
+            (size_t)(logical_end - view->prerelease.text);
+    }
+    return true;
+}
+
+static bool slice_numeric(struct semver_slice value)
+{
+    if (value.length == 0)
+        return false;
+    for (size_t index = 0; index < value.length; index++) {
+        if (value.text[index] < '0' || value.text[index] > '9')
+            return false;
+    }
+    return true;
+}
+
+static int compare_numeric_slice(struct semver_slice left,
+                                 struct semver_slice right)
+{
+    while (left.length > 1 && left.text[0] == '0')
+        left.text++, left.length--;
+    while (right.length > 1 && right.text[0] == '0')
+        right.text++, right.length--;
+    if (left.length != right.length)
+        return left.length > right.length ? 1 : -1;
+    int compared = memcmp(left.text, right.text, left.length);
+    return compared > 0 ? 1 : (compared < 0 ? -1 : 0);
+}
+
+static int compare_identifier(struct semver_slice left,
+                              struct semver_slice right)
+{
+    bool left_numeric = slice_numeric(left);
+    bool right_numeric = slice_numeric(right);
+    if (left_numeric && right_numeric)
+        return compare_numeric_slice(left, right);
+    if (left_numeric != right_numeric)
+        return left_numeric ? -1 : 1;
+    size_t shared = left.length < right.length ? left.length : right.length;
+    int compared = memcmp(left.text, right.text, shared);
+    if (compared != 0)
+        return compared > 0 ? 1 : -1;
+    return left.length > right.length ? 1
+                                      : (left.length < right.length ? -1 : 0);
+}
+
+static struct semver_slice take_identifier(struct semver_slice *remaining)
+{
+    const char *separator = memchr(remaining->text, '.', remaining->length);
+    size_t length = separator == NULL
+                        ? remaining->length
+                        : (size_t)(separator - remaining->text);
+    struct semver_slice result = {.text = remaining->text, .length = length};
+    size_t consumed = length + (separator == NULL ? 0U : 1U);
+    remaining->text += consumed;
+    remaining->length -= consumed;
+    return result;
+}
+
+static bool store_version_is_newer(const char *candidate,
+                                   const char *installed)
+{
+    struct semver_view left;
+    struct semver_view right;
+    if (!parse_semver_view(candidate, &left) ||
+        !parse_semver_view(installed, &right))
+        return false;
+    for (unsigned int index = 0; index < 3; index++) {
+        int compared = compare_numeric_slice(left.core[index],
+                                             right.core[index]);
+        if (compared != 0)
+            return compared > 0;
+    }
+    if (left.prerelease.length == 0 || right.prerelease.length == 0)
+        return left.prerelease.length == 0 && right.prerelease.length != 0;
+    while (left.prerelease.length > 0 && right.prerelease.length > 0) {
+        int compared = compare_identifier(take_identifier(&left.prerelease),
+                                          take_identifier(&right.prerelease));
+        if (compared != 0)
+            return compared > 0;
+    }
+    return left.prerelease.length > 0;
+}
+
+static bool copy_store_app(struct cp0_ui_store_app *app,
+                           const struct cp0_ui_store_catalog_app *source)
+{
+    if (source->state > CP0_UI_STORE_FAILED ||
+        source->progress_percent > 100)
+        return false;
+    *app = (struct cp0_ui_store_app){
+        .package_bytes = source->package_bytes,
+        .permissions = source->permissions,
+        .progress_percent = source->progress_percent,
+        .state = source->state,
+    };
+    if (!copy_text(app->app_id, sizeof(app->app_id), source->app_id) ||
+        !copy_text(app->name, sizeof(app->name), source->name) ||
+        !copy_text(app->version, sizeof(app->version), source->version) ||
+        !copy_text(app->summary, sizeof(app->summary), source->summary))
+        return false;
+    if (app->state == CP0_UI_STORE_AVAILABLE ||
+        app->state == CP0_UI_STORE_INSTALLED) {
+        if (source->installed_version == NULL) {
+            app->state = CP0_UI_STORE_AVAILABLE;
+        } else if (strcmp(source->installed_version, app->version) == 0) {
+            app->state = CP0_UI_STORE_INSTALLED;
+        } else if (store_version_is_newer(app->version,
+                                          source->installed_version)) {
+            app->state = CP0_UI_STORE_UPDATE;
+        } else {
+            app->state = CP0_UI_STORE_INSTALLED;
+        }
+    }
+    return true;
+}
+
 void cp0_ui_set_store_status(struct cp0_ui *ui,
                              enum cp0_ui_store_status status)
 {
@@ -1558,30 +1900,9 @@ void cp0_ui_sync_store_catalog(
     memset(ui->store_apps, 0, sizeof(ui->store_apps));
     ui->store_count = 0;
     for (size_t index = 0; index < app_count; index++) {
-        if (apps[index].state > CP0_UI_STORE_FAILED ||
-            apps[index].progress_percent > 100)
+        struct cp0_ui_store_app app;
+        if (!copy_store_app(&app, &apps[index]))
             continue;
-        struct cp0_ui_store_app app = {
-            .package_bytes = apps[index].package_bytes,
-            .permissions = apps[index].permissions,
-            .progress_percent = apps[index].progress_percent,
-            .state = apps[index].state,
-        };
-        if (!copy_text(app.app_id, sizeof(app.app_id), apps[index].app_id) ||
-            !copy_text(app.name, sizeof(app.name), apps[index].name) ||
-            !copy_text(app.version, sizeof(app.version), apps[index].version) ||
-            !copy_text(app.summary, sizeof(app.summary), apps[index].summary))
-            continue;
-        if (app.state == CP0_UI_STORE_AVAILABLE ||
-            app.state == CP0_UI_STORE_INSTALLED) {
-            if (apps[index].installed_version == NULL) {
-                app.state = CP0_UI_STORE_AVAILABLE;
-            } else if (strcmp(apps[index].installed_version, app.version) == 0) {
-                app.state = CP0_UI_STORE_INSTALLED;
-            } else {
-                app.state = CP0_UI_STORE_UPDATE;
-            }
-        }
         for (size_t old = 0; old < previous_count; old++) {
             bool old_active = previous[old].state == CP0_UI_STORE_QUEUED ||
                               previous[old].state == CP0_UI_STORE_DOWNLOADING ||
@@ -1611,31 +1932,194 @@ void cp0_ui_sync_store_catalog(
         ui->store_detail = false;
 }
 
+void cp0_ui_set_store_search_status(struct cp0_ui *ui,
+                                    enum cp0_ui_store_status status)
+{
+    if (ui == NULL || status > CP0_UI_STORE_UNAVAILABLE)
+        return;
+    ui->store_search_status = status;
+    if (status != CP0_UI_STORE_READY) {
+        ui->store_search_count = 0;
+        ui->store_search_selected = 0;
+        ui->store_detail = false;
+    }
+}
+
+void cp0_ui_sync_store_search(
+    struct cp0_ui *ui, const char *query, uint16_t offset, uint16_t total,
+    bool has_next, uint16_t next_offset,
+    const struct cp0_ui_store_catalog_app *apps, size_t app_count, bool stale)
+{
+    char selected_id[CP0_UI_APP_ID_MAX + 1] = {0};
+    uint16_t expected_next = (uint16_t)(offset + app_count);
+
+    if (ui == NULL || query == NULL || strcmp(query, ui->store_search_query) != 0 ||
+        (apps == NULL && app_count > 0) ||
+        app_count > CP0_UI_STORE_SEARCH_PAGE_MAX || total > 64U ||
+        offset != ui->store_search_offset || offset > total ||
+        app_count != (size_t)((total - offset) < CP0_UI_STORE_SEARCH_PAGE_MAX
+                                  ? (total - offset)
+                                  : CP0_UI_STORE_SEARCH_PAGE_MAX) ||
+        has_next != (expected_next < total) ||
+        (has_next && next_offset != expected_next))
+        return;
+    if (ui->store_search_selected < ui->store_search_count)
+        copy_optional_text(selected_id, sizeof(selected_id),
+                           ui->store_search_apps[ui->store_search_selected]
+                               .app_id);
+    memset(ui->store_search_apps, 0, sizeof(ui->store_search_apps));
+    ui->store_search_count = 0;
+    for (size_t index = 0; index < app_count; index++) {
+        struct cp0_ui_store_app app;
+        if (!copy_store_app(&app, &apps[index]))
+            return;
+        ui->store_search_apps[ui->store_search_count++] = app;
+    }
+    ui->store_search_total = total;
+    ui->store_search_has_next = has_next;
+    ui->store_search_next_offset = has_next ? next_offset : 0;
+    ui->store_search_status = CP0_UI_STORE_READY;
+    ui->store_search_stale = stale;
+    ui->store_search_selected = 0;
+    for (unsigned int index = 0; index < ui->store_search_count; index++) {
+        if (strcmp(ui->store_search_apps[index].app_id, selected_id) == 0) {
+            ui->store_search_selected = index;
+            break;
+        }
+    }
+}
+
 void cp0_ui_set_store_app_state(struct cp0_ui *ui, const char *app_id,
                                 enum cp0_ui_store_state state,
                                 uint8_t progress_percent)
 {
     int index = store_app_index_by_id(ui, app_id);
-    if (index < 0 || state > CP0_UI_STORE_FAILED || progress_percent > 100)
+    if (ui == NULL || app_id == NULL || state > CP0_UI_STORE_FAILED ||
+        progress_percent > 100)
         return;
-    ui->store_apps[index].state = state;
-    ui->store_apps[index].progress_percent = progress_percent;
+    if (index >= 0) {
+        ui->store_apps[index].state = state;
+        ui->store_apps[index].progress_percent = progress_percent;
+    }
+    for (unsigned int search = 0; search < ui->store_search_count; search++) {
+        if (strcmp(ui->store_search_apps[search].app_id, app_id) == 0) {
+            ui->store_search_apps[search].state = state;
+            ui->store_search_apps[search].progress_percent = progress_percent;
+        }
+    }
 }
 
 const char *cp0_ui_selected_store_app_id(const struct cp0_ui *ui)
 {
+    const struct cp0_ui_store_app *app;
     if (ui == NULL || ui->screen != CP0_UI_STORE ||
-        ui->store_selected >= ui->store_count)
+        (app = selected_store_app(ui)) == NULL)
         return NULL;
-    return ui->store_apps[ui->store_selected].app_id;
+    return app->app_id;
 }
 
 enum cp0_ui_store_state cp0_ui_selected_store_app_state(
     const struct cp0_ui *ui)
 {
-    return ui != NULL && ui->store_selected < ui->store_count
-               ? ui->store_apps[ui->store_selected].state
-               : CP0_UI_STORE_AVAILABLE;
+    const struct cp0_ui_store_app *app =
+        ui == NULL ? NULL : selected_store_app(ui);
+    return app == NULL ? CP0_UI_STORE_AVAILABLE : app->state;
+}
+
+static bool store_ascii_character(char character)
+{
+    return (character >= 'a' && character <= 'z') ||
+           (character >= 'A' && character <= 'Z') ||
+           (character >= '0' && character <= '9') || character == ' ' ||
+           character == '.' || character == '-' || character == '_';
+}
+
+bool cp0_ui_store_accepts_text(const struct cp0_ui *ui)
+{
+    return ui != NULL && ui->screen == CP0_UI_STORE && !ui->store_detail &&
+           ui->store_section == CP0_UI_STORE_SEARCH && ui->store_search_input;
+}
+
+static void reset_store_search_results(struct cp0_ui *ui)
+{
+    ui->store_search_offset = 0;
+    ui->store_search_total = 0;
+    ui->store_search_next_offset = 0;
+    ui->store_search_has_next = false;
+    ui->store_search_selected = 0;
+    ui->store_search_count = 0;
+    ui->store_search_status = CP0_UI_STORE_LOADING;
+}
+
+enum cp0_ui_event cp0_ui_store_input_ascii(struct cp0_ui *ui, char character)
+{
+    size_t length;
+    if (!cp0_ui_store_accepts_text(ui) || !store_ascii_character(character))
+        return CP0_UI_EVENT_NONE;
+    length = strlen(ui->store_search_query);
+    if (length >= 32U || (character == ' ' && length == 0) ||
+        (character == ' ' && ui->store_search_query[length - 1U] == ' '))
+        return CP0_UI_EVENT_NONE;
+    ui->store_search_query[length] = character;
+    ui->store_search_query[length + 1U] = '\0';
+    reset_store_search_results(ui);
+    return character == ' ' ? CP0_UI_EVENT_NONE : CP0_UI_EVENT_STORE_SEARCH;
+}
+
+enum cp0_ui_event cp0_ui_store_backspace(struct cp0_ui *ui)
+{
+    size_t length;
+    if (!cp0_ui_store_accepts_text(ui) ||
+        (length = strlen(ui->store_search_query)) == 0)
+        return CP0_UI_EVENT_NONE;
+    ui->store_search_query[length - 1U] = '\0';
+    reset_store_search_results(ui);
+    length--;
+    return length > 0 && ui->store_search_query[length - 1U] != ' '
+               ? CP0_UI_EVENT_STORE_SEARCH
+               : CP0_UI_EVENT_NONE;
+}
+
+const char *cp0_ui_store_search_query(const struct cp0_ui *ui)
+{
+    return ui == NULL ? NULL : ui->store_search_query;
+}
+
+uint16_t cp0_ui_store_search_offset(const struct cp0_ui *ui)
+{
+    return ui == NULL ? 0 : ui->store_search_offset;
+}
+
+static void remember_store_query(struct cp0_ui *ui)
+{
+    if (ui->store_search_query[0] == '\0')
+        return;
+    unsigned int existing = ui->store_recent_count;
+    for (unsigned int index = 0; index < ui->store_recent_count; index++) {
+        if (strcmp(ui->store_recent_queries[index],
+                   ui->store_search_query) == 0) {
+            existing = index;
+            break;
+        }
+    }
+    if (existing < ui->store_recent_count && existing > 0) {
+        memmove(&ui->store_recent_queries[1], &ui->store_recent_queries[0],
+                existing * sizeof(ui->store_recent_queries[0]));
+    } else if (existing == ui->store_recent_count) {
+        unsigned int move = ui->store_recent_count;
+        if (move >= CP0_UI_STORE_RECENT_MAX)
+            move = CP0_UI_STORE_RECENT_MAX - 1U;
+        if (move > 0)
+            memmove(&ui->store_recent_queries[1],
+                    &ui->store_recent_queries[0],
+                    move * sizeof(ui->store_recent_queries[0]));
+        if (ui->store_recent_count < CP0_UI_STORE_RECENT_MAX)
+            ui->store_recent_count++;
+    }
+    copy_optional_text(ui->store_recent_queries[0],
+                       sizeof(ui->store_recent_queries[0]),
+                       ui->store_search_query);
+    ui->store_recent_selected = 0;
 }
 
 static int selected_app_index(const struct cp0_ui *ui)
@@ -2003,6 +2487,20 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             ui->store_detail = false;
             return CP0_UI_EVENT_NONE;
         }
+        if (ui->screen == CP0_UI_STORE &&
+            ui->store_section == CP0_UI_STORE_SEARCH &&
+            ui->store_search_input) {
+            ui->store_search_input = false;
+            return CP0_UI_EVENT_NONE;
+        }
+        if (ui->screen == CP0_UI_STORE &&
+            ui->store_section == CP0_UI_STORE_SEARCH &&
+            ui->store_search_query[0] != '\0') {
+            ui->store_search_query[0] = '\0';
+            reset_store_search_results(ui);
+            ui->store_search_input = true;
+            return CP0_UI_EVENT_NONE;
+        }
         if (ui->screen == CP0_UI_SETTINGS && ui->settings_detail) {
             ui->settings_detail = false;
             return CP0_UI_EVENT_NONE;
@@ -2098,22 +2596,109 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             enum cp0_ui_store_state state =
                 cp0_ui_selected_store_app_state(ui);
             if (action == CP0_UI_ACCEPT &&
+                !(ui->store_section == CP0_UI_STORE_SEARCH
+                      ? ui->store_search_stale
+                      : ui->store_catalog_stale) &&
                 (state == CP0_UI_STORE_AVAILABLE ||
                  state == CP0_UI_STORE_UPDATE || state == CP0_UI_STORE_FAILED))
                 return CP0_UI_EVENT_STORE_INSTALL;
             return CP0_UI_EVENT_NONE;
         }
+        if (action == CP0_UI_LEFT && !ui->store_search_input &&
+            ui->store_section > CP0_UI_STORE_TODAY) {
+            ui->store_section--;
+            ui->store_selected = 0;
+            ui->store_search_selected = 0;
+            ui->store_search_input =
+                ui->store_section == CP0_UI_STORE_SEARCH;
+            return CP0_UI_EVENT_NONE;
+        }
+        if (action == CP0_UI_RIGHT && !ui->store_search_input &&
+            ui->store_section < CP0_UI_STORE_UPDATES) {
+            ui->store_section++;
+            ui->store_selected = 0;
+            ui->store_search_selected = 0;
+            ui->store_search_input =
+                ui->store_section == CP0_UI_STORE_SEARCH;
+            return CP0_UI_EVENT_NONE;
+        }
+        if (ui->store_section == CP0_UI_STORE_SEARCH) {
+            if (action == CP0_UI_DOWN && ui->store_search_input &&
+                (ui->store_search_count > 0 || ui->store_recent_count > 0)) {
+                ui->store_search_input = false;
+                return CP0_UI_EVENT_NONE;
+            }
+            if (action == CP0_UI_ACCEPT && ui->store_search_input &&
+                ui->store_search_query[0] != '\0') {
+                remember_store_query(ui);
+                ui->store_search_input = false;
+                return ui->store_search_status == CP0_UI_STORE_READY
+                           ? CP0_UI_EVENT_NONE
+                           : CP0_UI_EVENT_STORE_SEARCH;
+            }
+            if (ui->store_search_query[0] == '\0') {
+                if (action == CP0_UI_UP && ui->store_recent_selected > 0)
+                    ui->store_recent_selected--;
+                else if (action == CP0_UI_DOWN &&
+                         !ui->store_search_input &&
+                         ui->store_recent_selected + 1 <
+                             ui->store_recent_count)
+                    ui->store_recent_selected++;
+                else if (action == CP0_UI_ACCEPT &&
+                         !ui->store_search_input &&
+                         ui->store_recent_selected < ui->store_recent_count) {
+                    copy_optional_text(
+                        ui->store_search_query,
+                        sizeof(ui->store_search_query),
+                        ui->store_recent_queries[ui->store_recent_selected]);
+                    reset_store_search_results(ui);
+                    ui->store_search_input = true;
+                    return CP0_UI_EVENT_STORE_SEARCH;
+                }
+                return CP0_UI_EVENT_NONE;
+            }
+            if (ui->store_search_input)
+                return CP0_UI_EVENT_NONE;
+            if (action == CP0_UI_UP && ui->store_search_selected > 0) {
+                ui->store_search_selected--;
+            } else if (action == CP0_UI_UP && ui->store_search_offset > 0) {
+                ui->store_search_offset =
+                    ui->store_search_offset > CP0_UI_STORE_SEARCH_PAGE_MAX
+                        ? (uint16_t)(ui->store_search_offset -
+                                     CP0_UI_STORE_SEARCH_PAGE_MAX)
+                        : 0;
+                ui->store_search_status = CP0_UI_STORE_LOADING;
+                ui->store_search_count = 0;
+                return CP0_UI_EVENT_STORE_SEARCH;
+            } else if (action == CP0_UI_UP) {
+                ui->store_search_input = true;
+            } else if (action == CP0_UI_DOWN &&
+                       ui->store_search_selected + 1 <
+                           ui->store_search_count) {
+                ui->store_search_selected++;
+            } else if (action == CP0_UI_DOWN &&
+                       ui->store_search_has_next) {
+                ui->store_search_offset = ui->store_search_next_offset;
+                ui->store_search_status = CP0_UI_STORE_LOADING;
+                ui->store_search_count = 0;
+                ui->store_search_selected = 0;
+                return CP0_UI_EVENT_STORE_SEARCH;
+            } else if (action == CP0_UI_ACCEPT &&
+                       ui->store_search_count > 0) {
+                remember_store_query(ui);
+                ui->store_detail = true;
+            }
+            return CP0_UI_EVENT_NONE;
+        }
         if (ui->store_status != CP0_UI_STORE_READY)
-            return action == CP0_UI_RIGHT ? CP0_UI_EVENT_STORE_REFRESH
-                                          : CP0_UI_EVENT_NONE;
+            return action == CP0_UI_ACCEPT ? CP0_UI_EVENT_STORE_REFRESH
+                                           : CP0_UI_EVENT_NONE;
+        unsigned int count = store_section_count(ui);
         if (action == CP0_UI_UP && ui->store_selected > 0)
             ui->store_selected--;
-        else if (action == CP0_UI_DOWN &&
-                 ui->store_selected + 1 < ui->store_count)
+        else if (action == CP0_UI_DOWN && ui->store_selected + 1 < count)
             ui->store_selected++;
-        else if (action == CP0_UI_RIGHT)
-            return CP0_UI_EVENT_STORE_REFRESH;
-        else if (action == CP0_UI_ACCEPT && ui->store_count > 0)
+        else if (action == CP0_UI_ACCEPT && count > 0)
             ui->store_detail = true;
         return CP0_UI_EVENT_NONE;
     }

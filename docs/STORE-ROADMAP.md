@@ -28,9 +28,10 @@
 - [x] 增加 `search` 有界分页协议：query、offset、limit、total、next_offset。
 - [x] 在 `cp0-stored` 对已验证 Catalog 执行稳定排序的本地搜索。
 - [x] 增加 `cp0ctl store search`，拒绝错配响应和越界分页。
-- [ ] 在 System Shell 实现 Search 输入、最近查询和空结果状态。
-- [ ] 增加 Search、无结果、最大文本、分页和 stale Catalog 像素回归。
-- [ ] 增加 Apps 分类和 Updates 计算模型，先使用现有 Catalog 元数据。
+- [x] 在 System Shell 实现 Search 输入、最近查询和空结果状态。
+- [x] 增加 Search、无结果、最大文本、分页和 stale Catalog 像素回归。
+- [x] 增加 Today/Apps/Search/Updates 分段和严格 SemVer Updates 计算模型；
+  Catalog v1 的 Apps 显示全部应用，签名 category 字段仍按 S6 引入。
 
 完成条件：64 应用最大目录可以在 CM0 内存预算内搜索；搜索词不离开设备。
 

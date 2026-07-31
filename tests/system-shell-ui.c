@@ -110,6 +110,53 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     write_snapshot(directory, "store", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
     write_snapshot(directory, "store-detail", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_BACK);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "store-search-empty", ui, frame);
+    static const char search_query[] = "camera";
+    for (size_t index = 0; index < strlen(search_query); index++)
+        assert(cp0_ui_store_input_ascii(ui, search_query[index]) ==
+               CP0_UI_EVENT_STORE_SEARCH);
+    cp0_ui_sync_store_search(ui, search_query, 0, 2, false, 0, store_apps, 2,
+                             true);
+    write_snapshot(directory, "store-search", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "store-updates", ui, frame);
+
+    cp0_ui_init(ui);
+    cp0_ui_set_local_simulation(ui, true);
+    cp0_ui_set_status(ui, "12:34", true, 73);
+    cp0_ui_sync_store_catalog(ui, store_apps, 2, false, false);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    static const char missing_query[] = "missing";
+    for (size_t index = 0; index < strlen(missing_query); index++)
+        cp0_ui_store_input_ascii(ui, missing_query[index]);
+    cp0_ui_sync_store_search(ui, missing_query, 0, 0, false, 0, NULL, 0,
+                             false);
+    write_snapshot(directory, "store-search-none", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    cp0_ui_handle_action(ui, CP0_UI_BACK);
+    cp0_ui_handle_action(ui, CP0_UI_DOWN);
+    write_snapshot(directory, "store-search-recent", ui, frame);
+
+    cp0_ui_init(ui);
+    cp0_ui_set_local_simulation(ui, true);
+    cp0_ui_set_status(ui, "12:34", true, 73);
+    cp0_ui_sync_store_catalog(ui, store_apps, 2, false, false);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    for (unsigned int index = 0; index < 32; index++)
+        cp0_ui_store_input_ascii(ui, (char)('a' + index % 26));
+    cp0_ui_sync_store_search(ui, ui->store_search_query, 0, 0, false, 0,
+                             NULL, 0, false);
+    write_snapshot(directory, "store-search-max", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_GO_HOME);
     cp0_ui_handle_action(ui, CP0_UI_LEFT);
 
@@ -277,6 +324,7 @@ int main(int argc, char **argv)
     struct cp0_ui ui;
     struct guarded_frame *frame = calloc(1, sizeof(*frame));
     assert(frame != NULL);
+    assert(sizeof(struct cp0_ui) <= 64U * 1024U);
 
     cp0_ui_init(&ui);
     cp0_ui_set_local_simulation(&ui, true);
@@ -368,14 +416,15 @@ int main(int argc, char **argv)
          .summary = "An update ready for installation",
          .installed_version = "1.0.0"},
     };
-    cp0_ui_sync_store_catalog(&ui, store_catalog, 2, false, true);
+    cp0_ui_sync_store_catalog(&ui, store_catalog, 2, false, false);
     assert(ui.store_apps[0].state == CP0_UI_STORE_INSTALLED);
     assert(ui.store_apps[1].state == CP0_UI_STORE_UPDATE);
     cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
     cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
     assert(ui.screen == CP0_UI_STORE && !ui.store_detail);
-    assert(cp0_ui_handle_action(&ui, CP0_UI_RIGHT) ==
-           CP0_UI_EVENT_STORE_REFRESH);
+    assert(ui.store_section == CP0_UI_STORE_TODAY);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_RIGHT) == CP0_UI_EVENT_NONE);
+    assert(ui.store_section == CP0_UI_STORE_APPS);
     cp0_ui_handle_action(&ui, CP0_UI_DOWN);
     assert(strcmp(cp0_ui_selected_store_app_id(&ui),
                   "dev.cardputerzero.beta") == 0);
@@ -400,8 +449,115 @@ int main(int argc, char **argv)
     assert(ui.store_status == CP0_UI_STORE_UNCONFIGURED);
     cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
     assert(ui.screen == CP0_UI_STORE && !ui.store_detail);
-    assert(cp0_ui_handle_action(&ui, CP0_UI_RIGHT) ==
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_STORE_REFRESH);
+
+    struct cp0_ui search_ui;
+    cp0_ui_init(&search_ui);
+    cp0_ui_sync_store_catalog(&search_ui, store_catalog, 2, false, false);
+    cp0_ui_handle_action(&search_ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&search_ui, CP0_UI_ACCEPT);
+    cp0_ui_handle_action(&search_ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&search_ui, CP0_UI_RIGHT);
+    assert(search_ui.store_section == CP0_UI_STORE_SEARCH);
+    assert(cp0_ui_store_accepts_text(&search_ui));
+    assert(cp0_ui_store_input_ascii(&search_ui, 'a') ==
+           CP0_UI_EVENT_STORE_SEARCH);
+    assert(cp0_ui_store_input_ascii(&search_ui, 'p') ==
+           CP0_UI_EVENT_STORE_SEARCH);
+    assert(cp0_ui_store_input_ascii(&search_ui, 'p') ==
+           CP0_UI_EVENT_STORE_SEARCH);
+
+    struct cp0_ui_store_catalog_app search_page[8];
+    char search_ids[8][48];
+    char search_names[8][24];
+    for (unsigned int index = 0; index < 8; index++) {
+        snprintf(search_ids[index], sizeof(search_ids[index]),
+                 "dev.cardputerzero.search%u", index);
+        snprintf(search_names[index], sizeof(search_names[index]),
+                 "Search Result %u", index);
+        search_page[index] = (struct cp0_ui_store_catalog_app){
+            .package_bytes = 4096,
+            .state = CP0_UI_STORE_AVAILABLE,
+            .app_id = search_ids[index],
+            .name = search_names[index],
+            .version = "1.0.0",
+            .summary = "Local ranked search result",
+        };
+    }
+    cp0_ui_sync_store_search(&search_ui, "app", 0, 9, true, 8,
+                             search_page, 8, true);
+    assert(search_ui.store_search_count == 8 &&
+           search_ui.store_search_has_next &&
+           search_ui.store_search_stale && !search_ui.store_catalog_stale);
+    cp0_ui_handle_action(&search_ui, CP0_UI_ACCEPT);
+    assert(!search_ui.store_search_input && search_ui.store_recent_count == 1);
+    for (unsigned int index = 0; index < 7; index++)
+        cp0_ui_handle_action(&search_ui, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&search_ui, CP0_UI_DOWN) ==
+           CP0_UI_EVENT_STORE_SEARCH);
+    assert(cp0_ui_store_search_offset(&search_ui) == 8);
+    struct cp0_ui_store_catalog_app final_result = search_page[0];
+    final_result.app_id = "dev.cardputerzero.search8";
+    final_result.name = "Search Result 8";
+    cp0_ui_sync_store_search(&search_ui, "app", 8, 9, false, 0,
+                             &final_result, 1, true);
+    assert(strcmp(cp0_ui_selected_store_app_id(&search_ui),
+                  "dev.cardputerzero.search8") == 0);
+    cp0_ui_handle_action(&search_ui, CP0_UI_ACCEPT);
+    assert(search_ui.store_detail);
+    assert(cp0_ui_handle_action(&search_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_NONE);
+    cp0_ui_handle_action(&search_ui, CP0_UI_BACK);
+    assert(cp0_ui_handle_action(&search_ui, CP0_UI_UP) ==
+           CP0_UI_EVENT_STORE_SEARCH);
+    assert(cp0_ui_store_search_offset(&search_ui) == 0);
+    cp0_ui_handle_action(&search_ui, CP0_UI_BACK);
+    assert(search_ui.store_search_query[0] == '\0' &&
+           search_ui.store_search_input);
+    cp0_ui_handle_action(&search_ui, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&search_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_SEARCH);
+    assert(strcmp(search_ui.store_search_query, "app") == 0);
+
+    struct cp0_ui max_query_ui;
+    cp0_ui_init(&max_query_ui);
+    cp0_ui_sync_store_catalog(&max_query_ui, store_catalog, 2, false, false);
+    cp0_ui_handle_action(&max_query_ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&max_query_ui, CP0_UI_ACCEPT);
+    cp0_ui_handle_action(&max_query_ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&max_query_ui, CP0_UI_RIGHT);
+    for (unsigned int index = 0; index < 32; index++)
+        assert(cp0_ui_store_input_ascii(&max_query_ui, 'a') ==
+               CP0_UI_EVENT_STORE_SEARCH);
+    assert(strlen(max_query_ui.store_search_query) == 32);
+    assert(cp0_ui_store_input_ascii(&max_query_ui, 'b') ==
+           CP0_UI_EVENT_NONE);
+    assert(cp0_ui_store_backspace(&max_query_ui) ==
+           CP0_UI_EVENT_STORE_SEARCH);
+    assert(strlen(max_query_ui.store_search_query) == 31);
+
+    struct cp0_ui_store_catalog_app older_catalog = store_catalog[0];
+    older_catalog.version = "1.0.0-beta.1";
+    older_catalog.installed_version = "1.0.0";
+    cp0_ui_sync_store_catalog(&max_query_ui, &older_catalog, 1, false, false);
+    assert(max_query_ui.store_apps[0].state == CP0_UI_STORE_INSTALLED);
+    older_catalog.version = "10.0.0";
+    older_catalog.installed_version = "2.0.0";
+    cp0_ui_sync_store_catalog(&max_query_ui, &older_catalog, 1, false, false);
+    assert(max_query_ui.store_apps[0].state == CP0_UI_STORE_UPDATE);
+    older_catalog.version = "2.0.0";
+    older_catalog.installed_version = "10.0.0";
+    cp0_ui_sync_store_catalog(&max_query_ui, &older_catalog, 1, false, false);
+    assert(max_query_ui.store_apps[0].state == CP0_UI_STORE_INSTALLED);
+    older_catalog.version = "1.0.0-beta.2";
+    older_catalog.installed_version = "1.0.0-beta.1";
+    cp0_ui_sync_store_catalog(&max_query_ui, &older_catalog, 1, false, false);
+    assert(max_query_ui.store_apps[0].state == CP0_UI_STORE_UPDATE);
+    older_catalog.version = "1.0.0+new-build";
+    older_catalog.installed_version = "1.0.0+old-build";
+    cp0_ui_sync_store_catalog(&max_query_ui, &older_catalog, 1, false, false);
+    assert(max_query_ui.store_apps[0].state == CP0_UI_STORE_INSTALLED);
 
     cp0_ui_handle_action(&ui, CP0_UI_SHOW_TASKS);
     assert(ui.screen == CP0_UI_TASKS);

@@ -189,6 +189,15 @@ Store 签名是独立安全域：
 - 搜索不上传输入，也不需要登录；
 - stale Catalog 可以搜索和浏览，但不能授权安装。
 
+当前 System Shell 使用物理键盘直接输入 ASCII 字母、数字、空格、点、连字符和下划线，
+最多 32 字符；协议继续保留 96 字节 UTF-8 边界，为后续可信输入法留出空间。最近查询只保存在
+Shell 进程内存中，重启即清空，不写入 SD 卡，也不发送到网络。每次请求严格绑定 query、
+offset 和 limit；结果页最多 8 条，Previous/Next 分页不会把 64 项 Catalog 常驻复制到 UI。
+
+Catalog v1 没有签名 category 字段，因此 Apps 当前是经过验证的全部应用列表；Today 选择
+稳定的首项作为本地推荐占位，Updates 仅在 Catalog 版本按 SemVer 严格高于 appd 报告的
+已安装版本时出现。旧版本、相同版本和 prerelease 降级都保持 `INSTALLED`，不会伪装成更新。
+
 #### 下载与更新
 
 - 同一时间只允许一个 Store 下载/安装任务，避免 CM0 内存和 SD 抖动；

@@ -63,6 +63,7 @@ struct shell {
     bool configured;
     bool has_argb;
     bool meta_pressed;
+    bool shift_pressed;
     bool redraw_pending;
     bool has_installed_apps;
     unsigned int catalog_ticks;
@@ -299,6 +300,50 @@ static void poll_store_catalog(struct shell *shell)
     }
     cp0_ui_sync_store_catalog(&shell->ui, apps, catalog.count,
                               catalog.truncated, catalog.stale);
+}
+
+static void poll_store_search(struct shell *shell)
+{
+    struct cp0_store_search_results results;
+    struct cp0_ui_store_catalog_app apps[CP0_STORE_SEARCH_MAX_APPS];
+    const char *query = cp0_ui_store_search_query(&shell->ui);
+    uint16_t offset = cp0_ui_store_search_offset(&shell->ui);
+    int result;
+
+    if (query == NULL || query[0] == '\0')
+        return;
+    result = cp0_store_search(query, offset, CP0_STORE_SEARCH_MAX_APPS,
+                              &results);
+    if (result == CP0_STORE_RESULT_UNCONFIGURED) {
+        cp0_ui_set_store_search_status(&shell->ui,
+                                       CP0_UI_STORE_UNCONFIGURED);
+        return;
+    }
+    if (result != CP0_STORE_RESULT_OK) {
+        if (result != CP0_STORE_RESULT_BUSY)
+            cp0_ui_set_store_search_status(&shell->ui,
+                                           CP0_UI_STORE_UNAVAILABLE);
+        return;
+    }
+    for (size_t index = 0; index < results.count; index++) {
+        const struct cp0_app_summary *installed =
+            installed_app(shell, results.apps[index].app_id);
+        apps[index] = (struct cp0_ui_store_catalog_app){
+            .package_bytes = results.apps[index].package_bytes,
+            .permissions = results.apps[index].permissions,
+            .progress_percent = results.apps[index].progress_percent,
+            .state = store_ui_state(&results.apps[index]),
+            .app_id = results.apps[index].app_id,
+            .name = results.apps[index].name,
+            .version = results.apps[index].version,
+            .summary = results.apps[index].summary,
+            .installed_version = installed == NULL ? NULL : installed->version,
+        };
+    }
+    cp0_ui_sync_store_search(
+        &shell->ui, results.query, results.offset, results.total,
+        results.has_next, results.next_offset, apps, results.count,
+        results.stale);
 }
 
 static void poll_notification(struct shell *shell)
@@ -713,6 +758,8 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                         app_id);
             }
         }
+    } else if (event == CP0_UI_EVENT_STORE_SEARCH) {
+        poll_store_search(shell);
     } else if (event == CP0_UI_EVENT_DEVELOPER_ENABLE ||
                event == CP0_UI_EVENT_DEVELOPER_DISABLE ||
                event == CP0_UI_EVENT_RECOVERY_ENABLE ||
@@ -885,6 +932,10 @@ static bool translate_key(struct shell *shell, uint32_t key,
         shell->meta_pressed = pressed;
         return false;
     }
+    if (key == KEY_LEFTSHIFT || key == KEY_RIGHTSHIFT) {
+        shell->shift_pressed = pressed;
+        return false;
+    }
     if (!pressed)
         return false;
 
@@ -923,6 +974,12 @@ static bool translate_key(struct shell *shell, uint32_t key,
     case KEY_F4:
         *action = CP0_UI_SHOW_POWER;
         return true;
+    case KEY_F5:
+        *action = CP0_UI_LEFT;
+        return true;
+    case KEY_F6:
+        *action = CP0_UI_RIGHT;
+        return true;
     case KEY_F:
         *action = CP0_UI_UP;
         return true;
@@ -959,6 +1016,53 @@ static bool translate_key(struct shell *shell, uint32_t key,
     return false;
 }
 
+static char search_character(uint32_t key, bool shifted)
+{
+    char character = '\0';
+    switch (key) {
+    case KEY_A: character = 'a'; break;
+    case KEY_B: character = 'b'; break;
+    case KEY_C: character = 'c'; break;
+    case KEY_D: character = 'd'; break;
+    case KEY_E: character = 'e'; break;
+    case KEY_F: character = 'f'; break;
+    case KEY_G: character = 'g'; break;
+    case KEY_H: character = 'h'; break;
+    case KEY_I: character = 'i'; break;
+    case KEY_J: character = 'j'; break;
+    case KEY_K: character = 'k'; break;
+    case KEY_L: character = 'l'; break;
+    case KEY_M: character = 'm'; break;
+    case KEY_N: character = 'n'; break;
+    case KEY_O: character = 'o'; break;
+    case KEY_P: character = 'p'; break;
+    case KEY_Q: character = 'q'; break;
+    case KEY_R: character = 'r'; break;
+    case KEY_S: character = 's'; break;
+    case KEY_T: character = 't'; break;
+    case KEY_U: character = 'u'; break;
+    case KEY_V: character = 'v'; break;
+    case KEY_W: character = 'w'; break;
+    case KEY_X: character = 'x'; break;
+    case KEY_Y: character = 'y'; break;
+    case KEY_Z: character = 'z'; break;
+    default: break;
+    }
+    if (character != '\0')
+        return shifted ? (char)(character - 'a' + 'A') : character;
+    if (key >= KEY_1 && key <= KEY_9)
+        return (char)('1' + (key - KEY_1));
+    if (key == KEY_0)
+        return '0';
+    if (key == KEY_SPACE)
+        return ' ';
+    if (key == KEY_DOT)
+        return '.';
+    if (key == KEY_MINUS)
+        return shifted ? '_' : '-';
+    return '\0';
+}
+
 static void handle_keyboard_keymap(void *data, struct wl_keyboard *keyboard,
                                    uint32_t format, int fd, uint32_t size)
 {
@@ -988,6 +1092,7 @@ static void handle_keyboard_leave(void *data, struct wl_keyboard *keyboard,
     (void)serial;
     (void)surface;
     shell->meta_pressed = false;
+    shell->shift_pressed = false;
 }
 
 static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
@@ -999,6 +1104,32 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
     (void)keyboard;
     (void)serial;
     (void)time;
+    bool pressed = state == WL_KEYBOARD_KEY_STATE_PRESSED;
+    if (key == KEY_LEFTSHIFT || key == KEY_RIGHTSHIFT) {
+        shell->shift_pressed = pressed;
+        return;
+    }
+    if (pressed && cp0_ui_store_accepts_text(&shell->ui)) {
+        enum cp0_ui_event event = CP0_UI_EVENT_NONE;
+        bool handled = false;
+        if (key == KEY_BACKSPACE &&
+            cp0_ui_store_search_query(&shell->ui)[0] != '\0') {
+            event = cp0_ui_store_backspace(&shell->ui);
+            handled = true;
+        } else {
+            char character = search_character(key, shell->shift_pressed);
+            if (character != '\0') {
+                event = cp0_ui_store_input_ascii(&shell->ui, character);
+                handled = true;
+            }
+        }
+        if (handled) {
+            if (event == CP0_UI_EVENT_STORE_SEARCH)
+                poll_store_search(shell);
+            shell_redraw(shell);
+            return;
+        }
+    }
     if (translate_key(shell, key, state, &action))
         handle_ui_action(shell, action);
 }

@@ -14,6 +14,10 @@ int cp0_store_test_parse_install_response(const char *response,
                                           size_t response_length,
                                           uint64_t request_id,
                                           const char *app_id);
+int cp0_store_test_parse_search_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *query, uint16_t offset, uint8_t limit,
+    struct cp0_store_search_results *results);
 
 #define ENVELOPE_START(ID)                                                     \
     "{\"protocol_version\":1,\"request_id\":" ID ",\"outcome\":{"      \
@@ -28,6 +32,13 @@ int cp0_store_test_parse_install_response(const char *response,
     "\"kind\":\"catalog\",\"sequence\":4,\"expires_unix_seconds\":200," \
     "\"stale\":false,\"apps\":["
 #define CATALOG_END "]}}}"
+#define SEARCH_START(ID, QUERY, OFFSET, LIMIT, TOTAL, NEXT, STALE)             \
+    ENVELOPE_START(ID)                                                        \
+    "\"kind\":\"search-results\",\"query\":\"" QUERY                    \
+    "\",\"offset\":" OFFSET ",\"limit\":" LIMIT ",\"total\":" TOTAL    \
+    ",\"next_offset\":" NEXT ",\"sequence\":4,"                           \
+    "\"expires_unix_seconds\":200,\"stale\":" STALE ",\"apps\":["
+#define SEARCH_END "]}}}"
 
 static int parse_catalog(const char *response, uint64_t request_id,
                          struct cp0_store_catalog *catalog)
@@ -168,5 +179,49 @@ int main(void)
         "\"extra\":true}}}";
     assert(parse_catalog(extra_catalog_field, 22, &catalog) ==
            CP0_STORE_RESULT_ERROR);
+
+    struct cp0_store_search_results search;
+    static const char valid_search[] =
+        SEARCH_START("24", "app", "0", "2", "3", "2", "true")
+        APP("beta", "[]", "available", "0") ","
+        APP("alpha", "[]", "installed", "100") SEARCH_END;
+    assert(cp0_store_test_parse_search_response(
+               valid_search, strlen(valid_search), 24, "app", 0, 2,
+               &search) == CP0_STORE_RESULT_OK);
+    assert(search.count == 2 && search.total == 3 && search.has_next &&
+           search.next_offset == 2 && search.stale);
+    assert(strcmp(search.apps[0].app_id, "dev.cardputerzero.beta") == 0);
+    assert(cp0_store_test_parse_search_response(
+               valid_search, strlen(valid_search), 24, "notes", 0, 2,
+               &search) == CP0_STORE_RESULT_ERROR);
+    assert(cp0_store_test_parse_search_response(
+               valid_search, strlen(valid_search), 24, "app", 1, 2,
+               &search) == CP0_STORE_RESULT_ERROR);
+
+    static const char empty_search[] =
+        SEARCH_START("25", "missing", "0", "8", "0", "null", "false")
+        SEARCH_END;
+    assert(cp0_store_test_parse_search_response(
+               empty_search, strlen(empty_search), 25, "missing", 0, 8,
+               &search) == CP0_STORE_RESULT_OK);
+    assert(search.count == 0 && search.total == 0 && !search.has_next);
+
+    static const char wrong_next[] =
+        SEARCH_START("26", "app", "0", "2", "3", "null", "false")
+        APP("alpha", "[]", "available", "0") ","
+        APP("beta", "[]", "available", "0") SEARCH_END;
+    static const char duplicate_search[] =
+        SEARCH_START("27", "app", "0", "2", "2", "null", "false")
+        APP("alpha", "[]", "available", "0") ","
+        APP("alpha", "[]", "available", "0") SEARCH_END;
+    assert(cp0_store_test_parse_search_response(
+               wrong_next, strlen(wrong_next), 26, "app", 0, 2,
+               &search) == CP0_STORE_RESULT_ERROR);
+    assert(cp0_store_test_parse_search_response(
+               duplicate_search, strlen(duplicate_search), 27, "app", 0, 2,
+               &search) == CP0_STORE_RESULT_ERROR);
+    assert(cp0_store_test_parse_search_response(
+               empty_search, strlen(empty_search), 25, "bad\"query", 0, 8,
+               &search) == CP0_STORE_RESULT_ERROR);
     return 0;
 }

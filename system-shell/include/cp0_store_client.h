@@ -10,6 +10,8 @@
 #define CP0_STORE_APP_NAME_BYTES 129
 #define CP0_STORE_VERSION_BYTES 65
 #define CP0_STORE_SUMMARY_BYTES 385
+#define CP0_STORE_SEARCH_QUERY_BYTES 97
+#define CP0_STORE_SEARCH_MAX_APPS 8
 
 enum cp0_store_result {
     CP0_STORE_RESULT_OK = 0,
@@ -58,7 +60,23 @@ struct cp0_store_catalog {
     struct cp0_store_app_summary apps[CP0_STORE_MAX_APPS];
 };
 
+struct cp0_store_search_results {
+    uint64_t sequence;
+    uint64_t expires_unix_seconds;
+    uint16_t offset;
+    uint16_t total;
+    uint16_t next_offset;
+    uint8_t limit;
+    size_t count;
+    bool has_next;
+    bool stale;
+    char query[CP0_STORE_SEARCH_QUERY_BYTES];
+    struct cp0_store_app_summary apps[CP0_STORE_SEARCH_MAX_APPS];
+};
+
 int cp0_store_list(struct cp0_store_catalog *catalog);
+int cp0_store_search(const char *query, uint16_t offset, uint8_t limit,
+                     struct cp0_store_search_results *results);
 int cp0_store_refresh(void);
 int cp0_store_install(const char *app_id);
 
