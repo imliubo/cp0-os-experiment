@@ -132,6 +132,10 @@ install -D -m 0755 "${STAGE_DIR}/00-bsp/files/console-banner.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/console-banner.sh"
 install -D -m 0644 "${STAGE_DIR}/00-bsp/files/cardputerzero-console-banner.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-console-banner.service"
+install -D -m 0755 "${STAGE_DIR}/00-bsp/files/prepare-ssh.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/prepare-ssh.sh"
+install -D -m 0644 "${STAGE_DIR}/00-bsp/files/cardputerzero-ssh-prepare.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-ssh-prepare.service"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/cardputerzero-firmware.initramfs-hook" \
     "${ROOTFS_DIR}/etc/initramfs-tools/hooks/cardputerzero-firmware"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/overlay-root-initramfs" \
@@ -234,7 +238,8 @@ systemctl mask apt-daily.service apt-daily.timer \
     fb_load.service 2>/dev/null || true
 systemctl enable NetworkManager.service ssh.service apparmor.service \
     getty@tty1.service cardputerzero-console-banner.service \
-    cardputerzero-overlay-root-status.service
+    cardputerzero-overlay-root-status.service \
+    cardputerzero-ssh-prepare.service
 systemctl set-default multi-user.target
 for module in \
     overlay gpio-forwarder panel-mipi-dbi-m pwm_bl_m5stack st7789v_m5stack \

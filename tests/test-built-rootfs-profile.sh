@@ -39,6 +39,7 @@ required_executables=(
     usr/libexec/cardputerzero/device-support-bundle
     usr/libexec/cardputerzero/data-grow-initramfs
     usr/libexec/cardputerzero/overlay-root-initramfs
+    usr/libexec/cardputerzero/prepare-ssh.sh
     etc/initramfs-tools/scripts/init-bottom/cardputerzero-overlay-root
     etc/initramfs-tools/scripts/local-premount/cardputerzero-data-grow
 )
@@ -70,6 +71,8 @@ done
 
 enabled_units=(
     multi-user.target.wants/cardputerzero-console-banner.service
+    multi-user.target.wants/ssh.service
+    ssh.service.requires/cardputerzero-ssh-prepare.service
     sysinit.target.wants/regenerate_ssh_host_keys.service
     getty.target.wants/getty@tty1.service
 )

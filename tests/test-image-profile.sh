@@ -7,6 +7,8 @@ packages="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/00-packages-nr"
 build_script="$repo_root/image/build-image.sh"
 smoke_script="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/device-smoke.sh"
 firmware_hook="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardputerzero-firmware.initramfs-hook"
+ssh_prepare="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/prepare-ssh.sh"
+ssh_prepare_unit="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardputerzero-ssh-prepare.service"
 rootfs_verifier="$repo_root/tests/test-built-rootfs-profile.sh"
 
 grep -q '^PI_GEN_BRANCH=arm64$' "$repo_root/image/pi-gen/upstream.env"
@@ -20,6 +22,16 @@ grep -q 'for token in quiet splash fbcon=map:off fbcon=map:0' "$stage"
 grep -q 'fb_load.service' "$stage"
 grep -q 'rm -f /etc/systemd/system/fb_load.service' "$stage"
 grep -q 'getty@tty1.service cardputerzero-console-banner.service' "$stage"
+grep -q 'cardputerzero-ssh-prepare.service' "$stage"
+grep -q '^RequiredBy=ssh.service$' "$ssh_prepare_unit"
+grep -q '^Before=ssh.service$' "$ssh_prepare_unit"
+if grep -q 'ConditionFirstBoot' "$ssh_prepare_unit"; then
+    echo "error: SSH preparation cannot depend on systemd first-boot detection" >&2
+    exit 1
+fi
+grep -q '^/usr/bin/ssh-keygen -A$' "$ssh_prepare"
+grep -q '^/usr/sbin/sshd -t$' "$ssh_prepare"
+sh -n "$ssh_prepare"
 grep -q 'rpi-resize.service 2>/dev/null' "$stage"
 grep -qx 'raspberrypi-sys-mods' "$packages"
 grep -q 'tca8418_keypad_m5stack' "$stage"

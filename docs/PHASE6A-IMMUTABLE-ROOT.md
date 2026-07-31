@@ -75,6 +75,11 @@ paths survive reboot:
 This covers installed applications, the registry and permission decisions,
 private app data, trust/revocation policy, LoRa policy, Wi-Fi credentials,
 NetworkManager state, SSH host keys, machine identity and the random seed.
+The initramfs creates the persistent machine identity before systemd starts, so SSH
+host-key provisioning must not use `ConditionFirstBoot=yes`. The
+`cardputerzero-ssh-prepare.service` instead runs before `ssh.service`, creates any
+missing keys directly in the persistent `/etc/ssh` bind mount and validates the
+server configuration before it can listen.
 Everything else written to `/etc` or `/var` is discarded on reboot.
 
 The data filesystem root is mode `0700`. Applications do not receive its mount
