@@ -269,9 +269,12 @@ fn toml_string(value: &str) -> String {
 
 const APP_TEMPLATE: &str = r#"#![no_std]
 
+#[cfg(not(test))]
 use core::panic::PanicInfo;
+#[cfg(not(test))]
 use cp0_sdk::system;
 
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
     loop {
@@ -281,6 +284,7 @@ pub extern "C" fn main() -> i32 {
     }
 }
 
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(_information: &PanicInfo<'_>) -> ! {
     loop {
@@ -306,7 +310,14 @@ mod tests {
         assert_eq!(manifest.sdk_version, "1.0");
         let source = fs::read_to_string(path.join("src/lib.rs")).unwrap();
         assert!(source.contains("cp0_sdk::system"));
+        assert!(source.contains("#[cfg(not(test))]"));
         assert!(!source.contains("extern \"C\" {"));
+        let test_status = Command::new("cargo")
+            .args(["test", "--manifest-path"])
+            .arg(path.join("Cargo.toml"))
+            .status()
+            .unwrap();
+        assert!(test_status.success());
         let output = build_project(&path).unwrap();
         assert!(output.join("app.json").is_file());
         assert!(output.join("bin/generated.wasm").is_file());

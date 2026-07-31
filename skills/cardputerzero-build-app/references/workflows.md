@@ -25,6 +25,10 @@ Rust apps are `#![no_std]` `cdylib` crates for `wasm32-unknown-unknown`. Keep th
 generated panic handler and exported `main`. Use only public modules from
 `cp0-sdk`; never declare private imports.
 
+Keep runtime-only imports, the exported `main`, frame storage and panic handler
+behind `#[cfg(not(test))]`. Put deterministic state transitions in ordinary
+functions so `cargo test` can exercise them with the host test harness.
+
 ## C and C++
 
 This is an advanced SDK integration preview, not the release-ready App

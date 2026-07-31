@@ -12,9 +12,10 @@ capabilities.
 
 ## Resolve The DevKit
 
-1. Locate the root in this order: `$CP0_DEVKIT_ROOT`, an extracted DevKit that
-   contains this Skill, or the CardputerZero-OS repository root.
-2. Run `scripts/doctor.sh ROOT rust`. If it fails, read
+1. Set `SKILL_DIR` to the directory containing this `SKILL.md`. Locate `ROOT`
+   in this order: `$CP0_DEVKIT_ROOT`, an extracted DevKit that contains this
+   Skill, or the CardputerZero-OS repository root.
+2. Run `"$SKILL_DIR/scripts/doctor.sh" "$ROOT" rust`. If it fails, read
    [references/distribution.md](references/distribution.md) and use the pinned
    toolchain image or install only the reported missing component.
 3. Prefer `ROOT/bin/cp0ctl` in a released DevKit. In a source checkout, use
@@ -81,7 +82,7 @@ manifest declarations agree before packaging.
 Run the bundled verifier with a representative comma-separated key sequence:
 
 ```sh
-skills/cardputerzero-build-app/scripts/verify-app.sh APP_DIR left,right,enter deny
+"$SKILL_DIR/scripts/verify-app.sh" APP_DIR left,right,enter deny
 ```
 
 Then inspect both the rendered PPM and JSON profile. Exercise at least the
