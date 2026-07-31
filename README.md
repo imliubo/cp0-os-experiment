@@ -81,6 +81,8 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
   目录防回滚和 appd 独立复验，System Shell 提供 Store 列表、详情与安装进度。
 - Phase 5C 设备策略与 Settings：root-owned 家长/组织策略限制 Store、应用白名单和
   全局权限，用户可二次确认切换开发者模式与下次启动的 tty1 恢复控制台。
+- Phase 6B 本地诊断与量产门禁：默认脱敏且不联网的 RAM-only 支持包、显式同意的
+  原始服务日志，以及只读检查 V0.6 硬件、不可变根、服务与 socket 的工厂验收器。
 
 ## 快速验证
 
@@ -148,3 +150,5 @@ Rust SDK 公共 API 和真机迁移结果见
 [reviewed application store](docs/PHASE5B-APPLICATION-STORE.md)。
 设备策略、Settings 开关和恢复控制台退出流程见
 [device policy and user-controlled modes](docs/PHASE5C-DEVICE-POLICY.md)。
+不可识别诊断数据边界、敏感日志同意和量产门禁见
+[privacy-preserving diagnostics and factory acceptance](docs/PHASE6B-DIAGNOSTICS-FACTORY.md)。

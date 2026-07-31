@@ -215,4 +215,10 @@ appd 和 compositor 使用 `Restart=on-failure`，System Shell 使用
 
 24 小时验收按分钟将核心服务状态、重启数、cgroup 内存和 socket/ping 健康写入
 `/run` 的独立结果目录，避免持续写入 SD 卡。监控工具有固定的 32/32/24 MiB 内存
-上限和结束增长阈值，但不会在产品启动时常驻；量产遥测策略留到 Phase 6。
+上限和结束增长阈值，但不会在产品启动时常驻。
+
+Phase 6 的设备诊断同样不常驻且不自动上传。默认支持包只导出无设备/用户标识的
+硬件存在性、服务属性、资源和挂载状态；原始 journal 必须由 root 使用独立参数显式
+加入，并在包内标为敏感。量产验收只读检查不可变根、`cp0-data`、固定服务和 socket
+权限，结果仅写入 `/run`。详细数据边界见
+`docs/PHASE6B-DIAGNOSTICS-FACTORY.md`。

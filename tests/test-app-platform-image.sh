@@ -50,7 +50,9 @@ grep -q 'cardputerzero-store.conf' "$stage"
 grep -q 'useradd --system --gid cp0-storage' "$stage"
 grep -q 'cp0-storage -g cp0-storage -m 0700' "$stage"
 grep -q 'device-core-recovery' "$stage"
+grep -q 'device-factory-acceptance' "$stage"
 grep -q 'device-stability-monitor' "$stage"
+grep -q 'device-support-bundle' "$stage"
 grep -q 'chown -R root:root' "$stage"
 if grep -q 'cp0-app-20000 -g cp0-app-20000 -m 0700' "$stage"; then
     echo "error: application data must not be mounted from an app-owned host directory" >&2
