@@ -5,12 +5,13 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 recovery="$repo_root/scripts/device-core-recovery.sh"
 monitor="$repo_root/scripts/device-stability-monitor.sh"
 factory="$repo_root/scripts/device-factory-acceptance.sh"
+performance="$repo_root/scripts/device-performance-acceptance.sh"
 capability="$repo_root/scripts/device-capability-acceptance.sh"
 support="$repo_root/scripts/device-support-bundle.sh"
 build="$repo_root/image/build-image.sh"
 stage="$repo_root/image/pi-gen/stage-cardputerzero-os/02-app-platform/01-run.sh"
 
-bash -n "$recovery" "$monitor" "$factory" "$capability" "$support"
+bash -n "$recovery" "$monitor" "$factory" "$performance" "$capability" "$support"
 grep -q 'stop the foreground application before recovery testing' "$recovery"
 grep -q 'systemctl kill --kill-whom=main --signal=KILL' "$recovery"
 grep -q 'cardputerzero-compositor.service' "$recovery"
@@ -76,6 +77,28 @@ if grep -Eq '(^|[[:space:]])rm([[:space:]]|$)' "$factory"; then
     exit 1
 fi
 
+grep -q 'result_root=/run/cardputerzero-performance' "$performance"
+grep -q 'cardputerzero-stability-acceptance.service' "$performance"
+grep -q 'FinishTimestampMonotonic' "$performance"
+grep -q 'ActiveEnterTimestampMonotonic' "$performance"
+grep -q 'CPUUsageNSec' "$performance"
+grep -q 'MemoryCurrent' "$performance"
+grep -q '/sys/block/mmcblk0/stat' "$performance"
+grep -q -- "-name 'bq27220-\*'" "$performance"
+grep -q 'max_boot_ready_ms=35000' "$performance"
+grep -q 'max_idle_used_bytes=\$((180 \* 1024 \* 1024))' "$performance"
+grep -q 'estimated_average=.*record-only' "$performance"
+if grep -Eq \
+    'systemctl[[:space:]]+(start|stop|restart|kill)|cp0ctl[[:space:]]+app[[:space:]]+(start|stop)|(^|[[:space:]])(dd|mkfs|mount|umount|reboot|poweroff)([[:space:]]|$)' \
+    "$performance"; then
+    echo "error: performance acceptance contains a state-mutating command" >&2
+    exit 1
+fi
+if grep -Eq '(^|[[:space:]])rm([[:space:]]|$)' "$performance"; then
+    echo "error: performance acceptance must never delete result data" >&2
+    exit 1
+fi
+
 grep -q 'result_root=/run/cardputerzero-support' "$support"
 grep -q 'include_journal=0' "$support"
 grep -q -- '--include-journal' "$support"
@@ -98,10 +121,12 @@ fi
 grep -q 'device-core-recovery.sh' "$build"
 grep -q 'device-capability-acceptance.sh' "$build"
 grep -q 'device-factory-acceptance.sh' "$build"
+grep -q 'device-performance-acceptance.sh' "$build"
 grep -q 'device-stability-monitor.sh' "$build"
 grep -q 'device-support-bundle.sh' "$build"
 grep -q '/usr/libexec/cardputerzero/device-core-recovery' "$stage"
 grep -q '/usr/libexec/cardputerzero/device-capability-acceptance' "$stage"
 grep -q '/usr/libexec/cardputerzero/device-factory-acceptance' "$stage"
+grep -q '/usr/libexec/cardputerzero/device-performance-acceptance' "$stage"
 grep -q '/usr/libexec/cardputerzero/device-stability-monitor' "$stage"
 grep -q '/usr/libexec/cardputerzero/device-support-bundle' "$stage"

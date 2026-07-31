@@ -89,6 +89,8 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
   类型白名单、只向空目标恢复，以及明确确认后的恢复出厂设置。
 - Phase 6E 内部安全基线：系统威胁模型、五类不可信输入的 libFuzzer/ASan 入口，
   以及 dm-verity、RAUC A/B、U-Boot/FIT 与硬件信任根的条件式架构决策。
+- Phase 6F 资源与性能门禁：应用 60% CPU quota、Runtime 30 FPS 上限，以及只写
+  RAM 的启动、空闲资源、短时 SD 写入和电池遥测验收报告。
 
 ## 快速验证
 
@@ -165,3 +167,5 @@ Rust SDK 公共 API 和真机迁移结果见
 系统级攻击面、残余风险和量产阻断项见
 [threat model](docs/THREAT-MODEL.md)，内部安全验证入口见
 [Phase 6E security validation](docs/PHASE6E-SECURITY-VALIDATION.md)。
+资源上限、30 FPS 强制和真机性能报告见
+[Phase 6F resource and performance acceptance](docs/PHASE6F-RESOURCE-PERFORMANCE.md)。

@@ -57,10 +57,11 @@ failures. Compositor memory stayed at 7,487,488 bytes, Shell moved from
 1,073,152 to 1,323,008 bytes, and appd moved from 1,081,344 to 1,073,152 bytes.
 
 The first formal 24-hour acceptance run started at approximately 2026-07-31
-05:25 CST, but its RAM-backed result was lost when the device rebooted. After
-the Phase 5C platform hot deployment and Weston udev-monitor fix, a replacement
-run started at 2026-07-31 14:19:21 CST as transient unit
-`cardputerzero-stability-acceptance.service`. Its unique result is below
-`/run/cardputerzero-stability/acceptance/20260731T061921Z-75148`; the initial
-status was `RUNNING` with no failure log. The Roadmap remains open until this
-full interval finishes and the final report is inspected.
+05:25 CST, but its RAM-backed result was lost when the device rebooted. A later
+14:19 run was also invalidated during LCD cold-boot diagnosis. The current run
+started at 2026-07-31 20:42:15 CST as transient unit
+`cardputerzero-stability-acceptance.service`; at the 21:58 read-only check it and
+compositor, System Shell and appd were all `active/running` with zero restarts.
+The Roadmap remains open until approximately 2026-08-01 20:42 CST, when the
+complete RAM-backed result must be retrieved and inspected before any platform
+deployment or reboot.

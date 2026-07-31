@@ -146,10 +146,40 @@ permission_choice() {
     fi
 }
 
+declare -A resource_limits_checked
+check_app_resource_limits() {
+    local app_id=$1 unit=$2 value property_expected property expected
+    if [[ -n ${resource_limits_checked[$app_id]:-} ]]; then
+        return
+    fi
+    if [[ ! $unit =~ ^cardputerzero-app-[1-9][0-9]*\.service$ ]]; then
+        record FAIL "resource-limits:$app_id" "invalid transient unit ${unit:-missing}"
+        return
+    fi
+    for property_expected in \
+        CPUQuotaPerSecUSec=600ms \
+        CPUWeight=50 \
+        MemoryMax=16777216 \
+        MemorySwapMax=0 \
+        TasksMax=32; do
+        property=${property_expected%%=*}
+        expected=${property_expected#*=}
+        value=$(systemctl show "$unit" --property="$property" --value \
+            2>/dev/null || true)
+        if [[ $value == "$expected" ]]; then
+            record PASS "resource-limit:$app_id:$property" "$value"
+        else
+            record FAIL "resource-limit:$app_id:$property" \
+                "${value:-missing}; expected $expected"
+        fi
+    done
+    resource_limits_checked[$app_id]=1
+}
+
 drive_probe() {
     local app_id=$1 policy=$2 allow_prompts=${3:-1}
     local attempt second prompt prompt_id prompt_app permission choice result_file
-    local previous_inode current_inode body
+    local previous_inode current_inode body start_output unit
     final_body=
     case "$app_id" in
         "$primary_app")
@@ -165,12 +195,14 @@ drive_probe() {
     esac
     for attempt in 1 2 3 4 5 6 7 8; do
         previous_inode=$(stat -c %i "$result_file" 2>/dev/null || true)
-        if ! /usr/bin/cp0ctl app start "$app_id" \
-            >"$run_dir/start-${app_id##*.}-$policy-$attempt.json" 2>&1; then
+        start_output="$run_dir/start-${app_id##*.}-$policy-$attempt.json"
+        if ! /usr/bin/cp0ctl app start "$app_id" >"$start_output" 2>&1; then
             record FAIL "app-start:$app_id:$policy" "cp0ctl app start failed"
             return 1
         fi
         active_app=$app_id
+        unit=$(json_string unit <"$start_output")
+        check_app_resource_limits "$app_id" "$unit"
         for second in $(seq 1 90); do
             prompt=$(/usr/bin/cp0ctl permission pending 2>/dev/null || true)
             prompt_id=$(printf '%s\n' "$prompt" | json_number prompt_id)

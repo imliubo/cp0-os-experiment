@@ -232,6 +232,8 @@ pub fn build_sandbox_plan(
         format!("Group={app_user}"),
         format!("MemoryMax={memory_max_bytes}"),
         "MemorySwapMax=0".into(),
+        "CPUQuota=60%".into(),
+        "CPUWeight=50".into(),
         "TasksMax=32".into(),
         "UMask=0077".into(),
         "NoNewPrivileges=yes".into(),
@@ -427,6 +429,8 @@ mod tests {
                 .contains(&"CapabilityBoundingSet=".into())
         );
         assert!(plan.systemd_properties.contains(&"MemorySwapMax=0".into()));
+        assert!(plan.systemd_properties.contains(&"CPUQuota=60%".into()));
+        assert!(plan.systemd_properties.contains(&"CPUWeight=50".into()));
         assert!(
             plan.systemd_properties
                 .contains(&"PrivateDevices=yes".into())
@@ -464,6 +468,8 @@ mod tests {
         assert!(arguments.contains(&"--service-type=exec".into()));
         assert!(arguments.contains(&"--unit=cardputerzero-app-42.service".into()));
         assert!(arguments.contains(&"--property=MemoryMax=25165824".into()));
+        assert!(arguments.contains(&"--property=CPUQuota=60%".into()));
+        assert!(arguments.contains(&"--property=CPUWeight=50".into()));
         assert!(arguments.contains(&BWRAP_PATH.into()));
     }
 

@@ -77,6 +77,7 @@ add_executable(cardputerzero-app-runtime
   src/camera.c
   src/display.c
   src/document.c
+  src/frame_pacing.c
   src/hostcalls.c
   src/input_queue.c
   src/main.c

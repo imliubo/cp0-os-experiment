@@ -1,4 +1,5 @@
 #include "display.h"
+#include "frame_pacing.h"
 #include "input_queue.h"
 #include "pixels.h"
 
@@ -15,6 +16,7 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "wayland-client.h"
@@ -48,6 +50,7 @@ struct cp0_display_state {
     uint16_t content_height;
     uint16_t content_offset_y;
     struct cp0_input_queue input_queue;
+    struct cp0_frame_pacer frame_pacer;
     uint8_t held_modifiers;
     bool has_xrgb8888;
     bool configured;
@@ -580,6 +583,8 @@ int cp0_display_present_rgb565(const uint8_t *pixels, size_t pixel_bytes,
     size_t expected_bytes =
         (size_t)CP0_DISPLAY_WIDTH * state.content_height * sizeof(uint16_t);
     size_t index;
+    struct timespec now;
+    uint64_t now_ns;
     bool full_damage;
 
     if (state.display == NULL || state.failed)
@@ -591,6 +596,11 @@ int cp0_display_present_rgb565(const uint8_t *pixels, size_t pixel_bytes,
         return -2;
     buffer = available_buffer();
     if (buffer == NULL)
+        return -4;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+        return -2;
+    now_ns = (uint64_t)now.tv_sec * 1000000000ULL + (uint64_t)now.tv_nsec;
+    if (!cp0_frame_pacer_ready(&state.frame_pacer, now_ns))
         return -4;
 
     full_damage = state.first_frame || rectangle_count == 0U;
@@ -616,6 +626,7 @@ int cp0_display_present_rgb565(const uint8_t *pixels, size_t pixel_bytes,
     buffer->busy = true;
     state.first_frame = false;
     wl_surface_commit(state.surface);
+    cp0_frame_pacer_mark_committed(&state.frame_pacer, now_ns);
     if (wl_display_flush(state.display) < 0 && errno != EAGAIN) {
         state.failed = true;
         return -2;

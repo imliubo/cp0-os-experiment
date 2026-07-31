@@ -36,7 +36,9 @@ the final surface placement and keeps inactive applications hidden.
 The Runtime event wait pumps the Wayland connection, including buffer release,
 configure and close events. A busy double buffer returns the stable SDK
 `ResourceLimit` result so applications can retry without blocking compositor
-progress.
+progress. A monotonic host-side pacer also rejects commits closer than
+33,333,334 ns, enforcing the architecture's 30 FPS ceiling even when a WASM
+application spins instead of waiting for input.
 
 ## Build and tests
 

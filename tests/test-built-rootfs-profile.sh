@@ -34,6 +34,7 @@ required_executables=(
     usr/libexec/cardputerzero/device-core-recovery
     usr/libexec/cardputerzero/device-capability-acceptance
     usr/libexec/cardputerzero/device-factory-acceptance
+    usr/libexec/cardputerzero/device-performance-acceptance
     usr/libexec/cardputerzero/device-recovery-data
     usr/libexec/cardputerzero/device-smoke.sh
     usr/libexec/cardputerzero/device-stability-monitor

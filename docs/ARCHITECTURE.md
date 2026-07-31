@@ -71,7 +71,8 @@ socket；第三方应用不加入该组。可信 Shell 协议以 Wayland peer UI
 
 每个运行中的应用由 `appd` 启动到独立沙箱：
 
-- 独立 UID、PID/mount/network namespace 和 cgroup；
+- 独立 UID、PID/mount/network namespace 和 cgroup；固定 60% CPU quota 和较低
+  CPU weight 防止单核 CM0 被恶意应用完全占用；
 - `no_new_privs`、capability 全部移除、seccomp syscall allowlist；
 - 只读应用包、一个带配额的私有数据目录、空的设备目录；
 - 不暴露 system D-Bus、Wayland socket 路径、evdev、DRM、ALSA 和 GPIO；
@@ -216,6 +217,10 @@ appd 和 compositor 使用 `Restart=on-failure`，System Shell 使用
 24 小时验收按分钟将核心服务状态、重启数、cgroup 内存和 socket/ping 健康写入
 `/run` 的独立结果目录，避免持续写入 SD 卡。监控工具有固定的 32/32/24 MiB 内存
 上限和结束增长阈值，但不会在产品启动时常驻。
+
+Phase 6 性能门禁同样只写 `/run`，并在无前台应用时统一记录 systemd 单调启动时间、
+空闲内存、核心服务 CPU/内存、短时 SD 写入和 BQ27220 电池侧遥测。电池 gauge 在 USB
+供电时不代表整机功耗，因此只作为信息，不替代校准的外部功率测量。
 
 Phase 6 的设备诊断同样不常驻且不自动上传。默认支持包只导出无设备/用户标识的
 硬件存在性、服务属性、资源和挂载状态；原始 journal 必须由 root 使用独立参数显式

@@ -46,7 +46,9 @@ The primary probe performs the following operations:
 The isolation probe requests the primary application's marker name under its
 own identity and must receive `not found`. The harness also checks exact sysfs
 and private-storage owner/mode values and verifies that the login user cannot
-bypass `cp0-gpiod`.
+bypass `cp0-gpiod`. While each acceptance application is active, it also reads
+the actual transient unit properties and requires the fixed 60 percent CPU
+quota, CPU weight 50, 16 MiB manifest memory limit, zero swap and 32-task cap.
 
 ## Build and provision
 

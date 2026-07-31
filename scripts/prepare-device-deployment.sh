@@ -66,6 +66,7 @@ install -m 0755 \
     "$repo_root/scripts/device-install-app-platform.sh" \
     "$repo_root/scripts/device-capability-acceptance.sh" \
     "$repo_root/scripts/device-core-recovery.sh" \
+    "$repo_root/scripts/device-performance-acceptance.sh" \
     "$repo_root/scripts/device-stability-monitor.sh" \
     "$repo_root/scripts/device-store-acceptance.sh" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-generator" \

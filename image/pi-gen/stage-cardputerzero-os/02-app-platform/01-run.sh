@@ -105,6 +105,8 @@ install -D -m 0755 "${payload}/diagnostics/device-capability-acceptance.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-capability-acceptance"
 install -D -m 0755 "${payload}/diagnostics/device-factory-acceptance.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-factory-acceptance"
+install -D -m 0755 "${payload}/diagnostics/device-performance-acceptance.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-performance-acceptance"
 install -D -m 0755 "${payload}/diagnostics/device-recovery-data.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-recovery-data"
 install -D -m 0755 "${payload}/diagnostics/device-stability-monitor.sh" \

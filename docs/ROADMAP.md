@@ -131,7 +131,10 @@ Shell 和其他应用数据。
 
 ## Phase 6：产品化与后续安全
 
-- 启动时间、功耗、SD 写放大、内存和刷屏性能优化。
+- [x] 为应用 cgroup 增加固定 CPU quota/weight，在 Runtime 强制 30 FPS，并建立只写
+  RAM 的启动、空闲 CPU/内存、短时 SD 写入与电池遥测性能验收器。
+- [ ] 稳定性监控结束后运行性能验收器，并使用校准的外部 USB 功率计完成定义工况下
+  的整机功耗验收。
 - [x] 将 journald、临时目录和稳定性报告保持在 RAM，增加 64 MiB/24h SD 写入验收。
 - [x] 加入内核 sysctl 与 compositor/Shell/appd systemd 产品安全加固基线。
 - [x] 实现独立 `cp0-data` 分区、initramfs 幂等扩容、持久路径白名单和默认不可变

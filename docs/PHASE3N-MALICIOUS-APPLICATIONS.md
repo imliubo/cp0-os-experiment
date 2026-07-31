@@ -42,6 +42,13 @@ mounted broker endpoint. An application cannot invoke `socket` itself because
 WASI and native libc imports are absent; even a compromised Runtime sees no
 other host socket path in its mount namespace.
 
+Every transient application unit also carries a fixed 60 percent CPU quota and
+lower CPU weight. Together with the existing memory, swap and task limits, this
+prevents a busy-looping WASM or compromised Runtime from monopolizing the CM0's
+single CPU. Display commits are independently capped at 30 FPS in the trusted
+Runtime, so repeated valid frame submissions cannot bypass the CPU control by
+flooding the compositor.
+
 ## Verification
 
 `tests/test-malicious-apps.sh` rebuilds both WASM samples, inspects imports and
