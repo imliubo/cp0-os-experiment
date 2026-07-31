@@ -715,7 +715,7 @@ pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool,
         .map_err(WorkerError::Database)
 }
 
-/// Applies the complete Store control schema, including reviewer identity isolation.
+/// Applies the complete Store schema, including reviewer isolation and Release control.
 pub async fn migrate(pool: &PgPool) -> Result<(), WorkerError> {
     sqlx::migrate!("../cp0-store-control-server/migrations")
         .run(pool)

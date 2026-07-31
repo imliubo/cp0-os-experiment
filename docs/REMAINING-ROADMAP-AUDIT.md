@@ -15,11 +15,11 @@
 ### Store 产品化
 
 - Developer Portal 本地前端 MVP 已完成；Review Console、Store Operations 和真实控制面接入尚未实现；
-- Submission/Review/Release 事务域核心已完成；App Registry 与 Submission
-  create/upload/finalize/read 的 PostgreSQL/HTTP 纵向切片已完成，Identity/Teams、
-  OAuth、其余 Submission/Review/Release 适配、生产对象存储/GC、动态恶意样本、HSM signer 和
-  transparency log 尚未实现；隔离 Scanner 的 outbox/租约、签名密钥绑定、确定性内容扫描、
-  失败恢复和原子结果纵向切片已完成；
+- Submission/Review/Release 事务域核心已完成；App Registry、Submission
+  create/upload/finalize/read、单审核员 Review 和 Release 控制的 PostgreSQL/HTTP 纵向切片
+  已完成，Identity/Teams、OAuth、其余 Submission、二审/双人审批、生产对象存储/GC、动态
+  恶意样本、HSM signer、Catalog Publisher 和 transparency log 尚未实现；隔离 Scanner 的
+  outbox/租约、签名密钥绑定、确定性内容扫描、失败恢复和原子结果纵向切片已完成；
 - 设备端 Today/Apps/Search/Updates、分页搜索、图标/截图和更新队列尚未实现；
 - 当前发布仍是手工 review JSON + `cp0ctl store publish`，不能视为开发者自助发布；
 - 当前 Store 安全底座可以复用，详细阶段见 `STORE-ROADMAP.md`。
@@ -76,5 +76,5 @@
 | Phase 2 | 核心窗口/可信 UI/输入已实现 | 24 小时证据、扩展系统体验和最终真机部署 |
 | Phase 3 | Runtime、sandbox 和能力 broker 已实现 | 音频/GPIO/存储/相机/LoRa 的对应真机门禁 |
 | Phase 4 | SDK 1.0、CLI、模拟器和 DevKit 已实现 | 后续 Store submit CLI 属 Store 产品阶段 |
-| Phase 5 | 双签名、原子安装、静态 Store 和隔离扫描纵向切片已实现 | 自助发布、审核/发布后端、搜索发现和六步真机证据 |
+| Phase 5 | 双签名、原子安装、静态 Store、隔离扫描、单审核和 Release 控制纵向切片已实现 | OAuth、二审、隔离签名/Catalog 发布、搜索发现和六步真机证据 |
 | Phase 6 | profile、验证器和安全工具已实现 | 性能/功耗、烧录介质、A/B 硬件和第三方评审 |

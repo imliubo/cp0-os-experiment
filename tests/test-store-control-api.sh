@@ -14,7 +14,13 @@ jq -e '
   .paths["/v1/review/submissions"].get.operationId == "listReviewQueue" and
   .paths["/v1/review/submissions/{submission_id}:begin"].post.operationId == "beginReview" and
   .paths["/v1/review/submissions/{submission_id}/decisions"].post.operationId == "decideReview" and
+  .paths["/v1/releases"].post.operationId == "createRelease" and
+  .paths["/v1/releases/{release_id}"].get.operationId == "getRelease" and
+  .paths["/v1/releases/{release_id}:schedule"].post.operationId == "scheduleRelease" and
   .paths["/v1/releases/{release_id}:publish"].post.operationId == "publishRelease" and
+  .paths["/v1/releases/{release_id}:pause"].post.operationId == "pauseRelease" and
+  .paths["/v1/releases/{release_id}:resume"].post.operationId == "resumeRelease" and
+  .paths["/v1/releases/{release_id}:remove"].post.operationId == "removeRelease" and
   .components.schemas.SubmissionState.enum == [
     "draft", "uploading", "processing", "ready-for-review", "in-review",
     "needs-changes", "approved", "rejected", "withdrawn"
@@ -46,7 +52,21 @@ jq -e '
     index("#/components/parameters/IfMatch") != null) and
   (refs(.paths["/v1/submissions/{submission_id}/messages"].post) |
     index("#/components/parameters/IdempotencyKey") != null and
-    index("#/components/parameters/IfMatch") == null)
+    index("#/components/parameters/IfMatch") == null) and
+  all([
+    .paths["/v1/releases/{release_id}:schedule"].post,
+    .paths["/v1/releases/{release_id}:publish"].post,
+    .paths["/v1/releases/{release_id}:pause"].post,
+    .paths["/v1/releases/{release_id}:resume"].post,
+    .paths["/v1/releases/{release_id}:remove"].post
+  ][]; refs(.) |
+    index("#/components/parameters/IdempotencyKey") != null and
+    index("#/components/parameters/IfMatch") != null) and
+  .paths["/v1/releases/{release_id}:schedule"].post.requestBody.required == true and
+  .paths["/v1/releases/{release_id}:remove"].post.requestBody.required == true and
+  (.paths["/v1/releases/{release_id}:publish"].post | has("requestBody") | not) and
+  (.paths["/v1/releases/{release_id}:pause"].post | has("requestBody") | not) and
+  (.paths["/v1/releases/{release_id}:resume"].post | has("requestBody") | not)
 ' "$api" >/dev/null
 
 jq -e '

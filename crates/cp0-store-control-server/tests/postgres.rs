@@ -28,6 +28,8 @@ const REVIEWER_B_TOKEN: &str = "reviewer-b-token-0000000000000000002";
 const REVIEWER_NO_2FA_TOKEN: &str = "reviewer-no2fa-token-000000000000003";
 const REVIEWER_EXPIRED_TOKEN: &str = "reviewer-expired-token-0000000000004";
 const REVIEWER_REVOKED_TOKEN: &str = "reviewer-revoked-token-0000000000004";
+const RELEASE_MANAGER_TOKEN: &str = "release-manager-token-000000000000001";
+const RELEASE_NO_2FA_TOKEN: &str = "release-no2fa-token-00000000000000002";
 
 const TEAM_A: &str = "team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TEAM_B: &str = "team_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -35,6 +37,8 @@ const OWNER_A: &str = "member_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const OWNER_B: &str = "member_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const NO_2FA_MEMBER: &str = "member_cccccccccccccccccccccccccccccccc";
 const VIEWER_MEMBER: &str = "member_dddddddddddddddddddddddddddddddd";
+const RELEASE_MANAGER: &str = "member_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+const RELEASE_NO_2FA: &str = "member_ffffffffffffffffffffffffffffffff";
 const REVIEWER_A: &str = "reviewer_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const REVIEWER_B: &str = "reviewer_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const REVIEWER_NO_2FA: &str = "reviewer_cccccccccccccccccccccccccccccccc";
@@ -69,6 +73,7 @@ async fn postgres_http_transaction_acceptance() {
     verify_submission_upload(&application, &pool).await;
     verify_concurrent_submission_revisions(&application, &pool).await;
     verify_review_backend(&application, &pool).await;
+    verify_release_backend(&application, &pool).await;
     verify_database_immutability(&pool).await;
     tokio::fs::remove_dir_all(object_root)
         .await
@@ -1055,6 +1060,522 @@ async fn verify_review_backend(application: &Router, pool: &PgPool) {
     );
 }
 
+async fn verify_release_backend(application: &Router, pool: &PgPool) {
+    const APPROVED_SUBMISSION: &str = "sub_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const UNAPPROVED_SUBMISSION: &str = "sub_cccccccccccccccccccccccccccccccc";
+    const CONCURRENT_SUBMISSION: &str = "sub_dddddddddddddddddddddddddddddddd";
+    let counts_before = (
+        count(pool, "audit_events").await,
+        count(pool, "outbox_events").await,
+        count(pool, "idempotency_records").await,
+    );
+    let request = json!({"submission_id": APPROVED_SUBMISSION, "rollout_percent": 25});
+
+    for (token, key, status, code) in [
+        (
+            REVIEWER_A_TOKEN,
+            "release-reviewer-001",
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+        ),
+        (
+            RELEASE_NO_2FA_TOKEN,
+            "release-no2fa-0001",
+            StatusCode::FORBIDDEN,
+            "two-factor-required",
+        ),
+        (
+            VIEWER_TOKEN,
+            "release-viewer-0001",
+            StatusCode::FORBIDDEN,
+            "forbidden",
+        ),
+    ] {
+        let result = call(
+            application.clone(),
+            Method::POST,
+            "/v1/releases",
+            Some(token),
+            Some(key),
+            Some(request.clone()),
+        )
+        .await;
+        assert_problem(&result, status, code);
+    }
+    let cross_team = call(
+        application.clone(),
+        Method::POST,
+        "/v1/releases",
+        Some(OWNER_B_TOKEN),
+        Some("release-cross-team1"),
+        Some(request.clone()),
+    )
+    .await;
+    assert_problem(&cross_team, StatusCode::NOT_FOUND, "not-found");
+    let unapproved = call(
+        application.clone(),
+        Method::POST,
+        "/v1/releases",
+        Some(OWNER_A_TOKEN),
+        Some("release-unapproved1"),
+        Some(json!({
+            "submission_id": UNAPPROVED_SUBMISSION,
+            "rollout_percent": 25
+        })),
+    )
+    .await;
+    assert_problem(&unapproved, StatusCode::CONFLICT, "invalid-transition");
+    let invalid_rollout = call(
+        application.clone(),
+        Method::POST,
+        "/v1/releases",
+        Some(OWNER_A_TOKEN),
+        Some("release-rollout-0001"),
+        Some(json!({
+            "submission_id": APPROVED_SUBMISSION,
+            "rollout_percent": 0
+        })),
+    )
+    .await;
+    assert_problem(&invalid_rollout, StatusCode::BAD_REQUEST, "invalid-request");
+
+    let created = call(
+        application.clone(),
+        Method::POST,
+        "/v1/releases",
+        Some(RELEASE_MANAGER_TOKEN),
+        Some("release-create-0001"),
+        Some(request.clone()),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    assert_eq!(etag_version(&created), 1);
+    let created_body: Value = serde_json::from_slice(&created.body).unwrap();
+    let release_id = created_body["release_id"].as_str().unwrap();
+    assert!(release_id.starts_with("rel_"));
+    assert_eq!(created_body["state"], "ready");
+    assert_eq!(created_body["rollout_percent"], 25);
+    assert!(created_body["catalog_sequence"].is_null());
+    let replay = call(
+        application.clone(),
+        Method::POST,
+        "/v1/releases",
+        Some(RELEASE_MANAGER_TOKEN),
+        Some("release-create-0001"),
+        Some(request),
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::CREATED);
+    assert_eq!(replay.body, created.body);
+
+    let get = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/releases/{release_id}"),
+        Some(OWNER_A_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(get.status, StatusCode::OK);
+    assert_eq!(get.body, created.body);
+    let hidden = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/releases/{release_id}"),
+        Some(OWNER_B_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&hidden, StatusCode::NOT_FOUND, "not-found");
+    let scope_denied = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/releases/{release_id}"),
+        Some(READ_ONLY_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&scope_denied, StatusCode::FORBIDDEN, "forbidden");
+
+    seed_review_submission(pool, CONCURRENT_SUBMISSION, "3.0.3", 103).await;
+    sqlx::query(
+        "UPDATE submissions SET state = 'approved', resource_version = 2 \
+         WHERE submission_id = $1",
+    )
+    .bind(CONCURRENT_SUBMISSION)
+    .execute(pool)
+    .await
+    .unwrap();
+    let concurrent_body = json!({"submission_id": CONCURRENT_SUBMISSION, "rollout_percent": 100});
+    let create_a = call(
+        application.clone(),
+        Method::POST,
+        "/v1/releases",
+        Some(OWNER_A_TOKEN),
+        Some("release-concurrent-a1"),
+        Some(concurrent_body.clone()),
+    );
+    let create_b = call(
+        application.clone(),
+        Method::POST,
+        "/v1/releases",
+        Some(RELEASE_MANAGER_TOKEN),
+        Some("release-concurrent-b1"),
+        Some(concurrent_body),
+    );
+    let (create_a, create_b) = tokio::join!(create_a, create_b);
+    let mut statuses = [create_a.status, create_b.status];
+    statuses.sort_by_key(|status| status.as_u16());
+    assert_eq!(statuses, [StatusCode::CREATED, StatusCode::CONFLICT]);
+    let concurrent_release = if create_a.status == StatusCode::CREATED {
+        serde_json::from_slice::<Value>(&create_a.body).unwrap()
+    } else {
+        serde_json::from_slice::<Value>(&create_b.body).unwrap()
+    };
+    let concurrent_release_id = concurrent_release["release_id"].as_str().unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM releases WHERE submission_id = $1",)
+            .bind(CONCURRENT_SUBMISSION)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        1
+    );
+
+    let now: i64 = sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let missing_schedule_body = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{release_id}:schedule"),
+        RELEASE_MANAGER_TOKEN,
+        "release-schedule-empty1",
+        1,
+        None,
+    )
+    .await;
+    assert_problem(
+        &missing_schedule_body,
+        StatusCode::BAD_REQUEST,
+        "invalid-request",
+    );
+    let past_schedule = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{release_id}:schedule"),
+        RELEASE_MANAGER_TOKEN,
+        "release-schedule-past1",
+        1,
+        Some(json!({"publish_unix_seconds": now - 1})),
+    )
+    .await;
+    assert_problem(&past_schedule, StatusCode::BAD_REQUEST, "invalid-request");
+    let publish_with_body = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{release_id}:publish"),
+        RELEASE_MANAGER_TOKEN,
+        "release-publish-body1",
+        1,
+        Some(json!({})),
+    )
+    .await;
+    assert_problem(
+        &publish_with_body,
+        StatusCode::BAD_REQUEST,
+        "invalid-request",
+    );
+    let scheduled_at = u64::try_from(now + 3600).unwrap();
+    let schedule_body = json!({"publish_unix_seconds": scheduled_at});
+    let scheduled = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{release_id}:schedule"),
+        RELEASE_MANAGER_TOKEN,
+        "release-schedule-0001",
+        1,
+        Some(schedule_body.clone()),
+    )
+    .await;
+    assert_eq!(scheduled.status, StatusCode::OK);
+    assert_eq!(etag_version(&scheduled), 2);
+    let scheduled_body: Value = serde_json::from_slice(&scheduled.body).unwrap();
+    assert_eq!(scheduled_body["state"], "scheduled");
+    assert_eq!(scheduled_body["scheduled_unix_seconds"], scheduled_at);
+    let schedule_replay = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{release_id}:schedule"),
+        RELEASE_MANAGER_TOKEN,
+        "release-schedule-0001",
+        1,
+        Some(schedule_body),
+    )
+    .await;
+    assert_eq!(schedule_replay.body, scheduled.body);
+
+    let stale_publish = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{release_id}:publish"),
+        RELEASE_MANAGER_TOKEN,
+        "release-publish-stale1",
+        1,
+        None,
+    )
+    .await;
+    assert_problem(
+        &stale_publish,
+        StatusCode::PRECONDITION_FAILED,
+        "precondition-failed",
+    );
+    let published_request = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{release_id}:publish"),
+        RELEASE_MANAGER_TOKEN,
+        "release-publish-0001",
+        2,
+        None,
+    )
+    .await;
+    assert_eq!(published_request.status, StatusCode::ACCEPTED);
+    assert_eq!(etag_version(&published_request), 3);
+    let publishing_body: Value = serde_json::from_slice(&published_request.body).unwrap();
+    assert_eq!(publishing_body["state"], "publishing");
+    assert!(publishing_body["catalog_sequence"].is_null());
+    assert!(publishing_body["scheduled_unix_seconds"].is_null());
+    let queued_topic: String = sqlx::query_scalar(
+        "SELECT topic FROM outbox_events WHERE aggregate_id = $1 AND aggregate_version = 3",
+    )
+    .bind(release_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(queued_topic, "release.publish-requested");
+    let early_pause = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{release_id}:pause"),
+        RELEASE_MANAGER_TOKEN,
+        "release-pause-early1",
+        3,
+        None,
+    )
+    .await;
+    assert_problem(&early_pause, StatusCode::CONFLICT, "invalid-transition");
+
+    sqlx::query(
+        "UPDATE releases SET state = 'published', catalog_sequence = 1, resource_version = 4 \
+         WHERE release_id = $1",
+    )
+    .bind(release_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let paused = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{release_id}:pause"),
+        OWNER_A_TOKEN,
+        "release-pause-0001",
+        4,
+        None,
+    )
+    .await;
+    assert_eq!(paused.status, StatusCode::OK);
+    assert_eq!(etag_version(&paused), 5);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&paused.body).unwrap()["state"],
+        "paused"
+    );
+    let resumed = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{release_id}:resume"),
+        OWNER_A_TOKEN,
+        "release-resume-0001",
+        5,
+        None,
+    )
+    .await;
+    assert_eq!(resumed.status, StatusCode::OK);
+    assert_eq!(etag_version(&resumed), 6);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&resumed.body).unwrap()["state"],
+        "published"
+    );
+    let removal_body = json!({
+        "reason_code": "security-response",
+        "note": "Remove this version while the security issue is investigated."
+    });
+    let removed = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{release_id}:remove"),
+        OWNER_A_TOKEN,
+        "release-remove-0001",
+        6,
+        Some(removal_body.clone()),
+    )
+    .await;
+    assert_eq!(removed.status, StatusCode::OK);
+    assert_eq!(etag_version(&removed), 7);
+    let removed_body: Value = serde_json::from_slice(&removed.body).unwrap();
+    assert_eq!(removed_body["state"], "removed");
+    assert_eq!(removed_body["catalog_sequence"], 1);
+    let remove_replay = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{release_id}:remove"),
+        OWNER_A_TOKEN,
+        "release-remove-0001",
+        6,
+        Some(removal_body),
+    )
+    .await;
+    assert_eq!(remove_replay.body, removed.body);
+    let removal_details: Value = sqlx::query_scalar(
+        "SELECT details FROM release_operations WHERE release_id = $1 AND action = 'remove'",
+    )
+    .bind(release_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(removal_details["reason_code"], "security-response");
+    assert!(
+        removal_details["note"]
+            .as_str()
+            .unwrap()
+            .contains("security")
+    );
+    let removal_payload: Value = sqlx::query_scalar(
+        "SELECT payload FROM outbox_events WHERE aggregate_id = $1 AND aggregate_version = 7",
+    )
+    .bind(release_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(removal_payload["reason_code"], "security-response");
+    assert!(removal_payload.get("note").is_none());
+
+    let first_publish = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{concurrent_release_id}:publish"),
+        OWNER_A_TOKEN,
+        "release-retry-first1",
+        1,
+        None,
+    )
+    .await;
+    assert_eq!(first_publish.status, StatusCode::ACCEPTED);
+    sqlx::query(
+        "UPDATE releases SET state = 'publish-failed', resource_version = 3 \
+         WHERE release_id = $1",
+    )
+    .bind(concurrent_release_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let retried_publish = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/releases/{concurrent_release_id}:publish"),
+        OWNER_A_TOKEN,
+        "release-retry-second1",
+        3,
+        None,
+    )
+    .await;
+    assert_eq!(retried_publish.status, StatusCode::ACCEPTED);
+    assert_eq!(etag_version(&retried_publish), 4);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&retried_publish.body).unwrap()["state"],
+        "publishing"
+    );
+
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE releases SET state = 'paused', catalog_sequence = 2, resource_version = 5 \
+             WHERE release_id = $1",
+        )
+        .bind(concurrent_release_id)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO releases (release_id, submission_id, app_id, version, state, \
+             rollout_percent, resource_version, created_unix_seconds) VALUES \
+             ('rel_99999999999999999999999999999999', $1, 'dev.cardputerzero.notes', \
+             '3.0.2', 'ready', 100, 1, 1)",
+        )
+        .bind(UNAPPROVED_SUBMISSION)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO release_operations (operation_id, release_id, actor_id, action, \
+             before_state, after_state, resource_version, request_sha256, details, \
+             created_unix_seconds) VALUES \
+             ('releaseop_99999999999999999999999999999999', $1, $2, 'pause', \
+             'published', 'paused', 7, $3, '{}', 1)",
+        )
+        .bind(release_id)
+        .bind(OWNER_A)
+        .bind("9".repeat(64))
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO release_operations (operation_id, release_id, actor_id, action, \
+             before_state, after_state, resource_version, request_sha256, details, \
+             created_unix_seconds) VALUES \
+             ('releaseop_88888888888888888888888888888888', $1, $2, 'publish', \
+             'publish-failed', 'publishing', 4, $3, '{\"unexpected\":true}', 1)",
+        )
+        .bind(concurrent_release_id)
+        .bind(OWNER_A)
+        .bind("8".repeat(64))
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("UPDATE release_operations SET details = '{}' WHERE release_id = $1")
+            .bind(release_id)
+            .execute(pool)
+            .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM release_operations WHERE release_id = $1")
+            .bind(release_id)
+            .execute(pool)
+            .await,
+        "55000",
+    );
+
+    assert_eq!(count(pool, "release_operations").await, 7);
+    assert_eq!(count(pool, "audit_events").await, counts_before.0 + 9);
+    assert_eq!(count(pool, "outbox_events").await, counts_before.1 + 9);
+    assert_eq!(
+        count(pool, "idempotency_records").await,
+        counts_before.2 + 9
+    );
+}
+
 async fn seed_review_submission(
     pool: &PgPool,
     submission_id: &str,
@@ -1277,7 +1798,7 @@ async fn verify_database_immutability(pool: &PgPool) {
 
 async fn reset_database(pool: &PgPool) {
     pool.execute(
-        "TRUNCATE outbox_events, audit_events, idempotency_records, \
+        "TRUNCATE outbox_events, audit_events, idempotency_records, release_operations, \
          submission_upload_chunks, submission_upload_parts, releases, \
          review_decisions, review_messages, review_assignments, submissions, apps, developer_keys, \
          reviewer_access_tokens, reviewers, access_tokens, team_members, teams, catalog_sequence \
@@ -1314,6 +1835,20 @@ async fn seed_identities(pool: &PgPool) {
             false,
         ),
         (VIEWER_MEMBER, TEAM_A, "viewer@example.com", "viewer", true),
+        (
+            RELEASE_MANAGER,
+            TEAM_A,
+            "release@example.com",
+            "release-manager",
+            true,
+        ),
+        (
+            RELEASE_NO_2FA,
+            TEAM_A,
+            "release-no2fa@example.com",
+            "release-manager",
+            false,
+        ),
     ] {
         sqlx::query(
             "INSERT INTO team_members (member_id, team_id, email, role, two_factor_enabled) \
@@ -1337,7 +1872,7 @@ async fn seed_identities(pool: &PgPool) {
         (
             OWNER_A_TOKEN,
             OWNER_A,
-            vec!["store.apps.write", "store.submit"],
+            vec!["store.apps.write", "store.submit", "store.release"],
             now,
             now + 3600,
             false,
@@ -1345,7 +1880,7 @@ async fn seed_identities(pool: &PgPool) {
         (
             OWNER_B_TOKEN,
             OWNER_B,
-            vec!["store.apps.write", "store.submit"],
+            vec!["store.apps.write", "store.submit", "store.release"],
             now,
             now + 3600,
             false,
@@ -1389,6 +1924,22 @@ async fn seed_identities(pool: &PgPool) {
             now,
             now + 3600,
             true,
+        ),
+        (
+            RELEASE_MANAGER_TOKEN,
+            RELEASE_MANAGER,
+            vec!["store.release"],
+            now,
+            now + 3600,
+            false,
+        ),
+        (
+            RELEASE_NO_2FA_TOKEN,
+            RELEASE_NO_2FA,
+            vec!["store.release"],
+            now,
+            now + 3600,
+            false,
         ),
     ] {
         let scopes = scopes.into_iter().map(str::to_owned).collect::<Vec<_>>();

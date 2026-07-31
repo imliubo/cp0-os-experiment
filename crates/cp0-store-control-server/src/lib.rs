@@ -20,7 +20,7 @@ use cp0_store_control::{
     AppRecord, SubmissionSpec, create_submission_request_sha256, is_valid_locale,
     register_app_request_sha256, validate_submission_spec,
 };
-use cp0_store_metadata::{ImageAsset, SubmissionState};
+use cp0_store_metadata::{ImageAsset, ReleaseState, SubmissionState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -1350,6 +1350,374 @@ impl StoreControlService {
         Ok(stored.response)
     }
 
+    async fn create_release(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+        request_id: &str,
+        request: &CreateReleaseRequest,
+    ) -> Result<ReleaseResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let key_sha256 = sha256_hex(idempotency_key.as_bytes());
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self
+                .create_release_once(&token_sha256, &key_sha256, request_id, request)
+                .await
+            {
+                Err(TxError::Sql(error)) if is_retryable_transaction_error(&error) => {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(TxError::Sql(_)) => return Err(ApiError::unavailable()),
+                Err(TxError::Api(error)) => return Err(error),
+                Ok(release) => return Ok(release),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    async fn create_release_once(
+        &self,
+        token_sha256: &str,
+        key_sha256: &str,
+        request_id: &str,
+        request: &CreateReleaseRequest,
+    ) -> Result<ReleaseResponse, TxError> {
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let identity = authenticate(&mut transaction, token_sha256).await?;
+        require_release_write(&identity)?;
+        let rollout_percent = request.rollout_percent.to_string();
+        let request_sha256 = mutation_request_sha256(
+            "release.create.v1",
+            &[&request.submission_id, &rollout_percent],
+        );
+        let now = database_now(&mut transaction).await?;
+        match reserve_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            &request_sha256,
+            now,
+        )
+        .await?
+        {
+            IdempotencyReservation::Fresh => {}
+            IdempotencyReservation::Replay { status, body }
+                if status == StatusCode::CREATED.as_u16() as i16 =>
+            {
+                let release = serde_json::from_value(body).map_err(|_| ApiError::internal())?;
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(release);
+            }
+            IdempotencyReservation::Replay { .. } => {
+                return Err(ApiError::internal().into());
+            }
+        }
+
+        let submission = load_submission(
+            &mut transaction,
+            &request.submission_id,
+            &identity.team_id,
+            true,
+        )
+        .await?;
+        if submission.response.state != SubmissionState::Approved {
+            return Err(ApiError::invalid_transition().into());
+        }
+
+        let release = ReleaseResponse {
+            release_id: prefixed_uuid("rel_"),
+            submission_id: submission.response.submission_id,
+            app_id: submission.response.app_id,
+            version: submission.response.version,
+            state: ReleaseState::Ready,
+            rollout_percent: request.rollout_percent,
+            scheduled_unix_seconds: None,
+            catalog_sequence: None,
+            resource_version: 1,
+        };
+        let inserted = sqlx::query(
+            "INSERT INTO releases (release_id, submission_id, app_id, version, state, \
+             rollout_percent, scheduled_unix_seconds, catalog_sequence, resource_version, \
+             created_unix_seconds) VALUES ($1, $2, $3, $4, 'ready', $5, NULL, NULL, 1, $6) \
+             ON CONFLICT (submission_id) DO NOTHING",
+        )
+        .bind(&release.release_id)
+        .bind(&release.submission_id)
+        .bind(&release.app_id)
+        .bind(&release.version)
+        .bind(i16::from(release.rollout_percent))
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .rows_affected();
+        if inserted != 1 {
+            return Err(ApiError::conflict().into());
+        }
+
+        let response_body = serde_json::to_value(&release).map_err(|_| ApiError::internal())?;
+        complete_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            StatusCode::CREATED,
+            &response_body,
+        )
+        .await?;
+        append_mutation(
+            &mut transaction,
+            MutationEvent {
+                now,
+                actor_id: &identity.member_id,
+                action: "release.created",
+                topic: "release.created",
+                object_kind: "release",
+                object_id: &release.release_id,
+                before_state: None,
+                after_state: Some(ReleaseState::Ready.as_str()),
+                resource_version: release.resource_version,
+                request_id,
+                request_sha256: &request_sha256,
+                key_sha256,
+                payload: json!({
+                    "release_id": release.release_id,
+                    "submission_id": release.submission_id,
+                    "app_id": release.app_id,
+                    "version": release.version,
+                    "rollout_percent": release.rollout_percent
+                }),
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)?;
+        Ok(release)
+    }
+
+    async fn get_release(
+        &self,
+        token: &str,
+        release_id: &str,
+    ) -> Result<ReleaseResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        let identity = authenticate(&mut transaction, &token_sha256)
+            .await
+            .map_err(ApiError::from_transaction)?;
+        require_release_read(&identity)?;
+        let release = load_release(&mut transaction, release_id, &identity.team_id, false)
+            .await
+            .map_err(ApiError::from_transaction)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        Ok(release)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn mutate_release(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+        request_id: &str,
+        release_id: &str,
+        expected_version: u64,
+        action: &ReleaseAction,
+    ) -> Result<ReleaseResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let key_sha256 = sha256_hex(idempotency_key.as_bytes());
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self
+                .mutate_release_once(
+                    &token_sha256,
+                    &key_sha256,
+                    request_id,
+                    release_id,
+                    expected_version,
+                    action,
+                )
+                .await
+            {
+                Err(TxError::Sql(error)) if is_retryable_transaction_error(&error) => {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(TxError::Sql(_)) => return Err(ApiError::unavailable()),
+                Err(TxError::Api(error)) => return Err(error),
+                Ok(release) => return Ok(release),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn mutate_release_once(
+        &self,
+        token_sha256: &str,
+        key_sha256: &str,
+        request_id: &str,
+        release_id: &str,
+        expected_version: u64,
+        action: &ReleaseAction,
+    ) -> Result<ReleaseResponse, TxError> {
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let identity = authenticate(&mut transaction, token_sha256).await?;
+        require_release_write(&identity)?;
+        let request_sha256 = release_mutation_request_sha256(release_id, expected_version, action);
+        let now = database_now(&mut transaction).await?;
+        let response_status = action.response_status();
+        match reserve_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            &request_sha256,
+            now,
+        )
+        .await?
+        {
+            IdempotencyReservation::Fresh => {}
+            IdempotencyReservation::Replay { status, body }
+                if status == response_status.as_u16() as i16 =>
+            {
+                let release = serde_json::from_value(body).map_err(|_| ApiError::internal())?;
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(release);
+            }
+            IdempotencyReservation::Replay { .. } => {
+                return Err(ApiError::internal().into());
+            }
+        }
+        if matches!(
+            action,
+            ReleaseAction::Schedule {
+                publish_unix_seconds
+            } if *publish_unix_seconds <= u64::try_from(now).map_err(|_| ApiError::internal())?
+        ) {
+            return Err(ApiError::invalid_request().into());
+        }
+
+        let mut release =
+            load_release(&mut transaction, release_id, &identity.team_id, true).await?;
+        if release.resource_version != expected_version {
+            return Err(ApiError::precondition_failed().into());
+        }
+        let (target, event_action, topic) = release_action_transition(action);
+        if !release.state.can_transition_to(target) {
+            return Err(ApiError::invalid_transition().into());
+        }
+        let before = release.state;
+        release.state = target;
+        release.scheduled_unix_seconds = match action {
+            ReleaseAction::Schedule {
+                publish_unix_seconds,
+            } => Some(*publish_unix_seconds),
+            _ => None,
+        };
+        release.resource_version = expected_version
+            .checked_add(1)
+            .ok_or_else(ApiError::internal)?;
+        sqlx::query(
+            "UPDATE releases SET state = $1, scheduled_unix_seconds = $2, resource_version = $3 \
+             WHERE release_id = $4",
+        )
+        .bind(release.state.as_str())
+        .bind(
+            release
+                .scheduled_unix_seconds
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|_| ApiError::invalid_request())?,
+        )
+        .bind(i64::try_from(release.resource_version).map_err(|_| ApiError::internal())?)
+        .bind(release_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+
+        let details = match action {
+            ReleaseAction::Schedule {
+                publish_unix_seconds,
+            } => json!({"publish_unix_seconds": publish_unix_seconds}),
+            ReleaseAction::Remove { reason_code, note } => {
+                json!({"reason_code": reason_code, "note": note})
+            }
+            _ => json!({}),
+        };
+        sqlx::query(
+            "INSERT INTO release_operations (operation_id, release_id, actor_id, action, \
+             before_state, after_state, resource_version, request_sha256, details, \
+             created_unix_seconds) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        )
+        .bind(prefixed_uuid("releaseop_"))
+        .bind(release_id)
+        .bind(&identity.member_id)
+        .bind(action.name())
+        .bind(before.as_str())
+        .bind(release.state.as_str())
+        .bind(i64::try_from(release.resource_version).map_err(|_| ApiError::internal())?)
+        .bind(&request_sha256)
+        .bind(details)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+
+        let response_body = serde_json::to_value(&release).map_err(|_| ApiError::internal())?;
+        complete_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            response_status,
+            &response_body,
+        )
+        .await?;
+        let mut payload = json!({
+            "release_id": release.release_id,
+            "app_id": release.app_id,
+            "version": release.version,
+            "state": release.state
+        });
+        if let ReleaseAction::Schedule {
+            publish_unix_seconds,
+        } = action
+        {
+            payload["publish_unix_seconds"] = json!(publish_unix_seconds);
+        }
+        if let ReleaseAction::Remove { reason_code, .. } = action {
+            payload["reason_code"] = json!(reason_code);
+        }
+        append_mutation(
+            &mut transaction,
+            MutationEvent {
+                now,
+                actor_id: &identity.member_id,
+                action: event_action,
+                topic,
+                object_kind: "release",
+                object_id: release_id,
+                before_state: Some(before.as_str()),
+                after_state: Some(release.state.as_str()),
+                resource_version: release.resource_version,
+                request_id,
+                request_sha256: &request_sha256,
+                key_sha256,
+                payload,
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)?;
+        Ok(release)
+    }
+
     async fn post_review_message(
         &self,
         token: &str,
@@ -1524,7 +1892,7 @@ pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool,
         .await
 }
 
-/// Applies the App, Submission, scanner, and independent review schemas.
+/// Applies the App, Submission, scanner, review, and Release control schemas.
 pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
     sqlx::migrate!().run(pool).await
 }
@@ -1562,6 +1930,16 @@ pub fn router(service: StoreControlService) -> Router {
         .route(
             "/v1/review/submissions/{submission_id}/decisions",
             post(decide_review).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/v1/releases",
+            post(post_release).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/v1/releases/{release_action}",
+            get(get_release)
+                .post(mutate_release)
+                .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
         )
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(fallback)
@@ -1626,6 +2004,26 @@ struct ReviewQueueQuery {
     limit: Option<u16>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateReleaseRequest {
+    submission_id: String,
+    rollout_percent: u8,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScheduleReleaseRequest {
+    publish_unix_seconds: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemovalRequest {
+    reason_code: String,
+    note: String,
+}
+
 struct ReviewCursor {
     created_unix_seconds: i64,
     submission_id: String,
@@ -1660,6 +2058,47 @@ struct ReviewMessageResponse {
 struct ReviewQueueResponse {
     items: Vec<SubmissionResponse>,
     next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseResponse {
+    release_id: String,
+    submission_id: String,
+    app_id: String,
+    version: String,
+    state: ReleaseState,
+    rollout_percent: u8,
+    scheduled_unix_seconds: Option<u64>,
+    catalog_sequence: Option<u64>,
+    resource_version: u64,
+}
+
+enum ReleaseAction {
+    Schedule { publish_unix_seconds: u64 },
+    Publish,
+    Pause,
+    Resume,
+    Remove { reason_code: String, note: String },
+}
+
+impl ReleaseAction {
+    const fn name(&self) -> &'static str {
+        match self {
+            Self::Schedule { .. } => "schedule",
+            Self::Publish => "publish",
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+            Self::Remove { .. } => "remove",
+        }
+    }
+
+    const fn response_status(&self) -> StatusCode {
+        match self {
+            Self::Publish => StatusCode::ACCEPTED,
+            _ => StatusCode::OK,
+        }
+    }
 }
 
 struct StoredSubmission {
@@ -1869,7 +2308,7 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "conflict",
                 "Resource conflict",
-                Some("The App ID is already permanently registered."),
+                Some("The requested resource conflicts with an existing immutable identity."),
             ),
             ApiErrorKind::IdempotencyConflict => (
                 StatusCode::CONFLICT,
@@ -1899,7 +2338,7 @@ impl ApiError {
                 StatusCode::CONFLICT,
                 "invalid-transition",
                 "Invalid state transition",
-                Some("The Submission is not in a state that allows this operation."),
+                Some("The resource is not in a state that allows this operation."),
             ),
             ApiErrorKind::UploadRangeConflict => (
                 StatusCode::CONFLICT,
@@ -2064,6 +2503,23 @@ fn require_developer_write(identity: &Identity) -> Result<(), ApiError> {
     Ok(())
 }
 
+fn require_release_read(identity: &Identity) -> Result<(), ApiError> {
+    if !matches!(identity.role.as_str(), "owner" | "release-manager")
+        || !identity.has_any_scope(&["store.release", "store.control"])
+    {
+        return Err(ApiError::forbidden());
+    }
+    Ok(())
+}
+
+fn require_release_write(identity: &Identity) -> Result<(), ApiError> {
+    require_release_read(identity)?;
+    if !identity.two_factor_enabled {
+        return Err(ApiError::two_factor_required());
+    }
+    Ok(())
+}
+
 fn require_reviewer_write(identity: &ReviewerIdentity) -> Result<(), ApiError> {
     if !matches!(
         identity.role.as_str(),
@@ -2222,6 +2678,58 @@ async fn load_review_submission(
     stored_submission_from_row(&row).map_err(Into::into)
 }
 
+async fn load_release(
+    transaction: &mut Transaction<'_, Postgres>,
+    release_id: &str,
+    team_id: &str,
+    lock: bool,
+) -> Result<ReleaseResponse, TxError> {
+    let sql = if lock {
+        "SELECT release.release_id, release.submission_id, release.app_id, release.version, \
+         release.state, release.rollout_percent, release.scheduled_unix_seconds, \
+         release.catalog_sequence, release.resource_version FROM releases release \
+         JOIN apps app ON app.app_id = release.app_id \
+         WHERE release.release_id = $1 AND app.owner_team_id = $2 FOR UPDATE OF release"
+    } else {
+        "SELECT release.release_id, release.submission_id, release.app_id, release.version, \
+         release.state, release.rollout_percent, release.scheduled_unix_seconds, \
+         release.catalog_sequence, release.resource_version FROM releases release \
+         JOIN apps app ON app.app_id = release.app_id \
+         WHERE release.release_id = $1 AND app.owner_team_id = $2"
+    };
+    let row = sqlx::query(sql)
+        .bind(release_id)
+        .bind(team_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .ok_or_else(ApiError::not_found)?;
+    release_from_row(&row).map_err(Into::into)
+}
+
+fn release_from_row(row: &sqlx::postgres::PgRow) -> Result<ReleaseResponse, ApiError> {
+    Ok(ReleaseResponse {
+        release_id: row.get("release_id"),
+        submission_id: row.get("submission_id"),
+        app_id: row.get("app_id"),
+        version: row.get("version"),
+        state: parse_release_state(row.get("state"))?,
+        rollout_percent: u8::try_from(row.get::<i16, _>("rollout_percent"))
+            .map_err(|_| ApiError::internal())?,
+        scheduled_unix_seconds: row
+            .get::<Option<i64>, _>("scheduled_unix_seconds")
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| ApiError::internal())?,
+        catalog_sequence: row
+            .get::<Option<i64>, _>("catalog_sequence")
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| ApiError::internal())?,
+        resource_version: row_version(row)?,
+    })
+}
+
 fn stored_submission_from_row(row: &sqlx::postgres::PgRow) -> Result<StoredSubmission, ApiError> {
     let assets: Value = row.get("assets");
     Ok(StoredSubmission {
@@ -2258,6 +2766,19 @@ fn parse_submission_state(value: String) -> Result<SubmissionState, ApiError> {
         "approved" => Ok(SubmissionState::Approved),
         "rejected" => Ok(SubmissionState::Rejected),
         "withdrawn" => Ok(SubmissionState::Withdrawn),
+        _ => Err(ApiError::internal()),
+    }
+}
+
+fn parse_release_state(value: String) -> Result<ReleaseState, ApiError> {
+    match value.as_str() {
+        "ready" => Ok(ReleaseState::Ready),
+        "scheduled" => Ok(ReleaseState::Scheduled),
+        "publishing" => Ok(ReleaseState::Publishing),
+        "publish-failed" => Ok(ReleaseState::PublishFailed),
+        "published" => Ok(ReleaseState::Published),
+        "paused" => Ok(ReleaseState::Paused),
+        "removed" => Ok(ReleaseState::Removed),
         _ => Err(ApiError::internal()),
     }
 }
@@ -2405,6 +2926,74 @@ fn mutation_request_sha256(domain: &str, fields: &[&str]) -> String {
         hash_field(&mut hasher, field.as_bytes());
     }
     lower_hex(&hasher.finalize())
+}
+
+fn release_mutation_request_sha256(
+    release_id: &str,
+    expected_version: u64,
+    action: &ReleaseAction,
+) -> String {
+    let expected_version = expected_version.to_string();
+    match action {
+        ReleaseAction::Schedule {
+            publish_unix_seconds,
+        } => {
+            let publish_unix_seconds = publish_unix_seconds.to_string();
+            mutation_request_sha256(
+                "release.mutate.v1",
+                &[
+                    release_id,
+                    &expected_version,
+                    action.name(),
+                    &publish_unix_seconds,
+                ],
+            )
+        }
+        ReleaseAction::Remove { reason_code, note } => mutation_request_sha256(
+            "release.mutate.v1",
+            &[
+                release_id,
+                &expected_version,
+                action.name(),
+                reason_code,
+                note,
+            ],
+        ),
+        _ => mutation_request_sha256(
+            "release.mutate.v1",
+            &[release_id, &expected_version, action.name()],
+        ),
+    }
+}
+
+fn release_action_transition(action: &ReleaseAction) -> (ReleaseState, &'static str, &'static str) {
+    match action {
+        ReleaseAction::Schedule { .. } => (
+            ReleaseState::Scheduled,
+            "release.scheduled",
+            "release.scheduled",
+        ),
+        ReleaseAction::Publish => (
+            ReleaseState::Publishing,
+            "release.publish-requested",
+            "release.publish-requested",
+        ),
+        ReleaseAction::Pause => (
+            ReleaseState::Paused,
+            "release.paused",
+            "catalog.rebuild-requested",
+        ),
+        ReleaseAction::Resume => (
+            ReleaseState::Published,
+            "release.resumed",
+            "catalog.rebuild-requested",
+        ),
+        ReleaseAction::Remove { .. } => (
+            ReleaseState::Removed,
+            "release.removed",
+            "catalog.rebuild-requested",
+        ),
+    }
 }
 
 fn hash_field(hasher: &mut Sha256, value: &[u8]) {
@@ -2976,6 +3565,174 @@ async fn post_review_message(
     }
 }
 
+async fn post_release(
+    State(service): State<StoreControlService>,
+    headers: HeaderMap,
+    payload: Result<Json<CreateReleaseRequest>, JsonRejection>,
+) -> Response {
+    let request_id = request_id();
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    let idempotency_key = match idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(error) => return error.response(request_id),
+    };
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => return json_rejection(rejection).response(request_id),
+    };
+    if !is_valid_submission_id(&request.submission_id)
+        || !(1..=100).contains(&request.rollout_percent)
+    {
+        return ApiError::invalid_request().response(request_id);
+    }
+    match service
+        .create_release(&token, &idempotency_key, &request_id, &request)
+        .await
+    {
+        Ok(release) => {
+            let version = release.resource_version;
+            resource_response(StatusCode::CREATED, release, version, request_id)
+        }
+        Err(error) => error.response(request_id),
+    }
+}
+
+async fn get_release(
+    State(service): State<StoreControlService>,
+    Path(release_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = request_id();
+    if !is_valid_release_id(&release_id) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    match service.get_release(&token, &release_id).await {
+        Ok(release) => {
+            let version = release.resource_version;
+            resource_response(StatusCode::OK, release, version, request_id)
+        }
+        Err(error) => error.response(request_id),
+    }
+}
+
+async fn mutate_release(
+    State(service): State<StoreControlService>,
+    Path(release_action): Path<String>,
+    headers: HeaderMap,
+    payload: Result<Bytes, BytesRejection>,
+) -> Response {
+    let request_id = request_id();
+    let Some((release_id, action_name)) = release_action.split_once(':') else {
+        return ApiError::invalid_request().response(request_id);
+    };
+    if !is_valid_release_id(release_id) || action_name.contains(':') {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let body = match payload {
+        Ok(body) => body,
+        Err(rejection) => {
+            let error = if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                ApiError::payload_too_large()
+            } else {
+                ApiError::invalid_request()
+            };
+            return error.response(request_id);
+        }
+    };
+    let action = match parse_release_action(action_name, &headers, &body) {
+        Ok(action) => action,
+        Err(error) => return error.response(request_id),
+    };
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    let idempotency_key = match idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(error) => return error.response(request_id),
+    };
+    let expected_version = match expected_version(&headers) {
+        Ok(value) => value,
+        Err(error) => return error.response(request_id),
+    };
+    let response_status = action.response_status();
+    match service
+        .mutate_release(
+            &token,
+            &idempotency_key,
+            &request_id,
+            release_id,
+            expected_version,
+            &action,
+        )
+        .await
+    {
+        Ok(release) => {
+            let version = release.resource_version;
+            resource_response(response_status, release, version, request_id)
+        }
+        Err(error) => error.response(request_id),
+    }
+}
+
+fn parse_release_action(
+    action_name: &str,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<ReleaseAction, ApiError> {
+    match action_name {
+        "schedule" => {
+            require_json_content_type(headers)?;
+            let request: ScheduleReleaseRequest =
+                serde_json::from_slice(body).map_err(|_| ApiError::invalid_request())?;
+            if request.publish_unix_seconds == 0 || request.publish_unix_seconds > i64::MAX as u64 {
+                return Err(ApiError::invalid_request());
+            }
+            Ok(ReleaseAction::Schedule {
+                publish_unix_seconds: request.publish_unix_seconds,
+            })
+        }
+        "publish" if body.is_empty() => Ok(ReleaseAction::Publish),
+        "pause" if body.is_empty() => Ok(ReleaseAction::Pause),
+        "resume" if body.is_empty() => Ok(ReleaseAction::Resume),
+        "remove" => {
+            require_json_content_type(headers)?;
+            let request: RemovalRequest =
+                serde_json::from_slice(body).map_err(|_| ApiError::invalid_request())?;
+            if !is_valid_reason_code(&request.reason_code)
+                || validate_review_text(&request.note, false).is_err()
+            {
+                return Err(ApiError::invalid_request());
+            }
+            Ok(ReleaseAction::Remove {
+                reason_code: request.reason_code,
+                note: request.note,
+            })
+        }
+        _ => Err(ApiError::invalid_request()),
+    }
+}
+
+fn require_json_content_type(headers: &HeaderMap) -> Result<(), ApiError> {
+    let is_json = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"));
+    if is_json {
+        Ok(())
+    } else {
+        Err(ApiError::invalid_request())
+    }
+}
+
 fn json_rejection(rejection: JsonRejection) -> ApiError {
     if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
         ApiError::payload_too_large()
@@ -3132,6 +3889,10 @@ fn is_valid_sha256(value: &str) -> bool {
 
 fn is_valid_submission_id(value: &str) -> bool {
     valid_prefixed_hex_id(value, "sub_")
+}
+
+fn is_valid_release_id(value: &str) -> bool {
+    valid_prefixed_hex_id(value, "rel_")
 }
 
 fn validate_review_decision(request: &ReviewDecisionRequest) -> Result<(), ApiError> {
@@ -3332,6 +4093,28 @@ mod tests {
         assert!(validate_review_decision(&missing_explanation).is_err());
         assert!(validate_review_text(&"x".repeat(2000), false).is_ok());
         assert!(validate_review_text(&"x".repeat(2001), false).is_err());
+    }
+
+    #[test]
+    fn release_contract_rejects_ambiguous_actions_and_bodies() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/json; charset=utf-8"),
+        );
+        let schedule = br#"{"publish_unix_seconds":1700000000}"#;
+        assert!(matches!(
+            parse_release_action("schedule", &headers, schedule).unwrap(),
+            ReleaseAction::Schedule {
+                publish_unix_seconds: 1_700_000_000
+            }
+        ));
+        assert!(parse_release_action("publish", &headers, b"").is_ok());
+        assert!(parse_release_action("publish", &headers, b"{}").is_err());
+        assert!(parse_release_action("publish-extra", &headers, b"").is_err());
+        assert!(parse_release_action("schedule", &headers, b"{}").is_err());
+        assert!(is_valid_release_id("rel_0123456789abcdef0123456789abcdef"));
+        assert!(!is_valid_release_id("rel_0123456789ABCDEF0123456789ABCDEF"));
     }
 
     #[test]

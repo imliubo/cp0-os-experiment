@@ -26,7 +26,8 @@ The core owns these invariants before any PostgreSQL or HTTP adapter runs:
 The `ControlPlane` keeps state in memory so its complete transaction semantics
 can be tested deterministically. It is not a production persistence substitute.
 The persistence adapter is implemented by `cp0-store-control-server` for App
-registration/lookup and the create/upload/finalize/read Submission path. One
+registration/lookup, the create/upload/finalize/read Submission path, human
+review, and developer Release control. One
 mutation maps to one PostgreSQL serializable transaction containing resource
 state, idempotency result, audit row and outbox row. Uploaded bytes use an
 owner-only content-addressed backend and the database references only declared
@@ -34,7 +35,8 @@ sizes, SHA-256 digests and immutable chunk descriptors. Runtime details and
 remaining gaps are documented in `STORE-CONTROL-SERVER.md`. The isolated
 `cp0-store-scan-worker` consumes the finalize outbox event with expiring leases,
 revalidates bytes and commits one append-only result as described in
-`STORE-SCAN-WORKER.md`.
+`STORE-SCAN-WORKER.md`. Release control deliberately stops at `publishing`;
+Store signing and Catalog publication remain isolated Publisher responsibilities.
 
 The adapter hashes bearer tokens before lookup and validates token expiry,
 revocation, current team role, current 2FA state and scope inside the database
@@ -45,9 +47,9 @@ gate and TLS termination outside the process.
 
 The migrations also enforce permanent App ownership, immutable Submission
 content and uploaded chunk descriptors, one-time finalize digest, immutable
-Release identity, append-only Review/Audit records, at least one team Owner,
-stable member identity, and one-way token revocation. The remaining
-Submission/Review/Release HTTP operations must reuse these transaction and
+Release identity, exact Release transitions, append-only Review/Release/Audit
+records, at least one team Owner, stable member identity, and one-way token
+revocation. Remaining control-plane operations must reuse these transaction and
 response boundaries.
 
 Production IDs must be allocated by the persistence adapter or an injected

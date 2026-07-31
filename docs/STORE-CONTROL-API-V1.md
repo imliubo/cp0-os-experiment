@@ -55,6 +55,7 @@ READY -> SCHEDULED -> PUBLISHING -> PUBLISHED -> PAUSED
 
 Release 只能引用 `APPROVED` submission。`PUBLISHING` 由 Release Service 发出摘要授权，经隔离
 Signer 签名后生成更高 sequence 的 Catalog；失败进入 `PUBLISH_FAILED`，不能伪装为已发布。
+修复失败原因后，`PUBLISH_FAILED` 使用新的 ETag 和幂等键重新进入 `PUBLISHING`，不会绕过签名。
 暂停、恢复和下架都创建更高 sequence 的 Catalog，不覆盖已发布对象，也不回滚 sequence。
 
 ## 重试与审计

@@ -14,7 +14,9 @@ part of the CardputerZero device image.
 - `POST /v1/submissions/{submission_id}/messages`;
 - `GET /v1/review/submissions`;
 - `POST /v1/review/submissions/{submission_id}:begin`;
-- `POST /v1/review/submissions/{submission_id}/decisions`.
+- `POST /v1/review/submissions/{submission_id}/decisions`;
+- `POST /v1/releases` and `GET /v1/releases/{release_id}`;
+- `POST /v1/releases/{release_id}:schedule|publish|pause|resume|remove`.
 
 All writes authenticate the hashed bearer token and re-read current team role,
 2FA state and scope inside a PostgreSQL `SERIALIZABLE` transaction. App writes
@@ -43,6 +45,15 @@ writes require an active identity, 2FA, a live one-hour token, and the exact
 `store.review` scope. Begin and decision operations preserve the same
 SERIALIZABLE, ETag, idempotency, audit, and outbox guarantees as developer
 mutations. See `STORE-REVIEW-BACKEND.md` for assignment and message rules.
+
+Release reads and writes require an owner or release-manager with
+`store.release` (or the internal `store.control` scope); writes additionally
+require live 2FA. Creation locks and verifies an owner-team approved Submission.
+Schedule, publish, pause, resume and remove use strong ETags and append an
+immutable operation record in the same transaction as audit and outbox. Publish
+only enters `publishing` and emits `release.publish-requested`; an isolated
+Publisher must sign and publish a Catalog before setting `published` and a
+Catalog sequence. See `STORE-RELEASE-BACKEND.md`.
 
 A database rollback after an object write can leave an unreachable
 content-addressed chunk. It grants no Submission state and can be removed by a
@@ -82,10 +93,11 @@ The database gate covers exact replay, competing App IDs, concurrent Submission
 revision allocation and review claims, live RBAC/2FA/scope/revocation checks,
 256 KiB chunk boundaries, stale ETags, non-contiguous ranges, digest mismatches,
 finalize replay, reviewer assignment authorization, structured decisions,
-developer/reviewer messages, injected transaction rollback and append-only
-database triggers.
+developer/reviewer messages, approved-only Release creation, concurrent Release
+uniqueness, scheduling, publication queueing, pause/resume/removal, publication
+retry, injected transaction rollback and append-only database triggers.
 
 OAuth Device Flow, withdraw, dynamic malware intelligence, independent second
-review, double approval, Review Console UI, Release, production object storage,
-general outbox delivery, garbage collection and transparency logging are not
-implemented by this slice.
+review, double approval, Review Console UI, isolated Store signing, Catalog
+publication, production object storage, general outbox delivery, garbage
+collection and transparency logging are not implemented by this slice.

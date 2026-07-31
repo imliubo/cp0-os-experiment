@@ -55,9 +55,10 @@ decisions are append-only at the database layer. Non-approval decisions require
 at least one unique structured reason code and a bounded actionable note.
 
 The assignment schema reserves `primary` and `secondary` kinds so a later policy
-slice can add independent second review. S5E deliberately does not yet claim to
-implement risk classification, reviewer independence, double approval, the
-Review Console frontend, release creation, Store signing, or Catalog publishing.
+slice can add independent second review. S5E deliberately does not claim to
+implement risk classification, reviewer independence, double approval or the
+Review Console frontend. Developer Release control is the separate S5F slice;
+Store signing and Catalog publishing remain later isolated services.
 
 ## Verification
 

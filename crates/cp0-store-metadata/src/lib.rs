@@ -222,7 +222,7 @@ impl ReleaseState {
                 Self::Scheduled,
                 Self::Ready | Self::Publishing | Self::Removed
             ) | (Self::Publishing, Self::Published | Self::PublishFailed)
-                | (Self::PublishFailed, Self::Ready | Self::Removed)
+                | (Self::PublishFailed, Self::Publishing | Self::Removed)
                 | (Self::Published, Self::Paused | Self::Removed)
                 | (Self::Paused, Self::Published | Self::Removed)
         )
@@ -807,6 +807,7 @@ mod tests {
 
         assert!(ReleaseState::Ready.can_transition_to(ReleaseState::Publishing));
         assert!(ReleaseState::Publishing.can_transition_to(ReleaseState::PublishFailed));
+        assert!(ReleaseState::PublishFailed.can_transition_to(ReleaseState::Publishing));
         assert!(ReleaseState::Paused.can_transition_to(ReleaseState::Published));
         assert!(!ReleaseState::Removed.can_transition_to(ReleaseState::Published));
         assert!(!ReleaseState::Ready.can_transition_to(ReleaseState::Published));
