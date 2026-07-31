@@ -62,6 +62,10 @@
 
 ## S5：审核与发布后端
 
+S5A 已新增 `cp0-store-control` 事务域核心：服务端 RBAC/2FA、永久 App ID、不可变 revision、
+严格状态机、ETag、幂等回放、append-only audit/outbox 和 Catalog sequence 单调约束已可测试；
+PostgreSQL/HTTP、Scan Worker、Review Console、Signer 和真实 Catalog pipeline 仍按下列门禁推进。
+
 - [ ] 实现 Identity/Teams、App Registry、Submission 和 Release 服务。
 - [ ] 实现隔离 Scan Worker：包格式、WASM、权限、资源和恶意样本检查。
 - [ ] 实现 Review Console、结构化问题、回复、二审和双人审批。
