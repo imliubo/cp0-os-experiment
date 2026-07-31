@@ -38,10 +38,10 @@
 
 - [x] 新增 `store-listing-v1.schema.json` 和 Rust 严格验证器。
 - [x] `cp0ctl store validate` 同时验证 `.capp`、Listing、资源和开发者签名。
-- [ ] `cp0ctl store submit` 支持 OAuth Device Flow、分片上传、重试和 finalize。
-- [ ] 输出可机器读取的 Submission ID、摘要和 Portal URL。
-- [ ] CLI 不读取/上传开发者私钥，不在日志中输出 OAuth token。
-- [ ] 加入确定性 fixture、断网恢复、过期 token 和摘要错配测试。
+- [x] `cp0ctl store submit` 支持 OAuth Device Flow、分片上传、重试和 finalize。
+- [x] 输出可机器读取的 Submission ID、摘要和 Portal URL。
+- [x] CLI 不读取/上传开发者私钥，不在日志中输出 OAuth token。
+- [x] 加入确定性 fixture、断网恢复、过期 token 和摘要错配测试。
 
 完成条件：开发者只使用 SDK、CLI 和浏览器即可提交一个版本并跟踪状态。
 

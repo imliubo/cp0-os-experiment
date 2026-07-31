@@ -139,7 +139,17 @@ cargo run -p cp0ctl -- store validate \
 
 This rejects identity mismatches, invalid developer signatures, pre-existing
 Store signatures, unsafe or symbolic-link asset paths, size/digest mismatches
-and malformed PNG dimensions. The review/publishing operator then runs:
+and malformed PNG dimensions. After the App ID is registered in Developer
+Portal, submit the same immutable inputs with:
+
+```sh
+cargo run -p cp0ctl -- store submit \
+  dev.cardputerzero.example-1.0.0.signed.capp store/listing.json
+```
+
+The CLI uses OAuth Device Flow, bounded resumable chunks and in-memory tokens.
+Its final stdout value is machine-readable JSON with the Submission ID and
+Portal URL. The current manual review/publishing operator then runs:
 
 ```sh
 cargo run -p cp0ctl -- store publish \

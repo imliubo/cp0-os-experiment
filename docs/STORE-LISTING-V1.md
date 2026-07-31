@@ -81,3 +81,13 @@ cp0ctl store validate dev.cardputerzero.notes-1.2.0.signed.capp store/listing.js
 SHA-256；它拒绝已经带有 Store 签名的提交。扫描 worker 仍会在隔离环境中独立重复验证
 并完整解码资源，再把 Listing、资源和包摘要绑定为一个 Submission revision。仅通过
 本地预检不能发布应用。
+
+Developer Portal 注册 App ID 后，可以通过 OAuth Device Flow 提交同一组文件：
+
+```sh
+cp0ctl store submit dev.cardputerzero.notes-1.2.0.signed.capp store/listing.json
+```
+
+授权说明写入 stderr；成功时 stdout 只输出包含 `submission_id`、`state`、`content_sha256`
+和 `portal_url` 的 JSON。上传按 256 KiB 分片重试，token 只保存在进程内存。正式端点固定为
+`https://developer.cardputerzero.dev`；开发环境可通过 `CP0_STORE_API` 指定另一个 HTTPS origin。

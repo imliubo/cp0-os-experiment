@@ -11,9 +11,15 @@ Console 和 Release Service 的首版控制面契约。设备上的 System Shell
 - `/v1` 下所有 POST/PUT 都要求 16-128 字节的 `Idempotency-Key`。
 - 修改已有状态的操作同时要求 `If-Match`，服务以 ETag/resource version 拒绝并发覆盖。
 - App ID 永久归属一个 team；已删除名称不能自动供其他开发者重新注册。
-- package、Listing 和 2-6 个资源对象按声明 SHA-256 上传。相同 part 名称只允许相同摘要
-  的幂等重放，不能覆盖成不同内容。
+- package、Listing 和 2-6 个资源对象按声明 SHA-256 上传；每次 PUT 使用 `Content-Range`
+  发送最多 256 KiB 的连续分片，`Content-SHA256` 是该分片摘要。相同 part/range 只允许相同
+  摘要的幂等重放，不能覆盖成不同内容。
 - `finalize` 重新读取所有对象，验证长度和摘要，计算 submission content digest 后冻结 revision。
+
+content digest 固定为 SHA-256：先写入 ASCII domain `CardputerZero Store submission content
+v1\0`，再按 package SHA、Listing SHA 分别写入 `u64 big-endian length + UTF-8 bytes`；随后按
+Listing 顺序写 icon 和截图的 path、SHA（同样使用长度前缀）、`u64 bytes`、`u16 width`、
+`u16 height`，全部为 big-endian。服务端必须独立复算，不能信任 finalize 请求。
 
 错误使用有界的 `application/problem+json`，稳定 `code` 供 CLI 处理；内部路径、SQL、对象存储
 key、token 和扫描器输出不能进入 `detail`。

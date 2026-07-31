@@ -7,7 +7,40 @@ use cp0_package::CApp;
 use cp0_store_metadata::{ImageAsset, StoreListing};
 use sha2::{Digest, Sha256};
 
+pub(super) struct ValidatedAsset {
+    pub descriptor: ImageAsset,
+    pub encoded: Vec<u8>,
+}
+
+pub(super) struct ValidatedSubmission {
+    pub app_id: String,
+    pub version: String,
+    pub package_sha256: String,
+    pub listing_sha256: String,
+    pub content_sha256: String,
+    pub package: Vec<u8>,
+    pub listing: Vec<u8>,
+    pub assets: Vec<ValidatedAsset>,
+}
+
 pub fn validate_submission(package_path: &str, listing_path: &str) -> Result<(), String> {
+    let submission = validate_submission_bundle(package_path, listing_path)?;
+    println!(
+        "validated Store submission {} {}: package_sha256={} listing_sha256={} content_sha256={} assets={}",
+        submission.app_id,
+        submission.version,
+        submission.package_sha256,
+        submission.listing_sha256,
+        submission.content_sha256,
+        submission.assets.len()
+    );
+    Ok(())
+}
+
+pub(super) fn validate_submission_bundle(
+    package_path: &str,
+    listing_path: &str,
+) -> Result<ValidatedSubmission, String> {
     let package_encoded = read_bounded(
         Path::new(package_path),
         cp0_store_protocol::MAX_PACKAGE_BYTES as usize,
@@ -40,20 +73,30 @@ pub fn validate_submission(package_path: &str, listing_path: &str) -> Result<(),
     validate_identity(&listing, &manifest)?;
 
     let asset_root = listing_path.parent().unwrap_or_else(|| Path::new("."));
-    validate_asset(asset_root, &listing.icon, (48, 48))?;
+    let mut assets = vec![ValidatedAsset {
+        descriptor: listing.icon.clone(),
+        encoded: validate_asset(asset_root, &listing.icon, (48, 48))?,
+    }];
     for screenshot in &listing.screenshots {
-        validate_asset(asset_root, screenshot, (320, 170))?;
+        assets.push(ValidatedAsset {
+            descriptor: screenshot.clone(),
+            encoded: validate_asset(asset_root, screenshot, (320, 170))?,
+        });
     }
 
-    println!(
-        "validated Store submission {} {}: package_sha256={} listing_sha256={} assets={}",
-        manifest.id,
-        manifest.version,
-        lower_hex(&Sha256::digest(&package_encoded)),
-        lower_hex(&Sha256::digest(&listing_encoded)),
-        listing.screenshots.len() + 1
-    );
-    Ok(())
+    let package_sha256 = lower_hex(&Sha256::digest(&package_encoded));
+    let listing_sha256 = lower_hex(&Sha256::digest(&listing_encoded));
+    let content_sha256 = submission_content_sha256(&package_sha256, &listing_sha256, &assets);
+    Ok(ValidatedSubmission {
+        app_id: manifest.id,
+        version: manifest.version,
+        package_sha256,
+        listing_sha256,
+        content_sha256,
+        package: package_encoded,
+        listing: listing_encoded,
+        assets,
+    })
 }
 
 fn validate_identity(
@@ -78,7 +121,7 @@ fn validate_asset(
     root: &Path,
     asset: &ImageAsset,
     expected_dimensions: (u16, u16),
-) -> Result<(), String> {
+) -> Result<Vec<u8>, String> {
     let path = checked_asset_path(root, &asset.path)?;
     let mut file = OpenOptions::new()
         .read(true)
@@ -117,7 +160,32 @@ fn validate_asset(
         expected_dimensions.0,
         expected_dimensions.1,
     )
-    .map_err(|error| format!("invalid Store asset {}: {error}", path.display()))
+    .map_err(|error| format!("invalid Store asset {}: {error}", path.display()))?;
+    Ok(encoded)
+}
+
+fn submission_content_sha256(
+    package_sha256: &str,
+    listing_sha256: &str,
+    assets: &[ValidatedAsset],
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"CardputerZero Store submission content v1\0");
+    hash_field(&mut hasher, package_sha256.as_bytes());
+    hash_field(&mut hasher, listing_sha256.as_bytes());
+    for asset in assets {
+        hash_field(&mut hasher, asset.descriptor.path.as_bytes());
+        hash_field(&mut hasher, asset.descriptor.sha256.as_bytes());
+        hasher.update(asset.descriptor.bytes.to_be_bytes());
+        hasher.update(asset.descriptor.width.to_be_bytes());
+        hasher.update(asset.descriptor.height.to_be_bytes());
+    }
+    lower_hex(&hasher.finalize())
+}
+
+fn hash_field(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
 }
 
 fn checked_asset_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
@@ -305,7 +373,15 @@ mod tests {
         let (root, package, listing) = fixture("valid");
         let listing_path = root.join("store/listing.json");
         fs::write(&listing_path, serde_json::to_vec_pretty(&listing).unwrap()).unwrap();
-        validate_submission(package.to_str().unwrap(), listing_path.to_str().unwrap()).unwrap();
+        let first =
+            validate_submission_bundle(package.to_str().unwrap(), listing_path.to_str().unwrap())
+                .unwrap();
+        let second =
+            validate_submission_bundle(package.to_str().unwrap(), listing_path.to_str().unwrap())
+                .unwrap();
+        assert_eq!(first.content_sha256, second.content_sha256);
+        assert_eq!(first.package_sha256, second.package_sha256);
+        assert_eq!(first.listing_sha256, second.listing_sha256);
     }
 
     #[test]

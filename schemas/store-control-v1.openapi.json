@@ -140,7 +140,8 @@
           { "$ref": "#/components/parameters/PartName" },
           { "$ref": "#/components/parameters/IdempotencyKey" },
           { "$ref": "#/components/parameters/IfMatch" },
-          { "$ref": "#/components/parameters/ContentSha256" }
+          { "$ref": "#/components/parameters/ContentSha256" },
+          { "$ref": "#/components/parameters/ContentRange" }
         ],
         "requestBody": {
           "required": true,
@@ -524,6 +525,16 @@
         "in": "header",
         "required": true,
         "schema": { "$ref": "#/components/schemas/Sha256" }
+      },
+      "ContentRange": {
+        "name": "Content-Range",
+        "in": "header",
+        "required": true,
+        "description": "A contiguous upload chunk, at most 262144 bytes",
+        "schema": {
+          "type": "string",
+          "pattern": "^bytes (0|[1-9][0-9]*)-(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$"
+        }
       }
     },
     "responses": {
