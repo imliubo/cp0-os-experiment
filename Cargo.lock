@@ -445,6 +445,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp0-store-publisher"
+version = "0.1.0"
+dependencies = [
+ "cp0-manifest",
+ "cp0-package",
+ "cp0-store-metadata",
+ "cp0-store-protocol",
+ "cp0-store-scan",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "cp0-store-scan"
 version = "0.1.0"
 dependencies = [

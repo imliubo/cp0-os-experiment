@@ -53,7 +53,8 @@ Schedule, publish, pause, resume and remove use strong ETags and append an
 immutable operation record in the same transaction as audit and outbox. Publish
 only enters `publishing` and emits `release.publish-requested`; an isolated
 Publisher must sign and publish a Catalog before setting `published` and a
-Catalog sequence. See `STORE-RELEASE-BACKEND.md`.
+Catalog sequence. S5G implements that boundary in `cp0-store-publisher`; see
+`STORE-RELEASE-BACKEND.md` and `STORE-PUBLISHER.md`.
 
 A database rollback after an object write can leave an unreachable
 content-addressed chunk. It grants no Submission state and can be removed by a

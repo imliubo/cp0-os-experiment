@@ -70,26 +70,30 @@ S5C 已接通 `cp0ctl` 所需的 Submission 创建、256 KiB 连续分片、读�
 寻址保存，finalize 独立重读并复算全部对象和 content digest，并发 revision、断点 ETag、错误
 摘要和事务回滚已有真实 PostgreSQL 验收。S5D 已接通隔离 Scanner：outbox 租约、只读对象重组、
 团队有效开发者密钥、WASM host imports/权限、Listing/PNG、重试恢复和原子 scan result 均有
-真实 PostgreSQL 验收。OAuth、Withdraw、动态恶意样本、生产对象存储/GC、
-Signer 和真实 Catalog pipeline 仍按下列门禁推进。
+真实 PostgreSQL 验收。OAuth、Withdraw、动态恶意样本和生产对象存储/GC 仍按下列门禁推进。
 S5E 已新增独立 reviewer 身份域和审核后端纵向切片：有界队列、并发唯一领取、结构化决定、
 开发者/审核员追加消息、即时 2FA/撤销、ETag、幂等、审计和 outbox 均通过真实 PostgreSQL
 验收；风险分级、独立二审、双人审批和 Review Console 前端仍未完成。
 S5F 已新增 Release 控制面纵向切片：仅 approved Submission 可创建 Release，owner/
 release-manager、2FA、scope、团队隔离、并发唯一创建、预约、发布排队、暂停/恢复/下架、
 失败重试、强 ETag、精确幂等、append-only 操作记录和原子 audit/outbox 均通过 PostgreSQL 17
-验收。`publish` 只进入 `publishing`；隔离 Signer、Catalog Builder 和 Publisher 回写仍未完成。
+验收。`publish` 只进入 `publishing`，由 S5G 的独立 Publisher 完成发布。
+S5G 已新增隔离文件 key Publisher/Catalog Builder：outbox 租约、不可复用 sequence、原始对象
+重算、开发者 key 复核、Store 双签名、64 App 有界确定性 Catalog、最新 Release 投影、不可变
+generation、原子 Release/audit/outbox 回写与 `current` 崩溃恢复均通过 PostgreSQL 17 验收。
+当前文件 key 是受限参考实现，不代表生产 HSM 或 key ceremony 已完成。
 
 - [ ] 实现 Identity/Teams、App Registry、Submission 和 Release 服务。
   当前 App Registry、Submission 上传/finalize、单审核员 Review 和 Release 控制纵向切片已完成；
-  Identity/Teams 管理、OAuth、Submission 其余操作和 Publisher 内部接口未完成。
+  Identity/Teams 管理、OAuth 和 Submission 其余操作未完成；Publisher 通过受约束 outbox 接入。
 - [x] 实现隔离 Scan Worker：包格式、WASM、权限、资源和恶意样本检查。
   当前为无 IP 网络、只读对象根的确定性结构/能力扫描；动态规则、信誉源和运营隔离环境待生产化。
 - [ ] 实现 Review Console、结构化问题、回复、二审和双人审批。
   当前结构化问题、回复和单审核员事务流程已完成；Console UI、独立二审和双人审批待实现。
 - [ ] 实现不可变对象、事务 outbox、append-only audit 和 transparency log。
-- [ ] 接入 HSM/隔离 Store Signer，任何 Web 服务都不能读取私钥。
-- [ ] 实现确定性 Catalog Builder、sequence 分配、发布和紧急撤回。
+- [ ] 接入生产 HSM 和 key ceremony；当前隔离文件 key 参考 Signer 已保证 Web 服务不能读私钥。
+- [x] 实现确定性 Catalog Builder、sequence 分配、发布和紧急撤回。
+  pause/resume/remove 生成更高 sequence，过期控制事件安全合并且 sequence 永不复用。
 - [ ] 灾备、key rotation、权限提升和内部威胁测试。
 
 完成条件：已审核 submission 才能发布；任意对象变化都会要求新 revision 和新审核。

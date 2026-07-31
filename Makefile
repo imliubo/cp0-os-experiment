@@ -22,6 +22,7 @@ check: fmt
 	node --check scripts/test-store-origin.mjs
 	./tests/test-store-control-api.sh
 	./tests/test-store-scan-profile.sh
+	./tests/test-store-publisher-profile.sh
 	./tests/test-image-profile.sh
 	./tests/test-overlay-root-profile.sh
 	./tests/test-recovery-image-profile.sh
@@ -72,6 +73,7 @@ store-control-db-check:
 		(echo "CP0_STORE_TEST_DATABASE_URL is required" >&2; exit 2)
 	cargo test -p cp0-store-control-server --test postgres -- --ignored --nocapture
 	cargo test -p cp0-store-scan-worker --test postgres -- --ignored --nocapture
+	cargo test -p cp0-store-publisher --test postgres -- --ignored --nocapture
 
 compositor:
 	docker run --rm \

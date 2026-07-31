@@ -45,7 +45,7 @@ published      -> paused | removed
 paused         -> published | removed
 ```
 
-Only the future isolated Publisher may complete `publishing` as `published` or
+Only the isolated Publisher may complete `publishing` as `published` or
 `publish-failed`. A successful completion must bind a nonzero, globally ordered
 Catalog sequence. S5F does not expose an HTTP shortcut for that internal trust
 boundary.
@@ -78,7 +78,8 @@ stale ETags, publish queue semantics, simulated Publisher completion,
 pause/resume/removal, publish-failed retry, sanitized outbox payloads,
 append-only operations, illegal SQL transitions and audit/outbox atomicity.
 
-The next trust-boundary slice must implement an isolated signer and deterministic
-Catalog Builder, allocate monotonic sequences, persist publication results and
-deliver signed immutable artifacts. Until then no Release created by this API is
-device-visible merely because it reached `publishing`.
+S5G now implements this trust boundary in `cp0-store-publisher`: reaching
+`publishing` only queues work, while the isolated process revalidates immutable
+content, signs the package and Catalog, persists the snapshot and then commits
+`published`. See `STORE-PUBLISHER.md`. Production HSM integration and key
+ceremony remain external infrastructure gates.

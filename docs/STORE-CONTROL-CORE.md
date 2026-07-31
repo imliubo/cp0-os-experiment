@@ -36,7 +36,8 @@ remaining gaps are documented in `STORE-CONTROL-SERVER.md`. The isolated
 `cp0-store-scan-worker` consumes the finalize outbox event with expiring leases,
 revalidates bytes and commits one append-only result as described in
 `STORE-SCAN-WORKER.md`. Release control deliberately stops at `publishing`;
-Store signing and Catalog publication remain isolated Publisher responsibilities.
+the independent `cp0-store-publisher` owns Store signing, deterministic Catalog
+publication and crash recovery as described in `STORE-PUBLISHER.md`.
 
 The adapter hashes bearer tokens before lookup and validates token expiry,
 revocation, current team role, current 2FA state and scope inside the database

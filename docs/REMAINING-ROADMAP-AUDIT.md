@@ -18,10 +18,10 @@
 - Submission/Review/Release 事务域核心已完成；App Registry、Submission
   create/upload/finalize/read、单审核员 Review 和 Release 控制的 PostgreSQL/HTTP 纵向切片
   已完成，Identity/Teams、OAuth、其余 Submission、二审/双人审批、生产对象存储/GC、动态
-  恶意样本、HSM signer、Catalog Publisher 和 transparency log 尚未实现；隔离 Scanner 的
-  outbox/租约、签名密钥绑定、确定性内容扫描、失败恢复和原子结果纵向切片已完成；
+  恶意样本、生产 HSM/key ceremony 和 transparency log 尚未实现；隔离 Scanner 与文件 key
+  Publisher/Catalog Builder 的 outbox/租约、签名、失败恢复和原子结果纵向切片已完成；
 - 设备端 Today/Apps/Search/Updates、分页搜索、图标/截图和更新队列尚未实现；
-- 当前发布仍是手工 review JSON + `cp0ctl store publish`，不能视为开发者自助发布；
+- 后端可从 approved Release 自动发布，Portal 的真实身份/OAuth 接入仍未形成完整自助流程；
 - 当前 Store 安全底座可以复用，详细阶段见 `STORE-ROADMAP.md`。
 
 ### 产品安全与发布工程
