@@ -6,6 +6,7 @@ check: fmt
 		schemas/device-policy-v1.schema.json appd/device-policy.json \
 		appd/device-policy-production.json \
 		examples/hello-card/app.json \
+		examples/neon-snake/app.json \
 		examples/device-capability-probe/app.json \
 		examples/storage-isolation-probe/app.json \
 		examples/store-acceptance-v1/app.json \

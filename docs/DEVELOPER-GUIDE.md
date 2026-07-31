@@ -76,6 +76,10 @@ storage fixture enforces the manifest byte quota, 256-key limit and missing-key
 semantics. It is a deterministic SDK test harness, not a security substitute
 for the device namespace, seccomp and cgroup tests.
 
+`examples/neon-snake` is a complete allocation-free game example using the
+display, focused keyboard input, monotonic clock and isolated private storage.
+It includes simulator commands and physical-key controls in its README.
+
 ## Package, sign and install
 
 Generate a developer key once, then create and sign a reproducible `.capp`:
