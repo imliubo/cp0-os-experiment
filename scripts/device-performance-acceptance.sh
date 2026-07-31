@@ -34,7 +34,7 @@ printf 'RUNNING\n' >"$status_file"
 printf 'result\tcheck\tdetail\n' >"$checks"
 printf 'epoch\tuptime_seconds\tmem_available_bytes\tmem_used_bytes\tdirty_bytes\twriteback_bytes\tmmc_sectors_written\tvoltage_uv\tcurrent_ua\testimated_battery_uw\n' \
     >"$samples"
-printf 'unit\tstart_cpu_ns\tend_cpu_ns\tcpu_millipercent\tmax_memory_bytes\trestarts\n' \
+printf 'unit\tstart_pid\tend_pid\tstart_cpu_ns\tend_cpu_ns\tcpu_millipercent\tmax_memory_bytes\tstart_restarts\tend_restarts\n' \
     >"$services"
 
 failures=0
@@ -183,16 +183,27 @@ declare -A memory_limit=(
     [cardputerzero-system-shell.service]=$((32 * 1024 * 1024))
     [cardputerzero-appd.service]=$((24 * 1024 * 1024))
 )
-declare -A start_cpu max_memory restarts
+declare -A start_cpu max_memory start_pid start_restarts
 for unit in "${units[@]}"; do
+    active=$(read_property "$unit" ActiveState)
+    sub=$(read_property "$unit" SubState)
+    start_pid[$unit]=$(read_property "$unit" MainPID)
     start_cpu[$unit]=$(read_property "$unit" CPUUsageNSec)
     max_memory[$unit]=0
-    restarts[$unit]=$(read_property "$unit" NRestarts)
+    start_restarts[$unit]=$(read_property "$unit" NRestarts)
+    if [[ $active != active || $sub != running ||
+        ! ${start_pid[$unit]} =~ ^[1-9][0-9]*$ ]]; then
+        record FAIL "unit:$unit" \
+            "unhealthy start state=$active/$sub pid=${start_pid[$unit]:-missing}"
+    else
+        record PASS "unit-active:$unit" \
+            "state=$active/$sub pid=${start_pid[$unit]}"
+    fi
     if [[ ! ${start_cpu[$unit]} =~ ^[0-9]+$ ||
-        ! ${restarts[$unit]} =~ ^[0-9]+$ ]]; then
+        ! ${start_restarts[$unit]} =~ ^[0-9]+$ ]]; then
         record FAIL "unit:$unit" "CPU or restart counters unavailable"
-    elif [[ ${restarts[$unit]} != 0 ]]; then
-        record FAIL "unit:$unit" "restart count ${restarts[$unit]}"
+    elif [[ ${start_restarts[$unit]} != 0 ]]; then
+        record FAIL "unit:$unit" "restart count ${start_restarts[$unit]}"
     fi
 done
 
@@ -274,6 +285,10 @@ fi
 total_cpu_delta=0
 for unit in "${units[@]}"; do
     end_cpu=$(read_property "$unit" CPUUsageNSec)
+    end_pid=$(read_property "$unit" MainPID)
+    end_restarts=$(read_property "$unit" NRestarts)
+    end_active=$(read_property "$unit" ActiveState)
+    end_sub=$(read_property "$unit" SubState)
     unit_cpu_millipercent=unknown
     if [[ ${start_cpu[$unit]} =~ ^[0-9]+$ && $end_cpu =~ ^[0-9]+$ &&
         $end_cpu -ge ${start_cpu[$unit]} && $elapsed_ns -gt 0 ]]; then
@@ -283,9 +298,20 @@ for unit in "${units[@]}"; do
     else
         record FAIL "cpu:$unit" "invalid CPU accounting counters"
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$unit" \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$unit" \
+        "${start_pid[$unit]}" "${end_pid:-unknown}" \
         "${start_cpu[$unit]}" "${end_cpu:-unknown}" "$unit_cpu_millipercent" \
-        "${max_memory[$unit]}" "${restarts[$unit]}" >>"$services"
+        "${max_memory[$unit]}" "${start_restarts[$unit]}" \
+        "${end_restarts:-unknown}" >>"$services"
+    if [[ $end_active != active || $end_sub != running ||
+        $end_pid != "${start_pid[$unit]}" ||
+        $end_restarts != "${start_restarts[$unit]}" ]]; then
+        record FAIL "continuity:$unit" \
+            "end=$end_active/$end_sub pid=${start_pid[$unit]}->$end_pid restarts=${start_restarts[$unit]}->$end_restarts"
+    else
+        record PASS "continuity:$unit" \
+            "pid=$end_pid restarts=$end_restarts"
+    fi
     if ((max_memory[$unit] > memory_limit[$unit])); then
         record FAIL "memory:$unit" \
             "${max_memory[$unit]} > ${memory_limit[$unit]}"

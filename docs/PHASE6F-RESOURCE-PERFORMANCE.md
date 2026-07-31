@@ -46,6 +46,7 @@ The V0.6 release thresholds are:
 - systemd boot completion and System Shell activation no later than 35 seconds;
 - at most 180 MiB used and at least 200 MiB available during idle sampling;
 - compositor, Shell and appd within 32/32/24 MiB respectively;
+- all three core services remain active with unchanged PID and restart count;
 - aggregate idle CPU for those three services at or below 10 percent;
 - no more than 1 MiB of SD writes during the short idle sample.
 
