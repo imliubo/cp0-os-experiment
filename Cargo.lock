@@ -242,6 +242,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp0-store-metadata"
+version = "0.1.0"
+dependencies = [
+ "cp0-manifest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cp0-store-protocol"
 version = "0.1.0"
 dependencies = [

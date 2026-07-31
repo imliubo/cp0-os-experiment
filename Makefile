@@ -3,6 +3,7 @@
 check: fmt
 	jq empty schemas/app-manifest-v1.schema.json schemas/os-release-v1.schema.json \
 		schemas/store-review-v1.schema.json \
+		schemas/store-listing-v1.schema.json \
 		schemas/device-policy-v1.schema.json appd/device-policy.json \
 		appd/device-policy-production.json \
 		examples/hello-card/app.json \

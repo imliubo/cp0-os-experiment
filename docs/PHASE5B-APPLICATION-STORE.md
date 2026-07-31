@@ -134,14 +134,18 @@ giving an operator a URL, package path, hash or signature override:
 
 ```sh
 sudo cp0ctl store list
+sudo cp0ctl store search notes
+sudo cp0ctl store search notes 8 8
 sudo cp0ctl store refresh
 sudo cp0ctl store install dev.cardputerzero.example
 ```
 
 `cp0ctl` rejects a response whose kind does not match the request, an install
-response for a different application ID, an uncorrelated request ID or any
-malformed protocol field. These commands do not change the product Store
-configuration or trust roots.
+response for a different application ID, search results for a different query
+or page, an uncorrelated request ID or any malformed protocol field. Search is
+performed locally by `cp0-stored` against the verified Catalog; the query never
+leaves the device. These commands do not change the product Store configuration
+or trust roots.
 
 ## Offline and unconfigured operation
 

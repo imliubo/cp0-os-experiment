@@ -14,6 +14,9 @@ pub const MAX_CATALOG_APPS: usize = 64;
 pub const MAX_PACKAGE_BYTES: u64 = cp0_package::MAX_PAYLOAD_BYTES as u64 + 4096;
 pub const MAX_PACKAGE_URL_BYTES: usize = 2048;
 pub const MAX_SUMMARY_CHARS: usize = 96;
+pub const MAX_SEARCH_QUERY_CHARS: usize = 32;
+pub const MAX_SEARCH_QUERY_BYTES: usize = 96;
+pub const MAX_SEARCH_PAGE_APPS: u8 = 8;
 pub const MAX_ERROR_MESSAGE_CHARS: usize = 160;
 pub const MAX_CATALOG_LIFETIME_SECONDS: u64 = 31 * 24 * 60 * 60;
 
@@ -63,8 +66,15 @@ pub struct StoreRequest {
 #[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum StoreCommand {
     List,
+    Search {
+        query: String,
+        offset: u16,
+        limit: u8,
+    },
     Refresh,
-    Install { app_id: String },
+    Install {
+        app_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +101,17 @@ pub enum StoreOutcome {
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum StoreResponseData {
     Catalog {
+        sequence: u64,
+        expires_unix_seconds: u64,
+        stale: bool,
+        apps: Vec<StoreAppSummary>,
+    },
+    SearchResults {
+        query: String,
+        offset: u16,
+        limit: u8,
+        total: u16,
+        next_offset: Option<u16>,
         sequence: u64,
         expires_unix_seconds: u64,
         stale: bool,
@@ -296,12 +317,23 @@ impl StoreRequest {
                 "store request ID must be non-zero".into(),
             ));
         }
-        if let StoreCommand::Install { app_id } = &self.command {
-            if !cp0_manifest::is_valid_app_id(app_id) {
-                return Err(StoreProtocolError::Invalid(
-                    "store install application ID is invalid".into(),
-                ));
+        match &self.command {
+            StoreCommand::Search {
+                query,
+                offset,
+                limit,
+            } => {
+                validate_search_query(query)?;
+                validate_search_page(*offset, *limit)?;
             }
+            StoreCommand::Install { app_id } => {
+                if !cp0_manifest::is_valid_app_id(app_id) {
+                    return Err(StoreProtocolError::Invalid(
+                        "store install application ID is invalid".into(),
+                    ));
+                }
+            }
+            StoreCommand::List | StoreCommand::Refresh => {}
         }
         Ok(())
     }
@@ -393,6 +425,55 @@ impl StoreResponseData {
                 }
                 Ok(())
             }
+            Self::SearchResults {
+                query,
+                offset,
+                limit,
+                total,
+                next_offset,
+                sequence,
+                expires_unix_seconds,
+                apps,
+                ..
+            } => {
+                validate_search_query(query)?;
+                validate_search_page(*offset, *limit)?;
+                if *sequence == 0 || *expires_unix_seconds == 0 {
+                    return Err(StoreProtocolError::Invalid(
+                        "store search catalog metadata is invalid".into(),
+                    ));
+                }
+                if usize::from(*total) > MAX_CATALOG_APPS {
+                    return Err(StoreProtocolError::Invalid(
+                        "store search total exceeds the catalog limit".into(),
+                    ));
+                }
+                let remaining = total.saturating_sub(*offset);
+                let expected_page = remaining.min(u16::from(*limit));
+                if apps.len() != usize::from(expected_page) {
+                    return Err(StoreProtocolError::Invalid(
+                        "store search result page length is inconsistent".into(),
+                    ));
+                }
+                let expected_next = offset
+                    .checked_add(expected_page)
+                    .filter(|next| *next < *total);
+                if *next_offset != expected_next {
+                    return Err(StoreProtocolError::Invalid(
+                        "store search next offset is inconsistent".into(),
+                    ));
+                }
+                let mut ids = BTreeSet::new();
+                for app in apps {
+                    app.validate()?;
+                    if !ids.insert(app.app_id.as_str()) {
+                        return Err(StoreProtocolError::Invalid(
+                            "store search response contains duplicate applications".into(),
+                        ));
+                    }
+                }
+                Ok(())
+            }
             Self::RefreshAccepted => Ok(()),
             Self::InstallAccepted { app_id, version } => {
                 if !cp0_manifest::is_valid_app_id(app_id)
@@ -406,6 +487,29 @@ impl StoreResponseData {
             }
         }
     }
+}
+
+pub fn validate_search_query(query: &str) -> Result<(), StoreProtocolError> {
+    let chars = query.chars().count();
+    if !(1..=MAX_SEARCH_QUERY_CHARS).contains(&chars)
+        || query.len() > MAX_SEARCH_QUERY_BYTES
+        || query.trim() != query
+        || has_unsafe_text(query)
+    {
+        return Err(StoreProtocolError::Invalid(
+            "store search query is invalid".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_search_page(offset: u16, limit: u8) -> Result<(), StoreProtocolError> {
+    if usize::from(offset) > MAX_CATALOG_APPS || !(1..=MAX_SEARCH_PAGE_APPS).contains(&limit) {
+        return Err(StoreProtocolError::Invalid(
+            "store search page is outside limits".into(),
+        ));
+    }
+    Ok(())
 }
 
 impl StoreAppSummary {
@@ -739,6 +843,48 @@ mod tests {
             Some(request)
         );
 
+        let search = StoreRequest {
+            protocol_version: STORE_PROTOCOL_VERSION,
+            request_id: 10,
+            command: StoreCommand::Search {
+                query: "notes and tools".into(),
+                offset: 8,
+                limit: MAX_SEARCH_PAGE_APPS,
+            },
+        };
+        let mut encoded = Vec::new();
+        write_request(&mut encoded, &search).unwrap();
+        assert_eq!(read_request(&mut encoded.as_slice()).unwrap(), Some(search));
+
+        for query in ["", " leading", "trailing ", "unsafe\nquery"] {
+            let invalid = StoreRequest {
+                protocol_version: STORE_PROTOCOL_VERSION,
+                request_id: 10,
+                command: StoreCommand::Search {
+                    query: query.into(),
+                    offset: 0,
+                    limit: 1,
+                },
+            };
+            assert!(invalid.validate().is_err());
+        }
+        assert!(validate_search_query(&"界".repeat(MAX_SEARCH_QUERY_CHARS)).is_ok());
+        assert!(validate_search_query(&"界".repeat(MAX_SEARCH_QUERY_CHARS + 1)).is_err());
+        assert!(validate_search_query(&"a".repeat(MAX_SEARCH_QUERY_BYTES + 1)).is_err());
+
+        for (offset, limit) in [(0, 0), (0, MAX_SEARCH_PAGE_APPS + 1), (65, 1)] {
+            let invalid = StoreRequest {
+                protocol_version: STORE_PROTOCOL_VERSION,
+                request_id: 10,
+                command: StoreCommand::Search {
+                    query: "notes".into(),
+                    offset,
+                    limit,
+                },
+            };
+            assert!(invalid.validate().is_err());
+        }
+
         let unknown =
             br#"{"protocol_version":1,"request_id":1,"command":{"name":"list"},"extra":true}\n"#;
         assert!(read_request(&mut unknown.as_slice()).is_err());
@@ -791,6 +937,59 @@ mod tests {
             },
         );
         assert!(write_response(&mut Vec::new(), &duplicate).is_err());
+
+        let search = StoreResponse::success(
+            4,
+            StoreResponseData::SearchResults {
+                query: "example".into(),
+                offset: 0,
+                limit: 1,
+                total: 2,
+                next_offset: Some(1),
+                sequence: 2,
+                expires_unix_seconds: 1_900_000_000,
+                stale: true,
+                apps: vec![response_app()],
+            },
+        );
+        let mut encoded = Vec::new();
+        write_response(&mut encoded, &search).unwrap();
+        assert_eq!(
+            read_response(&mut encoded.as_slice()).unwrap(),
+            Some(search)
+        );
+
+        let invalid_next = StoreResponse::success(
+            4,
+            StoreResponseData::SearchResults {
+                query: "example".into(),
+                offset: 0,
+                limit: 1,
+                total: 2,
+                next_offset: None,
+                sequence: 2,
+                expires_unix_seconds: 1_900_000_000,
+                stale: false,
+                apps: vec![response_app()],
+            },
+        );
+        assert!(write_response(&mut Vec::new(), &invalid_next).is_err());
+
+        let invalid_page_length = StoreResponse::success(
+            4,
+            StoreResponseData::SearchResults {
+                query: "example".into(),
+                offset: 0,
+                limit: 2,
+                total: 2,
+                next_offset: None,
+                sequence: 2,
+                expires_unix_seconds: 1_900_000_000,
+                stale: false,
+                apps: vec![response_app()],
+            },
+        );
+        assert!(write_response(&mut Vec::new(), &invalid_page_length).is_err());
 
         let oversized_error = StoreResponse::error(
             4,

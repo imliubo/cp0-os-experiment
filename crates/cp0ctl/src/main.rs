@@ -70,6 +70,16 @@ fn main() -> ExitCode {
         [store_command, command] if store_command == "store" && command == "list" => {
             store_client::send(cp0_store_protocol::StoreCommand::List)
         }
+        [store_command, command, query]
+            if store_command == "store" && command == "search" =>
+        {
+            parse_store_search(query, None, None).and_then(store_client::send)
+        }
+        [store_command, command, query, offset, limit]
+            if store_command == "store" && command == "search" =>
+        {
+            parse_store_search(query, Some(offset), Some(limit)).and_then(store_client::send)
+        }
         [store_command, command] if store_command == "store" && command == "refresh" => {
             store_client::send(cp0_store_protocol::StoreCommand::Refresh)
         }
@@ -191,7 +201,7 @@ fn main() -> ExitCode {
             })
         }
         _ => Err(
-            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | store publish <submissions-dir> <reviews-dir> <output-dir> <base-url> <sequence> <published-unix> <expires-unix> <store-secret-key> | store list | store refresh | store install <app-id> | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | device status | device <developer|recovery> <on|off> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
+            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | store publish <submissions-dir> <reviews-dir> <output-dir> <base-url> <sequence> <published-unix> <expires-unix> <store-secret-key> | store list | store search <query> [offset limit] | store refresh | store install <app-id> | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | device status | device <developer|recovery> <on|off> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
                 .into(),
         ),
     };
@@ -203,6 +213,38 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn parse_store_search(
+    query: &str,
+    offset: Option<&str>,
+    limit: Option<&str>,
+) -> Result<cp0_store_protocol::StoreCommand, String> {
+    cp0_store_protocol::validate_search_query(query).map_err(|_| {
+        "store search query must be 1-32 characters and at most 96 bytes".to_owned()
+    })?;
+    let (offset, limit) = match (offset, limit) {
+        (None, None) => (0, cp0_store_protocol::MAX_SEARCH_PAGE_APPS),
+        (Some(offset), Some(limit)) => {
+            let offset = offset
+                .parse::<u16>()
+                .ok()
+                .filter(|offset| usize::from(*offset) <= cp0_store_protocol::MAX_CATALOG_APPS)
+                .ok_or_else(|| "store search offset must be between 0 and 64".to_owned())?;
+            let limit = limit
+                .parse::<u8>()
+                .ok()
+                .filter(|limit| (1..=cp0_store_protocol::MAX_SEARCH_PAGE_APPS).contains(limit))
+                .ok_or_else(|| "store search limit must be between 1 and 8".to_owned())?;
+            (offset, limit)
+        }
+        _ => return Err("store search pagination requires both offset and limit".into()),
+    };
+    Ok(cp0_store_protocol::StoreCommand::Search {
+        query: query.into(),
+        offset,
+        limit,
+    })
 }
 
 fn install_package(path: &str) -> Result<(), String> {
@@ -392,5 +434,29 @@ mod tests {
         assert_eq!(parse_enabled("on"), Ok(true));
         assert_eq!(parse_enabled("off"), Ok(false));
         assert!(parse_enabled("yes").is_err());
+    }
+
+    #[test]
+    fn cli_store_search_parser_is_bounded() {
+        assert_eq!(
+            parse_store_search("Notes", None, None),
+            Ok(cp0_store_protocol::StoreCommand::Search {
+                query: "Notes".into(),
+                offset: 0,
+                limit: cp0_store_protocol::MAX_SEARCH_PAGE_APPS,
+            })
+        );
+        assert_eq!(
+            parse_store_search("Notes", Some("8"), Some("4")),
+            Ok(cp0_store_protocol::StoreCommand::Search {
+                query: "Notes".into(),
+                offset: 8,
+                limit: 4,
+            })
+        );
+        assert!(parse_store_search("", None, None).is_err());
+        assert!(parse_store_search("Notes", Some("65"), Some("1")).is_err());
+        assert!(parse_store_search("Notes", Some("0"), Some("9")).is_err());
+        assert!(parse_store_search("Notes", Some("0"), None).is_err());
     }
 }

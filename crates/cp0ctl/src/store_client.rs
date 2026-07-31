@@ -77,6 +77,19 @@ fn response_matches(command: &StoreCommand, data: &StoreResponseData) -> bool {
         (StoreCommand::List, StoreResponseData::Catalog { .. })
         | (StoreCommand::Refresh, StoreResponseData::RefreshAccepted) => true,
         (
+            StoreCommand::Search {
+                query: requested_query,
+                offset: requested_offset,
+                limit: requested_limit,
+            },
+            StoreResponseData::SearchResults {
+                query,
+                offset,
+                limit,
+                ..
+            },
+        ) => requested_query == query && requested_offset == offset && requested_limit == limit,
+        (
             StoreCommand::Install { app_id: requested },
             StoreResponseData::InstallAccepted { app_id, .. },
         ) => requested == app_id,
@@ -149,6 +162,34 @@ mod tests {
         assert!(
             exchange_stream(stream, StoreCommand::Install { app_id: requested }, TIMEOUT).is_err()
         );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn rejects_search_response_for_a_different_page() {
+        let requested = StoreCommand::Search {
+            query: "notes".into(),
+            offset: 0,
+            limit: 1,
+        };
+        let (stream, worker) = serve_once(
+            requested.clone(),
+            StoreResponse::success(
+                REQUEST_ID,
+                StoreResponseData::SearchResults {
+                    query: "notes".into(),
+                    offset: 1,
+                    limit: 1,
+                    total: 0,
+                    next_offset: None,
+                    sequence: 3,
+                    expires_unix_seconds: 1_900_000_000,
+                    stale: false,
+                    apps: Vec::new(),
+                },
+            ),
+        );
+        assert!(exchange_stream(stream, requested, TIMEOUT).is_err());
         worker.join().unwrap();
     }
 

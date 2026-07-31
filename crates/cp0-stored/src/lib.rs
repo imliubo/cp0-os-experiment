@@ -444,6 +444,11 @@ impl StoreService {
         let request_id = request.request_id;
         let result = match request.command {
             StoreCommand::List => self.catalog_response(),
+            StoreCommand::Search {
+                query,
+                offset,
+                limit,
+            } => self.search_response(query, offset, limit),
             StoreCommand::Refresh => self
                 .start_refresh()
                 .map(|()| StoreResponseData::RefreshAccepted),
@@ -471,28 +476,65 @@ impl StoreService {
             .catalog
             .apps
             .iter()
-            .map(|app| {
-                let operation = state.operations.get(&app.app_id);
-                StoreAppSummary {
-                    app_id: app.app_id.clone(),
-                    name: app.name.clone(),
-                    version: app.version.clone(),
-                    summary: app.summary.clone(),
-                    package_bytes: app.package_bytes,
-                    permissions: app.permissions.clone(),
-                    state: operation
-                        .map(|operation| operation.state)
-                        .unwrap_or(StoreAppState::Available),
-                    progress_percent: operation
-                        .map(|operation| operation.progress_percent)
-                        .unwrap_or(0),
-                }
-            })
+            .map(|app| store_app_summary(app, state.operations.get(&app.app_id)))
             .collect();
         Ok(StoreResponseData::Catalog {
             sequence: catalog.catalog.sequence,
             expires_unix_seconds: catalog.catalog.expires_unix_seconds,
             stale: now >= catalog.catalog.expires_unix_seconds,
+            apps,
+        })
+    }
+
+    fn search_response(
+        &self,
+        query: String,
+        offset: u16,
+        limit: u8,
+    ) -> Result<StoreResponseData, StoreServiceError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+        let catalog = state
+            .catalog
+            .as_ref()
+            .ok_or(StoreServiceError::Unconfigured)?;
+        let normalized_query = query.to_lowercase();
+        let mut matches = catalog
+            .catalog
+            .apps
+            .iter()
+            .filter_map(|app| {
+                search_rank(app, &normalized_query).map(|rank| (rank, app.name.to_lowercase(), app))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.app_id.cmp(&right.2.app_id))
+        });
+
+        let total = matches.len() as u16;
+        let apps = matches
+            .into_iter()
+            .skip(usize::from(offset))
+            .take(usize::from(limit))
+            .map(|(_, _, app)| store_app_summary(app, state.operations.get(&app.app_id)))
+            .collect::<Vec<_>>();
+        let next_offset = offset
+            .checked_add(apps.len() as u16)
+            .filter(|next| *next < total);
+        Ok(StoreResponseData::SearchResults {
+            query,
+            offset,
+            limit,
+            total,
+            next_offset,
+            sequence: catalog.catalog.sequence,
+            expires_unix_seconds: catalog.catalog.expires_unix_seconds,
+            stale: unix_time() >= catalog.catalog.expires_unix_seconds,
             apps,
         })
     }
@@ -665,6 +707,40 @@ impl StoreService {
         cleanup_result?;
         self.set_operation(&app.app_id, StoreAppState::Installed, 100);
         Ok(())
+    }
+}
+
+fn store_app_summary(app: &CatalogApp, operation: Option<&OperationState>) -> StoreAppSummary {
+    StoreAppSummary {
+        app_id: app.app_id.clone(),
+        name: app.name.clone(),
+        version: app.version.clone(),
+        summary: app.summary.clone(),
+        package_bytes: app.package_bytes,
+        permissions: app.permissions.clone(),
+        state: operation
+            .map(|operation| operation.state)
+            .unwrap_or(StoreAppState::Available),
+        progress_percent: operation
+            .map(|operation| operation.progress_percent)
+            .unwrap_or(0),
+    }
+}
+
+fn search_rank(app: &CatalogApp, normalized_query: &str) -> Option<u8> {
+    let name = app.name.to_lowercase();
+    if name == normalized_query {
+        Some(0)
+    } else if name.starts_with(normalized_query) {
+        Some(1)
+    } else if name.contains(normalized_query) {
+        Some(2)
+    } else if app.summary.to_lowercase().contains(normalized_query)
+        || app.app_id.contains(normalized_query)
+    {
+        Some(3)
+    } else {
+        None
     }
 }
 
@@ -1010,23 +1086,44 @@ mod tests {
 
         fn signed_catalog(&self, sequence: u64) -> Vec<u8> {
             let now = unix_time();
+            self.signed_catalog_with_apps(
+                sequence,
+                now + 3600,
+                vec![self.catalog_app(
+                    "dev.cardputerzero.storetest",
+                    "Store Test",
+                    "Tests trusted resumable installation",
+                )],
+            )
+        }
+
+        fn catalog_app(&self, app_id: &str, name: &str, summary: &str) -> CatalogApp {
             let digest = cp0_store_protocol::lower_hex(&Sha256::digest(&self.package));
+            CatalogApp {
+                app_id: app_id.into(),
+                name: name.into(),
+                version: "1.0.0".into(),
+                sdk_version: "1.0".into(),
+                summary: summary.into(),
+                package_url: "https://store.example.com/storetest.capp".into(),
+                package_sha256: digest,
+                package_bytes: self.package.len() as u64,
+                permissions: Vec::new(),
+            }
+        }
+
+        fn signed_catalog_with_apps(
+            &self,
+            sequence: u64,
+            expires_unix_seconds: u64,
+            apps: Vec<CatalogApp>,
+        ) -> Vec<u8> {
             let catalog = Catalog {
                 schema_version: CATALOG_SCHEMA_VERSION,
                 sequence,
-                published_unix_seconds: now.saturating_sub(10),
-                expires_unix_seconds: now + 3600,
-                apps: vec![CatalogApp {
-                    app_id: "dev.cardputerzero.storetest".into(),
-                    name: "Store Test".into(),
-                    version: "1.0.0".into(),
-                    sdk_version: "1.0".into(),
-                    summary: "Tests trusted resumable installation".into(),
-                    package_url: "https://store.example.com/storetest.capp".into(),
-                    package_sha256: digest,
-                    package_bytes: self.package.len() as u64,
-                    permissions: Vec::new(),
-                }],
+                published_unix_seconds: expires_unix_seconds.saturating_sub(3600),
+                expires_unix_seconds,
+                apps,
             };
             encode_signed_catalog(&sign_catalog(catalog, &self.secret).unwrap()).unwrap()
         }
@@ -1137,6 +1234,122 @@ mod tests {
             service.catalog_response().unwrap(),
             StoreResponseData::Catalog { apps, .. }
                 if apps[0].state == StoreAppState::Installed && apps[0].progress_percent == 100
+        ));
+    }
+
+    #[test]
+    fn searches_verified_catalog_with_stable_ranking_and_pagination() {
+        let fixture = Fixture::new("search");
+        let apps = vec![
+            fixture.catalog_app(
+                "dev.cardputerzero.alpha",
+                "Noteworthy",
+                "Starts with the query",
+            ),
+            fixture.catalog_app("dev.cardputerzero.exact", "Note", "Exact name match"),
+            fixture.catalog_app(
+                "dev.cardputerzero.middle",
+                "Quick Notes",
+                "Contains the query",
+            ),
+            fixture.catalog_app(
+                "dev.cardputerzero.noteutility",
+                "Utility",
+                "Matches through the application ID",
+            ),
+            fixture.catalog_app(
+                "dev.cardputerzero.summary",
+                "Journal",
+                "A private note keeper",
+            ),
+        ];
+        let catalog = fixture.signed_catalog_with_apps(8, unix_time() + 3600, apps);
+        fs::write(&fixture.paths.catalog_cache, catalog).unwrap();
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+
+        let first = service.search_response("NOTE".into(), 0, 2).unwrap();
+        assert!(matches!(
+            first,
+            StoreResponseData::SearchResults {
+                total: 5,
+                next_offset: Some(2),
+                stale: false,
+                apps,
+                ..
+            } if apps.iter().map(|app| app.name.as_str()).collect::<Vec<_>>()
+                == ["Note", "Noteworthy"]
+        ));
+
+        let middle = service.search_response("note".into(), 2, 2).unwrap();
+        assert!(matches!(
+            middle,
+            StoreResponseData::SearchResults {
+                total: 5,
+                next_offset: Some(4),
+                apps,
+                ..
+            } if apps.iter().map(|app| app.name.as_str()).collect::<Vec<_>>()
+                == ["Quick Notes", "Journal"]
+        ));
+
+        let last = service.search_response("note".into(), 4, 2).unwrap();
+        assert!(matches!(
+            last,
+            StoreResponseData::SearchResults {
+                total: 5,
+                next_offset: None,
+                apps,
+                ..
+            } if apps.iter().map(|app| app.name.as_str()).collect::<Vec<_>>() == ["Utility"]
+        ));
+    }
+
+    #[test]
+    fn permits_search_but_rejects_install_from_a_stale_catalog() {
+        let fixture = Fixture::new("stale-search");
+        let catalog = fixture.signed_catalog_with_apps(
+            2,
+            unix_time().saturating_sub(1),
+            vec![fixture.catalog_app(
+                "dev.cardputerzero.storetest",
+                "Store Test",
+                "Tests stale local search",
+            )],
+        );
+        fs::write(&fixture.paths.catalog_cache, catalog).unwrap();
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+
+        assert!(matches!(
+            service.search_response("store".into(), 0, 8).unwrap(),
+            StoreResponseData::SearchResults {
+                stale: true,
+                total: 1,
+                ..
+            }
+        ));
+        assert!(matches!(
+            service.start_install("dev.cardputerzero.storetest"),
+            Err(StoreServiceError::Untrusted(_))
         ));
     }
 

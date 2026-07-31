@@ -19,6 +19,7 @@ members = [
     "crates/cp0-recovery",
     "crates/cp0-storage-protocol",
     "crates/cp0-storaged",
+    "crates/cp0-store-metadata",
     "crates/cp0-store-protocol",
     "crates/cp0-stored",
     "crates/cp0ctl",
