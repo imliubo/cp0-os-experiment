@@ -105,6 +105,14 @@ install -D -m 0644 "${STAGE_DIR}/00-bsp/files/cardputerzero-console-banner.servi
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-console-banner.service"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/cardputerzero-firmware.initramfs-hook" \
     "${ROOTFS_DIR}/etc/initramfs-tools/hooks/cardputerzero-firmware"
+install -D -m 0755 "${STAGE_DIR}/00-bsp/files/overlay-root-initramfs" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/overlay-root-initramfs"
+install -D -m 0755 "${STAGE_DIR}/00-bsp/files/cardputerzero-overlay-root.initramfs-hook" \
+    "${ROOTFS_DIR}/etc/initramfs-tools/hooks/cardputerzero-overlay-root"
+install -D -m 0755 "${STAGE_DIR}/00-bsp/files/overlay-root-status.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/overlay-root-status"
+install -D -m 0644 "${STAGE_DIR}/00-bsp/files/cardputerzero-overlay-root-status.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-overlay-root-status.service"
 
 if [[ -n ${PUBKEY_SSH_FIRST_USER:-} ]]; then
     install -d -m 0700 \
@@ -190,15 +198,16 @@ systemctl mask apt-daily.service apt-daily.timer \
     fb_load.service 2>/dev/null || true
 systemctl enable NetworkManager.service ssh.service apparmor.service \
     getty@tty1.service cardputerzero-console-banner.service \
-    rpi-resize.service
+    cardputerzero-overlay-root-status.service rpi-resize.service
 systemctl set-default multi-user.target
 for module in \
-    gpio-forwarder panel-mipi-dbi-m pwm_bl_m5stack st7789v_m5stack \
+    overlay gpio-forwarder panel-mipi-dbi-m pwm_bl_m5stack st7789v_m5stack \
     tca8418_keypad_m5stack; do
     if ! grep -qx "$module" /etc/initramfs-tools/modules; then
         printf '%s\n' "$module" >>/etc/initramfs-tools/modules
     fi
 done
+update-initramfs -u -k all
 mkdir -p /etc/systemd/journald.conf.d
 cat >/etc/systemd/journald.conf.d/10-cardputerzero-os.conf <<'JOURNALD'
 [Journal]
@@ -209,7 +218,25 @@ cat >/etc/sysctl.d/90-cardputerzero-os.conf <<'SYSCTL'
 vm.swappiness=100
 vm.dirty_background_ratio=5
 vm.dirty_ratio=10
+fs.protected_fifos=2
+fs.protected_hardlinks=1
+fs.protected_regular=2
+fs.protected_symlinks=1
+fs.suid_dumpable=0
+kernel.core_pattern=/dev/null
+kernel.dmesg_restrict=1
+kernel.kptr_restrict=2
+kernel.unprivileged_bpf_disabled=1
 SYSCTL
+if ! grep -q '^# BEGIN CardputerZero volatile filesystems$' /etc/fstab; then
+    cat >>/etc/fstab <<'FSTAB'
+
+# BEGIN CardputerZero volatile filesystems
+tmpfs /tmp tmpfs nodev,nosuid,noatime,mode=1777,size=32M 0 0
+tmpfs /var/tmp tmpfs nodev,nosuid,noatime,mode=1777,size=8M 0 0
+# END CardputerZero volatile filesystems
+FSTAB
+fi
 rm -f /var/lib/systemd/random-seed
 rm -f /etc/ssh/ssh_host_*_key*
 apt-get clean

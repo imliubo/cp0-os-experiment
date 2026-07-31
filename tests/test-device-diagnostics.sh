@@ -25,6 +25,9 @@ grep -q 'MemoryCurrent' "$monitor"
 grep -q 'NRestarts' "$monitor"
 grep -q '/usr/bin/cp0ctl app ping' "$monitor"
 grep -q 'memory-growth' "$monitor"
+grep -q '/sys/block/mmcblk0/stat' "$monitor"
+grep -q 'sd_write_bytes' "$monitor"
+grep -q 'maximum_sd_write_bytes' "$monitor"
 if grep -Eq '(^|[[:space:]])rm([[:space:]]|$)' "$monitor"; then
     echo "error: stability monitor must never delete result data" >&2
     exit 1

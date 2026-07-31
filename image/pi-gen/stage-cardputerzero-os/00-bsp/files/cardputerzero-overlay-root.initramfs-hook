@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+prereqs() {
+    :
+}
+
+case "${1:-}" in
+    prereqs)
+        prereqs
+        exit 0
+        ;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+manual_add_modules overlay
+mkdir -p "$DESTDIR/scripts/init-bottom"
+copy_file script /usr/libexec/cardputerzero/overlay-root-initramfs \
+    /scripts/init-bottom/cardputerzero-overlay-root

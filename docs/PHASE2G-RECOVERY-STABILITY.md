@@ -27,12 +27,16 @@ Each sample records:
   compositor, System Shell and appd;
 - an authenticated appd ping;
 - the private Wayland, appd control and runtime broker sockets.
+- cumulative SD-card sectors written from `/sys/block/mmcblk0/stat`, sampled to
+  RAM without causing measured SD writes.
 
 Unexpected restarts, missing processes/sockets, failed pings and cgroup memory
 above 32 MiB for compositor/Shell or 24 MiB for appd are failures. The final
 sample may grow by at most 4 MiB, 2 MiB and 4 MiB respectively from the idle
 baseline. Results contain `samples.tsv`, `summary.env`, `status` and, only on
-failure, `failures.log`.
+failure, `failures.log`. `block-io.tsv` contains the raw write counter. The
+default idle acceptance permits at most 64 MiB of SD writes over the run; a
+fourth argument can set a stricter byte limit.
 
 Both tools are copied into the image as explicit diagnostics under
 `/usr/libexec/cardputerzero/`; neither is enabled as a boot service.

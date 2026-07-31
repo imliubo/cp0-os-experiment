@@ -37,4 +37,5 @@ RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
+MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native

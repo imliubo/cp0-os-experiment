@@ -39,6 +39,23 @@ else
     fail memory-cgroup "memory controller missing"
 fi
 
+if [[ "$cmdline" == *" cp0.overlay_root=volatile "* ]]; then
+    root_type=$(findmnt -n -o FSTYPE / 2>/dev/null || true)
+    lower_options=$(findmnt -n -o OPTIONS \
+        /run/cardputerzero-root/lower 2>/dev/null || true)
+    upper_type=$(findmnt -n -o FSTYPE \
+        /run/cardputerzero-root/volatile 2>/dev/null || true)
+    if [[ "$root_type" == overlay && ",$lower_options," == *,ro,* &&
+        "$upper_type" == tmpfs ]]; then
+        pass root-overlay "read-only lower and volatile upper"
+    else
+        fail root-overlay \
+            "root=$root_type lower=$lower_options upper=$upper_type"
+    fi
+else
+    pass root-overlay "disabled by kernel command line"
+fi
+
 lsms=$(cat /sys/kernel/security/lsm 2>/dev/null || true)
 if [[ ",$lsms," == *",apparmor,"* ]]; then
     pass apparmor "$lsms"

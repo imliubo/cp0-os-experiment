@@ -1,0 +1,52 @@
+#!/bin/sh
+
+overlay_requested() {
+    command_line=$1
+    for argument in $command_line; do
+        if [ "$argument" = "cp0.overlay_root=volatile" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+if [ "${1:-}" = "--test-cmdline" ]; then
+    overlay_requested "${2:-}"
+    exit $?
+fi
+
+overlay_requested "$(cat /proc/cmdline)" || exit 0
+
+. /scripts/functions
+
+overlay_fail() {
+    panic "CardputerZero volatile root setup failed: $1"
+}
+
+root_target=${rootmnt:-/root}
+state=/cardputerzero-root
+lower="$state/lower"
+volatile="$state/volatile"
+
+mkdir -p "$lower" "$volatile" || overlay_fail "cannot create mount points"
+modprobe overlay || overlay_fail "overlay module unavailable"
+mount -n --move "$root_target" "$lower" || overlay_fail "cannot move root"
+mount -n -o remount,ro "$lower" || overlay_fail "cannot protect lower root"
+mount -n -t tmpfs \
+    -o nodev,noatime,mode=0700,size=64M,nr_inodes=16384 \
+    cp0-root-volatile "$volatile" || overlay_fail "cannot mount volatile upper"
+mkdir -p "$volatile/upper" "$volatile/work" "$root_target" || \
+    overlay_fail "cannot prepare overlay directories"
+mount -n -t overlay \
+    -o "lowerdir=$lower,upperdir=$volatile/upper,workdir=$volatile/work" \
+    cp0-root "$root_target" || overlay_fail "cannot mount overlay root"
+
+mkdir -p \
+    "$root_target/run/cardputerzero-root/lower" \
+    "$root_target/run/cardputerzero-root/volatile" || \
+    overlay_fail "cannot create diagnostic mount points"
+chmod 0700 "$root_target/run/cardputerzero-root"
+mount -n --move "$lower" "$root_target/run/cardputerzero-root/lower" || \
+    overlay_fail "cannot expose lower root status"
+mount -n --move "$volatile" "$root_target/run/cardputerzero-root/volatile" || \
+    overlay_fail "cannot expose upper root status"

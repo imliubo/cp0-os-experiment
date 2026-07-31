@@ -4,6 +4,7 @@ set -euo pipefail
 duration_seconds=${1:-86400}
 interval_seconds=${2:-60}
 result_root=${3:-/run/cardputerzero-stability}
+maximum_sd_write_bytes=${4:-67108864}
 
 if ((EUID != 0)); then
     echo "error: device-stability-monitor.sh must run as root" >&2
@@ -11,8 +12,9 @@ if ((EUID != 0)); then
 fi
 if [[ ! $duration_seconds =~ ^[0-9]+$ ]] ||
     [[ ! $interval_seconds =~ ^[0-9]+$ ]] ||
+    [[ ! $maximum_sd_write_bytes =~ ^[0-9]+$ ]] ||
     ((duration_seconds < interval_seconds || interval_seconds < 1)); then
-    echo "error: duration and interval must be positive integers" >&2
+    echo "error: duration, interval and SD write limit must be positive integers" >&2
     exit 2
 fi
 case "$result_root" in
@@ -29,9 +31,11 @@ install -d -o root -g root -m 0700 "$run_dir"
 samples="$run_dir/samples.tsv"
 failures="$run_dir/failures.log"
 status_file="$run_dir/status"
+block_samples="$run_dir/block-io.tsv"
 printf 'RUNNING\n' >"$status_file"
 printf 'epoch\tuptime\tunit\tactive\tsub\tpid\trestarts\tmemory_bytes\n' \
     >"$samples"
+printf 'epoch\tuptime\tsectors_written\tbytes_written\n' >"$block_samples"
 
 units=(
     cardputerzero-compositor.service
@@ -51,6 +55,8 @@ declare -A allowed_growth=(
 declare -A baseline_restarts baseline_memory final_memory
 failure_count=0
 finished=0
+baseline_sectors_written=
+final_sectors_written=
 
 on_exit() {
     local code=$?
@@ -88,7 +94,7 @@ read_unit_properties() {
 }
 
 sample_once() {
-    local epoch uptime unit
+    local epoch uptime unit sectors_written
     epoch=$(date +%s)
     uptime=${EPOCHREALTIME:-$epoch}
     if [[ -r /proc/uptime ]]; then
@@ -96,6 +102,17 @@ sample_once() {
     fi
     if ! /usr/bin/cp0ctl app ping >/dev/null; then
         record_failure "appd-ping-failed"
+    fi
+    sectors_written=$(awk '{ print $7 }' /sys/block/mmcblk0/stat 2>/dev/null || true)
+    if [[ $sectors_written =~ ^[0-9]+$ ]]; then
+        if [[ -z $baseline_sectors_written ]]; then
+            baseline_sectors_written=$sectors_written
+        fi
+        final_sectors_written=$sectors_written
+        printf '%s\t%s\t%s\t%s\n' "$epoch" "$uptime" \
+            "$sectors_written" "$((sectors_written * 512))" >>"$block_samples"
+    else
+        record_failure "mmcblk0-write-counter-unavailable"
     fi
     for unit in "${units[@]}"; do
         if ! read_unit_properties "$unit"; then
@@ -140,6 +157,14 @@ for unit in "${units[@]}"; do
         record_failure "$unit memory-growth=$growth>${allowed_growth[$unit]}"
     fi
 done
+sd_write_bytes=-1
+if [[ $baseline_sectors_written =~ ^[0-9]+$ &&
+      $final_sectors_written =~ ^[0-9]+$ ]]; then
+    sd_write_bytes=$(((final_sectors_written - baseline_sectors_written) * 512))
+    if ((sd_write_bytes > maximum_sd_write_bytes)); then
+        record_failure "sd-write-bytes=$sd_write_bytes>$maximum_sd_write_bytes"
+    fi
+fi
 
 finish_epoch=$(date +%s)
 {
@@ -149,6 +174,10 @@ finish_epoch=$(date +%s)
     printf 'duration_seconds=%s\n' "$duration_seconds"
     printf 'interval_seconds=%s\n' "$interval_seconds"
     printf 'failure_count=%s\n' "$failure_count"
+    printf 'sd_baseline_sectors_written=%s\n' "$baseline_sectors_written"
+    printf 'sd_final_sectors_written=%s\n' "$final_sectors_written"
+    printf 'sd_write_bytes=%s\n' "$sd_write_bytes"
+    printf 'maximum_sd_write_bytes=%s\n' "$maximum_sd_write_bytes"
     for unit in "${units[@]}"; do
         printf '%s_baseline_memory=%s\n' "${unit%.service}" \
             "${baseline_memory[$unit]}"
