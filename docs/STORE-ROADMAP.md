@@ -64,9 +64,13 @@
 
 S5A 已新增 `cp0-store-control` 事务域核心：服务端 RBAC/2FA、永久 App ID、不可变 revision、
 严格状态机、ETag、幂等回放、append-only audit/outbox 和 Catalog sequence 单调约束已可测试；
-PostgreSQL/HTTP、Scan Worker、Review Console、Signer 和真实 Catalog pipeline 仍按下列门禁推进。
+S5B 已新增首个 PostgreSQL/HTTP 纵向切片：App 注册/读取、实时 token/RBAC/2FA/scope 校验、
+SERIALIZABLE 幂等事务、ETag、有界 Problem、append-only 数据库约束和并发/回滚验收。
+Submission/Review/Release 的 PostgreSQL/HTTP 适配、Scan Worker、Review Console、Signer 和真实
+Catalog pipeline 仍按下列门禁推进。
 
 - [ ] 实现 Identity/Teams、App Registry、Submission 和 Release 服务。
+  当前 App Registry 首个纵向切片已完成；Identity/Teams 管理接口及其余资源接口未完成。
 - [ ] 实现隔离 Scan Worker：包格式、WASM、权限、资源和恶意样本检查。
 - [ ] 实现 Review Console、结构化问题、回复、二审和双人审批。
 - [ ] 实现不可变对象、事务 outbox、append-only audit 和 transparency log。

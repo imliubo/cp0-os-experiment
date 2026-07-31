@@ -86,8 +86,9 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
   Submission 审核时间线和 Release rollout 控制；严格客户端要求 HTTPS、幂等键、ETag
   和有界响应，Web 项目不进入设备镜像。
 - S5A Store 控制面事务核心：服务端 RBAC/2FA、永久 App ID、不可变 Submission、
-  approved-only Release、乐观并发、精确幂等回放及原子 audit/outbox 约束；生产
-  PostgreSQL/HTTP 适配器仍与设备镜像隔离开发。
+  approved-only Release、乐观并发、精确幂等回放及原子 audit/outbox 约束。
+- S5B PostgreSQL/HTTP 首个纵向切片：App 注册/读取、实时身份与 2FA/scope 校验、
+  SERIALIZABLE 原子审计/outbox、ETag 和有界 Problem；该服务仍与设备镜像隔离开发。
 - Phase 5C 设备策略与 Settings：root-owned 家长/组织策略限制 Store、应用白名单和
   全局权限，用户可二次确认切换开发者模式与下次启动的 tty1 恢复控制台。
 - Phase 6B 本地诊断与量产门禁：默认脱敏且不联网的 RAM-only 支持包、显式同意的

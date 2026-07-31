@@ -19,7 +19,7 @@ pub enum TeamRole {
 }
 
 impl TeamRole {
-    const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Owner => "owner",
             Self::Developer => "developer",
@@ -360,14 +360,10 @@ impl ControlPlane {
         default_locale: &str,
     ) -> Result<AppRecord, ControlError> {
         self.require_user(actor, &[TeamRole::Owner, TeamRole::Developer])?;
-        if !cp0_manifest::is_valid_app_id(app_id) || !valid_locale(default_locale) {
+        if !cp0_manifest::is_valid_app_id(app_id) || !is_valid_locale(default_locale) {
             return Err(ControlError::InvalidInput("App ID or locale is invalid"));
         }
-        let mut request = RequestDigest::new("app.register.v1");
-        request.add(&actor.team_id);
-        request.add(app_id);
-        request.add(default_locale);
-        let request_sha256 = request.finish();
+        let request_sha256 = register_app_request_sha256(&actor.team_id, app_id, default_locale);
         if let Some(result) = self.replay(&actor.member_id, context, &request_sha256)? {
             return expect_app(result);
         }
@@ -1131,7 +1127,7 @@ fn valid_prefixed_id(value: &str, prefix: &str) -> bool {
     })
 }
 
-fn valid_locale(locale: &str) -> bool {
+pub fn is_valid_locale(locale: &str) -> bool {
     if locale.len() < 2 || locale.len() > 16 || !locale.is_ascii() {
         return false;
     }
@@ -1160,6 +1156,14 @@ fn valid_locale(locale: &str) -> bool {
         index += 1;
     }
     index == parts.len()
+}
+
+pub fn register_app_request_sha256(team_id: &str, app_id: &str, default_locale: &str) -> String {
+    let mut request = RequestDigest::new("app.register.v1");
+    request.add(team_id);
+    request.add(app_id);
+    request.add(default_locale);
+    request.finish()
 }
 
 fn valid_sha256(value: &str) -> bool {

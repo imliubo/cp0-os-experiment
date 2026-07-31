@@ -20,6 +20,7 @@ members = [
     "crates/cp0-storage-protocol",
     "crates/cp0-storaged",
     "crates/cp0-store-control",
+    "crates/cp0-store-control-server",
     "crates/cp0-store-metadata",
     "crates/cp0-store-protocol",
     "crates/cp0-stored",
@@ -39,6 +40,11 @@ serde_json = "1.0.150"
 ed25519-dalek = "2.2.0"
 sha2 = "0.10.9"
 semver = "1.0.27"
+axum = "=0.8.4"
+sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "json", "migrate", "macros"] }
+tokio = { version = "=1.47.1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+tower = "=0.5.2"
+uuid = { version = "=1.18.0", features = ["v4"] }
 
 [profile.release]
 codegen-units = 1
