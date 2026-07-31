@@ -89,9 +89,10 @@ CONFIG
 for token in quiet splash fbcon=map:off fbcon=map:0; do
     sed -i -E "s/(^|[[:space:]])${token}([[:space:]]|$)/ /g" "$cmdline"
 done
+sed -i -E 's/(^|[[:space:]])resize([[:space:]]|$)/ /g' "$cmdline"
 sed -i -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' "$cmdline"
 
-for token in cgroup_memory=1 cgroup_enable=memory apparmor=1 security=apparmor loglevel=6 consoleblank=0 fbcon=map:1; do
+for token in cgroup_memory=1 cgroup_enable=memory apparmor=1 security=apparmor loglevel=6 consoleblank=0 fbcon=map:1 cp0.overlay_root=volatile; do
     if ! grep -qw "$token" "$cmdline"; then
         sed -i "s|$| $token|" "$cmdline"
     fi
@@ -107,6 +108,8 @@ install -D -m 0755 "${STAGE_DIR}/00-bsp/files/cardputerzero-firmware.initramfs-h
     "${ROOTFS_DIR}/etc/initramfs-tools/hooks/cardputerzero-firmware"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/overlay-root-initramfs" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/overlay-root-initramfs"
+install -D -m 0755 "${STAGE_DIR}/00-bsp/files/data-grow-initramfs" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/data-grow-initramfs"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/cardputerzero-overlay-root.initramfs-hook" \
     "${ROOTFS_DIR}/etc/initramfs-tools/hooks/cardputerzero-overlay-root"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/overlay-root-status.sh" \
@@ -191,14 +194,15 @@ systemctl disable \
     rpi-connect-wayvnc.service \
     fb_load.service \
     rpi-zram-writeback.service \
-    rpi-zram-writeback.timer 2>/dev/null || true
+    rpi-zram-writeback.timer \
+    rpi-resize.service 2>/dev/null || true
 rm -f /etc/systemd/system/fb_load.service
 systemctl mask apt-daily.service apt-daily.timer \
     apt-daily-upgrade.service apt-daily-upgrade.timer \
     fb_load.service 2>/dev/null || true
 systemctl enable NetworkManager.service ssh.service apparmor.service \
     getty@tty1.service cardputerzero-console-banner.service \
-    cardputerzero-overlay-root-status.service rpi-resize.service
+    cardputerzero-overlay-root-status.service
 systemctl set-default multi-user.target
 for module in \
     overlay gpio-forwarder panel-mipi-dbi-m pwm_bl_m5stack st7789v_m5stack \

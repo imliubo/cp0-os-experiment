@@ -24,6 +24,7 @@ required_executables=(
     usr/libexec/cardputerzero/device-core-recovery
     usr/libexec/cardputerzero/device-smoke.sh
     usr/libexec/cardputerzero/device-stability-monitor
+    usr/libexec/cardputerzero/data-grow-initramfs
     usr/libexec/cardputerzero/overlay-root-initramfs
 )
 for path in "${required_executables[@]}"; do
@@ -78,12 +79,18 @@ grep -qx 'kernel.unprivileged_bpf_disabled=1' \
 
 test -s "$bootfs/initramfs8"
 grep -qx 'auto_initramfs=1' "$bootfs/config.txt"
-if grep -qw 'cp0.overlay_root=volatile' "$bootfs/cmdline.txt"; then
-    echo "error: volatile overlay root must remain opt-in" >&2
+if ! grep -qw 'cp0.overlay_root=volatile' "$bootfs/cmdline.txt"; then
+    echo "error: immutable root is not enabled in the final image" >&2
+    exit 1
+fi
+if grep -qw 'resize' "$bootfs/cmdline.txt"; then
+    echo "error: upstream root resize would overwrite cp0-data" >&2
     exit 1
 fi
 initramfs_contents=$(chroot "$rootfs" \
     /usr/bin/lsinitramfs /boot/firmware/initramfs8)
+grep -qx 'scripts/local-premount/cardputerzero-data-grow' \
+    <<<"$initramfs_contents"
 grep -qx 'scripts/init-bottom/cardputerzero-overlay-root' \
     <<<"$initramfs_contents"
 grep -qE 'usr/lib/modules/.*/kernel/fs/overlayfs/overlay\.ko' \
@@ -91,12 +98,41 @@ grep -qE 'usr/lib/modules/.*/kernel/fs/overlayfs/overlay\.ko' \
 grep -qx 'usr/lib/firmware/cardputerzero,st7789v_lcd.bin' \
     <<<"$initramfs_contents"
 
+data_root="$rootfs/var/lib/cardputerzero-persist"
+if [[ $(findmnt -n -o FSTYPE --target "$data_root") != ext4 ]]; then
+    echo "error: cp0-data is not mounted during image verification" >&2
+    exit 1
+fi
+data_device=$(findmnt -n -o SOURCE --target "$data_root")
+if [[ $(blkid -s LABEL -o value "$data_device") != cp0-data ]]; then
+    echo "error: persistent filesystem label is not cp0-data" >&2
+    exit 1
+fi
+grep -qx 'cp0-data-layout-v1' "$data_root/layout-version"
+for path in cardputerzero etc-cardputerzero network-connections \
+    network-state ssh; do
+    if [[ ! -d $data_root/$path || -L $data_root/$path ]]; then
+        echo "error: persistent layout directory is invalid: $path" >&2
+        exit 1
+    fi
+done
+for path in machine-id random-seed; do
+    if [[ ! -f $data_root/$path || -L $data_root/$path ]]; then
+        echo "error: persistent layout file is invalid: $path" >&2
+        exit 1
+    fi
+done
+
 if [[ -e $rootfs/etc/apt/apt.conf.d/51cache ]]; then
     echo "error: build proxy configuration leaked into the image" >&2
     exit 1
 fi
 if find "$rootfs" -xdev -type f -perm /0002 -print -quit | grep -q .; then
     echo "error: image contains a world-writable regular file" >&2
+    exit 1
+fi
+if find "$data_root" -xdev -type f -perm /0002 -print -quit | grep -q .; then
+    echo "error: cp0-data contains a world-writable regular file" >&2
     exit 1
 fi
 

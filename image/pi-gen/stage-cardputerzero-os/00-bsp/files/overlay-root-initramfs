@@ -41,12 +41,79 @@ mount -n -t overlay \
     -o "lowerdir=$lower,upperdir=$volatile/upper,workdir=$volatile/work" \
     cp0-root "$root_target" || overlay_fail "cannot mount overlay root"
 
+data_devices=$(blkid -t LABEL=cp0-data -o device) || \
+    overlay_fail "cannot locate persistent data"
+set -- $data_devices
+[ "$#" -eq 1 ] || overlay_fail "expected one persistent data partition"
+data_device=$1
+data=/run/cardputerzero-data
+mkdir -p "$data" || overlay_fail "cannot create persistent data mount"
+chmod 0700 "$data" || overlay_fail "cannot protect persistent data mount"
+mount -n -t ext4 \
+    -o rw,nodev,nosuid,noexec,noatime,errors=remount-ro \
+    "$data_device" "$data" || overlay_fail "cannot mount persistent data"
+[ -f "$data/layout-version" ] && [ ! -L "$data/layout-version" ] && \
+    [ "$(cat "$data/layout-version")" = cp0-data-layout-v1 ] || \
+    overlay_fail "persistent data layout is invalid"
+
+if ! grep -Eq '^[0-9a-f]{32}$' "$data/machine-id" 2>/dev/null; then
+    machine_id=$(tr -d '-' </proc/sys/kernel/random/uuid) || \
+        overlay_fail "cannot read kernel random identity"
+    echo "$machine_id" | grep -Eq '^[0-9a-f]{32}$' || \
+        overlay_fail "cannot generate machine identity"
+    printf '%s\n' "$machine_id" >"$data/machine-id.new" || \
+        overlay_fail "cannot write machine identity"
+    chmod 0644 "$data/machine-id.new" || \
+        overlay_fail "cannot protect machine identity"
+    mv "$data/machine-id.new" "$data/machine-id" || \
+        overlay_fail "cannot commit machine identity"
+    sync || overlay_fail "cannot persist machine identity"
+fi
+
+bind_directory() {
+    source_path=$1
+    target_path=$2
+    [ -d "$source_path" ] && [ ! -L "$source_path" ] || \
+        overlay_fail "invalid persistent directory $source_path"
+    mkdir -p "$target_path" || overlay_fail "cannot create $target_path"
+    mount -n --bind "$source_path" "$target_path" || \
+        overlay_fail "cannot bind $source_path"
+    mount -n -o remount,bind,rw,nodev,nosuid,noexec "$target_path" || \
+        overlay_fail "cannot protect $target_path"
+}
+
+bind_file() {
+    source_path=$1
+    target_path=$2
+    access=$3
+    [ -f "$source_path" ] && [ ! -L "$source_path" ] || \
+        overlay_fail "invalid persistent file $source_path"
+    mkdir -p "${target_path%/*}" || overlay_fail "cannot create file parent"
+    : >"$target_path" || overlay_fail "cannot create $target_path"
+    mount -n --bind "$source_path" "$target_path" || \
+        overlay_fail "cannot bind $source_path"
+    mount -n -o "remount,bind,$access,nodev,nosuid,noexec" "$target_path" || \
+        overlay_fail "cannot protect $target_path"
+}
+
+bind_directory "$data/cardputerzero" \
+    "$root_target/var/lib/cardputerzero"
+bind_directory "$data/etc-cardputerzero" \
+    "$root_target/etc/cardputerzero"
+bind_directory "$data/ssh" "$root_target/etc/ssh"
+bind_directory "$data/network-connections" \
+    "$root_target/etc/NetworkManager/system-connections"
+bind_directory "$data/network-state" "$root_target/var/lib/NetworkManager"
+bind_file "$data/machine-id" "$root_target/etc/machine-id" ro
+bind_file "$data/random-seed" "$root_target/var/lib/systemd/random-seed" rw
+
 mkdir -p \
-    "$root_target/run/cardputerzero-root/lower" \
-    "$root_target/run/cardputerzero-root/volatile" || \
+    /run/cardputerzero-root/lower \
+    /run/cardputerzero-root/volatile || \
     overlay_fail "cannot create diagnostic mount points"
-chmod 0700 "$root_target/run/cardputerzero-root"
-mount -n --move "$lower" "$root_target/run/cardputerzero-root/lower" || \
+chmod 0700 /run/cardputerzero-root || \
+    overlay_fail "cannot protect diagnostic mount points"
+mount -n --move "$lower" /run/cardputerzero-root/lower || \
     overlay_fail "cannot expose lower root status"
-mount -n --move "$volatile" "$root_target/run/cardputerzero-root/volatile" || \
+mount -n --move "$volatile" /run/cardputerzero-root/volatile || \
     overlay_fail "cannot expose upper root status"

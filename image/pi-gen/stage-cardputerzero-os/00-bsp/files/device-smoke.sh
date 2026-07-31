@@ -45,9 +45,15 @@ if [[ "$cmdline" == *" cp0.overlay_root=volatile "* ]]; then
         /run/cardputerzero-root/lower 2>/dev/null || true)
     upper_type=$(findmnt -n -o FSTYPE \
         /run/cardputerzero-root/volatile 2>/dev/null || true)
+    data_type=$(findmnt -n -o FSTYPE \
+        /run/cardputerzero-data 2>/dev/null || true)
+    data_options=$(findmnt -n -o OPTIONS \
+        /run/cardputerzero-data 2>/dev/null || true)
     if [[ "$root_type" == overlay && ",$lower_options," == *,ro,* &&
-        "$upper_type" == tmpfs ]]; then
-        pass root-overlay "read-only lower and volatile upper"
+        "$upper_type" == tmpfs && "$data_type" == ext4 &&
+        ",$data_options," == *,rw,* && ",$data_options," == *,nodev,* &&
+        ",$data_options," == *,nosuid,* && ",$data_options," == *,noexec,* ]]; then
+        pass root-overlay "read-only lower, volatile upper, persistent data"
     else
         fail root-overlay \
             "root=$root_type lower=$lower_options upper=$upper_type"

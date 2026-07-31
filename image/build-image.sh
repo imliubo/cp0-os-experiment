@@ -33,6 +33,8 @@ if ! git -C "$pi_gen_dir" cat-file -e "$PI_GEN_COMMIT^{commit}" 2>/dev/null; the
 fi
 git -C "$pi_gen_dir" checkout --detach "$PI_GEN_COMMIT"
 test "$(git -C "$pi_gen_dir" rev-parse HEAD)" = "$PI_GEN_COMMIT"
+install -m 0755 "$repo_root/image/pi-gen/export-image-prerun.sh" \
+    "$pi_gen_dir/export-image/prerun.sh"
 
 # CM0 uses only the arm64 rpi-v8 kernel. Avoid installing the Pi 5 kernel and
 # headers in stage0 merely to purge them again in the board-specific stage.
@@ -120,7 +122,8 @@ mkdir -p "$verify_stage"
 install -m 0755 "$repo_root/tests/test-built-rootfs-profile.sh" \
     "$verify_stage/00-run.sh"
 
-config_file=$(mktemp "${TMPDIR:-/tmp}/cp0-pigen-config.XXXXXX")
+mkdir -p "$repo_root/target/image-build"
+config_file=$(mktemp "$repo_root/target/image-build/cp0-pigen-config.XXXXXX")
 cleanup() {
     rm -f "$config_file"
 }

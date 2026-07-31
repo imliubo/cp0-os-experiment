@@ -1,0 +1,90 @@
+#!/bin/sh
+set -e
+
+prereqs() {
+    :
+}
+
+case "${1:-}" in
+    prereqs)
+        prereqs
+        exit 0
+        ;;
+esac
+
+test_mode=0
+if [ "${1:-}" = "--test-device" ]; then
+    [ "$#" -eq 3 ] || exit 2
+    test_mode=1
+    data_device=$2
+    disk_device=$3
+else
+    . /scripts/functions
+fi
+
+overlay_requested() {
+    for argument in $(cat /proc/cmdline); do
+        [ "$argument" = "cp0.overlay_root=volatile" ] && return 0
+    done
+    return 1
+}
+
+fail() {
+    if [ "$test_mode" -eq 1 ]; then
+        echo "CardputerZero persistent data resize failed: $1" >&2
+        exit 1
+    fi
+    panic "CardputerZero persistent data resize failed: $1"
+}
+
+if [ "$test_mode" -eq 0 ]; then
+    overlay_requested || exit 0
+    devices=$(blkid -t LABEL=cp0-data -o device)
+    set -- $devices
+    [ "$#" -eq 1 ] || fail "expected one cp0-data filesystem"
+    data_device=$1
+    partition_name=$(lsblk -ndo KNAME "$data_device")
+    disk_name=$(lsblk -ndo PKNAME "$data_device")
+    [ "$disk_name" = mmcblk0 ] || fail "unexpected data disk $disk_name"
+    disk_device="/dev/$disk_name"
+fi
+
+[ -b "$data_device" ] || fail "data partition is not a block device"
+[ -b "$disk_device" ] || fail "parent disk is not a block device"
+partition_name=$(lsblk -ndo KNAME "$data_device")
+disk_name=$(lsblk -ndo KNAME "$disk_device")
+partition_number=$(cat "/sys/block/$disk_name/$partition_name/partition")
+[ "$partition_number" -eq 3 ] || fail "data partition number is not 3"
+
+set -- $(parted -m "$disk_device" unit s print | awk -F: '
+    /^[0-9]+:/ { number=$1; end=$3 }
+    END { sub(/s$/, "", end); print number, end }
+')
+[ "$#" -eq 2 ] || fail "cannot parse partition table"
+[ "$1" -eq "$partition_number" ] || fail "data partition is not last"
+current_end=$2
+disk_size=$(cat "/sys/block/$disk_name/size")
+target_end=$((disk_size - 1))
+if [ "$target_end" -gt 4294967295 ]; then
+    target_end=4294967295
+fi
+
+if [ "$current_end" -lt "$target_end" ]; then
+    if ! parted -m "$disk_device" unit s resizepart \
+        "$partition_number" "$target_end"; then
+        echo "warning: cp0-data partition expansion will retry next boot" >&2
+    fi
+fi
+
+set +e
+e2fsck -pf "$data_device"
+check_status=$?
+set -e
+if [ "$check_status" -gt 1 ]; then
+    fail "cp0-data filesystem check returned $check_status"
+fi
+resize2fs "$data_device" || fail "cannot grow cp0-data filesystem"
+
+if [ "$test_mode" -eq 0 ]; then
+    echo "CardputerZero persistent data partition ready"
+fi
