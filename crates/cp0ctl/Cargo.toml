@@ -8,4 +8,5 @@ publish = false
 [dependencies]
 cp0-appd = { path = "../cp0-appd" }
 cp0-manifest = { path = "../cp0-manifest" }
+cp0-package = { path = "../cp0-package" }
 serde_json.workspace = true

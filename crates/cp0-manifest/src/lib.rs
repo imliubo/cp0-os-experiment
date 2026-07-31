@@ -105,6 +105,12 @@ pub fn load_and_validate(path: impl AsRef<Path>) -> Result<AppManifest, Manifest
     Ok(manifest)
 }
 
+pub fn parse_and_validate(encoded: &[u8]) -> Result<AppManifest, ManifestError> {
+    let manifest: AppManifest = serde_json::from_slice(encoded).map_err(ManifestError::Json)?;
+    validate(&manifest).map_err(ManifestError::Invalid)?;
+    Ok(manifest)
+}
+
 pub fn validate(manifest: &AppManifest) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
 

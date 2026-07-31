@@ -11,6 +11,7 @@ use cp0_appd::{
 };
 use cp0_manifest::Permission;
 
+mod package;
 mod project;
 
 const APPD_SOCKET: &str = "/run/cardputerzero-appd/control.sock";
@@ -29,6 +30,24 @@ fn main() -> ExitCode {
             project::new_project(path, app_id, name)
         }
         [command, path] if command == "build" => project::build_project(path).map(|_| ()),
+        [key, command, secret, public] if key == "key" && command == "generate" => {
+            package::generate_key(secret, public)
+        }
+        [command, project] if command == "package" => {
+            package::default_package_path(project).and_then(|output| {
+                package::package_project(project, &output.to_string_lossy())
+            })
+        }
+        [command, project, output] if command == "package" => {
+            package::package_project(project, output)
+        }
+        [command, role, input, output, secret] if command == "sign" => {
+            package::sign_package(role, input, output, secret)
+        }
+        [command, input] if command == "verify" => package::verify_package(input, None),
+        [command, input, store_public] if command == "verify" => {
+            package::verify_package(input, Some(store_public))
+        }
         [app, command] if app == "app" && command == "ping" => send_app_command(AppdCommand::Ping),
         [app, command] if app == "app" && command == "list" => send_app_command(
             AppdCommand::List {
@@ -91,7 +110,7 @@ fn main() -> ExitCode {
             })
         }
         _ => Err(
-            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
+            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
                 .into(),
         ),
     };

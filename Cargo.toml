@@ -12,6 +12,7 @@ members = [
     "crates/cp0-manifest",
     "crates/cp0-network-protocol",
     "crates/cp0-networkd",
+    "crates/cp0-package",
     "crates/cp0-radio-protocol",
     "crates/cp0-radiod",
     "crates/cp0-storage-protocol",
@@ -29,6 +30,8 @@ rust-version = "1.85"
 libc = "0.2.177"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+ed25519-dalek = "2.2.0"
+sha2 = "0.10.9"
 
 [profile.release]
 codegen-units = 1
