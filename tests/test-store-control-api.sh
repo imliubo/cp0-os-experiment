@@ -10,6 +10,9 @@ jq -e '
   .paths["/oauth/device/code"].post.operationId == "createDeviceCode" and
   .paths["/v1/apps/{app_id}/submissions"].post.operationId == "createSubmission" and
   .paths["/v1/submissions/{submission_id}:finalize"].post.operationId == "finalizeSubmission" and
+  .paths["/v1/submissions/{submission_id}/messages"].post.operationId == "postReviewMessage" and
+  .paths["/v1/review/submissions"].get.operationId == "listReviewQueue" and
+  .paths["/v1/review/submissions/{submission_id}:begin"].post.operationId == "beginReview" and
   .paths["/v1/review/submissions/{submission_id}/decisions"].post.operationId == "decideReview" and
   .paths["/v1/releases/{release_id}:publish"].post.operationId == "publishRelease" and
   .components.schemas.SubmissionState.enum == [
@@ -31,6 +34,19 @@ jq -e '
   ) and
   ([.. | objects | .operationId? // empty] | length) ==
     ([.. | objects | .operationId? // empty] | unique | length)
+' "$api" >/dev/null
+
+jq -e '
+  def refs($operation): [($operation.parameters // [])[] | .["$ref"]];
+  (refs(.paths["/v1/review/submissions/{submission_id}:begin"].post) |
+    index("#/components/parameters/IdempotencyKey") != null and
+    index("#/components/parameters/IfMatch") != null) and
+  (refs(.paths["/v1/review/submissions/{submission_id}/decisions"].post) |
+    index("#/components/parameters/IdempotencyKey") != null and
+    index("#/components/parameters/IfMatch") != null) and
+  (refs(.paths["/v1/submissions/{submission_id}/messages"].post) |
+    index("#/components/parameters/IdempotencyKey") != null and
+    index("#/components/parameters/IfMatch") == null)
 ' "$api" >/dev/null
 
 jq -e '

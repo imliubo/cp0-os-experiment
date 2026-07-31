@@ -10,7 +10,11 @@ part of the CardputerZero device image.
 - `POST /v1/apps/{app_id}/submissions`;
 - `PUT /v1/submissions/{submission_id}/parts/{part_name}`;
 - `POST /v1/submissions/{submission_id}:finalize`;
-- `GET /v1/submissions/{submission_id}`.
+- `GET /v1/submissions/{submission_id}`;
+- `POST /v1/submissions/{submission_id}/messages`;
+- `GET /v1/review/submissions`;
+- `POST /v1/review/submissions/{submission_id}:begin`;
+- `POST /v1/review/submissions/{submission_id}/decisions`.
 
 All writes authenticate the hashed bearer token and re-read current team role,
 2FA state and scope inside a PostgreSQL `SERIALIZABLE` transaction. App writes
@@ -32,6 +36,13 @@ It independently reopens the read-only objects, binds the package key to an
 active team Developer Key, performs bounded package/WASM/Listing/PNG checks,
 and atomically records an append-only result before advancing the Submission.
 See `STORE-SCAN-WORKER.md` for its separate trust boundary and host profile.
+
+Human review uses a separate internal reviewer identity and token domain; a
+reviewer is never represented as an App team member. Queue reads and review
+writes require an active identity, 2FA, a live one-hour token, and the exact
+`store.review` scope. Begin and decision operations preserve the same
+SERIALIZABLE, ETag, idempotency, audit, and outbox guarantees as developer
+mutations. See `STORE-REVIEW-BACKEND.md` for assignment and message rules.
 
 A database rollback after an object write can leave an unreachable
 content-addressed chunk. It grants no Submission state and can be removed by a
@@ -68,10 +79,13 @@ CP0_STORE_TEST_DATABASE_URL=postgres://... make store-control-db-check
 ```
 
 The database gate covers exact replay, competing App IDs, concurrent Submission
-revision allocation, live RBAC/2FA/scope checks, 256 KiB chunk boundaries,
-stale ETags, non-contiguous ranges, digest mismatches, finalize replay, injected
-transaction rollback and append-only database triggers.
+revision allocation and review claims, live RBAC/2FA/scope/revocation checks,
+256 KiB chunk boundaries, stale ETags, non-contiguous ranges, digest mismatches,
+finalize replay, reviewer assignment authorization, structured decisions,
+developer/reviewer messages, injected transaction rollback and append-only
+database triggers.
 
-OAuth Device Flow, withdraw/messages, dynamic malware intelligence, Review,
-Release, production object storage, general outbox delivery, garbage collection
-and transparency logging are not implemented by this slice.
+OAuth Device Flow, withdraw, dynamic malware intelligence, independent second
+review, double approval, Review Console UI, Release, production object storage,
+general outbox delivery, garbage collection and transparency logging are not
+implemented by this slice.

@@ -9,7 +9,8 @@ use std::os::unix::fs::PermissionsExt;
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::rejection::QueryRejection;
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, IF_MATCH, WWW_AUTHENTICATE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -968,6 +969,552 @@ impl StoreControlService {
         transaction.commit().await.map_err(TxError::Sql)?;
         Ok(stored.response)
     }
+
+    async fn list_review_queue(
+        &self,
+        token: &str,
+        cursor: Option<ReviewCursor>,
+        limit: usize,
+    ) -> Result<ReviewQueueResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        let identity = authenticate_reviewer(&mut transaction, &token_sha256)
+            .await
+            .map_err(ApiError::from_transaction)?;
+        require_reviewer_write(&identity)?;
+        let (cursor_time, cursor_id) = cursor
+            .map(|cursor| (cursor.created_unix_seconds, cursor.submission_id))
+            .unwrap_or((0, String::new()));
+        let rows = sqlx::query(
+            "SELECT submission_id, app_id, version, revision, state, package_sha256, \
+             package_bytes, listing_sha256, listing_bytes, assets, resource_version, \
+             created_unix_seconds FROM submissions \
+             WHERE state = 'ready-for-review' AND \
+               (created_unix_seconds, submission_id) > ($1, $2) \
+             ORDER BY created_unix_seconds, submission_id LIMIT $3",
+        )
+        .bind(cursor_time)
+        .bind(cursor_id)
+        .bind(i64::try_from(limit + 1).map_err(|_| ApiError::invalid_request())?)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| ApiError::unavailable())?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+
+        let has_more = rows.len() > limit;
+        let mut items = rows
+            .iter()
+            .take(limit)
+            .map(stored_submission_from_row)
+            .map(|result| result.map(|stored| stored.response))
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = if has_more {
+            items
+                .last()
+                .map(|item| encode_review_cursor(item.created_unix_seconds, &item.submission_id))
+        } else {
+            None
+        };
+        items.shrink_to_fit();
+        Ok(ReviewQueueResponse { items, next_cursor })
+    }
+
+    async fn begin_review(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+        request_id: &str,
+        submission_id: &str,
+        expected_version: u64,
+    ) -> Result<SubmissionResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let key_sha256 = sha256_hex(idempotency_key.as_bytes());
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self
+                .begin_review_once(
+                    &token_sha256,
+                    &key_sha256,
+                    request_id,
+                    submission_id,
+                    expected_version,
+                )
+                .await
+            {
+                Err(TxError::Sql(error)) if is_retryable_transaction_error(&error) => {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(TxError::Sql(_)) => return Err(ApiError::unavailable()),
+                Err(TxError::Api(error)) => return Err(error),
+                Ok(submission) => return Ok(submission),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    async fn begin_review_once(
+        &self,
+        token_sha256: &str,
+        key_sha256: &str,
+        request_id: &str,
+        submission_id: &str,
+        expected_version: u64,
+    ) -> Result<SubmissionResponse, TxError> {
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let identity = authenticate_reviewer(&mut transaction, token_sha256).await?;
+        require_reviewer_write(&identity)?;
+        let request_sha256 = mutation_request_sha256(
+            "submission.review.begin.v1",
+            &[submission_id, &expected_version.to_string()],
+        );
+        let now = database_now(&mut transaction).await?;
+        match reserve_idempotency(
+            &mut transaction,
+            &identity.reviewer_id,
+            key_sha256,
+            &request_sha256,
+            now,
+        )
+        .await?
+        {
+            IdempotencyReservation::Fresh => {}
+            IdempotencyReservation::Replay { status, body }
+                if status == StatusCode::OK.as_u16() as i16 =>
+            {
+                let submission = serde_json::from_value(body).map_err(|_| ApiError::internal())?;
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(submission);
+            }
+            IdempotencyReservation::Replay { .. } => {
+                return Err(ApiError::internal().into());
+            }
+        }
+
+        let mut stored = load_review_submission(&mut transaction, submission_id, true).await?;
+        if stored.response.resource_version != expected_version {
+            return Err(ApiError::precondition_failed().into());
+        }
+        if stored.response.state != SubmissionState::ReadyForReview {
+            return Err(ApiError::invalid_transition().into());
+        }
+        let resource_version = expected_version
+            .checked_add(1)
+            .ok_or_else(ApiError::internal)?;
+        sqlx::query(
+            "INSERT INTO review_assignments (assignment_id, submission_id, reviewer_id, \
+             assignment_kind, state, source_resource_version, created_unix_seconds) \
+             VALUES ($1, $2, $3, 'primary', 'active', $4, $5)",
+        )
+        .bind(prefixed_uuid("assignment_"))
+        .bind(submission_id)
+        .bind(&identity.reviewer_id)
+        .bind(i64::try_from(expected_version).map_err(|_| ApiError::internal())?)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+        sqlx::query(
+            "UPDATE submissions SET state = 'in-review', resource_version = $1 \
+             WHERE submission_id = $2",
+        )
+        .bind(i64::try_from(resource_version).map_err(|_| ApiError::internal())?)
+        .bind(submission_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+        stored.response.state = SubmissionState::InReview;
+        stored.response.resource_version = resource_version;
+        let response_body =
+            serde_json::to_value(&stored.response).map_err(|_| ApiError::internal())?;
+        complete_idempotency(
+            &mut transaction,
+            &identity.reviewer_id,
+            key_sha256,
+            StatusCode::OK,
+            &response_body,
+        )
+        .await?;
+        append_mutation(
+            &mut transaction,
+            MutationEvent {
+                now,
+                actor_id: &identity.reviewer_id,
+                action: "submission.review-begun",
+                topic: "submission.review-begun",
+                object_kind: "submission",
+                object_id: submission_id,
+                before_state: Some("ready-for-review"),
+                after_state: Some("in-review"),
+                resource_version,
+                request_id,
+                request_sha256: &request_sha256,
+                key_sha256,
+                payload: json!({
+                    "submission_id": submission_id,
+                    "reviewer_id": identity.reviewer_id
+                }),
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)?;
+        Ok(stored.response)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn decide_review(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+        request_id: &str,
+        submission_id: &str,
+        expected_version: u64,
+        request: &ReviewDecisionRequest,
+    ) -> Result<SubmissionResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let key_sha256 = sha256_hex(idempotency_key.as_bytes());
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self
+                .decide_review_once(
+                    &token_sha256,
+                    &key_sha256,
+                    request_id,
+                    submission_id,
+                    expected_version,
+                    request,
+                )
+                .await
+            {
+                Err(TxError::Sql(error)) if is_retryable_transaction_error(&error) => {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(TxError::Sql(_)) => return Err(ApiError::unavailable()),
+                Err(TxError::Api(error)) => return Err(error),
+                Ok(submission) => return Ok(submission),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn decide_review_once(
+        &self,
+        token_sha256: &str,
+        key_sha256: &str,
+        request_id: &str,
+        submission_id: &str,
+        expected_version: u64,
+        request: &ReviewDecisionRequest,
+    ) -> Result<SubmissionResponse, TxError> {
+        validate_review_decision(request)?;
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let identity = authenticate_reviewer(&mut transaction, token_sha256).await?;
+        require_reviewer_write(&identity)?;
+        let reason_codes = request.reason_codes.join("\0");
+        let request_sha256 = mutation_request_sha256(
+            "submission.review.decision.v1",
+            &[
+                submission_id,
+                &expected_version.to_string(),
+                &request.decision,
+                &reason_codes,
+                &request.note,
+            ],
+        );
+        let now = database_now(&mut transaction).await?;
+        match reserve_idempotency(
+            &mut transaction,
+            &identity.reviewer_id,
+            key_sha256,
+            &request_sha256,
+            now,
+        )
+        .await?
+        {
+            IdempotencyReservation::Fresh => {}
+            IdempotencyReservation::Replay { status, body }
+                if status == StatusCode::CREATED.as_u16() as i16 =>
+            {
+                let submission = serde_json::from_value(body).map_err(|_| ApiError::internal())?;
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(submission);
+            }
+            IdempotencyReservation::Replay { .. } => {
+                return Err(ApiError::internal().into());
+            }
+        }
+
+        let mut stored = load_review_submission(&mut transaction, submission_id, true).await?;
+        if stored.response.resource_version != expected_version {
+            return Err(ApiError::precondition_failed().into());
+        }
+        if stored.response.state != SubmissionState::InReview {
+            return Err(ApiError::invalid_transition().into());
+        }
+        let assignment_id: String = sqlx::query_scalar(
+            "SELECT assignment_id FROM review_assignments \
+             WHERE submission_id = $1 AND reviewer_id = $2 AND assignment_kind = 'primary' \
+               AND state = 'active' FOR UPDATE",
+        )
+        .bind(submission_id)
+        .bind(&identity.reviewer_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .ok_or_else(ApiError::forbidden)?;
+        let decision_id = prefixed_uuid("decision_");
+        sqlx::query(
+            "INSERT INTO review_decisions (decision_id, submission_id, reviewer_id, decision, \
+             reason_codes, note, created_unix_seconds) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(&decision_id)
+        .bind(submission_id)
+        .bind(&identity.reviewer_id)
+        .bind(&request.decision)
+        .bind(&request.reason_codes)
+        .bind(&request.note)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+        sqlx::query(
+            "UPDATE review_assignments SET state = 'completed', completed_unix_seconds = $1 \
+             WHERE assignment_id = $2",
+        )
+        .bind(now)
+        .bind(&assignment_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+        let resource_version = expected_version
+            .checked_add(1)
+            .ok_or_else(ApiError::internal)?;
+        sqlx::query(
+            "UPDATE submissions SET state = $1, resource_version = $2 WHERE submission_id = $3",
+        )
+        .bind(&request.decision)
+        .bind(i64::try_from(resource_version).map_err(|_| ApiError::internal())?)
+        .bind(submission_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+        stored.response.state = review_decision_state(&request.decision)?;
+        stored.response.resource_version = resource_version;
+        let response_body =
+            serde_json::to_value(&stored.response).map_err(|_| ApiError::internal())?;
+        complete_idempotency(
+            &mut transaction,
+            &identity.reviewer_id,
+            key_sha256,
+            StatusCode::CREATED,
+            &response_body,
+        )
+        .await?;
+        append_mutation(
+            &mut transaction,
+            MutationEvent {
+                now,
+                actor_id: &identity.reviewer_id,
+                action: "submission.review-decided",
+                topic: "submission.review-decided",
+                object_kind: "submission",
+                object_id: submission_id,
+                before_state: Some("in-review"),
+                after_state: Some(&request.decision),
+                resource_version,
+                request_id,
+                request_sha256: &request_sha256,
+                key_sha256,
+                payload: json!({
+                    "decision_id": decision_id,
+                    "submission_id": submission_id,
+                    "reviewer_id": identity.reviewer_id,
+                    "decision": request.decision,
+                    "reason_codes": request.reason_codes
+                }),
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)?;
+        Ok(stored.response)
+    }
+
+    async fn post_review_message(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+        request_id: &str,
+        submission_id: &str,
+        request: &ReviewMessageRequest,
+    ) -> Result<ReviewMessageResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let key_sha256 = sha256_hex(idempotency_key.as_bytes());
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self
+                .post_review_message_once(
+                    &token_sha256,
+                    &key_sha256,
+                    request_id,
+                    submission_id,
+                    request,
+                )
+                .await
+            {
+                Err(TxError::Sql(error)) if is_retryable_transaction_error(&error) => {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(TxError::Sql(_)) => return Err(ApiError::unavailable()),
+                Err(TxError::Api(error)) => return Err(error),
+                Ok(message) => return Ok(message),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    async fn post_review_message_once(
+        &self,
+        token_sha256: &str,
+        key_sha256: &str,
+        request_id: &str,
+        submission_id: &str,
+        request: &ReviewMessageRequest,
+    ) -> Result<ReviewMessageResponse, TxError> {
+        validate_review_text(&request.body, false)?;
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let identity = authenticate_message_actor(&mut transaction, token_sha256).await?;
+        match &identity {
+            MessageIdentity::Developer(developer) => require_developer_write(developer)?,
+            MessageIdentity::Reviewer(reviewer) => require_reviewer_write(reviewer)?,
+        }
+        let request_sha256 = mutation_request_sha256(
+            "submission.review.message.v1",
+            &[submission_id, &request.body],
+        );
+        let now = database_now(&mut transaction).await?;
+        match reserve_idempotency(
+            &mut transaction,
+            identity.actor_id(),
+            key_sha256,
+            &request_sha256,
+            now,
+        )
+        .await?
+        {
+            IdempotencyReservation::Fresh => {}
+            IdempotencyReservation::Replay { status, body }
+                if status == StatusCode::CREATED.as_u16() as i16 =>
+            {
+                let message = serde_json::from_value(body).map_err(|_| ApiError::internal())?;
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(message);
+            }
+            IdempotencyReservation::Replay { .. } => {
+                return Err(ApiError::internal().into());
+            }
+        }
+
+        let stored = match &identity {
+            MessageIdentity::Developer(developer) => {
+                load_submission(&mut transaction, submission_id, &developer.team_id, true).await?
+            }
+            MessageIdentity::Reviewer(reviewer) => {
+                let stored = load_review_submission(&mut transaction, submission_id, true).await?;
+                let assigned: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM review_assignments \
+                     WHERE submission_id = $1 AND reviewer_id = $2)",
+                )
+                .bind(submission_id)
+                .bind(&reviewer.reviewer_id)
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(TxError::Sql)?;
+                if !assigned {
+                    return Err(ApiError::forbidden().into());
+                }
+                stored
+            }
+        };
+        if !matches!(
+            stored.response.state,
+            SubmissionState::ReadyForReview
+                | SubmissionState::InReview
+                | SubmissionState::NeedsChanges
+                | SubmissionState::Approved
+                | SubmissionState::Rejected
+        ) {
+            return Err(ApiError::invalid_transition().into());
+        }
+
+        let message = ReviewMessageResponse {
+            message_id: prefixed_uuid("msg_"),
+            submission_id: submission_id.to_owned(),
+            actor_id: identity.actor_id().to_owned(),
+            body: request.body.clone(),
+            created_unix_seconds: u64::try_from(now).map_err(|_| ApiError::internal())?,
+        };
+        sqlx::query(
+            "INSERT INTO review_messages (message_id, submission_id, actor_id, actor_kind, body, \
+             created_unix_seconds) VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(&message.message_id)
+        .bind(submission_id)
+        .bind(&message.actor_id)
+        .bind(identity.actor_kind())
+        .bind(&message.body)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+        let response_body = serde_json::to_value(&message).map_err(|_| ApiError::internal())?;
+        complete_idempotency(
+            &mut transaction,
+            identity.actor_id(),
+            key_sha256,
+            StatusCode::CREATED,
+            &response_body,
+        )
+        .await?;
+        append_mutation(
+            &mut transaction,
+            MutationEvent {
+                now,
+                actor_id: identity.actor_id(),
+                action: "review-message.created",
+                topic: "review-message.created",
+                object_kind: "review-message",
+                object_id: &message.message_id,
+                before_state: None,
+                after_state: None,
+                resource_version: 1,
+                request_id,
+                request_sha256: &request_sha256,
+                key_sha256,
+                payload: json!({
+                    "message_id": message.message_id,
+                    "submission_id": submission_id,
+                    "actor_id": message.actor_id,
+                    "actor_kind": identity.actor_kind()
+                }),
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)?;
+        Ok(message)
+    }
 }
 
 pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool, sqlx::Error> {
@@ -977,7 +1524,7 @@ pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool,
         .await
 }
 
-/// Applies the App, Submission upload, and isolated scan-worker schema.
+/// Applies the App, Submission, scanner, and independent review schemas.
 pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
     sqlx::migrate!().run(pool).await
 }
@@ -1002,6 +1549,19 @@ pub fn router(service: StoreControlService) -> Router {
         .route(
             "/v1/submissions/{submission_id}/parts/{part_name}",
             put(put_submission_part).layer(DefaultBodyLimit::max(MAX_UPLOAD_CHUNK_BYTES)),
+        )
+        .route(
+            "/v1/submissions/{submission_id}/messages",
+            post(post_review_message).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route("/v1/review/submissions", get(list_review_queue))
+        .route(
+            "/v1/review/submissions/{submission_action}",
+            post(begin_review).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/v1/review/submissions/{submission_id}/decisions",
+            post(decide_review).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
         )
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(fallback)
@@ -1045,6 +1605,32 @@ struct FinalizeSubmissionRequest {
     content_sha256: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewMessageRequest {
+    body: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewDecisionRequest {
+    decision: String,
+    reason_codes: Vec<String>,
+    note: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewQueueQuery {
+    cursor: Option<String>,
+    limit: Option<u16>,
+}
+
+struct ReviewCursor {
+    created_unix_seconds: i64,
+    submission_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SubmissionResponse {
@@ -1058,6 +1644,22 @@ struct SubmissionResponse {
     assets: Vec<ImageAsset>,
     resource_version: u64,
     created_unix_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewMessageResponse {
+    message_id: String,
+    submission_id: String,
+    actor_id: String,
+    body: String,
+    created_unix_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ReviewQueueResponse {
+    items: Vec<SubmissionResponse>,
+    next_cursor: Option<String>,
 }
 
 struct StoredSubmission {
@@ -1386,6 +1988,41 @@ impl Identity {
     }
 }
 
+#[derive(Debug)]
+struct ReviewerIdentity {
+    reviewer_id: String,
+    role: String,
+    two_factor_enabled: bool,
+    scopes: Vec<String>,
+}
+
+impl ReviewerIdentity {
+    fn has_scope(&self, expected: &str) -> bool {
+        self.scopes.iter().any(|scope| scope == expected)
+    }
+}
+
+enum MessageIdentity {
+    Developer(Identity),
+    Reviewer(ReviewerIdentity),
+}
+
+impl MessageIdentity {
+    fn actor_id(&self) -> &str {
+        match self {
+            Self::Developer(identity) => &identity.member_id,
+            Self::Reviewer(identity) => &identity.reviewer_id,
+        }
+    }
+
+    const fn actor_kind(&self) -> &'static str {
+        match self {
+            Self::Developer(_) => "developer",
+            Self::Reviewer(_) => "reviewer",
+        }
+    }
+}
+
 struct MutationEvent<'a> {
     now: i64,
     actor_id: &'a str,
@@ -1418,6 +2055,20 @@ async fn retry_delay(attempt: usize) {
 fn require_developer_write(identity: &Identity) -> Result<(), ApiError> {
     if !matches!(identity.role.as_str(), "owner" | "developer")
         || !identity.has_any_scope(&["store.submit", "store.control"])
+    {
+        return Err(ApiError::forbidden());
+    }
+    if !identity.two_factor_enabled {
+        return Err(ApiError::two_factor_required());
+    }
+    Ok(())
+}
+
+fn require_reviewer_write(identity: &ReviewerIdentity) -> Result<(), ApiError> {
+    if !matches!(
+        identity.role.as_str(),
+        "reviewer" | "senior-reviewer" | "admin"
+    ) || !identity.has_scope("store.review")
     {
         return Err(ApiError::forbidden());
     }
@@ -1545,6 +2196,33 @@ async fn load_submission(
         .await
         .map_err(TxError::Sql)?
         .ok_or_else(ApiError::not_found)?;
+    stored_submission_from_row(&row).map_err(Into::into)
+}
+
+async fn load_review_submission(
+    transaction: &mut Transaction<'_, Postgres>,
+    submission_id: &str,
+    lock: bool,
+) -> Result<StoredSubmission, TxError> {
+    let sql = if lock {
+        "SELECT submission_id, app_id, version, revision, state, package_sha256, \
+         package_bytes, listing_sha256, listing_bytes, assets, resource_version, \
+         created_unix_seconds FROM submissions WHERE submission_id = $1 FOR UPDATE"
+    } else {
+        "SELECT submission_id, app_id, version, revision, state, package_sha256, \
+         package_bytes, listing_sha256, listing_bytes, assets, resource_version, \
+         created_unix_seconds FROM submissions WHERE submission_id = $1"
+    };
+    let row = sqlx::query(sql)
+        .bind(submission_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .ok_or_else(ApiError::not_found)?;
+    stored_submission_from_row(&row).map_err(Into::into)
+}
+
+fn stored_submission_from_row(row: &sqlx::postgres::PgRow) -> Result<StoredSubmission, ApiError> {
     let assets: Value = row.get("assets");
     Ok(StoredSubmission {
         response: SubmissionResponse {
@@ -1742,6 +2420,15 @@ async fn authenticate(
     transaction: &mut Transaction<'_, Postgres>,
     token_sha256: &str,
 ) -> Result<Identity, TxError> {
+    lookup_developer_identity(transaction, token_sha256)
+        .await?
+        .ok_or_else(|| ApiError::unauthorized().into())
+}
+
+async fn lookup_developer_identity(
+    transaction: &mut Transaction<'_, Postgres>,
+    token_sha256: &str,
+) -> Result<Option<Identity>, TxError> {
     let row = sqlx::query(
         "SELECT member.member_id, member.team_id, member.role, member.two_factor_enabled, token.scopes \
          FROM access_tokens token \
@@ -1752,16 +2439,61 @@ async fn authenticate(
     .bind(token_sha256)
     .fetch_optional(&mut **transaction)
     .await
-    .map_err(TxError::Sql)?
-    .ok_or_else(ApiError::unauthorized)?;
+    .map_err(TxError::Sql)?;
 
-    Ok(Identity {
+    Ok(row.map(|row| Identity {
         member_id: row.get("member_id"),
         team_id: row.get("team_id"),
         role: row.get("role"),
         two_factor_enabled: row.get("two_factor_enabled"),
         scopes: row.get("scopes"),
-    })
+    }))
+}
+
+async fn authenticate_reviewer(
+    transaction: &mut Transaction<'_, Postgres>,
+    token_sha256: &str,
+) -> Result<ReviewerIdentity, TxError> {
+    lookup_reviewer_identity(transaction, token_sha256)
+        .await?
+        .ok_or_else(|| ApiError::unauthorized().into())
+}
+
+async fn lookup_reviewer_identity(
+    transaction: &mut Transaction<'_, Postgres>,
+    token_sha256: &str,
+) -> Result<Option<ReviewerIdentity>, TxError> {
+    let row = sqlx::query(
+        "SELECT reviewer.reviewer_id, reviewer.role, reviewer.two_factor_enabled, token.scopes \
+         FROM reviewer_access_tokens token \
+         JOIN reviewers reviewer ON reviewer.reviewer_id = token.reviewer_id \
+         WHERE token.token_sha256 = $1 AND NOT token.revoked AND reviewer.state = 'active' \
+           AND token.expires_unix_seconds > EXTRACT(EPOCH FROM clock_timestamp())::BIGINT",
+    )
+    .bind(token_sha256)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(TxError::Sql)?;
+
+    Ok(row.map(|row| ReviewerIdentity {
+        reviewer_id: row.get("reviewer_id"),
+        role: row.get("role"),
+        two_factor_enabled: row.get("two_factor_enabled"),
+        scopes: row.get("scopes"),
+    }))
+}
+
+async fn authenticate_message_actor(
+    transaction: &mut Transaction<'_, Postgres>,
+    token_sha256: &str,
+) -> Result<MessageIdentity, TxError> {
+    let developer = lookup_developer_identity(transaction, token_sha256).await?;
+    let reviewer = lookup_reviewer_identity(transaction, token_sha256).await?;
+    match (developer, reviewer) {
+        (Some(identity), None) => Ok(MessageIdentity::Developer(identity)),
+        (None, Some(identity)) => Ok(MessageIdentity::Reviewer(identity)),
+        _ => Err(ApiError::unauthorized().into()),
+    }
 }
 
 async fn database_now(transaction: &mut Transaction<'_, Postgres>) -> Result<i64, TxError> {
@@ -2086,12 +2818,178 @@ async fn finalize_submission(
     }
 }
 
+async fn list_review_queue(
+    State(service): State<StoreControlService>,
+    headers: HeaderMap,
+    query: Result<Query<ReviewQueueQuery>, QueryRejection>,
+) -> Response {
+    let request_id = request_id();
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(_) => return ApiError::invalid_request().response(request_id),
+    };
+    let limit = usize::from(query.limit.unwrap_or(25));
+    if !(1..=50).contains(&limit) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let cursor = match query.cursor.as_deref().map(parse_review_cursor).transpose() {
+        Ok(cursor) => cursor,
+        Err(error) => return error.response(request_id),
+    };
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    match service.list_review_queue(&token, cursor, limit).await {
+        Ok(queue) => json_response(StatusCode::OK, queue, request_id),
+        Err(error) => error.response(request_id),
+    }
+}
+
+async fn begin_review(
+    State(service): State<StoreControlService>,
+    Path(submission_action): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = request_id();
+    let Some(submission_id) = submission_action.strip_suffix(":begin") else {
+        return ApiError::invalid_request().response(request_id);
+    };
+    if !is_valid_submission_id(submission_id) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    let idempotency_key = match idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(error) => return error.response(request_id),
+    };
+    let expected_version = match expected_version(&headers) {
+        Ok(value) => value,
+        Err(error) => return error.response(request_id),
+    };
+    match service
+        .begin_review(
+            &token,
+            &idempotency_key,
+            &request_id,
+            submission_id,
+            expected_version,
+        )
+        .await
+    {
+        Ok(submission) => {
+            let version = submission.resource_version;
+            resource_response(StatusCode::OK, submission, version, request_id)
+        }
+        Err(error) => error.response(request_id),
+    }
+}
+
+async fn decide_review(
+    State(service): State<StoreControlService>,
+    Path(submission_id): Path<String>,
+    headers: HeaderMap,
+    payload: Result<Json<ReviewDecisionRequest>, JsonRejection>,
+) -> Response {
+    let request_id = request_id();
+    if !is_valid_submission_id(&submission_id) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    let idempotency_key = match idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(error) => return error.response(request_id),
+    };
+    let expected_version = match expected_version(&headers) {
+        Ok(value) => value,
+        Err(error) => return error.response(request_id),
+    };
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => return json_rejection(rejection).response(request_id),
+    };
+    if let Err(error) = validate_review_decision(&request) {
+        return error.response(request_id);
+    }
+    match service
+        .decide_review(
+            &token,
+            &idempotency_key,
+            &request_id,
+            &submission_id,
+            expected_version,
+            &request,
+        )
+        .await
+    {
+        Ok(submission) => {
+            let version = submission.resource_version;
+            resource_response(StatusCode::CREATED, submission, version, request_id)
+        }
+        Err(error) => error.response(request_id),
+    }
+}
+
+async fn post_review_message(
+    State(service): State<StoreControlService>,
+    Path(submission_id): Path<String>,
+    headers: HeaderMap,
+    payload: Result<Json<ReviewMessageRequest>, JsonRejection>,
+) -> Response {
+    let request_id = request_id();
+    if !is_valid_submission_id(&submission_id) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    let idempotency_key = match idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(error) => return error.response(request_id),
+    };
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => return json_rejection(rejection).response(request_id),
+    };
+    if let Err(error) = validate_review_text(&request.body, false) {
+        return error.response(request_id);
+    }
+    match service
+        .post_review_message(
+            &token,
+            &idempotency_key,
+            &request_id,
+            &submission_id,
+            &request,
+        )
+        .await
+    {
+        Ok(message) => json_response(StatusCode::CREATED, message, request_id),
+        Err(error) => error.response(request_id),
+    }
+}
+
 fn json_rejection(rejection: JsonRejection) -> ApiError {
     if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
         ApiError::payload_too_large()
     } else {
         ApiError::invalid_request()
     }
+}
+
+fn json_response<T: Serialize>(status: StatusCode, resource: T, request_id: String) -> Response {
+    let mut response = (status, Json(resource)).into_response();
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert("x-request-id", value);
+    }
+    response
 }
 
 async fn fallback() -> Response {
@@ -2236,6 +3134,91 @@ fn is_valid_submission_id(value: &str) -> bool {
     valid_prefixed_hex_id(value, "sub_")
 }
 
+fn validate_review_decision(request: &ReviewDecisionRequest) -> Result<(), ApiError> {
+    review_decision_state(&request.decision)?;
+    if request.reason_codes.len() > 16
+        || request
+            .reason_codes
+            .iter()
+            .any(|code| !is_valid_reason_code(code))
+        || request
+            .reason_codes
+            .iter()
+            .enumerate()
+            .any(|(index, code)| request.reason_codes[..index].contains(code))
+    {
+        return Err(ApiError::invalid_request());
+    }
+    let requires_explanation = request.decision != "approved";
+    if requires_explanation && request.reason_codes.is_empty() {
+        return Err(ApiError::invalid_request());
+    }
+    validate_review_text(&request.note, !requires_explanation)
+}
+
+fn review_decision_state(value: &str) -> Result<SubmissionState, ApiError> {
+    match value {
+        "needs-changes" => Ok(SubmissionState::NeedsChanges),
+        "approved" => Ok(SubmissionState::Approved),
+        "rejected" => Ok(SubmissionState::Rejected),
+        _ => Err(ApiError::invalid_request()),
+    }
+}
+
+fn validate_review_text(value: &str, allow_empty: bool) -> Result<(), ApiError> {
+    let characters = value.chars().count();
+    if characters > 2000
+        || (!allow_empty && characters == 0)
+        || value.trim() != value
+        || value.chars().any(|character| {
+            character == '\0' || (character.is_control() && !matches!(character, '\n' | '\t'))
+        })
+    {
+        return Err(ApiError::invalid_request());
+    }
+    Ok(())
+}
+
+fn is_valid_reason_code(value: &str) -> bool {
+    (1..=64).contains(&value.len())
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn encode_review_cursor(created_unix_seconds: u64, submission_id: &str) -> String {
+    format!("{created_unix_seconds:016x}.{submission_id}")
+}
+
+fn parse_review_cursor(value: &str) -> Result<ReviewCursor, ApiError> {
+    if value.len() != 53 {
+        return Err(ApiError::invalid_request());
+    }
+    let (timestamp, submission_id) = value
+        .split_once('.')
+        .ok_or_else(ApiError::invalid_request)?;
+    let created_unix_seconds = u64::from_str_radix(timestamp, 16)
+        .ok()
+        .filter(|value| *value > 0 && *value <= i64::MAX as u64)
+        .ok_or_else(ApiError::invalid_request)?;
+    if !timestamp
+        .bytes()
+        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || !is_valid_submission_id(submission_id)
+        || encode_review_cursor(created_unix_seconds, submission_id) != value
+    {
+        return Err(ApiError::invalid_request());
+    }
+    Ok(ReviewCursor {
+        created_unix_seconds: created_unix_seconds as i64,
+        submission_id: submission_id.to_owned(),
+    })
+}
+
 fn valid_part_name(value: &str) -> bool {
     matches!(value, "package" | "listing")
         || value
@@ -2315,6 +3298,40 @@ mod tests {
     fn retry_classifier_is_closed_by_default() {
         let error = sqlx::Error::RowNotFound;
         assert!(!is_retryable_transaction_error(&error));
+    }
+
+    #[test]
+    fn review_contract_rejects_ambiguous_input() {
+        let submission_id = "sub_0123456789abcdef0123456789abcdef";
+        let cursor = encode_review_cursor(1_700_000_000, submission_id);
+        let parsed = parse_review_cursor(&cursor).unwrap();
+        assert_eq!(parsed.created_unix_seconds, 1_700_000_000);
+        assert_eq!(parsed.submission_id, submission_id);
+        assert!(parse_review_cursor(&cursor.to_uppercase()).is_err());
+        assert!(
+            parse_review_cursor("0000000000000000.sub_0123456789abcdef0123456789abcdef").is_err()
+        );
+
+        let approved = ReviewDecisionRequest {
+            decision: "approved".to_owned(),
+            reason_codes: Vec::new(),
+            note: String::new(),
+        };
+        assert!(validate_review_decision(&approved).is_ok());
+        let duplicate = ReviewDecisionRequest {
+            decision: "needs-changes".to_owned(),
+            reason_codes: vec!["privacy".to_owned(), "privacy".to_owned()],
+            note: "Explain the issue.".to_owned(),
+        };
+        assert!(validate_review_decision(&duplicate).is_err());
+        let missing_explanation = ReviewDecisionRequest {
+            decision: "rejected".to_owned(),
+            reason_codes: vec!["malware".to_owned()],
+            note: String::new(),
+        };
+        assert!(validate_review_decision(&missing_explanation).is_err());
+        assert!(validate_review_text(&"x".repeat(2000), false).is_ok());
+        assert!(validate_review_text(&"x".repeat(2001), false).is_err());
     }
 
     #[test]
