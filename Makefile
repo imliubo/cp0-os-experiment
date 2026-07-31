@@ -4,6 +4,7 @@ check: fmt
 	jq empty schemas/app-manifest-v1.schema.json schemas/os-release-v1.schema.json \
 		schemas/store-review-v1.schema.json \
 		schemas/store-listing-v1.schema.json \
+		schemas/store-control-v1.openapi.json \
 		schemas/device-policy-v1.schema.json appd/device-policy.json \
 		appd/device-policy-production.json \
 		examples/hello-card/app.json \
@@ -19,6 +20,7 @@ check: fmt
 		image/pi-gen/stage-cardputerzero-os/01-compositor/01-run.sh \
 		image/pi-gen/stage-cardputerzero-os/02-app-platform/01-run.sh
 	node --check scripts/test-store-origin.mjs
+	./tests/test-store-control-api.sh
 	./tests/test-image-profile.sh
 	./tests/test-overlay-root-profile.sh
 	./tests/test-recovery-image-profile.sh

@@ -200,19 +200,29 @@ Store 签名是独立安全域：
 
 ## 3. 端到端状态机
 
-### 3.1 开发者版本
+### 3.1 Submission revision
 
 ```text
-DRAFT -> UPLOADING -> PROCESSING -> READY_FOR_REVIEW
-      -> IN_REVIEW -> NEEDS_CHANGES -> READY_FOR_REVIEW
-      -> APPROVED -> READY_FOR_RELEASE -> PUBLISHED
-      -> PAUSED | REMOVED
+DRAFT -> UPLOADING -> PROCESSING -> READY_FOR_REVIEW -> IN_REVIEW
+      -> WITHDRAWN       -> NEEDS_CHANGES | REJECTED
+                                            -> APPROVED
 ```
 
-任何 package、Listing 或资源变化都创建新的 Submission revision 并重新审核，不能在
-`APPROVED` 对象上原地改字。拒绝、撤回和下架保留历史。
+`NEEDS_CHANGES`、`APPROVED`、`REJECTED` 和 `WITHDRAWN` 是 revision 终态。任何 package、
+Listing 或资源变化都创建新的递增 revision 并重新审核，不能在旧对象上原地改字。
 
-### 3.2 设备安装
+### 3.2 Release
+
+```text
+READY -> SCHEDULED -> PUBLISHING -> PUBLISHED <-> PAUSED
+                    -> PUBLISH_FAILED -> READY
+      -> REMOVED
+```
+
+Release 只能引用 `APPROVED` submission；发布、暂停、恢复和下架都生成更高 sequence 的
+Catalog。完整转换权限、并发和幂等契约见 `STORE-CONTROL-API-V1.md`。
+
+### 3.3 设备安装
 
 ```text
 AVAILABLE -> QUEUED -> DOWNLOADING -> VERIFYING -> INSTALLING -> INSTALLED
@@ -258,6 +268,8 @@ POST   /v1/releases/{id}:publish
 POST   /v1/releases/{id}:pause
 ```
 
+冻结的 OpenAPI 3.1 契约位于 `schemas/store-control-v1.openapi.json`；上表仅是入口摘要。
+
 大文件上传使用短期、单对象、限尺寸的 presigned URL。finalize 请求必须提交所有对象
 摘要；后端重新读取对象并校验，不信任浏览器报告的大小和 SHA。
 
@@ -299,3 +311,6 @@ POST   /v1/releases/{id}:pause
 7. 本地 Store socket 的搜索命令作为协议 v1 的可选增量：旧客户端不会收到未经请求的
    搜索响应，新客户端连接旧服务会得到严格的 invalid-request；产品镜像仍统一升级
    Shell、CLI、`cp0-stored` 和协议库，跨版本混用不作为受支持部署方式。
+
+首版内容、隐私、审核、申诉和下架工程基线见 `STORE-POLICY-V1.md`；生产文本仍需产品、
+安全和法务签署。

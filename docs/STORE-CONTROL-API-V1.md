@@ -1,0 +1,59 @@
+# Store Control API v1
+
+`schemas/store-control-v1.openapi.json` 是 Developer Portal、`cp0ctl store submit`、Review
+Console 和 Release Service 的首版控制面契约。设备上的 System Shell 和 `cp0-stored` 不调用
+这个 API，只读取不可变发布面。
+
+## 请求约束
+
+- `cp0ctl` 使用 OAuth Device Authorization Grant，access token 最长有效 1 小时且只授予
+  `store.submit` scope；CLI 不保存或上传开发者私钥。
+- `/v1` 下所有 POST/PUT 都要求 16-128 字节的 `Idempotency-Key`。
+- 修改已有状态的操作同时要求 `If-Match`，服务以 ETag/resource version 拒绝并发覆盖。
+- App ID 永久归属一个 team；已删除名称不能自动供其他开发者重新注册。
+- package、Listing 和 2-6 个资源对象按声明 SHA-256 上传。相同 part 名称只允许相同摘要
+  的幂等重放，不能覆盖成不同内容。
+- `finalize` 重新读取所有对象，验证长度和摘要，计算 submission content digest 后冻结 revision。
+
+错误使用有界的 `application/problem+json`，稳定 `code` 供 CLI 处理；内部路径、SQL、对象存储
+key、token 和扫描器输出不能进入 `detail`。
+
+## Submission 状态机
+
+```text
+DRAFT -> UPLOADING -> PROCESSING -> READY_FOR_REVIEW -> IN_REVIEW
+  |          |             |               |              |
+  +------> WITHDRAWN <------+---------------+              +-> APPROVED
+                           +-> NEEDS_CHANGES                +-> NEEDS_CHANGES
+                           +-> REJECTED                     +-> REJECTED
+                                                          +-> WITHDRAWN
+```
+
+`NEEDS_CHANGES`、`APPROVED`、`REJECTED` 和 `WITHDRAWN` 对该 revision 都是终态。开发者修改
+package、Listing 或任一资源时必须创建递增的新 revision，不能把旧 revision 重新变回
+`READY_FOR_REVIEW`。Review 消息和决定是 append-only 事件，不能改写 submission 内容。
+
+只有自动扫描通过的 revision 可以进入 `READY_FOR_REVIEW`；只有 Review Service 可以进入
+`IN_REVIEW/APPROVED/NEEDS_CHANGES/REJECTED`。高风险权限和安全例外由服务端策略要求双人审批，
+不能由请求字段关闭。
+
+## Release 状态机
+
+```text
+READY -> SCHEDULED -> PUBLISHING -> PUBLISHED -> PAUSED
+  |          |             |            |          |
+  |          +-> READY     +-> PUBLISH_FAILED      +-> PUBLISHED
+  |                             |            |          |
+  +-----------------------------+------------+----------+-> REMOVED
+```
+
+Release 只能引用 `APPROVED` submission。`PUBLISHING` 由 Release Service 发出摘要授权，经隔离
+Signer 签名后生成更高 sequence 的 Catalog；失败进入 `PUBLISH_FAILED`，不能伪装为已发布。
+暂停、恢复和下架都创建更高 sequence 的 Catalog，不覆盖已发布对象，也不回滚 sequence。
+
+## 重试与审计
+
+客户端只在网络失败、429 和可重试 5xx 上使用带抖动退避；401 重新授权，409/412 重新读取
+资源和 ETag 后由用户决定。服务端为每个状态变化记录 actor、旧/新状态、对象摘要、原因、
+request ID 和 idempotency key hash，并通过事务 outbox 发布事件。原始 access token 和完整
+idempotency key 不进入审计日志。

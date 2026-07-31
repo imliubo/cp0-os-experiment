@@ -118,6 +118,117 @@ impl AgeRating {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubmissionState {
+    Draft,
+    Uploading,
+    Processing,
+    ReadyForReview,
+    InReview,
+    NeedsChanges,
+    Approved,
+    Rejected,
+    Withdrawn,
+}
+
+impl SubmissionState {
+    pub const ALL: [Self; 9] = [
+        Self::Draft,
+        Self::Uploading,
+        Self::Processing,
+        Self::ReadyForReview,
+        Self::InReview,
+        Self::NeedsChanges,
+        Self::Approved,
+        Self::Rejected,
+        Self::Withdrawn,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Uploading => "uploading",
+            Self::Processing => "processing",
+            Self::ReadyForReview => "ready-for-review",
+            Self::InReview => "in-review",
+            Self::NeedsChanges => "needs-changes",
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+            Self::Withdrawn => "withdrawn",
+        }
+    }
+
+    pub const fn can_transition_to(self, next: Self) -> bool {
+        matches!(
+            (self, next),
+            (Self::Draft, Self::Uploading | Self::Withdrawn)
+                | (Self::Uploading, Self::Processing | Self::Withdrawn)
+                | (
+                    Self::Processing,
+                    Self::ReadyForReview | Self::NeedsChanges | Self::Rejected
+                )
+                | (Self::ReadyForReview, Self::InReview | Self::Withdrawn)
+                | (
+                    Self::InReview,
+                    Self::NeedsChanges | Self::Approved | Self::Rejected | Self::Withdrawn
+                )
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReleaseState {
+    Ready,
+    Scheduled,
+    Publishing,
+    PublishFailed,
+    Published,
+    Paused,
+    Removed,
+}
+
+impl ReleaseState {
+    pub const ALL: [Self; 7] = [
+        Self::Ready,
+        Self::Scheduled,
+        Self::Publishing,
+        Self::PublishFailed,
+        Self::Published,
+        Self::Paused,
+        Self::Removed,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Scheduled => "scheduled",
+            Self::Publishing => "publishing",
+            Self::PublishFailed => "publish-failed",
+            Self::Published => "published",
+            Self::Paused => "paused",
+            Self::Removed => "removed",
+        }
+    }
+
+    pub const fn can_transition_to(self, next: Self) -> bool {
+        matches!(
+            (self, next),
+            (
+                Self::Ready,
+                Self::Scheduled | Self::Publishing | Self::Removed
+            ) | (
+                Self::Scheduled,
+                Self::Ready | Self::Publishing | Self::Removed
+            ) | (Self::Publishing, Self::Published | Self::PublishFailed)
+                | (Self::PublishFailed, Self::Ready | Self::Removed)
+                | (Self::Published, Self::Paused | Self::Removed)
+                | (Self::Paused, Self::Published | Self::Removed)
+        )
+    }
+}
+
 #[derive(Debug)]
 pub enum ListingError {
     Io(std::io::Error),
@@ -648,6 +759,57 @@ mod tests {
             .map(|rating| rating.as_str())
             .collect::<BTreeSet<_>>();
         assert_eq!(ratings, rust_ratings);
+    }
+
+    #[test]
+    fn control_api_states_match_rust_and_reject_unknown_values() {
+        let api: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../schemas/store-control-v1.openapi.json"
+        ))
+        .unwrap();
+        let submission_states = api["components"]["schemas"]["SubmissionState"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            submission_states,
+            SubmissionState::ALL
+                .iter()
+                .map(|state| state.as_str())
+                .collect::<Vec<_>>()
+        );
+        let release_states = api["components"]["schemas"]["ReleaseState"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            release_states,
+            ReleaseState::ALL
+                .iter()
+                .map(|state| state.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert!(serde_json::from_str::<SubmissionState>("\"future\"").is_err());
+        assert!(serde_json::from_str::<ReleaseState>("\"future\"").is_err());
+    }
+
+    #[test]
+    fn submission_and_release_transitions_are_closed() {
+        assert!(SubmissionState::Draft.can_transition_to(SubmissionState::Uploading));
+        assert!(SubmissionState::InReview.can_transition_to(SubmissionState::Approved));
+        assert!(!SubmissionState::Approved.can_transition_to(SubmissionState::ReadyForReview));
+        assert!(!SubmissionState::NeedsChanges.can_transition_to(SubmissionState::Uploading));
+        assert!(!SubmissionState::Draft.can_transition_to(SubmissionState::Draft));
+
+        assert!(ReleaseState::Ready.can_transition_to(ReleaseState::Publishing));
+        assert!(ReleaseState::Publishing.can_transition_to(ReleaseState::PublishFailed));
+        assert!(ReleaseState::Paused.can_transition_to(ReleaseState::Published));
+        assert!(!ReleaseState::Removed.can_transition_to(ReleaseState::Published));
+        assert!(!ReleaseState::Ready.can_transition_to(ReleaseState::Published));
     }
 
     #[test]

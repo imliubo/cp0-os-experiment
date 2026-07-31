@@ -1,0 +1,809 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "CardputerZero Store Control API",
+    "version": "1.0.0",
+    "description": "Developer submission, review and release control plane. Device Store clients never call this API."
+  },
+  "servers": [{ "url": "https://developer.cardputerzero.dev" }],
+  "security": [{ "bearerAuth": [] }],
+  "paths": {
+    "/oauth/device/code": {
+      "post": {
+        "operationId": "createDeviceCode",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/DeviceCodeRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Device authorization created",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/DeviceCodeResponse" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/oauth/token": {
+      "post": {
+        "operationId": "exchangeDeviceCode",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/DeviceTokenRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Short-lived access token",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/DeviceTokenResponse" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/apps": {
+      "post": {
+        "operationId": "createApp",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/CreateAppRequest" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Permanent App ID registered",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/App" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/apps/{app_id}": {
+      "get": {
+        "operationId": "getApp",
+        "parameters": [{ "$ref": "#/components/parameters/AppId" }],
+        "responses": {
+          "200": {
+            "description": "Application",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/App" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/apps/{app_id}/submissions": {
+      "post": {
+        "operationId": "createSubmission",
+        "parameters": [
+          { "$ref": "#/components/parameters/AppId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateSubmissionRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Immutable submission revision allocated",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Submission" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/submissions/{submission_id}": {
+      "get": {
+        "operationId": "getSubmission",
+        "parameters": [{ "$ref": "#/components/parameters/SubmissionId" }],
+        "responses": {
+          "200": {
+            "description": "Submission revision and review state",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Submission" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/submissions/{submission_id}/parts/{part_name}": {
+      "put": {
+        "operationId": "uploadSubmissionPart",
+        "parameters": [
+          { "$ref": "#/components/parameters/SubmissionId" },
+          { "$ref": "#/components/parameters/PartName" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" },
+          { "$ref": "#/components/parameters/ContentSha256" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": { "type": "string", "contentMediaType": "application/octet-stream" }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Immutable part accepted",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/submissions/{submission_id}:finalize": {
+      "post": {
+        "operationId": "finalizeSubmission",
+        "parameters": [
+          { "$ref": "#/components/parameters/SubmissionId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/FinalizeSubmissionRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Submission frozen and scanning queued",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Submission" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/submissions/{submission_id}:withdraw": {
+      "post": {
+        "operationId": "withdrawSubmission",
+        "parameters": [
+          { "$ref": "#/components/parameters/SubmissionId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Submission withdrawn",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Submission" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/submissions/{submission_id}/messages": {
+      "post": {
+        "operationId": "postReviewMessage",
+        "parameters": [
+          { "$ref": "#/components/parameters/SubmissionId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/ReviewMessageRequest" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Append-only review message",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReviewMessage" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/review/submissions": {
+      "servers": [{ "url": "https://review.cardputerzero.dev" }],
+      "get": {
+        "operationId": "listReviewQueue",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": { "type": "string", "maxLength": 256 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 50, "default": 25 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded review queue page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["items"],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "maxItems": 50,
+                      "items": { "$ref": "#/components/schemas/Submission" }
+                    },
+                    "next_cursor": { "type": ["string", "null"], "maxLength": 256 }
+                  }
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/review/submissions/{submission_id}:begin": {
+      "servers": [{ "url": "https://review.cardputerzero.dev" }],
+      "post": {
+        "operationId": "beginReview",
+        "parameters": [
+          { "$ref": "#/components/parameters/SubmissionId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Review claimed",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Submission" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/review/submissions/{submission_id}/decisions": {
+      "servers": [{ "url": "https://review.cardputerzero.dev" }],
+      "post": {
+        "operationId": "decideReview",
+        "parameters": [
+          { "$ref": "#/components/parameters/SubmissionId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ReviewDecisionRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Append-only review decision",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Submission" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/releases": {
+      "post": {
+        "operationId": "createRelease",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/CreateReleaseRequest" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Release created from an approved submission",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Release" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/releases/{release_id}": {
+      "get": {
+        "operationId": "getRelease",
+        "parameters": [{ "$ref": "#/components/parameters/ReleaseId" }],
+        "responses": {
+          "200": {
+            "description": "Release",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Release" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/releases/{release_id}:schedule": {
+      "post": {
+        "operationId": "scheduleRelease",
+        "parameters": [
+          { "$ref": "#/components/parameters/ReleaseId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ScheduleReleaseRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Release scheduled",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Release" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/releases/{release_id}:publish": {
+      "post": {
+        "operationId": "publishRelease",
+        "parameters": [
+          { "$ref": "#/components/parameters/ReleaseId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "202": {
+            "description": "Isolated signing and Catalog publication queued",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Release" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/releases/{release_id}:pause": {
+      "post": {
+        "operationId": "pauseRelease",
+        "parameters": [
+          { "$ref": "#/components/parameters/ReleaseId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Published release paused by a higher Catalog sequence",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Release" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/releases/{release_id}:resume": {
+      "post": {
+        "operationId": "resumeRelease",
+        "parameters": [
+          { "$ref": "#/components/parameters/ReleaseId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paused release made visible by a higher Catalog sequence",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Release" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/releases/{release_id}:remove": {
+      "post": {
+        "operationId": "removeRelease",
+        "parameters": [
+          { "$ref": "#/components/parameters/ReleaseId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/RemovalRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Release permanently removed from subsequent Catalogs",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Release" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "opaque" }
+    },
+    "headers": {
+      "ETag": { "description": "Quoted resource version used by If-Match", "schema": { "type": "string" } }
+    },
+    "parameters": {
+      "AppId": {
+        "name": "app_id",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/AppId" }
+      },
+      "SubmissionId": {
+        "name": "submission_id",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/SubmissionId" }
+      },
+      "ReleaseId": {
+        "name": "release_id",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ReleaseId" }
+      },
+      "PartName": {
+        "name": "part_name",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "pattern": "^(package|listing|asset-[0-5])$" }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "minLength": 16, "maxLength": 128, "pattern": "^[A-Za-z0-9._~-]+$" }
+      },
+      "IfMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "maxLength": 64 }
+      },
+      "ContentSha256": {
+        "name": "Content-SHA256",
+        "in": "header",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/Sha256" }
+      }
+    },
+    "responses": {
+      "Problem": {
+        "description": "Bounded error response",
+        "content": {
+          "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
+        }
+      }
+    },
+    "schemas": {
+      "AppId": {
+        "type": "string",
+        "minLength": 5,
+        "maxLength": 128,
+        "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*){2,}$"
+      },
+      "SubmissionId": { "type": "string", "pattern": "^sub_[0-9a-f]{32}$" },
+      "ReleaseId": { "type": "string", "pattern": "^rel_[0-9a-f]{32}$" },
+      "Sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+      "SemanticVersion": {
+        "type": "string",
+        "maxLength": 64,
+        "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)([-+][0-9A-Za-z.-]+)*$"
+      },
+      "SubmissionState": {
+        "enum": [
+          "draft",
+          "uploading",
+          "processing",
+          "ready-for-review",
+          "in-review",
+          "needs-changes",
+          "approved",
+          "rejected",
+          "withdrawn"
+        ]
+      },
+      "ReleaseState": {
+        "enum": [
+          "ready",
+          "scheduled",
+          "publishing",
+          "publish-failed",
+          "published",
+          "paused",
+          "removed"
+        ]
+      },
+      "Problem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "title", "status", "code", "request_id"],
+        "properties": {
+          "type": { "type": "string", "maxLength": 256 },
+          "title": { "type": "string", "maxLength": 160 },
+          "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+          "code": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+          "request_id": { "type": "string", "maxLength": 64 },
+          "detail": { "type": "string", "maxLength": 512 }
+        }
+      },
+      "DeviceCodeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["client_id", "scope"],
+        "properties": {
+          "client_id": { "const": "cp0ctl" },
+          "scope": { "const": "store.submit" }
+        }
+      },
+      "DeviceCodeResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["device_code", "user_code", "verification_uri", "expires_in", "interval"],
+        "properties": {
+          "device_code": { "type": "string", "minLength": 32, "maxLength": 128 },
+          "user_code": { "type": "string", "minLength": 6, "maxLength": 16 },
+          "verification_uri": { "const": "https://developer.cardputerzero.dev/activate" },
+          "expires_in": { "type": "integer", "minimum": 60, "maximum": 900 },
+          "interval": { "type": "integer", "minimum": 5, "maximum": 30 }
+        }
+      },
+      "DeviceTokenRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["grant_type", "device_code", "client_id"],
+        "properties": {
+          "grant_type": { "const": "urn:ietf:params:oauth:grant-type:device_code" },
+          "device_code": { "type": "string", "minLength": 32, "maxLength": 128 },
+          "client_id": { "const": "cp0ctl" }
+        }
+      },
+      "DeviceTokenResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["access_token", "token_type", "expires_in", "scope"],
+        "properties": {
+          "access_token": { "type": "string", "minLength": 32, "maxLength": 2048 },
+          "token_type": { "const": "Bearer" },
+          "expires_in": { "type": "integer", "minimum": 60, "maximum": 3600 },
+          "scope": { "const": "store.submit" }
+        }
+      },
+      "CreateAppRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["app_id", "default_locale"],
+        "properties": {
+          "app_id": { "$ref": "#/components/schemas/AppId" },
+          "default_locale": {
+            "type": "string",
+            "maxLength": 16,
+            "pattern": "^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$"
+          }
+        }
+      },
+      "App": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["app_id", "owner_team_id", "default_locale", "resource_version"],
+        "properties": {
+          "app_id": { "$ref": "#/components/schemas/AppId" },
+          "owner_team_id": { "type": "string", "pattern": "^team_[0-9a-f]{32}$" },
+          "default_locale": {
+            "type": "string",
+            "maxLength": 16,
+            "pattern": "^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$"
+          },
+          "resource_version": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "AssetDescriptor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "bytes", "width", "height"],
+        "properties": {
+          "path": { "type": "string", "maxLength": 128 },
+          "sha256": { "$ref": "#/components/schemas/Sha256" },
+          "bytes": { "type": "integer", "minimum": 1, "maximum": 524288 },
+          "width": { "type": "integer", "minimum": 1, "maximum": 320 },
+          "height": { "type": "integer", "minimum": 1, "maximum": 170 }
+        }
+      },
+      "CreateSubmissionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "package_sha256", "package_bytes", "listing_sha256", "listing_bytes", "assets"],
+        "properties": {
+          "version": { "$ref": "#/components/schemas/SemanticVersion" },
+          "package_sha256": { "$ref": "#/components/schemas/Sha256" },
+          "package_bytes": { "type": "integer", "minimum": 1, "maximum": 8392704 },
+          "listing_sha256": { "$ref": "#/components/schemas/Sha256" },
+          "listing_bytes": { "type": "integer", "minimum": 1, "maximum": 32768 },
+          "assets": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 6,
+            "items": { "$ref": "#/components/schemas/AssetDescriptor" }
+          }
+        }
+      },
+      "FinalizeSubmissionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["content_sha256"],
+        "properties": {
+          "content_sha256": { "$ref": "#/components/schemas/Sha256" }
+        }
+      },
+      "Submission": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "submission_id",
+          "app_id",
+          "version",
+          "revision",
+          "state",
+          "package_sha256",
+          "listing_sha256",
+          "assets",
+          "resource_version",
+          "created_unix_seconds"
+        ],
+        "properties": {
+          "submission_id": { "$ref": "#/components/schemas/SubmissionId" },
+          "app_id": { "$ref": "#/components/schemas/AppId" },
+          "version": { "$ref": "#/components/schemas/SemanticVersion" },
+          "revision": { "type": "integer", "minimum": 1 },
+          "state": { "$ref": "#/components/schemas/SubmissionState" },
+          "package_sha256": { "$ref": "#/components/schemas/Sha256" },
+          "listing_sha256": { "$ref": "#/components/schemas/Sha256" },
+          "assets": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 6,
+            "items": { "$ref": "#/components/schemas/AssetDescriptor" }
+          },
+          "resource_version": { "type": "integer", "minimum": 1 },
+          "created_unix_seconds": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ReviewMessageRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["body"],
+        "properties": {
+          "body": { "type": "string", "minLength": 1, "maxLength": 2000 }
+        }
+      },
+      "ReviewMessage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["message_id", "submission_id", "actor_id", "body", "created_unix_seconds"],
+        "properties": {
+          "message_id": { "type": "string", "pattern": "^msg_[0-9a-f]{32}$" },
+          "submission_id": { "$ref": "#/components/schemas/SubmissionId" },
+          "actor_id": { "type": "string", "maxLength": 64 },
+          "body": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "created_unix_seconds": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ReviewDecisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision", "reason_codes", "note"],
+        "properties": {
+          "decision": { "enum": ["needs-changes", "approved", "rejected"] },
+          "reason_codes": {
+            "type": "array",
+            "maxItems": 16,
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" }
+          },
+          "note": { "type": "string", "maxLength": 2000 }
+        }
+      },
+      "CreateReleaseRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["submission_id", "rollout_percent"],
+        "properties": {
+          "submission_id": { "$ref": "#/components/schemas/SubmissionId" },
+          "rollout_percent": { "type": "integer", "minimum": 1, "maximum": 100 }
+        }
+      },
+      "ScheduleReleaseRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["publish_unix_seconds"],
+        "properties": {
+          "publish_unix_seconds": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "RemovalRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason_code", "note"],
+        "properties": {
+          "reason_code": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+          "note": { "type": "string", "minLength": 1, "maxLength": 2000 }
+        }
+      },
+      "Release": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["release_id", "submission_id", "app_id", "version", "state", "rollout_percent", "resource_version"],
+        "properties": {
+          "release_id": { "$ref": "#/components/schemas/ReleaseId" },
+          "submission_id": { "$ref": "#/components/schemas/SubmissionId" },
+          "app_id": { "$ref": "#/components/schemas/AppId" },
+          "version": { "$ref": "#/components/schemas/SemanticVersion" },
+          "state": { "$ref": "#/components/schemas/ReleaseState" },
+          "rollout_percent": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "scheduled_unix_seconds": { "type": ["integer", "null"], "minimum": 1 },
+          "catalog_sequence": { "type": ["integer", "null"], "minimum": 1 },
+          "resource_version": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}

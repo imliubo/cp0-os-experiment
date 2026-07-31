@@ -18,8 +18,8 @@
 - [x] 定义控制面/发布面隔离、签名服务和端到端信任链。
 - [x] 定义 Today/Apps/Search/Updates 小屏信息架构。
 - [x] 冻结 `store-listing-v1` schema、分类、年龄分级和本地化边界。
-- [ ] 冻结 Submission/Review/Release 状态机与 OpenAPI v1。
-- [ ] 编写 Store 内容、隐私、审核和下架政策。
+- [x] 冻结 Submission/Review/Release 状态机与 OpenAPI v1。
+- [x] 编写 Store 内容、隐私、审核和下架工程政策（生产文本待产品/法务签署）。
 
 完成条件：架构评审通过，schema/OpenAPI 有严格解析和变异测试。
 
