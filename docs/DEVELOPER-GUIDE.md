@@ -47,11 +47,13 @@ frame submission and every input event pass through App Runtime.
 
 Declare only capabilities the application uses, with a short reason visible in
 the trusted permission prompt. Examples include `network.client`,
-`audio.playback`, `audio.capture`, `camera.capture`, `gpio.output`,
-`radio.lora`, `storage.private`, `documents.open`, `notifications.post` and
-intent declarations. A denied capability returns `Error::Denied`; a pending
-decision or temporarily unavailable service returns `Error::Unavailable` and
-may be retried after returning to the event loop.
+`audio.playback`, `audio.capture`, `camera.capture`, `hardware.gpio`,
+`radio.lora`, `documents.open`, `notifications.post` and intent declarations.
+Private key/value storage is automatically available within the manifest's
+`resources.storage_mb` quota and has no separate permission name. A denied
+capability returns `Error::Denied`; a pending decision or temporarily
+unavailable service returns `Error::Unavailable` and may be retried after
+returning to the event loop.
 
 The PC simulator never grants ambient host access. `--permissions allow` uses
 deterministic capability fixtures, while `--permissions deny` verifies the
@@ -98,8 +100,10 @@ cargo run -p cp0ctl -- logs dev.example.clock --device pi@192.168.20.146
 
 ## Compatibility
 
-The manifest requests SDK `major.minor`. The device rejects unknown majors and
-accepts an application minor no newer than its own within the same major.
-Before 1.0, a minor release may be breaking. Public WIT describes the typed
-source contract; `sdk/abi/cardputerzero-hostcalls-v1.json` is the canonical
-flat WAMR import contract and generated SDK bindings must match it exactly.
+The current manifest SDK requirement is `1.0`, backed by WIT package
+`cardputerzero:sdk@1.0.0`. The device rejects unknown majors and accepts an
+application minor no newer than its own within the same major. It also accepts
+exactly legacy SDK `0.1`; arbitrary `0.x` versions are not compatible. Public
+WIT describes the typed source contract;
+`sdk/abi/cardputerzero-hostcalls-v1.json` is the canonical flat WAMR import
+contract and generated SDK bindings must match it exactly.

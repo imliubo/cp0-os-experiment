@@ -195,18 +195,10 @@ fn parse_permission_choice(value: &str) -> Result<PermissionChoice, String> {
 }
 
 fn parse_permission(value: &str) -> Result<Permission, String> {
-    match value {
-        "network.client" => Ok(Permission::NetworkClient),
-        "documents.open" => Ok(Permission::DocumentsOpen),
-        "audio.playback" => Ok(Permission::AudioPlayback),
-        "audio.capture" => Ok(Permission::AudioCapture),
-        "camera.capture" => Ok(Permission::CameraCapture),
-        "radio.lora" => Ok(Permission::RadioLora),
-        "hardware.gpio" => Ok(Permission::HardwareGpio),
-        "clipboard.read" => Ok(Permission::ClipboardRead),
-        "notifications.post" => Ok(Permission::NotificationsPost),
-        _ => Err("unknown CardputerZero capability".into()),
-    }
+    Permission::ALL
+        .into_iter()
+        .find(|permission| permission.as_str() == value)
+        .ok_or_else(|| "unknown CardputerZero capability".into())
 }
 
 fn validate_manifest(path: &str) -> Result<(), String> {
@@ -320,5 +312,18 @@ fn send_broker_command(command: BrokerCommand) -> Result<(), String> {
         BrokerOutcome::Error { code, message } => {
             Err(format!("broker returned {code:?}: {message}"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_permission_parser_uses_manifest_vocabulary() {
+        for permission in Permission::ALL {
+            assert_eq!(parse_permission(permission.as_str()), Ok(permission));
+        }
+        assert!(parse_permission("clipboard.read").is_err());
     }
 }

@@ -3,7 +3,7 @@
   "id": "dev.cardputerzero.calculator",
   "name": "Calculator",
   "version": "0.1.0",
-  "sdk_version": "0.1",
+  "sdk_version": "1.0",
   "runtime": "wamr",
   "entrypoint": "bin/calculator.wasm",
   "display": "standard",

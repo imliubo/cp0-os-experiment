@@ -13,7 +13,7 @@ arguments to a WASM application. Its complete contract is:
 - operation: synchronous, one frame, four-second service deadline.
 
 There is no sensor selection, preview stream, arbitrary resolution, codec,
-container or output path in SDK 0.1. A future streaming API must use a separate
+container or output path in SDK 1.0. A future streaming API must use a separate
 permission and bounded shared-buffer protocol rather than expanding this call.
 
 ## Trust Flow

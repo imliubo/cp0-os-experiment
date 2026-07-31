@@ -6,7 +6,8 @@
 dependency-free `no_std` crate for `wasm32-unknown-unknown`; application code
 does not declare WAMR imports or depend on Linux APIs.
 
-SDK 0.1 provides:
+This phase originally introduced the pre-release SDK 0.1 API. The same public
+surface is now part of the frozen SDK 1.0 and provides:
 
 - `system::monotonic_milliseconds()`;
 - `system::wait_event()` with a maximum one-second wait;
@@ -52,7 +53,7 @@ cp0ctl build <directory>
 
 `new` refuses to overwrite an existing path, validates the generated manifest
 before writing and creates a `no_std` cdylib with no private Runtime imports.
-Until SDK 0.1 is published to a developer registry, its Cargo dependency points
+Until SDK 1.0 is published to a developer registry, its Cargo dependency points
 to the canonical SDK path in the current checkout.
 
 `build` validates `app.json`, reads Cargo's structured metadata to find the

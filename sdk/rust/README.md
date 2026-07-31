@@ -1,12 +1,13 @@
-# CardputerZero Rust SDK 0.1
+# CardputerZero Rust SDK 1.0
 
 This `no_std` crate is the supported Rust API for CardputerZero applications.
 Applications compile for `wasm32-unknown-unknown` and must not declare private
 Runtime imports directly.
 
-The initial API exposes display and focused input, a monotonic clock, bounded
+The SDK 1.0 API exposes display and focused input, a monotonic clock, bounded
 event waiting, notifications, documents, restricted HTTPS GET, fixed-format
-PCM audio and fixed-frame camera capabilities.
+PCM audio, fixed-frame camera, logical GPIO, LoRa, private storage and intent
+capabilities.
 `network::http_get` accepts a caller-owned buffer of at most 2048 bytes and
 returns only the HTTP status and body length. `Error::Unavailable` means a
 capability may be waiting for a System Shell permission decision or a transient
@@ -23,6 +24,10 @@ sensor selection, camera device, capture process or file path.
 `gpio::read` and `gpio::write` accept only the four `gpio::Line` variants
 defined for the V0.6 connector functions. They expose booleans rather than
 Linux gpiochip numbers, device paths, pin direction or pinmux configuration.
+
+`storage::put`, `storage::get` and `storage::delete` provide private key/value
+storage within the manifest's `storage_mb` quota. Storage isolation is
+automatic and does not require a manifest permission.
 
 `intents::send` routes a reverse-domain action and at most 1024 payload bytes
 through appd. `intents::take` returns only the next message bound to the current

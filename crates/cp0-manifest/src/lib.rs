@@ -72,10 +72,34 @@ pub enum Permission {
     RadioLora,
     #[serde(rename = "hardware.gpio")]
     HardwareGpio,
-    #[serde(rename = "clipboard.read")]
-    ClipboardRead,
     #[serde(rename = "notifications.post")]
     NotificationsPost,
+}
+
+impl Permission {
+    pub const ALL: [Self; 8] = [
+        Self::NetworkClient,
+        Self::DocumentsOpen,
+        Self::AudioPlayback,
+        Self::AudioCapture,
+        Self::CameraCapture,
+        Self::RadioLora,
+        Self::HardwareGpio,
+        Self::NotificationsPost,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NetworkClient => "network.client",
+            Self::DocumentsOpen => "documents.open",
+            Self::AudioPlayback => "audio.playback",
+            Self::AudioCapture => "audio.capture",
+            Self::CameraCapture => "camera.capture",
+            Self::RadioLora => "radio.lora",
+            Self::HardwareGpio => "hardware.gpio",
+            Self::NotificationsPost => "notifications.post",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -293,7 +317,7 @@ mod tests {
             id: "dev.cardputerzero.example".into(),
             name: "Example".into(),
             version: "1.2.3-beta.1+build.7".into(),
-            sdk_version: "0.1".into(),
+            sdk_version: "1.0".into(),
             runtime: Runtime::Wamr,
             entrypoint: "bin/example.wasm".into(),
             display: DisplayMode::Standard,
@@ -312,6 +336,32 @@ mod tests {
     #[test]
     fn accepts_valid_manifest() {
         assert_eq!(validate(&valid_manifest()), Ok(()));
+    }
+
+    #[test]
+    fn json_schema_permission_vocabulary_matches_rust() {
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../../schemas/app-manifest-v1.schema.json"))
+                .unwrap();
+        let schema_names: std::collections::BTreeSet<_> = schema
+            .pointer("/properties/permissions/items/properties/name/enum")
+            .and_then(serde_json::Value::as_array)
+            .unwrap()
+            .iter()
+            .map(|name| name.as_str().unwrap())
+            .collect();
+        let rust_names: std::collections::BTreeSet<_> = Permission::ALL
+            .iter()
+            .map(|permission| permission.as_str())
+            .collect();
+
+        assert_eq!(schema_names, rust_names);
+        for permission in Permission::ALL {
+            assert_eq!(
+                serde_json::to_value(permission).unwrap(),
+                permission.as_str()
+            );
+        }
     }
 
     #[test]
@@ -383,7 +433,7 @@ mod tests {
             "id": "dev.cardputerzero.example",
             "name": "Example",
             "version": "1.0.0",
-            "sdk_version": "0.1",
+            "sdk_version": "1.0",
             "runtime": "wamr",
             "entrypoint": "app.wasm",
             "display": "standard",

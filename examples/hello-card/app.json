@@ -3,7 +3,7 @@
   "id": "dev.cardputerzero.hello",
   "name": "Hello Card",
   "version": "0.1.0",
-  "sdk_version": "0.1",
+  "sdk_version": "1.0",
   "runtime": "wamr",
   "entrypoint": "bin/hello-card.wasm",
   "display": "standard",

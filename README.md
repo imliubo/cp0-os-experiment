@@ -15,7 +15,8 @@ Phase 3 已贯通 WAMR 强隔离运行时、权限系统和首个 capability bro
 
 - 系统架构与资源预算；
 - 分阶段 Roadmap 和初始 ADR；
-- CardputerZero SDK 的 WIT 公共契约与可生成 flat WAMR ABI；
+- 已冻结的 CardputerZero SDK 1.0 WIT 公共契约、可生成 flat WAMR ABI 和精确
+  legacy 0.1 兼容快照；
 - 应用 manifest v1 和 Rust 校验库；
 - `cp0ctl manifest validate` 开发工具。
 - 固定版本的 CM0 V0.6 BSP 和 `pi-gen` 外部构建阶段；
@@ -71,7 +72,7 @@ Phase 3 已贯通 WAMR 强隔离运行时、权限系统和首个 capability bro
   产物目录。
 - `pi-gen` app platform stage：构建并安装 appd、broker sockets、静态 Runtime、
   稳定测试身份与 SDK 版 Hello，开发镜像默认进入 System Shell。
-- Freestanding C11/C++17 SDK 0.1 头文件与 wasm32 编译检查，不暴露 WASI/Linux ABI。
+- Freestanding C11/C++17 SDK 1.0 头文件与 wasm32 编译检查，不暴露 WASI/Linux ABI。
 - 三分区不可变根产品配置：只读 ext4 lower、64 MiB RAM upper、可自动扩容的
   `cp0-data`，以及应用/权限/信任、网络、SSH 和设备身份的持久路径白名单。
 

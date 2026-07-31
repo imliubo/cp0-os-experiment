@@ -3,7 +3,7 @@
   "id": "dev.cardputerzero.escape",
   "name": "Path Escape",
   "version": "0.1.0",
-  "sdk_version": "0.1",
+  "sdk_version": "1.0",
   "runtime": "wamr",
   "entrypoint": "../etc/passwd.wasm",
   "display": "standard",

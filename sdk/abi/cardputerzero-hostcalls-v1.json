@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "abi_version": "0.1",
+  "abi_version": "1.0",
   "module": "cardputerzero",
   "imports": [
     {

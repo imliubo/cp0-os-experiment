@@ -13,8 +13,9 @@ pub const DEFAULT_STORE_TRUST_DIR: &str = "/etc/cardputerzero/trust/store";
 pub const DEFAULT_DEVELOPER_TRUST_DIR: &str = "/etc/cardputerzero/trust/developers";
 pub const DEFAULT_REVOKED_KEYS_DIR: &str = "/etc/cardputerzero/trust/revoked";
 pub const DEFAULT_DEVELOPER_MODE_PATH: &str = "/etc/cardputerzero/developer-mode";
-pub const DEVICE_SDK_MAJOR: u32 = 0;
-pub const DEVICE_SDK_MINOR: u32 = 1;
+pub const DEVICE_SDK_MAJOR: u32 = 1;
+pub const DEVICE_SDK_MINOR: u32 = 0;
+pub const LEGACY_SDK_VERSIONS: &[(u32, u32)] = &[(0, 1)];
 
 static INSTALL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -293,11 +294,28 @@ impl PackageInstaller {
 }
 
 fn require_compatible_sdk(version: &str) -> Result<(), InstallError> {
-    let (major, minor) = version
-        .split_once('.')
-        .and_then(|(major, minor)| Some((major.parse::<u32>().ok()?, minor.parse::<u32>().ok()?)))
-        .ok_or_else(|| InstallError::Invalid("SDK version is malformed".into()))?;
-    if major != DEVICE_SDK_MAJOR || minor > DEVICE_SDK_MINOR {
+    let (major, minor) = version.split_once('.').ok_or_else(|| {
+        InstallError::Invalid("SDK version must use canonical <major>.<minor> form".into())
+    })?;
+    let canonical_component = |component: &str| {
+        !component.is_empty()
+            && component.bytes().all(|byte| byte.is_ascii_digit())
+            && (component == "0" || !component.starts_with('0'))
+    };
+    if !canonical_component(major) || !canonical_component(minor) {
+        return Err(InstallError::Invalid(
+            "SDK version must use canonical <major>.<minor> form".into(),
+        ));
+    }
+    let major = major
+        .parse::<u32>()
+        .map_err(|_| InstallError::Invalid("SDK version major component is out of range".into()))?;
+    let minor = minor
+        .parse::<u32>()
+        .map_err(|_| InstallError::Invalid("SDK version minor component is out of range".into()))?;
+    let is_current_line = major == DEVICE_SDK_MAJOR && minor <= DEVICE_SDK_MINOR;
+    let is_supported_legacy = LEGACY_SDK_VERSIONS.contains(&(major, minor));
+    if !is_current_line && !is_supported_legacy {
         return Err(InstallError::Invalid(format!(
             "SDK {version} is incompatible with device SDK {DEVICE_SDK_MAJOR}.{DEVICE_SDK_MINOR}"
         )));
@@ -568,7 +586,7 @@ mod tests {
                 id: "dev.cardputerzero.installer".into(),
                 name: "Installer Test".into(),
                 version: "1.0.0".into(),
-                sdk_version: "0.1".into(),
+                sdk_version: "1.0".into(),
                 runtime: Runtime::Wamr,
                 entrypoint: "bin/app.wasm".into(),
                 display: DisplayMode::Standard,
@@ -691,7 +709,7 @@ mod tests {
     fn rejects_incompatible_sdk_before_extraction() {
         let fixture = Fixture::new("sdk");
         let mut manifest = fixture.manifest();
-        manifest.sdk_version = "1.0".into();
+        manifest.sdk_version = "1.1".into();
         let mut package = CApp::new(vec![
             PackageEntry {
                 path: "app.json".into(),
@@ -717,6 +735,28 @@ mod tests {
                 .join(&manifest.version)
                 .exists()
         );
+    }
+
+    #[test]
+    fn accepts_current_and_exact_legacy_sdk_versions() {
+        for version in ["1.0", "0.1"] {
+            require_compatible_sdk(version).unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_and_noncanonical_sdk_versions() {
+        for version in [
+            "0.0", "0.2", "1.1", "2.0", "01.0", "1.00", "1", "1.0.0", "1.x", "",
+        ] {
+            assert!(
+                matches!(
+                    require_compatible_sdk(version),
+                    Err(InstallError::Invalid(_))
+                ),
+                "SDK {version} should be rejected"
+            );
+        }
     }
 
     #[test]

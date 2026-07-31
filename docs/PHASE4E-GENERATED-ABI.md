@@ -33,22 +33,26 @@ strings, lists, results and options are lowered by the generated SDK facade to
 caller-owned flat buffers and packed scalar results. Applications never call
 the flat imports directly.
 
-The repository's offline structural check validates WIT package version,
-interface/function mapping and balanced interface blocks. A standards-complete
-WIT parser could not be added in the current network environment; integrating
-`wasm-tools` remains a toolchain hardening item, not a runtime dependency.
+The generator's offline structural check validates the WIT package version,
+interface/function mapping and balanced interface blocks. In addition, the SDK
+test suite parses and resolves the complete contract with the standard
+Bytecode Alliance `wit-parser` used by `wasm-tools`; it verifies the 1.0.0
+package identity, interface count and exported application world. This is a
+build-time test dependency only, not a Runtime or product-image dependency.
 
 ## Compatibility
 
-`sdk/abi/compat/cardputerzero-hostcalls-0.1.json` records every published 0.1
-name and WAMR signature. Tests require all snapshot entries to remain present
-and unchanged. A compatible minor may add imports; removing an import or
-changing a signature requires a new SDK major (or, before 1.0, an explicit
-minor migration with a preserved Runtime compatibility table).
+`sdk/abi/compat/cardputerzero-hostcalls-0.1.json` and
+`sdk/abi/compat/cardputerzero-hostcalls-1.0.json` record every published name
+and WAMR signature. Tests require all entries from both snapshots to remain
+present and unchanged. A compatible minor may add imports; removing an import
+or changing a signature requires a new SDK major.
 
-The resulting 0.1 contract contains 22 bounded hostcalls. C11, C++17 and Rust
-WASM builds consume the generated declarations, while Runtime builds consume
-the same signature source.
+The frozen 1.0 contract contains 22 bounded hostcalls and is byte-for-byte ABI
+compatible with legacy 0.1. C11, C++17 and Rust WASM builds consume the
+generated declarations, while Runtime builds consume the same signature
+source. App installation accepts current SDK 1.0 and exact legacy 0.1, but not
+other pre-1.0 versions.
 
 The pinned WAMR 2.4.5 AArch64 static Runtime rebuilt successfully with the
 generated registration table. Its Phase 4E SHA-256 is

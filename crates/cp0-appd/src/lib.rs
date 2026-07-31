@@ -313,7 +313,7 @@ mod tests {
             id: "dev.cardputerzero.hello".into(),
             name: "Hello".into(),
             version: "1.2.3".into(),
-            sdk_version: "0.1".into(),
+            sdk_version: "1.0".into(),
             runtime: Runtime::Wamr,
             entrypoint: "bin/hello.wasm".into(),
             display: DisplayMode::Standard,

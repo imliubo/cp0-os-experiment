@@ -1,4 +1,4 @@
-package cardputerzero:sdk@0.1.0;
+package cardputerzero:sdk@1.0.0;
 
 interface types {
     record rect {

@@ -1,4 +1,4 @@
-# CardputerZero C/C++ SDK 0.1
+# CardputerZero C/C++ SDK 1.0
 
 Include `include/cardputerzero.h` from a freestanding Clang C11 or C++17
 project targeting `wasm32-unknown-unknown`. The header declares only the public

@@ -4,8 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CP0_SDK_VERSION_MAJOR 0
-#define CP0_SDK_VERSION_MINOR 1
+#define CP0_SDK_VERSION_MAJOR 1
+#define CP0_SDK_VERSION_MINOR 0
 #define CP0_DISPLAY_WIDTH 320U
 #define CP0_DISPLAY_HEIGHT 170U
 #define CP0_STANDARD_DISPLAY_HEIGHT 150U
@@ -42,7 +42,7 @@
 #define CP0_IMPORT(name)                                                       \
     __attribute__((import_module("cardputerzero"), import_name(name)))
 #else
-#error "CardputerZero C/C++ SDK 0.1 requires a Clang-compatible wasm compiler"
+#error "CardputerZero C/C++ SDK 1.0 requires a Clang-compatible wasm compiler"
 #endif
 
 #ifdef __cplusplus

@@ -21,7 +21,7 @@ pub fn new_project(path: impl AsRef<Path>, app_id: &str, name: &str) -> Result<(
         id: app_id.into(),
         name: name.into(),
         version: "0.1.0".into(),
-        sdk_version: "0.1".into(),
+        sdk_version: "1.0".into(),
         runtime: Runtime::Wamr,
         entrypoint: format!("bin/{artifact_name}.wasm"),
         display: DisplayMode::Standard,
@@ -263,6 +263,8 @@ mod tests {
             fs::remove_dir_all(&path).unwrap();
         }
         new_project(&path, "dev.cardputerzero.generated", "Generated").unwrap();
+        let manifest = cp0_manifest::load_and_validate(path.join("app.json")).unwrap();
+        assert_eq!(manifest.sdk_version, "1.0");
         let source = fs::read_to_string(path.join("src/lib.rs")).unwrap();
         assert!(source.contains("cp0_sdk::system"));
         assert!(!source.contains("extern \"C\" {"));

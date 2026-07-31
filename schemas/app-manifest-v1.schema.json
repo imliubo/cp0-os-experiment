@@ -59,7 +59,6 @@
               "camera.capture",
               "radio.lora",
               "hardware.gpio",
-              "clipboard.read",
               "notifications.post"
             ]
           },

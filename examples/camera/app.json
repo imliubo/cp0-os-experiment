@@ -3,7 +3,7 @@
   "id": "dev.cardputerzero.camera",
   "name": "Camera",
   "version": "0.1.0",
-  "sdk_version": "0.1",
+  "sdk_version": "1.0",
   "runtime": "wamr",
   "entrypoint": "bin/camera.wasm",
   "display": "standard",

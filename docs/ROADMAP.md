@@ -11,7 +11,7 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 - [x] 建立 WIT SDK ABI 草案与示例应用清单。
 - [x] 增加基础 CI、SDK/manifest 版本策略和架构测试。
 - [x] 加入扁平 ABI 契约解析、三端生成和已发布签名兼容性测试。
-- [ ] 工具链网络恢复后增加标准 `wasm-tools` WIT 完整语法解析。
+- [x] 使用 `wasm-tools` 同源标准 `wit-parser` 完成 WIT 全量语法与名称解析。
 
 完成条件：`make check` 可重复通过，manifest 和 ABI 的兼容规则有自动化测试。
 
@@ -106,7 +106,7 @@ Shell 和其他应用数据。
 - [x] 实现 `cp0ctl run/package/sign/install/logs`，包含 PC 到真机的 SSH 安装/日志路径。
 - [x] 建立 PC WASM 模拟器、权限模拟、evdev 输入映射和 JSON 性能分析工具。
 - [x] 迁移 Calculator、Camera 示例，不提供传统 Linux 应用兼容层。
-- [ ] 冻结 SDK 1.0 ABI、兼容策略和开发者文档（首版开发者指南已完成）。
+- [x] 冻结 SDK 1.0 ABI、精确 legacy 0.1 兼容策略、权限词表和开发者文档。
 
 完成条件：新开发者可只使用 SDK 在 PC 编写、调试、签名并安装一个应用到真机。
 
