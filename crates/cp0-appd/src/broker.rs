@@ -59,6 +59,11 @@ pub enum BrokerCommand {
     StorageDelete {
         key: String,
     },
+    SendIntent {
+        action: String,
+        payload_base64: String,
+    },
+    TakeIntent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +133,14 @@ pub enum BrokerOutcome {
     StorageDeleted {
         existed: bool,
     },
+    IntentAccepted {
+        intent_id: u64,
+    },
+    IntentMessage {
+        action: String,
+        payload_base64: String,
+    },
+    IntentEmpty,
     Error {
         code: BrokerErrorCode,
         message: String,
@@ -149,6 +162,8 @@ pub enum BrokerErrorCode {
     Tls,
     TooManyRedirects,
     ResponseTooLarge,
+    NotFound,
+    Ambiguous,
     Internal,
 }
 
@@ -177,6 +192,7 @@ pub enum BrokerProtocolError {
     InvalidCameraResponse,
     InvalidRadio,
     InvalidStorage,
+    InvalidIntent,
 }
 
 impl fmt::Display for BrokerProtocolError {
@@ -208,6 +224,7 @@ impl fmt::Display for BrokerProtocolError {
             }
             Self::InvalidRadio => formatter.write_str("invalid bounded LoRa operation"),
             Self::InvalidStorage => formatter.write_str("invalid private storage operation"),
+            Self::InvalidIntent => formatter.write_str("invalid bounded intent operation"),
         }
     }
 }
@@ -273,6 +290,20 @@ impl BrokerRequest {
             BrokerCommand::StorageGet { key } | BrokerCommand::StorageDelete { key } => {
                 cp0_storage_protocol::validate_key(key)
                     .map_err(|_| BrokerProtocolError::InvalidStorage)
+            }
+            BrokerCommand::SendIntent {
+                action,
+                payload_base64,
+            } => {
+                if !cp0_manifest::is_valid_intent_action(action) {
+                    return Err(BrokerProtocolError::InvalidIntent);
+                }
+                let payload = cp0_network_protocol::decode_base64(payload_base64)
+                    .map_err(|_| BrokerProtocolError::InvalidIntent)?;
+                if payload.len() > crate::MAX_INTENT_PAYLOAD_BYTES {
+                    return Err(BrokerProtocolError::InvalidIntent);
+                }
+                Ok(())
             }
             _ => Ok(()),
         }
@@ -433,6 +464,33 @@ impl BrokerResponse {
         }
     }
 
+    pub fn intent_accepted(request_id: u64, intent_id: u64) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::IntentAccepted { intent_id },
+        }
+    }
+
+    pub fn intent_message(request_id: u64, action: String, payload: &[u8]) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::IntentMessage {
+                action,
+                payload_base64: cp0_network_protocol::encode_base64(payload),
+            },
+        }
+    }
+
+    pub fn intent_empty(request_id: u64) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::IntentEmpty,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), BrokerProtocolError> {
         if self.protocol_version != BROKER_PROTOCOL_VERSION {
             return Err(BrokerProtocolError::UnsupportedVersion(
@@ -506,6 +564,22 @@ impl BrokerResponse {
                 if cp0_storage_protocol::decode_value(value_base64).is_err() =>
             {
                 return Err(BrokerProtocolError::InvalidStorage);
+            }
+            BrokerOutcome::IntentAccepted { intent_id } if *intent_id == 0 => {
+                return Err(BrokerProtocolError::InvalidIntent);
+            }
+            BrokerOutcome::IntentMessage {
+                action,
+                payload_base64,
+            } => {
+                if !cp0_manifest::is_valid_intent_action(action) {
+                    return Err(BrokerProtocolError::InvalidIntent);
+                }
+                let payload = cp0_network_protocol::decode_base64(payload_base64)
+                    .map_err(|_| BrokerProtocolError::InvalidIntent)?;
+                if payload.len() > crate::MAX_INTENT_PAYLOAD_BYTES {
+                    return Err(BrokerProtocolError::InvalidIntent);
+                }
             }
             _ => {}
         }
@@ -927,5 +1001,48 @@ mod tests {
         );
         assert!(BrokerResponse::storage_not_found(12).validate().is_ok());
         assert!(BrokerResponse::storage_deleted(12, true).validate().is_ok());
+    }
+
+    #[test]
+    fn round_trips_bounded_intents_without_exposing_a_target() {
+        let request = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 14,
+            command: BrokerCommand::SendIntent {
+                action: "dev.cardputerzero.documents.open".into(),
+                payload_base64: cp0_network_protocol::encode_base64(b"document-7"),
+            },
+        };
+        let mut frame = Vec::new();
+        write_broker_request(&mut frame, &request).unwrap();
+        assert_eq!(
+            read_broker_request(&mut Cursor::new(frame)).unwrap(),
+            Some(request)
+        );
+        let accepted = BrokerResponse::intent_accepted(14, 1);
+        let encoded = serde_json::to_string(&accepted).unwrap();
+        assert!(!encoded.contains("target"));
+        assert!(accepted.validate().is_ok());
+        assert!(
+            BrokerResponse::intent_message(
+                15,
+                "dev.cardputerzero.documents.open".into(),
+                b"document-7"
+            )
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            BrokerRequest {
+                protocol_version: BROKER_PROTOCOL_VERSION,
+                request_id: 14,
+                command: BrokerCommand::SendIntent {
+                    action: "../../escape".into(),
+                    payload_base64: String::new(),
+                },
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

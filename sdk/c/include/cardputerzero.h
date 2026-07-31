@@ -31,6 +31,8 @@
 #define CP0_LORA_METADATA_BYTES 4U
 #define CP0_MAX_STORAGE_KEY_BYTES 64U
 #define CP0_MAX_STORAGE_VALUE_BYTES (8U * 1024U)
+#define CP0_MAX_INTENT_ACTION_BYTES 96U
+#define CP0_MAX_INTENT_PAYLOAD_BYTES 1024U
 
 #if !defined(__wasm32__)
 #error "CardputerZero applications must target wasm32"
@@ -93,6 +95,11 @@ typedef struct cp0_lora_metadata {
     int8_t snr_quarter_db;
     uint8_t reserved;
 } cp0_lora_metadata_t;
+
+typedef struct cp0_intent_message {
+    uint32_t action_length;
+    uint32_t payload_length;
+} cp0_intent_message_t;
 
 CP0_IMPORT("cp0_monotonic_milliseconds")
 uint64_t cp0_monotonic_milliseconds(void);
@@ -168,6 +175,16 @@ int32_t cp0_storage_get_raw(const uint8_t *key, uint32_t key_length,
 
 CP0_IMPORT("cp0_storage_delete")
 int32_t cp0_storage_delete_raw(const uint8_t *key, uint32_t key_length);
+
+CP0_IMPORT("cp0_intent_send")
+cp0_result_t cp0_intent_send_raw(const uint8_t *action,
+                                 uint32_t action_length,
+                                 const uint8_t *payload,
+                                 uint32_t payload_length);
+
+CP0_IMPORT("cp0_intent_take")
+int64_t cp0_intent_take_raw(uint8_t *action, uint32_t action_capacity,
+                            uint8_t *payload, uint32_t payload_capacity);
 
 static inline cp0_result_t cp0_http_get(const uint8_t *url,
                                         uint32_t url_length, uint8_t *body,
@@ -412,6 +429,73 @@ static inline cp0_result_t cp0_storage_delete(const uint8_t *key,
     if (result > 1)
         return CP0_ERROR_INTERNAL;
     *existed = (uint8_t)result;
+    return CP0_OK;
+}
+
+static inline uint8_t cp0_intent_action_is_valid(const uint8_t *action,
+                                                 uint32_t action_length) {
+    uint32_t part_length = 0U;
+    uint32_t parts = 1U;
+
+    if (action == NULL || action_length == 0U ||
+        action_length > CP0_MAX_INTENT_ACTION_BYTES)
+        return 0U;
+    for (uint32_t index = 0; index < action_length; index++) {
+        uint8_t byte = action[index];
+        if (byte == '.') {
+            if (part_length == 0U || action[index - 1U] == '-')
+                return 0U;
+            part_length = 0U;
+            parts++;
+            continue;
+        }
+        if (part_length == 0U && (byte < 'a' || byte > 'z'))
+            return 0U;
+        if (!((byte >= 'a' && byte <= 'z') ||
+              (byte >= '0' && byte <= '9') || byte == '-'))
+            return 0U;
+        part_length++;
+        if (part_length > 32U)
+            return 0U;
+    }
+    return parts >= 3U && part_length > 0U && action[action_length - 1U] != '-';
+}
+
+static inline cp0_result_t cp0_intent_send(const uint8_t *action,
+                                           uint32_t action_length,
+                                           const uint8_t *payload,
+                                           uint32_t payload_length) {
+    if (!cp0_intent_action_is_valid(action, action_length) ||
+        payload_length > CP0_MAX_INTENT_PAYLOAD_BYTES ||
+        (payload == NULL && payload_length != 0U))
+        return CP0_ERROR_INVALID_ARGUMENT;
+    return cp0_intent_send_raw(action, action_length, payload, payload_length);
+}
+
+static inline cp0_result_t cp0_intent_take(
+    uint8_t *action, uint32_t action_capacity, uint8_t *payload,
+    uint32_t payload_capacity, cp0_intent_message_t *message) {
+    int64_t result;
+    uint32_t action_length;
+    uint32_t payload_length;
+
+    if (action == NULL || action_capacity == 0U ||
+        action_capacity > CP0_MAX_INTENT_ACTION_BYTES || payload == NULL ||
+        payload_capacity == 0U ||
+        payload_capacity > CP0_MAX_INTENT_PAYLOAD_BYTES || message == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    result = cp0_intent_take_raw(action, action_capacity, payload,
+                                 payload_capacity);
+    if (result < 0)
+        return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
+                                           : CP0_ERROR_INTERNAL;
+    action_length = (uint32_t)((uint64_t)result >> 32);
+    payload_length = (uint32_t)result;
+    if ((result != 0 && action_length == 0U) ||
+        action_length > action_capacity || payload_length > payload_capacity)
+        return CP0_ERROR_INTERNAL;
+    message->action_length = action_length;
+    message->payload_length = payload_length;
     return CP0_OK;
 }
 

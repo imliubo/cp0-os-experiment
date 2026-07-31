@@ -10,6 +10,7 @@ mod camera_client;
 mod document_client;
 mod document_prompt;
 mod gpio_client;
+mod intent;
 mod lifecycle;
 mod network_client;
 mod permission_prompt;
@@ -37,6 +38,9 @@ pub use document_prompt::{
     DocumentCoordinator, DocumentPrompt, DocumentPromptError, DocumentRequestResult,
 };
 pub use gpio_client::{DEFAULT_GPIO_SOCKET, GpioClient, GpioClientError};
+pub use intent::{
+    IntentQueue, IntentQueueError, MAX_INTENT_PAYLOAD_BYTES, MAX_PENDING_INTENTS, PendingIntent,
+};
 pub use lifecycle::{AppManager, AppManagerError, InstalledApp, ManagerPaths, lookup_unix_account};
 pub use network_client::{
     DEFAULT_NETWORK_SOCKET, NetworkClient, NetworkClientError, NetworkHttpResponse,
@@ -317,6 +321,7 @@ mod tests {
                 name: Permission::NotificationsPost,
                 reason: "Show a completed notification".into(),
             }],
+            intents: Vec::new(),
         }
     }
 

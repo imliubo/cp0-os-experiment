@@ -23,3 +23,8 @@ sensor selection, camera device, capture process or file path.
 `gpio::read` and `gpio::write` accept only the four `gpio::Line` variants
 defined for the V0.6 connector functions. They expose booleans rather than
 Linux gpiochip numbers, device paths, pin direction or pinmux configuration.
+
+`intents::send` routes a reverse-domain action and at most 1024 payload bytes
+through appd. `intents::take` returns only the next message bound to the current
+application and consumes it once. The sender cannot name a target application
+or connect to another application's process.

@@ -142,8 +142,12 @@ LoRa 能力仅面向外接 SX1276 系列模块；V0.6 本身没有板载 LoRa。
 8 字节前导码、私有同步字 `0x12` 和 14 dBm；报文最多 64 字节，每次发送至少间隔
 15 秒，单次接收等待不超过 1000 ms。
 
-应用间调用通过 Intent Broker 路由，接收方必须显式声明 Intent，不提供任意应用间
-socket。
+应用间调用通过 appd 内部 Intent Broker 路由，接收方必须在 root-owned manifest
+显式导出受限反向域名 action，不提供任意应用间 socket、目标应用 ID 或路径。发送
+payload 上限为 1024 字节，全局队列最多 8 条；没有接收方或存在多个接收方都会拒绝，
+不会静默选择。appd 先把接受响应写回发送方，再停止发送方、启动唯一接收方；接收方
+使用经过 UID/PID/cgroup 认证的一次性 `take` 获取绑定到自身的消息。响应写入失败会
+撤销对应队列项，从而保持消息接受与单前台切换顺序一致。
 
 应用私有数据只通过 SDK key/value API 访问。`cp0-storaged` 独占
 `/var/lib/cardputerzero/data`，appd 根据经过 UID/cgroup 认证的调用者和 root-owned

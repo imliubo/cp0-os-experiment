@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 pub const SCHEMA_VERSION: u32 = 1;
 pub const MAX_APP_MEMORY_MB: u16 = 96;
 pub const MAX_APP_STORAGE_MB: u16 = 512;
+pub const MAX_INTENTS_PER_MANIFEST: usize = 8;
+pub const MAX_INTENT_ACTION_BYTES: usize = 96;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +25,8 @@ pub struct AppManifest {
     pub display: DisplayMode,
     pub resources: ResourceLimits,
     pub permissions: Vec<PermissionRequest>,
+    #[serde(default)]
+    pub intents: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +158,25 @@ pub fn validate(manifest: &AppManifest) -> Result<(), Vec<String>> {
         }
     }
 
+    if manifest.intents.len() > MAX_INTENTS_PER_MANIFEST {
+        errors.push(format!(
+            "intents must contain at most {MAX_INTENTS_PER_MANIFEST} actions"
+        ));
+    }
+    let mut intents = HashSet::new();
+    for action in &manifest.intents {
+        if !is_valid_intent_action(action) {
+            errors.push(format!(
+                "intent action {action:?} must be a lowercase reverse-domain name no longer than {MAX_INTENT_ACTION_BYTES} bytes"
+            ));
+        }
+        if !intents.insert(action) {
+            errors.push(format!(
+                "intent action {action:?} is declared more than once"
+            ));
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -170,6 +193,23 @@ pub fn is_valid_app_id(id: &str) -> bool {
     parts.len() >= 3
         && parts.iter().all(|part| {
             part.len() <= 32
+                && part.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+                && !part.ends_with('-')
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+}
+
+pub fn is_valid_intent_action(action: &str) -> bool {
+    if action.is_empty() || action.len() > MAX_INTENT_ACTION_BYTES {
+        return false;
+    }
+    let parts: Vec<_> = action.split('.').collect();
+    parts.len() >= 3
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && part.len() <= 32
                 && part.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
                 && !part.ends_with('-')
                 && part
@@ -259,6 +299,7 @@ mod tests {
                 name: Permission::NotificationsPost,
                 reason: "Notify the user when the operation is complete".into(),
             }],
+            intents: vec!["dev.cardputerzero.example.open".into()],
         }
     }
 
@@ -285,6 +326,20 @@ mod tests {
 
         let errors = validate(&manifest).expect_err("manifest should be rejected");
         assert!(errors.iter().any(|error| error.contains("more than once")));
+    }
+
+    #[test]
+    fn validates_bounded_unique_intent_actions() {
+        let mut manifest = valid_manifest();
+        manifest.intents = vec!["dev.cardputerzero.example.open".into(); 8];
+        manifest.intents.push("Open".into());
+
+        let errors = validate(&manifest).expect_err("manifest should be rejected");
+        assert!(errors.iter().any(|error| error.contains("reverse-domain")));
+        assert!(errors.iter().any(|error| error.contains("at most")));
+        assert!(errors.iter().any(|error| error.contains("more than once")));
+        assert!(is_valid_intent_action("dev.cardputerzero.documents.open"));
+        assert!(!is_valid_intent_action("dev.cardputerzero.bad_action"));
     }
 
     #[test]

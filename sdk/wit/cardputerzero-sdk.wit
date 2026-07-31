@@ -128,6 +128,18 @@ interface storage {
     delete: func(key: string) -> result<bool, error-code>;
 }
 
+interface intents {
+    use types.{error-code};
+
+    record message {
+        action: string,
+        payload: list<u8>,
+    }
+
+    send: func(action: string, payload: list<u8>) -> result<_, error-code>;
+    take: func() -> result<option<message>, error-code>;
+}
+
 interface application {
     use types.{app-event, error-code};
 
@@ -145,5 +157,6 @@ world cardputer-application {
     import gpio;
     import radio;
     import storage;
+    import intents;
     export application;
 }

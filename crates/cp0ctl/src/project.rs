@@ -30,6 +30,7 @@ pub fn new_project(path: impl AsRef<Path>, app_id: &str, name: &str) -> Result<(
             storage_mb: 8,
         },
         permissions: Vec::new(),
+        intents: Vec::new(),
     };
     validate(&manifest).map_err(|errors| errors.join("\n"))?;
 

@@ -22,10 +22,11 @@ use crate::{
     AudioClientError, BrokerCommand, BrokerErrorCode, BrokerProtocolError, BrokerRequest,
     BrokerResponse, CameraClient, CameraClientError, DocumentClient, DocumentClientError,
     DocumentCoordinator, DocumentPromptError, DocumentRequestResult, ErrorCode, GpioClient,
-    GpioClientError, NetworkClient, NetworkClientError, NotificationQueue, PermissionChoice,
-    PermissionCoordinator, PermissionPromptError, PermissionRequestResult, RadioClient,
-    RadioClientError, ResponseData, StorageClient, StorageClientError, encode_broker_response,
-    peer_credentials, read_broker_request, read_request, write_broker_response, write_response,
+    GpioClientError, IntentQueue, NetworkClient, NetworkClientError, NotificationQueue,
+    PermissionChoice, PermissionCoordinator, PermissionPromptError, PermissionRequestResult,
+    RadioClient, RadioClientError, ResponseData, StorageClient, StorageClientError,
+    encode_broker_response, peer_credentials, read_broker_request, read_request,
+    write_broker_response, write_response,
 };
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -80,6 +81,7 @@ struct ServerState {
     permissions: PermissionCoordinator,
     notifications: NotificationQueue,
     document_prompts: DocumentCoordinator,
+    intents: IntentQueue,
 }
 
 impl AppdServer {
@@ -143,6 +145,7 @@ impl AppdServer {
                 permissions,
                 notifications: NotificationQueue::default(),
                 document_prompts: DocumentCoordinator::default(),
+                intents: IntentQueue::default(),
             })),
             trusted_uids: trusted_uids.into_iter().collect(),
             capabilities,
@@ -371,15 +374,29 @@ impl AppdServer {
         let dispatch = match &request.command {
             BrokerCommand::OpenDocument => self.dispatch_document(credentials, request.request_id),
             BrokerCommand::CaptureCamera => self.dispatch_camera(credentials, request.request_id),
+            BrokerCommand::SendIntent {
+                action,
+                payload_base64,
+            } => self.dispatch_send_intent(credentials, request.request_id, action, payload_base64),
             _ => BrokerDispatch::response(self.dispatch_broker(credentials, request)),
         };
-        if let Some(descriptor) = dispatch.descriptor {
+        let write_result = if let Some(descriptor) = dispatch.descriptor.as_ref() {
             let frame = encode_broker_response(&dispatch.response).map_err(broker_io)?;
             send_frame_with_fd(&mut stream, &frame, descriptor.as_fd())
                 .map_err(document_protocol_io)
         } else {
             write_broker_response(&mut stream, &dispatch.response).map_err(broker_io)
+        };
+        if let Err(error) = write_result {
+            if let Some(transition) = &dispatch.transition {
+                self.cancel_intent(transition.intent_id);
+            }
+            return Err(error);
         }
+        if let Some(transition) = dispatch.transition {
+            self.complete_intent_transition(transition);
+        }
+        Ok(())
     }
 
     fn dispatch_broker(
@@ -621,6 +638,155 @@ impl AppdServer {
                     }
                 }
             }
+            BrokerCommand::SendIntent { .. } => {
+                unreachable!("intent send requires an acknowledgement-bound transition")
+            }
+            BrokerCommand::TakeIntent => {
+                let app = match self.authenticate_broker_caller(peer, request_id) {
+                    Ok(app) => app,
+                    Err(response) => return response,
+                };
+                let mut state = match self.state.lock() {
+                    Ok(state) => state,
+                    Err(_) => {
+                        return BrokerResponse::error(
+                            request_id,
+                            BrokerErrorCode::Internal,
+                            "application service state is unavailable",
+                        );
+                    }
+                };
+                match state.intents.take(&app.app_id) {
+                    Some(intent) => {
+                        BrokerResponse::intent_message(request_id, intent.action, &intent.payload)
+                    }
+                    None => BrokerResponse::intent_empty(request_id),
+                }
+            }
+        }
+    }
+
+    fn dispatch_send_intent(
+        &self,
+        peer: crate::PeerCredentials,
+        request_id: u64,
+        action: &str,
+        payload_base64: &str,
+    ) -> BrokerDispatch {
+        let app = match self.authenticate_broker_caller(peer, request_id) {
+            Ok(app) => app,
+            Err(response) => return BrokerDispatch::response(response),
+        };
+        let payload = match cp0_network_protocol::decode_base64(payload_base64) {
+            Ok(payload) if payload.len() <= crate::MAX_INTENT_PAYLOAD_BYTES => payload,
+            _ => {
+                return BrokerDispatch::response(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::InvalidRequest,
+                    "invalid bounded intent payload",
+                ));
+            }
+        };
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                return BrokerDispatch::response(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "application service state is unavailable",
+                ));
+            }
+        };
+        let mut manifests = Vec::new();
+        for installed in state.manager.installed_apps() {
+            match state.manager.installed_manifest(&installed.app_id) {
+                Ok(manifest) => manifests.push(manifest),
+                Err(error) => {
+                    eprintln!("cp0-appd: cannot resolve intent receiver: {error}");
+                    return BrokerDispatch::response(BrokerResponse::error(
+                        request_id,
+                        BrokerErrorCode::Internal,
+                        "installed application metadata is unavailable",
+                    ));
+                }
+            }
+        }
+        let target_app_id = match select_intent_target(action, &manifests) {
+            Ok(target) => target,
+            Err(IntentTargetError::NotFound) => {
+                return BrokerDispatch::response(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::NotFound,
+                    "no installed application handles the intent action",
+                ));
+            }
+            Err(IntentTargetError::Ambiguous) => {
+                return BrokerDispatch::response(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Ambiguous,
+                    "multiple installed applications handle the intent action",
+                ));
+            }
+        };
+        let intent_id =
+            match state
+                .intents
+                .enqueue(&app.app_id, &target_app_id, action.into(), payload)
+            {
+                Ok(intent_id) => intent_id,
+                Err(error) => {
+                    eprintln!("cp0-appd: cannot enqueue intent: {error}");
+                    return BrokerDispatch::response(BrokerResponse::error(
+                        request_id,
+                        BrokerErrorCode::ResourceExhausted,
+                        "intent queue is full",
+                    ));
+                }
+            };
+        BrokerDispatch {
+            response: BrokerResponse::intent_accepted(request_id, intent_id),
+            descriptor: None,
+            transition: Some(IntentTransition {
+                intent_id,
+                sender_app_id: app.app_id,
+                target_app_id,
+            }),
+        }
+    }
+
+    fn cancel_intent(&self, intent_id: u64) {
+        if let Ok(mut state) = self.state.lock() {
+            state.intents.cancel(intent_id);
+        }
+    }
+
+    fn complete_intent_transition(&self, transition: IntentTransition) {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                eprintln!("cp0-appd: cannot switch applications after accepted intent");
+                return;
+            }
+        };
+        match state.manager.is_running(&transition.sender_app_id) {
+            Ok(true) => {
+                if let Err(error) = state.manager.stop(&transition.sender_app_id) {
+                    eprintln!("cp0-appd: cannot stop intent sender: {error}");
+                    return;
+                }
+            }
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!("cp0-appd: cannot verify intent sender state: {error}");
+                return;
+            }
+        }
+        state
+            .permissions
+            .clear_app_session(&transition.sender_app_id);
+        state.document_prompts.clear_app(&transition.sender_app_id);
+        if let Err(error) = state.manager.start(&transition.target_app_id) {
+            eprintln!("cp0-appd: cannot start accepted intent receiver: {error}");
         }
     }
 
@@ -634,6 +800,7 @@ impl AppdServer {
             Ok(frame) => BrokerDispatch {
                 response: BrokerResponse::camera_captured(request_id),
                 descriptor: Some(frame.descriptor),
+                transition: None,
             },
             Err(error) => {
                 eprintln!("cp0-appd: camera capture request failed: {error}");
@@ -668,6 +835,7 @@ impl AppdServer {
                             opened.summary.size_bytes,
                         ),
                         descriptor: Some(opened.descriptor),
+                        transition: None,
                     },
                     Err(error) => {
                         eprintln!("cp0-appd: document service open failed: {error}");
@@ -735,6 +903,7 @@ impl AppdServer {
                                     opened.summary.size_bytes,
                                 ),
                                 descriptor: Some(opened.descriptor),
+                                transition: None,
                             },
                             Err(error) => BrokerDispatch::response(document_error_response(
                                 request_id, &error,
@@ -943,6 +1112,7 @@ struct AuthorizedApp {
 struct BrokerDispatch {
     response: BrokerResponse,
     descriptor: Option<OwnedFd>,
+    transition: Option<IntentTransition>,
 }
 
 impl BrokerDispatch {
@@ -950,8 +1120,36 @@ impl BrokerDispatch {
         Self {
             response,
             descriptor: None,
+            transition: None,
         }
     }
+}
+
+#[derive(Debug)]
+struct IntentTransition {
+    intent_id: u64,
+    sender_app_id: String,
+    target_app_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IntentTargetError {
+    NotFound,
+    Ambiguous,
+}
+
+fn select_intent_target(
+    action: &str,
+    manifests: &[cp0_manifest::AppManifest],
+) -> Result<String, IntentTargetError> {
+    let mut matches = manifests
+        .iter()
+        .filter(|manifest| manifest.intents.iter().any(|candidate| candidate == action));
+    let first = matches.next().ok_or(IntentTargetError::NotFound)?;
+    if matches.next().is_some() {
+        return Err(IntentTargetError::Ambiguous);
+    }
+    Ok(first.id.clone())
 }
 
 #[derive(Debug)]
@@ -1350,5 +1548,27 @@ mod tests {
             "malformed\n",
             "cardputerzero-app-20000.service"
         ));
+    }
+
+    #[test]
+    fn intent_routes_only_to_one_explicit_receiver() {
+        let action = "dev.cardputerzero.documents.open";
+        let mut first = crate::tests::manifest();
+        first.intents = vec![action.into()];
+        let mut second = first.clone();
+        second.id = "dev.cardputerzero.second".into();
+
+        assert_eq!(
+            select_intent_target(action, &[first.clone()]),
+            Ok(first.id.clone())
+        );
+        assert_eq!(
+            select_intent_target(action, &[first.clone(), second]),
+            Err(IntentTargetError::Ambiguous)
+        );
+        assert_eq!(
+            select_intent_target("dev.cardputerzero.missing", &[first]),
+            Err(IntentTargetError::NotFound)
+        );
     }
 }

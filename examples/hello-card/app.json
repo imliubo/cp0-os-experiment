@@ -11,6 +11,9 @@
     "memory_mb": 24,
     "storage_mb": 8
   },
+  "intents": [
+    "dev.cardputerzero.hello.open"
+  ],
   "permissions": [
     {
       "name": "notifications.post",

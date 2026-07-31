@@ -6,6 +6,7 @@ pub mod display;
 pub mod documents;
 pub mod gpio;
 pub mod input;
+pub mod intents;
 pub mod network;
 pub mod radio;
 pub mod storage;

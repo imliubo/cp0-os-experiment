@@ -230,7 +230,10 @@ fn send_broker_command(command: BrokerCommand) -> Result<(), String> {
         | BrokerOutcome::StorageStored { .. }
         | BrokerOutcome::StorageValue { .. }
         | BrokerOutcome::StorageNotFound
-        | BrokerOutcome::StorageDeleted { .. } => {
+        | BrokerOutcome::StorageDeleted { .. }
+        | BrokerOutcome::IntentAccepted { .. }
+        | BrokerOutcome::IntentMessage { .. }
+        | BrokerOutcome::IntentEmpty => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&response)

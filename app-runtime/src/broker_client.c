@@ -29,6 +29,8 @@
 #define CP0_LORA_METADATA_BYTES 4U
 #define CP0_STORAGE_MAX_KEY_BYTES 64U
 #define CP0_STORAGE_MAX_VALUE_BYTES (8U * 1024U)
+#define CP0_INTENT_MAX_ACTION_BYTES 96U
+#define CP0_INTENT_MAX_PAYLOAD_BYTES 1024U
 
 static bool append_bytes(char *output, size_t capacity, size_t *offset,
                          const char *value, size_t length) {
@@ -117,7 +119,9 @@ static int32_t decode_result(const char *response) {
         strstr(response, "\"code\":\"unavailable\"") != NULL ||
         strstr(response, "\"code\":\"timeout\"") != NULL ||
         strstr(response, "\"code\":\"tls\"") != NULL ||
-        strstr(response, "\"code\":\"too-many-redirects\"") != NULL)
+        strstr(response, "\"code\":\"too-many-redirects\"") != NULL ||
+        strstr(response, "\"code\":\"not-found\"") != NULL ||
+        strstr(response, "\"code\":\"ambiguous\"") != NULL)
         return CP0_BROKER_UNAVAILABLE;
     return CP0_BROKER_INTERNAL;
 }
@@ -1009,4 +1013,122 @@ int32_t cp0_broker_storage_delete(const uint8_t *key, size_t key_length) {
     if (!json_bool_field(response, "existed", &existed))
         return CP0_BROKER_INTERNAL;
     return existed ? 1 : 0;
+}
+
+static bool valid_intent_action(const uint8_t *action, size_t action_length) {
+    size_t part_length = 0;
+    size_t parts = 1;
+
+    if (action == NULL || action_length == 0U ||
+        action_length > CP0_INTENT_MAX_ACTION_BYTES)
+        return false;
+    for (size_t index = 0; index < action_length; index++) {
+        uint8_t byte = action[index];
+        if (byte == '.') {
+            if (part_length == 0U || action[index - 1U] == '-')
+                return false;
+            part_length = 0U;
+            parts++;
+            continue;
+        }
+        if (part_length == 0U && (byte < 'a' || byte > 'z'))
+            return false;
+        if (!((byte >= 'a' && byte <= 'z') ||
+              (byte >= '0' && byte <= '9') || byte == '-'))
+            return false;
+        part_length++;
+        if (part_length > 32U)
+            return false;
+    }
+    return parts >= 3U && part_length > 0U && action[action_length - 1U] != '-';
+}
+
+int32_t cp0_broker_intent_send(const uint8_t *action, size_t action_length,
+                               const uint8_t *payload,
+                               size_t payload_length) {
+    static const char prefix[] =
+        "{\"protocol_version\":1,\"request_id\":14,\"command\":{"
+        "\"name\":\"send-intent\",\"action\":";
+    static const char between[] = ",\"payload_base64\":\"";
+    static const char suffix[] = "\"}}\n";
+    char request[2048];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    size_t offset = 0;
+    int32_t result;
+
+    if (!valid_intent_action(action, action_length) ||
+        payload_length > CP0_INTENT_MAX_PAYLOAD_BYTES ||
+        (payload == NULL && payload_length != 0U))
+        return CP0_BROKER_INVALID_ARGUMENT;
+    if (!append_bytes(request, sizeof(request), &offset, prefix,
+                      sizeof(prefix) - 1U) ||
+        !append_json_string(request, sizeof(request), &offset, action,
+                            action_length) ||
+        !append_bytes(request, sizeof(request), &offset, between,
+                      sizeof(between) - 1U) ||
+        !append_base64(request, sizeof(request), &offset, payload,
+                       payload_length) ||
+        !append_bytes(request, sizeof(request), &offset, suffix,
+                      sizeof(suffix) - 1U))
+        return CP0_BROKER_INTERNAL;
+    result = broker_exchange(request, offset, response, sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    if (strstr(response, "\"status\":\"intent-accepted\"") == NULL)
+        return decode_result(response);
+    return CP0_BROKER_OK;
+}
+
+int64_t cp0_broker_decode_intent_response(const char *response,
+                                          uint8_t *action,
+                                          size_t action_capacity,
+                                          uint8_t *payload,
+                                          size_t payload_capacity) {
+    const char *returned_action;
+    const char *encoded;
+    size_t action_length;
+    size_t encoded_length;
+    size_t payload_length;
+
+    if (response == NULL || action == NULL || action_capacity == 0U ||
+        action_capacity > CP0_INTENT_MAX_ACTION_BYTES || payload == NULL ||
+        payload_capacity == 0U ||
+        payload_capacity > CP0_INTENT_MAX_PAYLOAD_BYTES)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    if (strstr(response, "\"status\":\"intent-empty\"") != NULL)
+        return 0;
+    if (strstr(response, "\"status\":\"intent-message\"") == NULL)
+        return decode_result(response);
+    returned_action = json_string_field(response, "action", &action_length);
+    encoded = json_string_field(response, "payload_base64", &encoded_length);
+    if (returned_action == NULL || action_length > action_capacity ||
+        !valid_intent_action((const uint8_t *)returned_action, action_length) ||
+        encoded == NULL ||
+        !decode_base64(encoded, encoded_length, payload, payload_capacity,
+                       &payload_length) ||
+        payload_length > CP0_INTENT_MAX_PAYLOAD_BYTES)
+        return CP0_BROKER_RESOURCE_LIMIT;
+    memcpy(action, returned_action, action_length);
+    return ((int64_t)action_length << 32) | (int64_t)payload_length;
+}
+
+int64_t cp0_broker_intent_take(uint8_t *action, size_t action_capacity,
+                               uint8_t *payload, size_t payload_capacity) {
+    static const char request[] =
+        "{\"protocol_version\":1,\"request_id\":15,\"command\":{"
+        "\"name\":\"take-intent\"}}\n";
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int32_t result;
+
+    if (action == NULL || action_capacity == 0U ||
+        action_capacity > CP0_INTENT_MAX_ACTION_BYTES || payload == NULL ||
+        payload_capacity == 0U ||
+        payload_capacity > CP0_INTENT_MAX_PAYLOAD_BYTES)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    result = broker_exchange(request, sizeof(request) - 1U, response,
+                             sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_intent_response(response, action, action_capacity,
+                                             payload, payload_capacity);
 }

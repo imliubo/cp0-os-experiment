@@ -159,6 +159,23 @@ static int32_t cp0_storage_delete(wasm_exec_env_t execution_environment,
     return cp0_broker_storage_delete(key, (size_t)key_length);
 }
 
+static int32_t cp0_intent_send(wasm_exec_env_t execution_environment,
+                               const uint8_t *action, uint32_t action_length,
+                               const uint8_t *payload,
+                               uint32_t payload_length) {
+    (void)execution_environment;
+    return cp0_broker_intent_send(action, (size_t)action_length, payload,
+                                  (size_t)payload_length);
+}
+
+static int64_t cp0_intent_take(wasm_exec_env_t execution_environment,
+                               uint8_t *action, uint32_t action_capacity,
+                               uint8_t *payload, uint32_t payload_capacity) {
+    (void)execution_environment;
+    return cp0_broker_intent_take(action, (size_t)action_capacity, payload,
+                                  (size_t)payload_capacity);
+}
+
 static NativeSymbol symbols[] = {
     {"cp0_monotonic_milliseconds", (void *)cp0_monotonic_milliseconds, "()I",
      NULL},
@@ -185,6 +202,8 @@ static NativeSymbol symbols[] = {
     {"cp0_storage_put", (void *)cp0_storage_put, "(*~*~)i", NULL},
     {"cp0_storage_get", (void *)cp0_storage_get, "(*~*~)i", NULL},
     {"cp0_storage_delete", (void *)cp0_storage_delete, "(*~)i", NULL},
+    {"cp0_intent_send", (void *)cp0_intent_send, "(*~*~)i", NULL},
+    {"cp0_intent_take", (void *)cp0_intent_take, "(*~*~)I", NULL},
 };
 
 NativeSymbol *cp0_host_symbols(uint32_t *count) {

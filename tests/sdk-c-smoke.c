@@ -28,6 +28,10 @@ int sdk_c_smoke(void) {
     uint8_t storage_value[16] = {1};
     uint32_t storage_value_length = 0;
     uint8_t storage_existed = 0;
+    static const uint8_t intent_action[] = "dev.cardputerzero.documents.open";
+    uint8_t intent_action_buffer[CP0_MAX_INTENT_ACTION_BYTES] = {0};
+    uint8_t intent_payload[32] = {0};
+    cp0_intent_message_t intent_message = {0};
     (void)cp0_poll_key_event(&event, sizeof(event), 0);
     (void)cp0_display_dimensions();
     (void)cp0_http_get(url, (uint32_t)(sizeof(url) - 1U), network_body,
@@ -51,6 +55,11 @@ int sdk_c_smoke(void) {
                           &storage_value_length);
     (void)cp0_storage_delete(storage_key, sizeof(storage_key) - 1U,
                              &storage_existed);
+    (void)cp0_intent_send(intent_action, sizeof(intent_action) - 1U,
+                          intent_payload, sizeof(intent_payload));
+    (void)cp0_intent_take(intent_action_buffer, sizeof(intent_action_buffer),
+                          intent_payload, sizeof(intent_payload),
+                          &intent_message);
     return result == CP0_ERROR_UNAVAILABLE ? (int)cp0_monotonic_milliseconds()
                                            : (int)result;
 }

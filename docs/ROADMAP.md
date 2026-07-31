@@ -82,7 +82,8 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 - [x] 实现外接 SX1276 LoRa broker，固定 SPI/调制参数、地区频点边界、发送限速、
   `radio.lora` 授权和 Rust/C/C++ SDK API；镜像默认禁用。
 - [ ] 连接 SX1276 模块并确认当地合法频点后完成收发、限速和拒绝权限真机验收。
-- [ ] 定义 Intent Broker。
+- [x] 实现 Intent Broker：manifest 显式导出、唯一接收方路由、8 条有界队列、响应后
+  单前台切换，以及 Rust/C/C++ SDK 一次性 `take` API。
 - [x] 实现应用私有存储 broker 与 manifest 配额，移除 Runtime 的宿主数据目录挂载，
   提供原子有界 key/value Rust/C/C++ SDK API。
 - [ ] 稳定性监控结束后完成存储持久化、配额拒绝及应用间读取隔离真机验收。

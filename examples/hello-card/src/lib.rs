@@ -2,7 +2,8 @@
 
 use core::panic::PanicInfo;
 use cp0_sdk::{
-    Error, audio, camera, display, documents, gpio, input, network, radio, storage, system,
+    Error, audio, camera, display, documents, gpio, input, intents, network, radio, storage,
+    system,
 };
 
 const FRAME_BYTES: usize =
@@ -13,6 +14,8 @@ static mut NETWORK_BODY: [u8; network::MAX_RESPONSE_BODY_BYTES] =
 static mut AUDIO_SAMPLES: [i16; audio::MAX_FRAMES] = [0; audio::MAX_FRAMES];
 static mut CAMERA_PIXELS: [u16; camera::PIXEL_COUNT] = [0; camera::PIXEL_COUNT];
 static mut LORA_PAYLOAD: [u8; radio::MAX_PAYLOAD_BYTES] = [0; radio::MAX_PAYLOAD_BYTES];
+static mut INTENT_ACTION: [u8; intents::MAX_ACTION_BYTES] = [0; intents::MAX_ACTION_BYTES];
+static mut INTENT_PAYLOAD: [u8; intents::MAX_PAYLOAD_BYTES] = [0; intents::MAX_PAYLOAD_BYTES];
 const KEY_N: u16 = 49;
 const KEY_D: u16 = 32;
 const KEY_P: u16 = 25;
@@ -21,6 +24,8 @@ const KEY_C: u16 = 46;
 const KEY_G: u16 = 34;
 const KEY_L: u16 = 38;
 const KEY_S: u16 = 31;
+const KEY_I: u16 = 23;
+const HELLO_INTENT: &str = "dev.cardputerzero.hello.open";
 
 fn prepare_frame() -> &'static mut [u8] {
     // The frame lives in the WASM data section rather than the 64 KiB call
@@ -208,6 +213,44 @@ fn request_private_storage(frame: &mut [u8]) {
     show_action_status(frame, color);
 }
 
+fn take_pending_intent(frame: &mut [u8]) {
+    let action = unsafe {
+        core::slice::from_raw_parts_mut(
+            core::ptr::addr_of_mut!(INTENT_ACTION).cast::<u8>(),
+            intents::MAX_ACTION_BYTES,
+        )
+    };
+    let payload = unsafe {
+        core::slice::from_raw_parts_mut(
+            core::ptr::addr_of_mut!(INTENT_PAYLOAD).cast::<u8>(),
+            intents::MAX_PAYLOAD_BYTES,
+        )
+    };
+    let color = match intents::take(action, payload) {
+        Ok(Some(message))
+            if &action[..message.action_length] == HELLO_INTENT.as_bytes()
+                && &payload[..message.payload_length] == b"restart" =>
+        {
+            0x07e0
+        }
+        Ok(None) => return,
+        Ok(Some(_)) => 0xf81f,
+        Err(Error::Unavailable) => 0xffe0,
+        Err(_) => 0xf81f,
+    };
+    show_action_status(frame, color);
+}
+
+fn request_intent(frame: &mut [u8]) {
+    let color = match intents::send(HELLO_INTENT, b"restart") {
+        Ok(()) => 0x07e0,
+        Err(Error::Unavailable) => 0xffe0,
+        Err(Error::ResourceLimit) => 0xf800,
+        Err(_) => 0xf81f,
+    };
+    show_action_status(frame, color);
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
     const TITLE: &str = "Hello Card";
@@ -215,6 +258,7 @@ pub extern "C" fn main() -> i32 {
     let mut posted = false;
     let mut rendered = false;
     let frame = prepare_frame();
+    take_pending_intent(frame);
 
     loop {
         if !rendered {
@@ -256,6 +300,9 @@ pub extern "C" fn main() -> i32 {
                 }
                 if event.code == KEY_S {
                     request_private_storage(frame);
+                }
+                if event.code == KEY_I {
+                    request_intent(frame);
                 }
                 show_key(frame, event.code);
                 rendered = false;

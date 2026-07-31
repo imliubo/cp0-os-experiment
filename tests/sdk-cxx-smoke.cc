@@ -21,6 +21,10 @@ extern "C" int sdk_cxx_smoke() {
     uint8_t storage_value[16]{1};
     uint32_t storage_value_length{};
     uint8_t storage_existed{};
+    static const uint8_t intent_action[] = "dev.cardputerzero.documents.open";
+    uint8_t intent_action_buffer[CP0_MAX_INTENT_ACTION_BYTES]{};
+    uint8_t intent_payload[32]{};
+    cp0_intent_message_t intent_message{};
     (void)cp0_http_get(url, sizeof(url) - 1U, body, sizeof(body), &response);
     (void)cp0_document_open(&document);
     (void)cp0_audio_play(audio_samples, 4U);
@@ -37,5 +41,10 @@ extern "C" int sdk_cxx_smoke() {
                           &storage_value_length);
     (void)cp0_storage_delete(storage_key, sizeof(storage_key) - 1U,
                              &storage_existed);
+    (void)cp0_intent_send(intent_action, sizeof(intent_action) - 1U,
+                          intent_payload, sizeof(intent_payload));
+    (void)cp0_intent_take(intent_action_buffer, sizeof(intent_action_buffer),
+                          intent_payload, sizeof(intent_payload),
+                          &intent_message);
     return cp0_poll_key_event(&event, sizeof(event), 1);
 }

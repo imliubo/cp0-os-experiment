@@ -54,5 +54,15 @@ int32_t cp0_broker_decode_storage_get_response(const char *response,
                                                uint8_t *value,
                                                size_t value_capacity);
 int32_t cp0_broker_storage_delete(const uint8_t *key, size_t key_length);
+int32_t cp0_broker_intent_send(const uint8_t *action, size_t action_length,
+                               const uint8_t *payload,
+                               size_t payload_length);
+int64_t cp0_broker_intent_take(uint8_t *action, size_t action_capacity,
+                               uint8_t *payload, size_t payload_capacity);
+int64_t cp0_broker_decode_intent_response(const char *response,
+                                          uint8_t *action,
+                                          size_t action_capacity,
+                                          uint8_t *payload,
+                                          size_t payload_capacity);
 
 #endif

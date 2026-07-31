@@ -37,3 +37,8 @@ valid regional configuration.
 key/value storage. Keys are bounded to 64 safe ASCII bytes and values to 8 KiB;
 the installed manifest's `storage_mb` field is enforced by the storage broker.
 The Runtime does not expose a writable host filesystem.
+
+`cp0_intent_send` and `cp0_intent_take` provide manifest-routed application
+handoff. Actions are reverse-domain ASCII names up to 96 bytes, payloads are at
+most 1024 bytes, and a taken message is consumed once. No target application,
+socket or native IPC handle appears in the SDK.
