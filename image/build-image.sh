@@ -113,6 +113,13 @@ cp "$repo_root/target/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm" \
 # image adds a large Raspberry Pi utility dependency set and can fill rootfs.
 touch "$pi_gen_dir/export-image/01-user-rename/SKIP"
 
+# Verify the mounted final filesystem after initramfs generation and before
+# pi-gen unmounts and compresses the export image.
+verify_stage="$pi_gen_dir/export-image/06-cardputerzero-verify"
+mkdir -p "$verify_stage"
+install -m 0755 "$repo_root/tests/test-built-rootfs-profile.sh" \
+    "$verify_stage/00-run.sh"
+
 config_file=$(mktemp "${TMPDIR:-/tmp}/cp0-pigen-config.XXXXXX")
 cleanup() {
     rm -f "$config_file"
