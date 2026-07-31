@@ -98,6 +98,18 @@ for path in "${enabled_units[@]}"; do
         exit 1
     fi
 done
+machine_id_commit_mask="$rootfs/etc/systemd/system/systemd-machine-id-commit.service"
+if [[ $image_profile == product ]]; then
+    if [[ ! -L $machine_id_commit_mask ||
+          $(readlink "$machine_id_commit_mask") != /dev/null ]]; then
+        echo "error: product image does not mask redundant machine-id commit" >&2
+        exit 1
+    fi
+elif [[ -L $machine_id_commit_mask &&
+        $(readlink "$machine_id_commit_mask") == /dev/null ]]; then
+    echo "error: recovery image masks machine-id commit" >&2
+    exit 1
+fi
 for path in getty.target.wants/getty@tty1.service \
     multi-user.target.wants/cardputerzero-compositor.service \
     multi-user.target.wants/cardputerzero-recovery-console.service; do

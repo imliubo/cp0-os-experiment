@@ -65,6 +65,13 @@ apt-get autoremove -y --purge
 apt-get clean
 CHROOT
 
+if [[ $image_profile == product ]]; then
+    on_chroot <<'CHROOT'
+set -e
+systemctl mask systemd-machine-id-commit.service
+CHROOT
+fi
+
 boot_config="${ROOTFS_DIR}/boot/firmware/config.txt"
 cmdline="${ROOTFS_DIR}/boot/firmware/cmdline.txt"
 

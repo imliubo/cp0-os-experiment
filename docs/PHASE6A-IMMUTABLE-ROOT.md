@@ -80,6 +80,9 @@ host-key provisioning must not use `ConditionFirstBoot=yes`. The
 `cardputerzero-ssh-prepare.service` instead runs before `ssh.service`, creates any
 missing keys directly in the persistent `/etc/ssh` bind mount and validates the
 server configuration before it can listen.
+The same early identity setup means the product does not need systemd's later
+`systemd-machine-id-commit.service`; it is masked only in the product profile to
+avoid a guaranteed failed commit against the read-only persistent bind mount.
 Everything else written to `/etc` or `/var` is discarded on reboot.
 
 The data filesystem root is mode `0700`. Applications do not receive its mount
