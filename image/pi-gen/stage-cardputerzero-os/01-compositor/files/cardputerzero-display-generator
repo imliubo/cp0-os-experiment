@@ -1,0 +1,33 @@
+#!/bin/sh
+set -eu
+
+compositor=cardputerzero-compositor.service
+recovery=cardputerzero-recovery-console.service
+
+select_display_unit() {
+    profile=$1
+    marker=$2
+
+    if [ "$profile" = product ] &&
+       [ ! -e "$marker" ] && [ ! -L "$marker" ]; then
+        printf '%s\n' "$compositor"
+    else
+        printf '%s\n' "$recovery"
+    fi
+}
+
+if [ "${1:-}" = --select ]; then
+    [ "$#" -eq 3 ] || exit 2
+    select_display_unit "$2" "$3"
+    exit 0
+fi
+
+[ "$#" -eq 3 ] || exit 2
+generator_dir=$1
+profile=$(cat /etc/cardputerzero/image-profile 2>/dev/null || true)
+marker=/var/lib/cardputerzero/registry/recovery-mode
+unit=$(select_display_unit "$profile" "$marker")
+wants_dir=$generator_dir/multi-user.target.wants
+
+mkdir -p "$wants_dir"
+ln -s "/usr/lib/systemd/system/$unit" "$wants_dir/$unit"

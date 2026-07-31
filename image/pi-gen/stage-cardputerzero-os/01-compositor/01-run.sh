@@ -234,6 +234,9 @@ install -D -m 0644 \
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/files/cardputerzero-recovery-console.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-recovery-console.service"
+install -D -m 0755 \
+    "${STAGE_DIR}/01-compositor/files/cardputerzero-display-generator" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system-generators/cardputerzero-display-generator"
 install -D -m 0755 "${STAGE_DIR}/01-compositor/files/start-compositor.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/start-compositor.sh"
 install -D -m 0755 "${STAGE_DIR}/01-compositor/files/wait-wayland.sh" \
@@ -263,18 +266,21 @@ else
 fi
 CHROOT
 
+on_chroot <<'CHROOT'
+set -e
+systemctl disable getty@tty1.service cardputerzero-compositor.service \
+    cardputerzero-recovery-console.service 2>/dev/null || true
+CHROOT
+
 if [[ $image_profile == product ]]; then
     on_chroot <<'CHROOT'
 set -e
 systemctl enable seatd.service
-systemctl enable cardputerzero-compositor.service
-systemctl enable cardputerzero-recovery-console.service
 CHROOT
 else
     on_chroot <<'CHROOT'
 set -e
-systemctl disable seatd.service cardputerzero-recovery-console.service \
-    2>/dev/null || true
+systemctl disable seatd.service 2>/dev/null || true
 systemctl mask cardputerzero-compositor.service \
     cardputerzero-system-shell.service
 CHROOT

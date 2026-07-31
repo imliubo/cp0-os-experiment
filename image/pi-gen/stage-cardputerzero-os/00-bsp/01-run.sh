@@ -237,7 +237,7 @@ systemctl mask apt-daily.service apt-daily.timer \
     apt-daily-upgrade.service apt-daily-upgrade.timer \
     fb_load.service 2>/dev/null || true
 systemctl enable NetworkManager.service ssh.service apparmor.service \
-    getty@tty1.service cardputerzero-console-banner.service \
+    cardputerzero-console-banner.service \
     cardputerzero-overlay-root-status.service \
     cardputerzero-ssh-prepare.service
 systemctl set-default multi-user.target

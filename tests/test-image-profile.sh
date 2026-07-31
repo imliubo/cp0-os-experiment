@@ -21,7 +21,11 @@ grep -q 'fbcon=map:1' "$stage"
 grep -q 'for token in quiet splash fbcon=map:off fbcon=map:0' "$stage"
 grep -q 'fb_load.service' "$stage"
 grep -q 'rm -f /etc/systemd/system/fb_load.service' "$stage"
-grep -q 'getty@tty1.service cardputerzero-console-banner.service' "$stage"
+grep -q 'cardputerzero-console-banner.service' "$stage"
+if grep -q 'getty@tty1.service cardputerzero-console-banner.service' "$stage"; then
+    echo "error: tty1 cannot be statically enabled with the compositor" >&2
+    exit 1
+fi
 grep -q 'cardputerzero-ssh-prepare.service' "$stage"
 grep -q '^RequiredBy=ssh.service$' "$ssh_prepare_unit"
 grep -q '^Before=ssh.service$' "$ssh_prepare_unit"

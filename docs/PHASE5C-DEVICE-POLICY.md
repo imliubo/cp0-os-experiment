@@ -65,7 +65,8 @@ the persistent developer-mode marker for every developer installation.
 Recovery Boot creates the root-owned persistent marker
 `/var/lib/cardputerzero/registry/recovery-mode`. On the next and subsequent
 boots, the compositor refuses to start and
-`cardputerzero-recovery-console.service` explicitly activates `getty@tty1`.
+`cardputerzero-display-generator` selects
+`cardputerzero-recovery-console.service`, which activates `getty@tty1`.
 The LCD therefore presents the local Linux login console and the keyboard can
 enter commands.
 

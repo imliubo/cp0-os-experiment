@@ -37,6 +37,14 @@ one-shot `ConditionPathExists` checks. The keyboard udev rule carries the
 early multi-user target transaction from permanently skipping the compositor
 before the LCD and keyboard aliases exist.
 
+The product does not statically enable either `getty@tty1` or the compositor.
+At manager startup, `cardputerzero-display-generator` selects exactly one
+session: the compositor for a normal product boot, or the recovery console for
+a recovery image or a product with the persistent recovery marker. This avoids
+placing mutually conflicting display sessions in the same systemd transaction.
+The compositor's `OnFailure=getty@tty1.service` remains an independent fallback
+for failures after normal-session selection.
+
 V0.6 hardware validation passed with Weston 14.0.2, the DRM atomic backend,
 Pixman shadow framebuffer, kiosk shell and `weston-simple-shm` at
 `320x170@30Hz`. Libinput selected `tca8418c` when the custom seat was active.

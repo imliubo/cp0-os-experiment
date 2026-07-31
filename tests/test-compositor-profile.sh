@@ -7,6 +7,7 @@ packages="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/00-packag
 service="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-compositor.service"
 shell_service="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-system-shell.service"
 recovery_service="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-recovery-console.service"
+display_generator="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-generator"
 launcher="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/start-compositor.sh"
 waiter="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/wait-wayland.sh"
 unblanker="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/unblank-display.sh"
@@ -81,10 +82,17 @@ if grep -q '^ConditionPathExists=/dev/' "$service"; then
 fi
 grep -q 'TAG+="systemd"' "$udev_rules"
 grep -q 'files/99-cardputerzero-systemd.rules' "$stage"
-grep -q '^ConditionPathExists=/var/lib/cardputerzero/registry/recovery-mode$' "$recovery_service"
 grep -q '^Conflicts=cardputerzero-compositor.service$' "$recovery_service"
 grep -q '^Wants=getty@tty1.service$' "$recovery_service"
-grep -q 'systemctl enable cardputerzero-recovery-console.service' "$stage"
+if grep -q '^WantedBy=' "$recovery_service"; then
+    echo "error: recovery console must only be selected by the display generator" >&2
+    exit 1
+fi
+grep -q 'systemctl disable getty@tty1.service cardputerzero-compositor.service' "$stage"
+if grep -Eq 'systemctl enable (getty@tty1|cardputerzero-(compositor|recovery-console))' "$stage"; then
+    echo "error: display sessions cannot be enabled outside the display generator" >&2
+    exit 1
+fi
 grep -q '^RequiresMountsFor=/var/lib/cardputerzero/registry$' "$service"
 grep -q '^ConditionPathExists=!/var/lib/cardputerzero/registry/recovery-mode$' "$service"
 grep -q '^mode=320x170@30$' "$config"
@@ -92,6 +100,24 @@ grep -qx 'seatd' "$packages"
 sh -n "$launcher"
 sh -n "$waiter"
 sh -n "$unblanker"
+sh -n "$display_generator"
+mkdir -p "$repo_root/target/test-tmp"
+generator_tmp=$(mktemp -d "$repo_root/target/test-tmp/display-generator.XXXXXX")
+trap 'rm -rf -- "$generator_tmp"' EXIT
+marker="$generator_tmp/recovery-mode"
+test "$("$display_generator" --select product "$marker")" = \
+    cardputerzero-compositor.service
+touch "$marker"
+test "$("$display_generator" --select product "$marker")" = \
+    cardputerzero-recovery-console.service
+rm -f "$marker"
+ln -s invalid "$marker"
+test "$("$display_generator" --select product "$marker")" = \
+    cardputerzero-recovery-console.service
+test "$("$display_generator" --select recovery "$marker")" = \
+    cardputerzero-recovery-console.service
+test "$("$display_generator" --select invalid "$marker")" = \
+    cardputerzero-recovery-console.service
 grep -q '/dev/fb_lcd' "$unblanker"
 grep -q '/sys/class/graphics/\$fb_device/blank' "$unblanker"
 grep -q "printf '0" "$unblanker"

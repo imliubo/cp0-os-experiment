@@ -4,7 +4,6 @@ After=local-fs.target
 Before=getty@tty1.service
 Wants=getty@tty1.service
 Conflicts=cardputerzero-compositor.service
-ConditionPathExists=/var/lib/cardputerzero/registry/recovery-mode
 
 [Service]
 Type=oneshot
@@ -27,6 +26,3 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
-
-[Install]
-WantedBy=multi-user.target

@@ -60,4 +60,8 @@ if grep -q 'cp0-app-20000 -g cp0-app-20000 -m 0700' "$stage"; then
     echo "error: application data must not be mounted from an app-owned host directory" >&2
     exit 1
 fi
-grep -qx 'systemctl enable cardputerzero-compositor.service' "$compositor"
+grep -q 'cardputerzero-display-generator' "$compositor"
+if grep -qx 'systemctl enable cardputerzero-compositor.service' "$compositor"; then
+    echo "error: compositor must be selected by the display generator" >&2
+    exit 1
+fi

@@ -17,6 +17,7 @@ esac
 
 for file in cardputerzero-system-shell cardputerzero-policy.so \
     cardputerzero-app-runtime cardputerzero-compositor.service \
+    cardputerzero-display-generator \
     cardputerzero-recovery-console.service \
     cardputerzero-system-shell.service; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
@@ -45,14 +46,18 @@ install -o root -g root -m 0644 \
 install -o root -g root -m 0644 \
     "$staging/cardputerzero-recovery-console.service" \
     /etc/systemd/system/cardputerzero-recovery-console.service
+install -D -o root -g root -m 0755 \
+    "$staging/cardputerzero-display-generator" \
+    /usr/lib/systemd/system-generators/cardputerzero-display-generator
 install -o root -g root -m 0755 "$staging/cardputerzero-system-shell" \
     /usr/bin/cardputerzero-system-shell
 install -o root -g root -m 0755 "$staging/cardputerzero-policy.so" \
     /usr/lib/aarch64-linux-gnu/weston/cardputerzero-policy.so
 install -o root -g root -m 0755 "$staging/cardputerzero-app-runtime" \
     /usr/libexec/cardputerzero/app-runtime
+systemctl disable getty@tty1.service cardputerzero-compositor.service \
+    cardputerzero-recovery-console.service 2>/dev/null || true
 systemctl daemon-reload
-systemctl enable cardputerzero-recovery-console.service
 systemctl start cardputerzero-compositor.service
 
 wait_active()

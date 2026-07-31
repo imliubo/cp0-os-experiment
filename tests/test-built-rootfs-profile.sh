@@ -40,6 +40,7 @@ required_executables=(
     usr/libexec/cardputerzero/data-grow-initramfs
     usr/libexec/cardputerzero/overlay-root-initramfs
     usr/libexec/cardputerzero/prepare-ssh.sh
+    usr/lib/systemd/system-generators/cardputerzero-display-generator
     etc/initramfs-tools/scripts/init-bottom/cardputerzero-overlay-root
     etc/initramfs-tools/scripts/local-premount/cardputerzero-data-grow
 )
@@ -74,13 +75,10 @@ enabled_units=(
     multi-user.target.wants/ssh.service
     ssh.service.requires/cardputerzero-ssh-prepare.service
     sysinit.target.wants/regenerate_ssh_host_keys.service
-    getty.target.wants/getty@tty1.service
 )
 if [[ $image_profile == product ]]; then
     enabled_units+=(
-        multi-user.target.wants/cardputerzero-compositor.service
         multi-user.target.wants/cardputerzero-overlay-root-status.service
-        multi-user.target.wants/cardputerzero-recovery-console.service
         multi-user.target.wants/seatd.service
         sockets.target.wants/cardputerzero-appd.socket
         sockets.target.wants/cardputerzero-audiod.socket
@@ -97,6 +95,15 @@ fi
 for path in "${enabled_units[@]}"; do
     if [[ ! -L $rootfs/etc/systemd/system/$path ]]; then
         echo "error: required unit is not enabled: $path" >&2
+        exit 1
+    fi
+done
+for path in getty.target.wants/getty@tty1.service \
+    multi-user.target.wants/cardputerzero-compositor.service \
+    multi-user.target.wants/cardputerzero-recovery-console.service; do
+    if [[ -e $rootfs/etc/systemd/system/$path ||
+          -L $rootfs/etc/systemd/system/$path ]]; then
+        echo "error: display session is statically enabled: $path" >&2
         exit 1
     fi
 done
@@ -199,6 +206,23 @@ grep -Fqx '/scripts/init-bottom/cardputerzero-overlay-root "$@"' \
     "$initramfs_extract/scripts/init-bottom/ORDER"
 grep -Fqx '/scripts/local-premount/cardputerzero-data-grow "$@"' \
     "$initramfs_extract/scripts/local-premount/ORDER"
+
+generator_output="$initramfs_extract/display-generator"
+generator_chroot="$initramfs_chroot/display-generator"
+mkdir -p "$generator_output/early" "$generator_output/late"
+chroot "$rootfs" \
+    /usr/lib/systemd/system-generators/cardputerzero-display-generator \
+    "$generator_chroot" "$generator_chroot/early" "$generator_chroot/late"
+if [[ $image_profile == product ]]; then
+    selected_display=cardputerzero-compositor.service
+else
+    selected_display=cardputerzero-recovery-console.service
+fi
+test -L "$generator_output/multi-user.target.wants/$selected_display"
+if [[ $(find "$generator_output/multi-user.target.wants" -type l | wc -l) -ne 1 ]]; then
+    echo "error: display generator did not select exactly one session" >&2
+    exit 1
+fi
 
 data_root="$rootfs/var/lib/cardputerzero-persist"
 if [[ $(findmnt -n -o FSTYPE --target "$data_root") != ext4 ]]; then
