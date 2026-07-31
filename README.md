@@ -72,6 +72,8 @@ Phase 3 已贯通 WAMR 强隔离运行时、权限系统和首个 capability bro
 - `pi-gen` app platform stage：构建并安装 appd、broker sockets、静态 Runtime、
   稳定测试身份与 SDK 版 Hello，开发镜像默认进入 System Shell。
 - Freestanding C11/C++17 SDK 0.1 头文件与 wasm32 编译检查，不暴露 WASI/Linux ABI。
+- 三分区不可变根产品配置：只读 ext4 lower、64 MiB RAM upper、可自动扩容的
+  `cp0-data`，以及应用/权限/信任、网络、SSH 和设备身份的持久路径白名单。
 
 ## 快速验证
 

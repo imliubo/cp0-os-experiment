@@ -26,7 +26,15 @@ grep -q 'tca8418_keypad_m5stack' "$stage"
 grep -q 'panel-mipi-dbid' "$smoke_script"
 grep -q 'copy_file firmware /lib/firmware/cardputerzero,st7789v_lcd.bin' "$firmware_hook"
 grep -q 'cardputerzero-firmware.initramfs-hook' "$stage"
-grep -q '06-cardputerzero-verify' "$build_script"
+grep -q 'export-image/05-finalise/01-run.sh' "$build_script"
+grep -q 'cardputerzero-verify-rootfs.sh' "$build_script"
+grep -q "pi-gen finalise unmount marker changed" "$build_script"
+grep -Fq 'rm -rf "$pi_gen_dir/export-image/06-cardputerzero-verify"' \
+    "$build_script"
+if grep -q 'verify_stage=' "$build_script"; then
+    echo "error: rootfs verification cannot use a post-finalise export stage" >&2
+    exit 1
+fi
 grep -q 'export-image-prerun.sh' "$build_script"
 grep -q 'scripts/init-bottom/cardputerzero-overlay-root' "$rootfs_verifier"
 grep -q 'build proxy configuration leaked' "$rootfs_verifier"
@@ -36,6 +44,7 @@ grep -q '/pi-gen/stage0 /pi-gen/stage1 /pi-gen/stage-cardputerzero-os' "$build_s
 grep -q 'linux-image-rpi-2712 linux-headers-rpi-2712' "$build_script"
 grep -q "Pi 5 kernel package remains in stage0" "$build_script"
 grep -q "https://deb.debian.org" "$build_script"
+grep -q "https://archive.raspberrypi.com" "$build_script"
 grep -q 'Acquire::https' "$build_script"
 grep -q 'export-image/01-user-rename/SKIP' "$build_script"
 grep -q 'CP0_RESUME_BUILD' "$build_script"

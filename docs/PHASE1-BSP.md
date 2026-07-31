@@ -50,8 +50,9 @@ make verify-image
 
 构建固定使用 `pi-gen` arm64 分支提交
 `ca8aeed0ae300c2a89f55ce9617d5f96a27e99e5`，只执行官方 `stage0`、`stage1`
-和 CardputerZero 自定义阶段，不包含 `stage2`。构建入口将 Debian 源固定为 HTTPS，
-并在 `stage0` 只安装 CM0 所需的 `rpi-v8` 内核，不安装 Pi 5 的 2712 内核与头文件。
+和 CardputerZero 自定义阶段，不包含 `stage2`。构建入口将 Debian 和 Raspberry Pi
+软件源固定为 HTTPS，并在 `stage0` 只安装 CM0 所需的 `rpi-v8` 内核，不安装 Pi 5
+的 2712 内核与头文件。
 自定义阶段生成 `-cp0-os-dev` 镜像，编译固定 BSP 后删除编译器、内核头文件及桌面
 无关组件，并安装真机诊断脚本。构建代理只存在于构建 chroot，导出的系统中不得残留
 代理地址。
@@ -87,6 +88,11 @@ CP0_RESUME_BUILD=1 ./image/build-image.sh
 - journald 使用最大 16 MB 的易失日志，zram 固定 192 MB，不启用写回。
 - 安装并强制启用 `raspberrypi-sys-mods` 提供的 `rpi-resize.service`，首次启动将
   根分区扩展到 SD 卡剩余空间；构建时服务缺失会直接失败。
+
+以上扩根行为仅描述 2026-07-30 的两分区基线。Phase 6A 三分区产品镜像已停用
+`rpi-resize.service` 和 `resize` 内核参数，由 initramfs 只扩展最后一个
+`cp0-data` 分区，并默认使用不可变根；见
+[immutable root and persistent data](PHASE6A-IMMUTABLE-ROOT.md)。
 
 2026-07-30 的 V0.6 精简镜像真机验收结果：
 

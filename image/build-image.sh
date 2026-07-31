@@ -50,8 +50,12 @@ fi
 
 for apt_source in \
     "$pi_gen_dir/stage0/prerun.sh" \
-    "$pi_gen_dir/stage0/00-configure-apt/files/debian.sources"; do
-    sed -i.bak 's|http://deb.debian.org|https://deb.debian.org|g' "$apt_source"
+    "$pi_gen_dir/stage0/00-configure-apt/files/debian.sources" \
+    "$pi_gen_dir/stage0/00-configure-apt/files/raspi.sources"; do
+    sed -i.bak \
+        -e 's|http://deb.debian.org|https://deb.debian.org|g' \
+        -e 's|http://archive.raspberrypi.com|https://archive.raspberrypi.com|g' \
+        "$apt_source"
     rm -f "${apt_source}.bak"
 done
 printf '%s\n' \
@@ -115,12 +119,28 @@ cp "$repo_root/target/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm" \
 # image adds a large Raspberry Pi utility dependency set and can fill rootfs.
 touch "$pi_gen_dir/export-image/01-user-rename/SKIP"
 
-# Verify the mounted final filesystem after initramfs generation and before
-# pi-gen unmounts and compresses the export image.
-verify_stage="$pi_gen_dir/export-image/06-cardputerzero-verify"
-mkdir -p "$verify_stage"
+# Upstream finalise generates the initramfs and then unmounts and compresses the
+# image in the same substage. Inject the release gate immediately before that
+# unmount; a later numbered substage would only see an empty mount point.
+finalise_script="$pi_gen_dir/export-image/05-finalise/01-run.sh"
+rootfs_verifier="$pi_gen_dir/export-image/cardputerzero-verify-rootfs.sh"
 install -m 0755 "$repo_root/tests/test-built-rootfs-profile.sh" \
-    "$verify_stage/00-run.sh"
+    "$rootfs_verifier"
+rm -rf "$pi_gen_dir/export-image/06-cardputerzero-verify"
+if [[ $(grep -c '^ROOT_DEV=' "$finalise_script") -ne 1 ]]; then
+    echo "error: pi-gen finalise unmount marker changed" >&2
+    exit 1
+fi
+if ! grep -Fq 'cardputerzero-verify-rootfs.sh' "$finalise_script"; then
+    sed -i.bak \
+        '/^ROOT_DEV=/i\
+"${EXPORT_CONFIG_DIR}/cardputerzero-verify-rootfs.sh" "${ROOTFS_DIR}"\
+' "$finalise_script"
+    rm -f "${finalise_script}.bak"
+fi
+grep -Fqx \
+    '"${EXPORT_CONFIG_DIR}/cardputerzero-verify-rootfs.sh" "${ROOTFS_DIR}"' \
+    "$finalise_script"
 
 mkdir -p "$repo_root/target/image-build"
 config_file=$(mktemp "$repo_root/target/image-build/cp0-pigen-config.XXXXXX")
