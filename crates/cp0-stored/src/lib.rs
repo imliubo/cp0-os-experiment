@@ -809,7 +809,12 @@ fn validate_content_range(
     let total = total
         .parse::<u64>()
         .map_err(|_| StoreServiceError::Invalid("Content-Range total is invalid".into()))?;
-    if start != expected_start || total != expected_total || end < start || end >= total {
+    if expected_total == 0
+        || start != expected_start
+        || total != expected_total
+        || end < start
+        || end != total - 1
+    {
         return Err(StoreServiceError::Invalid(
             "Content-Range does not match the signed package".into(),
         ));
@@ -1138,13 +1143,22 @@ mod tests {
     fn validates_resume_content_range_and_configuration() {
         validate_content_range("bytes 100-199/200", 100, 200).unwrap();
         for invalid in [
+            "",
             "bytes 99-199/200",
+            "bytes 100-198/200",
             "bytes 100-200/200",
+            "bytes 100-199/201",
+            "bytes 100-199/200/extra",
+            "bytes 100--199/200",
+            "bytes -100-199/200",
+            "bytes 100-199/18446744073709551616",
+            "bytes 100-199/200\r\nX-Test: injected",
             "items 100-199/200",
             "bytes 100-199/*",
         ] {
             assert!(validate_content_range(invalid, 100, 200).is_err());
         }
+        assert!(validate_content_range("bytes 0-0/0", 0, 0).is_err());
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/test-tmp")

@@ -147,8 +147,9 @@ applications from launching.
 
 Automated coverage includes signed catalog bounds, expiry and sequence
 rollback, same-sequence equivocation, HTTPS/public-address enforcement,
-resumable downloads, package hash failure, peer UID authorization, strict
-upgrade enforcement, review/import/permission binding, malformed Shell
+resumable downloads, malicious Content-Range variants, deterministic catalog
+and protocol frame mutation, package hash failure, peer UID authorization,
+strict upgrade enforcement, review/import/permission binding, malformed Shell
 responses, Store navigation and 320x170 screenshot regression.
 
 Before a product endpoint is enabled, complete a real-device run covering

@@ -804,4 +804,39 @@ mod tests {
         let wrong_version = br#"{"protocol_version":2,"request_id":4,"outcome":{"status":"ok","data":{"kind":"refresh-accepted"}}}\n"#;
         assert!(read_response(&mut wrong_version.as_slice()).is_err());
     }
+
+    #[test]
+    fn bounded_mutation_corpus_rejects_tampering_without_panics() {
+        let secret = [19; 32];
+        let public = cp0_package::public_key(&secret);
+        let signed = sign_catalog(catalog(), &secret).unwrap();
+        let encoded = encode_signed_catalog(&signed).unwrap();
+
+        for index in 0..encoded.len() {
+            let mut mutated = encoded.clone();
+            mutated[index] ^= 1 + (index % 251) as u8;
+            if let Ok(decoded) = decode_signed_catalog(&mutated) {
+                assert!(verify_catalog(&decoded, &public).is_err());
+            }
+        }
+
+        let mut random = 0x6d5a_56e9_4f31_2c87_u64;
+        for iteration in 0..4096_usize {
+            random ^= random << 13;
+            random ^= random >> 7;
+            random ^= random << 17;
+            let length = (random as usize ^ iteration) % 513;
+            let mut bytes = Vec::with_capacity(length + 1);
+            for _ in 0..length {
+                random ^= random << 13;
+                random ^= random >> 7;
+                random ^= random << 17;
+                bytes.push(random as u8);
+            }
+            let _ = decode_signed_catalog(&bytes);
+            bytes.push(b'\n');
+            let _ = read_request(&mut bytes.as_slice());
+            let _ = read_response(&mut bytes.as_slice());
+        }
+    }
 }
