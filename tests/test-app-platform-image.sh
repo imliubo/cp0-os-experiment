@@ -55,6 +55,7 @@ grep -q 'device-core-recovery' "$stage"
 grep -q 'device-capability-acceptance' "$stage"
 grep -q 'device-factory-acceptance' "$stage"
 grep -q 'device-stability-monitor' "$stage"
+grep -q 'device-store-acceptance' "$stage"
 grep -q 'device-support-bundle' "$stage"
 grep -q 'chown -R root:root' "$stage"
 if grep -q 'cp0-app-20000 -g cp0-app-20000 -m 0700' "$stage"; then

@@ -31,7 +31,7 @@ for file in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-gpiod cp0-networkd
     device-policy.json \
     cardputerzero-trust.conf \
     device-capability-acceptance.sh device-core-recovery.sh \
-    device-stability-monitor.sh; do
+    device-stability-monitor.sh device-store-acceptance.sh; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
         echo "error: invalid staged file: $file" >&2
         exit 1
@@ -233,6 +233,8 @@ install -o root -g root -m 0755 "$staging/device-capability-acceptance.sh" \
     /usr/libexec/cardputerzero/device-capability-acceptance
 install -o root -g root -m 0755 "$staging/device-stability-monitor.sh" \
     /usr/libexec/cardputerzero/device-stability-monitor
+install -o root -g root -m 0755 "$staging/device-store-acceptance.sh" \
+    /usr/libexec/cardputerzero/device-store-acceptance
 systemctl daemon-reload
 systemctl enable --now cardputerzero-appd.socket cardputerzero-broker.socket
 systemctl enable --now cardputerzero-networkd.socket

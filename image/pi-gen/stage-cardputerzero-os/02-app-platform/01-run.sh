@@ -109,6 +109,8 @@ install -D -m 0755 "${payload}/diagnostics/device-recovery-data.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-recovery-data"
 install -D -m 0755 "${payload}/diagnostics/device-stability-monitor.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-stability-monitor"
+install -D -m 0755 "${payload}/diagnostics/device-store-acceptance.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-store-acceptance"
 install -D -m 0755 "${payload}/diagnostics/device-support-bundle.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-support-bundle"
 install -D -m 0644 "${payload}/hello/app.json" "${hello_root}/app.json"

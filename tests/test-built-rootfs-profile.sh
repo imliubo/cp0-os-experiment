@@ -37,6 +37,7 @@ required_executables=(
     usr/libexec/cardputerzero/device-recovery-data
     usr/libexec/cardputerzero/device-smoke.sh
     usr/libexec/cardputerzero/device-stability-monitor
+    usr/libexec/cardputerzero/device-store-acceptance
     usr/libexec/cardputerzero/device-support-bundle
     usr/libexec/cardputerzero/data-grow-initramfs
     usr/libexec/cardputerzero/overlay-root-initramfs

@@ -5,7 +5,9 @@ check: fmt
 		schemas/device-policy-v1.schema.json appd/device-policy.json \
 		examples/hello-card/app.json \
 		examples/device-capability-probe/app.json \
-		examples/storage-isolation-probe/app.json
+		examples/storage-isolation-probe/app.json \
+		examples/store-acceptance-v1/app.json \
+		examples/store-acceptance-v2/app.json
 	bash -n scripts/*.sh tests/*.sh image/build-image.sh \
 		image/pi-gen/export-image-prerun.sh \
 		image/pi-gen/stage-cardputerzero-os/prerun.sh \
@@ -28,6 +30,7 @@ check: fmt
 	./tests/test-runtime-display.sh
 	./tests/test-device-diagnostics.sh
 	./tests/test-device-capability-acceptance.sh
+	./tests/test-store-acceptance.sh
 	./tests/test-device-deployment.sh
 	./tests/test-malicious-apps.sh
 	./tests/test-security-validation.sh

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "dev.cardputerzero.store-test",
+  "name": "Store Acceptance",
+  "version": "1.0.0",
+  "sdk_version": "1.0",
+  "runtime": "wamr",
+  "entrypoint": "bin/store_acceptance.wasm",
+  "display": "standard",
+  "resources": {
+    "memory_mb": 16,
+    "storage_mb": 1
+  },
+  "permissions": [],
+  "intents": []
+}

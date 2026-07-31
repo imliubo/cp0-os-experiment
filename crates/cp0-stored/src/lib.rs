@@ -209,6 +209,7 @@ impl StoreNetwork for UreqStoreNetwork {
                     StoreServiceError::Invalid("resume response omitted Content-Range".into())
                 })?;
             validate_content_range(content_range, offset, expected_bytes)?;
+            eprintln!("cp0-stored: resuming package download from byte {offset}");
         } else if offset == 0 && status != 200 {
             return Err(StoreServiceError::Unavailable(
                 "package server returned a non-success status",

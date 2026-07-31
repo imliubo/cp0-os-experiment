@@ -134,6 +134,7 @@ cp "$repo_root/scripts/device-core-recovery.sh" \
     "$repo_root/scripts/device-factory-acceptance.sh" \
     "$repo_root/scripts/device-recovery-data.sh" \
     "$repo_root/scripts/device-stability-monitor.sh" \
+    "$repo_root/scripts/device-store-acceptance.sh" \
     "$repo_root/scripts/device-support-bundle.sh" \
     "$platform_payload/diagnostics/"
 cp "$repo_root/target/apps/dev.cardputerzero.hello/0.1.0/app.json" \
