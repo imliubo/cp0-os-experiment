@@ -7,6 +7,7 @@ use cp0_store_metadata::{AgeRating, ImageAsset, LocalizedListing, StoreCategory,
 use cp0_store_protocol::{decode_signed_catalog, verify_catalog};
 use cp0_store_publisher::{RunOutcome, StorePublisher, connect, migrate};
 use cp0_store_scan::submission_content_sha256;
+use cp0_store_transparency::{decode_checkpoint, decode_leaf, leaf_hash, lower_hex, verify_log};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
@@ -178,10 +179,53 @@ async fn postgres_store_publisher_acceptance() {
     .await;
     assert_published_sequence(&publisher, 7, 0).await;
     verify_snapshot(&pool, &origin, 7, &publisher.store_public_key(), "", 0).await;
+    verify_transparency_history(
+        &pool,
+        &origin,
+        &publisher.store_public_key(),
+        &[1, 2, 3, 4, 6, 7],
+        &[
+            "publishing",
+            "publishing",
+            "paused",
+            "published",
+            "published",
+            "removed",
+        ],
+    )
+    .await;
 
     let current = origin.join("current");
     tokio::fs::remove_file(&current).await.unwrap();
     symlink("generations/1", &current).unwrap();
+    let latest_leaf_path = origin.join("generations/7/transparency/leaf.json");
+    let latest_leaf = tokio::fs::read(&latest_leaf_path).await.unwrap();
+    tokio::fs::set_permissions(&latest_leaf_path, std::fs::Permissions::from_mode(0o644))
+        .await
+        .unwrap();
+    tokio::fs::write(&latest_leaf_path, b"{}").await.unwrap();
+    assert!(
+        StorePublisher::open(
+            pool.clone(),
+            &objects,
+            &origin,
+            &signing_key_path,
+            "https://store.example.invalid",
+            "publisher-rejects-origin-tamper",
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        tokio::fs::read_link(&current).await.unwrap(),
+        Path::new("generations/1")
+    );
+    tokio::fs::write(&latest_leaf_path, &latest_leaf)
+        .await
+        .unwrap();
+    tokio::fs::set_permissions(&latest_leaf_path, std::fs::Permissions::from_mode(0o444))
+        .await
+        .unwrap();
     let recovered = StorePublisher::open(
         pool.clone(),
         &objects,
@@ -197,6 +241,8 @@ async fn postgres_store_publisher_acceptance() {
         Path::new("generations/7")
     );
 
+    verify_atomic_publication_rollback(&pool, &objects, &recovered).await;
+
     let failed_app = "dev.example.publisher-failed";
     let failed = Fixture::new(failed_app, "1.0.0", [7_u8; 32]);
     seed_app(&pool, failed_app).await;
@@ -209,7 +255,7 @@ async fn postgres_store_publisher_acceptance() {
         "decision_88888888888888888888888888888888",
         "evt_88888888888888888888888888888888",
         1,
-        8,
+        9,
     )
     .await;
     sqlx::query(
@@ -234,14 +280,22 @@ async fn postgres_store_publisher_acceptance() {
         None,
     )
     .await;
-    assert_eq!(count_where_sequence(&pool, 8).await, 0);
-    assert_eq!(last_catalog_sequence(&pool).await, 8);
+    assert_eq!(count_where_sequence(&pool, 9).await, 0);
+    assert_eq!(last_catalog_sequence(&pool).await, 9);
     assert_eq!(
         tokio::fs::read_link(&current).await.unwrap(),
         Path::new("generations/7")
     );
 
     verify_database_guards(&pool).await;
+    verify_database_tamper_rejection(
+        &pool,
+        &objects,
+        &origin,
+        &signing_key_path,
+        &publisher.store_public_key(),
+    )
+    .await;
 }
 
 async fn assert_published_sequence(publisher: &StorePublisher, sequence: u64, app_count: usize) {
@@ -293,6 +347,177 @@ async fn verify_snapshot(
         package.verify_developer_signature().unwrap();
         package.verify_store_signature(public_key).unwrap();
     }
+}
+
+async fn verify_transparency_history(
+    pool: &PgPool,
+    origin: &Path,
+    public_key: &[u8; 32],
+    expected_sequences: &[i64],
+    expected_states: &[&str],
+) {
+    let rows = sqlx::query(
+        "SELECT leaf.tree_index, leaf.catalog_sequence, leaf.leaf_sha256, leaf.encoded_leaf, \
+         checkpoint.encoded_checkpoint, snapshot.encoded_catalog \
+         FROM store_transparency_leaves leaf \
+         JOIN store_transparency_checkpoints checkpoint \
+           ON checkpoint.tree_size = leaf.tree_index + 1 \
+          AND checkpoint.catalog_sequence = leaf.catalog_sequence \
+         JOIN store_catalog_snapshots snapshot ON snapshot.sequence = leaf.catalog_sequence \
+         ORDER BY leaf.tree_index",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), expected_sequences.len());
+    assert_eq!(expected_sequences.len(), expected_states.len());
+    let mut leaves = Vec::with_capacity(rows.len());
+    for (index, row) in rows.into_iter().enumerate() {
+        assert_eq!(row.get::<i64, _>("tree_index"), index as i64);
+        let sequence = row.get::<i64, _>("catalog_sequence");
+        assert_eq!(sequence, expected_sequences[index]);
+        let encoded_leaf: Vec<u8> = row.get("encoded_leaf");
+        let leaf = decode_leaf(&encoded_leaf).unwrap();
+        assert_eq!(leaf.tree_index, index as u64);
+        assert_eq!(leaf.catalog_sequence, sequence as u64);
+        assert_eq!(leaf.release_state, expected_states[index]);
+        assert_eq!(
+            leaf.catalog_sha256,
+            sha256_hex(&row.get::<Vec<u8>, _>("encoded_catalog"))
+        );
+        assert_eq!(
+            row.get::<String, _>("leaf_sha256"),
+            lower_hex(&leaf_hash(&leaf).unwrap())
+        );
+        let encoded_checkpoint: Vec<u8> = row.get("encoded_checkpoint");
+        let checkpoint = decode_checkpoint(&encoded_checkpoint).unwrap();
+        leaves.push(leaf);
+        verify_log(&checkpoint, public_key, &leaves).unwrap();
+        let generation = origin.join(format!("generations/{sequence}"));
+        assert_eq!(
+            tokio::fs::read(generation.join("transparency/leaf.json"))
+                .await
+                .unwrap(),
+            encoded_leaf
+        );
+        assert_eq!(
+            tokio::fs::read(generation.join("transparency/checkpoint.json"))
+                .await
+                .unwrap(),
+            encoded_checkpoint
+        );
+        assert_eq!(
+            tokio::fs::read(generation.join("store.pub")).await.unwrap(),
+            public_key
+        );
+    }
+}
+
+async fn verify_atomic_publication_rollback(
+    pool: &PgPool,
+    objects: &Path,
+    publisher: &StorePublisher,
+) {
+    const APP: &str = "dev.example.publisher-rollback";
+    const SUBMISSION: &str = "sub_99999999999999999999999999999999";
+    const RELEASE: &str = "rel_99999999999999999999999999999999";
+    const EVENT: &str = "evt_99999999999999999999999999999999";
+    let fixture = Fixture::new(APP, "1.0.0", [7_u8; 32]);
+    seed_app(pool, APP).await;
+    seed_submission_release(
+        pool,
+        objects,
+        &fixture,
+        SUBMISSION,
+        RELEASE,
+        "decision_99999999999999999999999999999999",
+        EVENT,
+        1,
+        8,
+    )
+    .await;
+    sqlx::query(
+        "CREATE FUNCTION fail_catalog_outbox_for_test() RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN IF NEW.topic = 'catalog.published' THEN \
+         RAISE EXCEPTION 'injected Catalog outbox failure' USING ERRCODE = '55000'; \
+         END IF; RETURN NEW; END; $$",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER fail_catalog_outbox_for_test BEFORE INSERT ON outbox_events \
+         FOR EACH ROW EXECUTE FUNCTION fail_catalog_outbox_for_test()",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let before = publication_atomic_counts(pool).await;
+    assert!(publisher.run_once().await.is_err());
+    assert_eq!(publication_atomic_counts(pool).await, before);
+    assert_release(pool, RELEASE, "publishing", 2, None).await;
+    assert_eq!(count_where_sequence(pool, 8).await, 0);
+
+    sqlx::query("DROP TRIGGER fail_catalog_outbox_for_test ON outbox_events")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP FUNCTION fail_catalog_outbox_for_test()")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE releases SET state = 'publish-failed', resource_version = 3 \
+         WHERE release_id = $1",
+    )
+    .bind(RELEASE)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE store_publication_jobs SET state = 'queued', lease_token = NULL, \
+         leased_until_unix_seconds = NULL WHERE event_id = $1",
+    )
+    .bind(EVENT)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(matches!(
+        publisher.run_once().await.unwrap(),
+        RunOutcome::Superseded {
+            catalog_sequence: 8,
+            ..
+        }
+    ));
+}
+
+async fn publication_atomic_counts(pool: &PgPool) -> (i64, i64, i64, i64, i64, i64) {
+    (
+        sqlx::query_scalar("SELECT COUNT(*) FROM store_package_artifacts")
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        sqlx::query_scalar("SELECT COUNT(*) FROM store_catalog_snapshots")
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        sqlx::query_scalar("SELECT COUNT(*) FROM store_transparency_leaves")
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        sqlx::query_scalar("SELECT COUNT(*) FROM store_transparency_checkpoints")
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        sqlx::query_scalar("SELECT COUNT(*) FROM audit_events")
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        sqlx::query_scalar("SELECT COUNT(*) FROM outbox_events")
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+    )
 }
 
 async fn transition_with_rebuild(
@@ -631,6 +856,211 @@ async fn verify_database_guards(pool: &PgPool) {
             .await,
         "55000",
     );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE store_transparency_leaves SET encoded_leaf = '{}' WHERE tree_index = 0",
+        )
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM store_transparency_leaves WHERE tree_index = 0")
+            .execute(pool)
+            .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO store_transparency_leaves (tree_index, catalog_sequence, leaf_sha256, \
+             encoded_leaf, created_unix_seconds) VALUES (99, 1, repeat('b', 64), '{}', 1)",
+        )
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE store_transparency_checkpoints SET encoded_checkpoint = '{}' \
+             WHERE tree_size = 1",
+        )
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM store_transparency_checkpoints WHERE tree_size = 1")
+            .execute(pool)
+            .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO store_transparency_checkpoints (tree_size, catalog_sequence, \
+             root_sha256, store_key_id, encoded_checkpoint, created_unix_seconds) \
+             VALUES (99, 1, repeat('c', 64), repeat('d', 64), '{}', 1)",
+        )
+        .execute(pool)
+        .await,
+        "55000",
+    );
+}
+
+async fn verify_database_tamper_rejection(
+    pool: &PgPool,
+    objects: &Path,
+    origin: &Path,
+    signing_key_path: &Path,
+    public_key: &[u8; 32],
+) {
+    let original_leaf: Vec<u8> = sqlx::query_scalar(
+        "SELECT encoded_leaf FROM store_transparency_leaves WHERE tree_index = 0",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    set_trigger(
+        pool,
+        "store_transparency_leaves",
+        "store_transparency_leaves_append_only",
+        false,
+    )
+    .await;
+    sqlx::query("UPDATE store_transparency_leaves SET encoded_leaf = '{}' WHERE tree_index = 0")
+        .execute(pool)
+        .await
+        .unwrap();
+    set_trigger(
+        pool,
+        "store_transparency_leaves",
+        "store_transparency_leaves_append_only",
+        true,
+    )
+    .await;
+    assert_publisher_open_fails(pool, objects, origin, signing_key_path).await;
+
+    set_trigger(
+        pool,
+        "store_transparency_leaves",
+        "store_transparency_leaves_append_only",
+        false,
+    )
+    .await;
+    sqlx::query("UPDATE store_transparency_leaves SET encoded_leaf = $1 WHERE tree_index = 0")
+        .bind(&original_leaf)
+        .execute(pool)
+        .await
+        .unwrap();
+    set_trigger(
+        pool,
+        "store_transparency_leaves",
+        "store_transparency_leaves_append_only",
+        true,
+    )
+    .await;
+
+    let checkpoint = sqlx::query(
+        "SELECT tree_size, catalog_sequence, root_sha256, store_key_id, encoded_checkpoint, \
+         created_unix_seconds FROM store_transparency_checkpoints ORDER BY tree_size DESC LIMIT 1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let tree_size: i64 = checkpoint.get("tree_size");
+    let catalog_sequence: i64 = checkpoint.get("catalog_sequence");
+    let root_sha256: String = checkpoint.get("root_sha256");
+    let store_key_id: String = checkpoint.get("store_key_id");
+    let encoded_checkpoint: Vec<u8> = checkpoint.get("encoded_checkpoint");
+    let created_unix_seconds: i64 = checkpoint.get("created_unix_seconds");
+    set_trigger(
+        pool,
+        "store_transparency_checkpoints",
+        "store_transparency_checkpoints_append_only",
+        false,
+    )
+    .await;
+    sqlx::query("DELETE FROM store_transparency_checkpoints WHERE tree_size = $1")
+        .bind(tree_size)
+        .execute(pool)
+        .await
+        .unwrap();
+    set_trigger(
+        pool,
+        "store_transparency_checkpoints",
+        "store_transparency_checkpoints_append_only",
+        true,
+    )
+    .await;
+    assert_publisher_open_fails(pool, objects, origin, signing_key_path).await;
+
+    set_trigger(
+        pool,
+        "store_transparency_checkpoints",
+        "store_transparency_checkpoints_ordered_insert",
+        false,
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO store_transparency_checkpoints (tree_size, catalog_sequence, root_sha256, \
+         store_key_id, encoded_checkpoint, created_unix_seconds) VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(tree_size)
+    .bind(catalog_sequence)
+    .bind(root_sha256)
+    .bind(store_key_id)
+    .bind(encoded_checkpoint)
+    .bind(created_unix_seconds)
+    .execute(pool)
+    .await
+    .unwrap();
+    set_trigger(
+        pool,
+        "store_transparency_checkpoints",
+        "store_transparency_checkpoints_ordered_insert",
+        true,
+    )
+    .await;
+    let restored = StorePublisher::open(
+        pool.clone(),
+        objects,
+        origin,
+        signing_key_path,
+        "https://store.example.invalid",
+        "publisher-database-restored",
+    )
+    .await
+    .unwrap();
+    assert_eq!(restored.store_public_key(), *public_key);
+}
+
+async fn assert_publisher_open_fails(
+    pool: &PgPool,
+    objects: &Path,
+    origin: &Path,
+    signing_key_path: &Path,
+) {
+    assert!(
+        StorePublisher::open(
+            pool.clone(),
+            objects,
+            origin,
+            signing_key_path,
+            "https://store.example.invalid",
+            "publisher-database-tamper",
+        )
+        .await
+        .is_err()
+    );
+}
+
+async fn set_trigger(pool: &PgPool, table: &str, trigger: &str, enabled: bool) {
+    let operation = if enabled { "ENABLE" } else { "DISABLE" };
+    sqlx::query(&format!(
+        "ALTER TABLE {table} {operation} TRIGGER {trigger}"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn reset_database(pool: &PgPool) {

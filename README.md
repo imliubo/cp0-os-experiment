@@ -93,9 +93,10 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
   finalize 独立摘要复算和精确幂等恢复。
 - S5D 隔离 Scanner 纵向切片：outbox 租约领取、只读对象双重摘要、开发者密钥绑定、
   WASM/权限/Listing/PNG 检查和原子结果推进；动态恶意样本仍未完成。
-- S5E-S5G 审核与发布纵向切片：独立 reviewer 身份、结构化决定与消息、approved-only
+- S5E-S5H 审核与发布纵向切片：独立 reviewer 身份、结构化决定与消息、approved-only
   Release 控制，以及隔离文件 key Publisher、Store 双签名、确定性 Catalog、不可变 generation
-  和崩溃恢复；生产 HSM、key ceremony 和 transparency log 仍未完成。
+  和崩溃恢复；每个 Catalog snapshot 的 append-only transparency leaf、完整前缀 Merkle
+  checkpoint 与篡改拒绝已完成。生产 HSM、key ceremony、compact proof 和外部 witness 仍未完成。
 - Phase 5C 设备策略与 Settings：root-owned 家长/组织策略限制 Store、应用白名单和
   全局权限，用户可二次确认切换开发者模式与下次启动的 tty1 恢复控制台。
 - Phase 6B 本地诊断与量产门禁：默认脱敏且不联网的 RAM-only 支持包、显式同意的

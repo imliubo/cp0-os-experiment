@@ -1,10 +1,12 @@
-# Store Publisher and Catalog Builder
+# Store Publisher, Catalog Builder and Transparency Committer
 
 S5G adds `cp0-store-publisher`, the only reference process allowed to read the
 Store Ed25519 private key. It consumes Release control-plane events, revalidates
 approved immutable content, Store-signs packages, builds a deterministic signed
 Catalog v1 and publishes immutable static-origin generations. It is a backend
-service and is never included in the CardputerZero device image.
+service and is never included in the CardputerZero device image. S5H extends
+the same isolated commit boundary with an append-only transparency leaf and
+signed checkpoint for every Catalog snapshot.
 
 ## Trust boundary
 
@@ -72,16 +74,22 @@ therefore uses this ordering:
 
 1. reserve sequence and timestamps in PostgreSQL;
 2. build deterministic signed artifacts;
-3. write, sync and atomically rename an immutable generation;
-4. commit package metadata, Catalog snapshot, Release state, audit and outbox;
-5. atomically switch `current` to the committed generation.
+3. write, sync and atomically rename an immutable generation containing the
+   Catalog, transparency leaf/checkpoint and Store public key;
+4. atomically commit package metadata, Catalog snapshot, transparency records,
+   Release state, audit and outbox;
+5. verify every committed generation object and atomically switch `current`.
 
 A crash before step 4 leaves an unreferenced generation that is verified and
 reused by the same leased job. A crash after step 4 temporarily leaves the prior
-Catalog visible; startup verifies the highest database snapshot byte-for-byte
-and repairs `current`. A database with no snapshot rejects any pre-existing
+Catalog visible; startup verifies the complete database transparency history,
+then checks the highest Catalog, leaf, checkpoint and public key byte-for-byte
+before repairing `current`. A database with no snapshot rejects any pre-existing
 `current` pointer instead of exposing uncommitted content. The process never
 rewrites or removes a committed generation.
+
+The transparency protocol, complete-prefix verifier, migration behavior and
+explicit limitations are documented in `STORE-TRANSPARENCY.md`.
 
 ## Isolation profile
 
@@ -105,11 +113,13 @@ cargo clippy -p cp0-store-publisher --all-targets -- -D warnings
 CP0_STORE_TEST_DATABASE_URL=postgres://... make store-control-db-check
 ```
 
-The PostgreSQL gate covers package and Catalog signatures, exact immutable
-paths, concurrent single claim, monotonic non-reused sequences, latest-version
+The PostgreSQL gate covers package, Catalog and checkpoint signatures, exact
+immutable paths, concurrent single claim with bounded serialization retry,
+monotonic non-reused sequences, complete transparency prefixes, latest-version
 projection, pause/resume/remove, stale-event coalescing, permanent failure,
-append-only records, SQL bypass attempts and crash recovery of `current`.
+append-only records, SQL bypass attempts, atomic rollback, tamper rejection and
+crash recovery of `current`.
 
 Production HSM integration, key rotation ceremony, multi-origin/CDN promotion,
-disaster recovery and the transparency log remain separate infrastructure
-gates.
+disaster recovery, compact consistency proofs and external witnesses remain
+separate infrastructure gates.

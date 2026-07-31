@@ -99,6 +99,7 @@ uniqueness, scheduling, publication queueing, pause/resume/removal, publication
 retry, injected transaction rollback and append-only database triggers.
 
 OAuth Device Flow, withdraw, dynamic malware intelligence, independent second
-review, double approval, Review Console UI, isolated Store signing, Catalog
-publication, production object storage, general outbox delivery, garbage
-collection and transparency logging are not implemented by this slice.
+review, double approval, Review Console UI, production object storage, general
+outbox delivery and garbage collection are not implemented by this HTTP slice.
+Isolated signing/Catalog publication and transparency logging are implemented by
+the S5G/S5H Publisher boundary described in `STORE-PUBLISHER.md`.

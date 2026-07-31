@@ -453,6 +453,7 @@ dependencies = [
  "cp0-store-metadata",
  "cp0-store-protocol",
  "cp0-store-scan",
+ "cp0-store-transparency",
  "libc",
  "serde",
  "serde_json",
@@ -490,6 +491,17 @@ dependencies = [
  "sqlx",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "cp0-store-transparency"
+version = "0.1.0"
+dependencies = [
+ "cp0-package",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

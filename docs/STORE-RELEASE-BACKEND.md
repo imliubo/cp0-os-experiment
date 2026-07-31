@@ -81,5 +81,7 @@ append-only operations, illegal SQL transitions and audit/outbox atomicity.
 S5G now implements this trust boundary in `cp0-store-publisher`: reaching
 `publishing` only queues work, while the isolated process revalidates immutable
 content, signs the package and Catalog, persists the snapshot and then commits
-`published`. See `STORE-PUBLISHER.md`. Production HSM integration and key
-ceremony remain external infrastructure gates.
+`published`. S5H atomically binds each committed snapshot to an append-only
+transparency leaf and signed checkpoint. See `STORE-PUBLISHER.md` and
+`STORE-TRANSPARENCY.md`. Production HSM integration and key ceremony remain
+external infrastructure gates.

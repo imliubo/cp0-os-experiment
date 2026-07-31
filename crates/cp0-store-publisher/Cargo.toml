@@ -11,6 +11,7 @@ cp0-package = { path = "../cp0-package" }
 cp0-store-metadata = { path = "../cp0-store-metadata" }
 cp0-store-protocol = { path = "../cp0-store-protocol" }
 cp0-store-scan = { path = "../cp0-store-scan" }
+cp0-store-transparency = { path = "../cp0-store-transparency" }
 libc.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

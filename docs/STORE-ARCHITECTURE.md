@@ -135,6 +135,10 @@ Store 签名是独立安全域：
 - 紧急吊销仍生成有序 Catalog，不能回滚 sequence；
 - 每次签名写入不可变审计记录和 transparency checkpoint。
 
+S5H 已实现该日志的首个有界纵向切片：每个 Catalog snapshot 原子写入 leaf 和签名
+checkpoint，Publisher 启动时重算全部完整前缀。compact consistency proof、外部 witness、
+gossip 和生产 HSM 仍是后续基础设施，详见 `STORE-TRANSPARENCY.md`。
+
 #### 发布面
 
 设备不调用控制面数据库 API。发布面只提供：

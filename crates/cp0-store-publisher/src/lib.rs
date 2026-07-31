@@ -13,6 +13,11 @@ use cp0_store_protocol::{
     CATALOG_SCHEMA_VERSION, Catalog, CatalogApp, MAX_CATALOG_APPS, MAX_CATALOG_LIFETIME_SECONDS,
     encode_signed_catalog, is_valid_https_url, lower_hex, sign_catalog,
 };
+use cp0_store_transparency::{
+    Checkpoint, TRANSPARENCY_SCHEMA_VERSION, TransparencyLeaf, decode_checkpoint, decode_leaf,
+    encode_checkpoint, encode_leaf, leaf_hash, lower_hex as transparency_hex,
+    merkle_root_from_hashes, sign_checkpoint, verify_log,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::{PgPool, PgPoolOptions};
@@ -21,6 +26,7 @@ use uuid::Uuid;
 
 const LEASE_SECONDS: i64 = 300;
 const MAX_ATTEMPTS: i16 = 8;
+const MAX_TRANSACTION_RETRIES: usize = 3;
 const MAX_CHUNK_BYTES: usize = 256 * 1024;
 const DEFAULT_CATALOG_LIFETIME_SECONDS: u64 = 7 * 24 * 60 * 60;
 
@@ -35,6 +41,7 @@ pub enum PublisherError {
     Manifest(cp0_manifest::ManifestError),
     Metadata(cp0_store_metadata::ListingError),
     Protocol(cp0_store_protocol::StoreProtocolError),
+    Transparency(cp0_store_transparency::TransparencyError),
 }
 
 impl fmt::Display for PublisherError {
@@ -56,6 +63,7 @@ impl fmt::Display for PublisherError {
             Self::Manifest(_) => formatter.write_str("Store manifest validation failed"),
             Self::Metadata(_) => formatter.write_str("Store Listing validation failed"),
             Self::Protocol(_) => formatter.write_str("Store Catalog validation failed"),
+            Self::Transparency(_) => formatter.write_str("Store transparency validation failed"),
         }
     }
 }
@@ -70,6 +78,7 @@ impl std::error::Error for PublisherError {
             Self::Manifest(error) => Some(error),
             Self::Metadata(error) => Some(error),
             Self::Protocol(error) => Some(error),
+            Self::Transparency(error) => Some(error),
             Self::Configuration(_) | Self::InvalidState(_) => None,
         }
     }
@@ -108,6 +117,12 @@ impl From<cp0_store_metadata::ListingError> for PublisherError {
 impl From<cp0_store_protocol::StoreProtocolError> for PublisherError {
     fn from(error: cp0_store_protocol::StoreProtocolError) -> Self {
         Self::Protocol(error)
+    }
+}
+
+impl From<cp0_store_transparency::TransparencyError> for PublisherError {
+    fn from(error: cp0_store_transparency::TransparencyError) -> Self {
+        Self::Transparency(error)
     }
 }
 
@@ -198,6 +213,7 @@ impl StorePublisher {
             base_url: Arc::new(base_url),
             catalog_lifetime_seconds,
         };
+        publisher.verify_transparency_log().await?;
         publisher.reconcile_current().await?;
         Ok(publisher)
     }
@@ -211,6 +227,22 @@ impl StorePublisher {
     }
 
     pub async fn run_once(&self) -> Result<RunOutcome, PublisherError> {
+        let mut retries = 0;
+        loop {
+            match self.run_once_inner().await {
+                Err(error)
+                    if retries < MAX_TRANSACTION_RETRIES
+                        && is_retryable_transaction_error(&error) =>
+                {
+                    retries += 1;
+                    tokio::task::yield_now().await;
+                }
+                outcome => return outcome,
+            }
+        }
+    }
+
+    async fn run_once_inner(&self) -> Result<RunOutcome, PublisherError> {
         self.reconcile_current().await?;
         self.enqueue_one().await?;
         if let Some(expired) = self.recover_expired_leases().await? {
@@ -273,6 +305,15 @@ impl StorePublisher {
             CommitOutcome::Published => {}
         }
         self.origin
+            .verify_committed_generation(
+                job.catalog_sequence,
+                &prepared.catalog_encoded,
+                &prepared.transparency.leaf_encoded,
+                &prepared.transparency.checkpoint_encoded,
+                &prepared.store_public_key,
+            )
+            .await?;
+        self.origin
             .switch_current(job.catalog_sequence, &prepared.catalog_encoded)
             .await?;
         Ok(RunOutcome::Published {
@@ -285,7 +326,12 @@ impl StorePublisher {
 
     pub async fn reconcile_current(&self) -> Result<(), PublisherError> {
         let snapshot = sqlx::query(
-            "SELECT sequence, encoded_catalog FROM store_catalog_snapshots ORDER BY sequence DESC LIMIT 1",
+            "SELECT snapshot.sequence, snapshot.encoded_catalog, leaf.encoded_leaf, \
+             checkpoint.encoded_checkpoint FROM store_catalog_snapshots snapshot \
+             JOIN store_transparency_leaves leaf ON leaf.catalog_sequence = snapshot.sequence \
+             JOIN store_transparency_checkpoints checkpoint \
+               ON checkpoint.catalog_sequence = snapshot.sequence \
+             ORDER BY snapshot.sequence DESC LIMIT 1",
         )
         .fetch_optional(&self.pool)
         .await?;
@@ -294,8 +340,107 @@ impl StorePublisher {
         };
         let sequence = positive_u64(snapshot.get::<i64, _>("sequence"))?;
         let encoded: Vec<u8> = snapshot.get("encoded_catalog");
-        self.origin.verify_catalog(sequence, &encoded).await?;
+        let leaf: Vec<u8> = snapshot.get("encoded_leaf");
+        let checkpoint: Vec<u8> = snapshot.get("encoded_checkpoint");
+        self.origin
+            .verify_committed_generation(
+                sequence,
+                &encoded,
+                &leaf,
+                &checkpoint,
+                &self.signer.public_key,
+            )
+            .await?;
         self.origin.switch_current(sequence, &encoded).await
+    }
+
+    async fn verify_transparency_log(&self) -> Result<(), PublisherError> {
+        let snapshot_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM store_catalog_snapshots")
+                .fetch_one(&self.pool)
+                .await?;
+        let leaf_rows = sqlx::query(
+            "SELECT leaf.tree_index, leaf.catalog_sequence, leaf.leaf_sha256, leaf.encoded_leaf, \
+             snapshot.catalog_sha256, snapshot.catalog_bytes, snapshot.store_key_id, \
+             snapshot.published_unix_seconds, snapshot.source_event_id, \
+             snapshot.source_release_id, job.job_kind, job.source_state \
+             FROM store_transparency_leaves leaf \
+             JOIN store_catalog_snapshots snapshot ON snapshot.sequence = leaf.catalog_sequence \
+             JOIN store_publication_jobs job ON job.event_id = snapshot.source_event_id \
+             ORDER BY leaf.tree_index",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let checkpoint_rows = sqlx::query(
+            "SELECT tree_size, catalog_sequence, root_sha256, store_key_id, encoded_checkpoint \
+             FROM store_transparency_checkpoints ORDER BY tree_size",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        if snapshot_count != leaf_rows.len() as i64 || checkpoint_rows.len() != leaf_rows.len() {
+            return Err(PublisherError::InvalidState(
+                "Catalog snapshots and transparency log are not one-to-one",
+            ));
+        }
+        if leaf_rows.is_empty() {
+            return Ok(());
+        }
+        let mut leaves = Vec::with_capacity(leaf_rows.len());
+        for (index, row) in leaf_rows.into_iter().enumerate() {
+            if row.get::<i64, _>("tree_index") != index as i64 {
+                return Err(PublisherError::InvalidState(
+                    "transparency log indices are not contiguous",
+                ));
+            }
+            let leaf = decode_leaf(&row.get::<Vec<u8>, _>("encoded_leaf"))?;
+            let expected_catalog_bytes = u32::try_from(row.get::<i32, _>("catalog_bytes"))
+                .map_err(|_| PublisherError::InvalidState("stored Catalog size is invalid"))?;
+            if leaf.tree_index != index as u64
+                || leaf.catalog_sequence != positive_u64(row.get::<i64, _>("catalog_sequence"))?
+                || leaf.catalog_sha256 != row.get::<String, _>("catalog_sha256")
+                || leaf.catalog_bytes != expected_catalog_bytes
+                || leaf.store_key_id != row.get::<String, _>("store_key_id")
+                || leaf.published_unix_seconds
+                    != positive_u64(row.get::<i64, _>("published_unix_seconds"))?
+                || leaf.source_event_id != row.get::<String, _>("source_event_id")
+                || leaf.source_release_id != row.get::<String, _>("source_release_id")
+                || leaf.job_kind != row.get::<String, _>("job_kind")
+                || leaf.release_state != row.get::<String, _>("source_state")
+                || transparency_hex(&leaf_hash(&leaf)?) != row.get::<String, _>("leaf_sha256")
+            {
+                return Err(PublisherError::InvalidState(
+                    "transparency leaf does not match its Catalog snapshot",
+                ));
+            }
+            leaves.push(leaf);
+        }
+        for (index, row) in checkpoint_rows.into_iter().enumerate() {
+            let expected_tree_size = index + 1;
+            if row.get::<i64, _>("tree_size") != expected_tree_size as i64 {
+                return Err(PublisherError::InvalidState(
+                    "transparency checkpoint sizes are not contiguous",
+                ));
+            }
+            let checkpoint = decode_checkpoint(&row.get::<Vec<u8>, _>("encoded_checkpoint"))?;
+            let latest = &leaves[index];
+            if checkpoint.checkpoint.tree_size != expected_tree_size as u64
+                || checkpoint.checkpoint.latest_catalog_sequence != latest.catalog_sequence
+                || checkpoint.checkpoint.issued_unix_seconds != latest.published_unix_seconds
+                || checkpoint.checkpoint.root_sha256 != row.get::<String, _>("root_sha256")
+                || checkpoint.key_id != row.get::<String, _>("store_key_id")
+                || latest.catalog_sequence != positive_u64(row.get::<i64, _>("catalog_sequence"))?
+            {
+                return Err(PublisherError::InvalidState(
+                    "transparency checkpoint does not match its database record",
+                ));
+            }
+            verify_log(
+                &checkpoint,
+                &self.signer.public_key,
+                &leaves[..expected_tree_size],
+            )?;
+        }
+        Ok(())
     }
 
     async fn enqueue_one(&self) -> Result<bool, PublisherError> {
@@ -541,15 +686,88 @@ impl StorePublisher {
         };
         let signed = sign_catalog(catalog, &self.signer.secret)?;
         let catalog_encoded = encode_signed_catalog(&signed)?;
+        let catalog_sha256 = sha256_hex(&catalog_encoded);
+        let transparency = self
+            .prepare_transparency(job, &catalog_sha256, catalog_encoded.len())
+            .await?;
         Ok(Preparation::Ready(Box::new(PreparedPublication {
-            catalog_sha256: sha256_hex(&catalog_encoded),
+            catalog_sha256,
             catalog_encoded,
             catalog_relative_path: catalog_relative_path(job.catalog_sequence),
             app_count: signed.catalog.apps.len(),
             package: target,
             store_public_key: self.signer.public_key,
             store_key_id: self.signer.key_id.clone(),
+            transparency,
         })))
+    }
+
+    async fn prepare_transparency(
+        &self,
+        job: &PublicationJob,
+        catalog_sha256: &str,
+        catalog_bytes: usize,
+    ) -> Result<PreparedTransparency, PublisherError> {
+        let rows = sqlx::query(
+            "SELECT tree_index, leaf_sha256, encoded_leaf \
+             FROM store_transparency_leaves ORDER BY tree_index",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut hashes = Vec::with_capacity(rows.len() + 1);
+        for (index, row) in rows.into_iter().enumerate() {
+            if row.get::<i64, _>("tree_index") != index as i64 {
+                return Err(PublisherError::InvalidState(
+                    "transparency log indices are not contiguous",
+                ));
+            }
+            let leaf = decode_leaf(&row.get::<Vec<u8>, _>("encoded_leaf"))?;
+            let hash = leaf_hash(&leaf)?;
+            if transparency_hex(&hash) != row.get::<String, _>("leaf_sha256") {
+                return Err(PublisherError::InvalidState(
+                    "stored transparency leaf digest does not match",
+                ));
+            }
+            hashes.push(hash);
+        }
+        let leaf = TransparencyLeaf {
+            schema_version: TRANSPARENCY_SCHEMA_VERSION,
+            tree_index: hashes.len() as u64,
+            catalog_sequence: job.catalog_sequence,
+            catalog_sha256: catalog_sha256.to_owned(),
+            catalog_bytes: u32::try_from(catalog_bytes).map_err(|_| {
+                PublisherError::InvalidState("Catalog size cannot be represented in transparency")
+            })?,
+            store_key_id: self.signer.key_id.clone(),
+            published_unix_seconds: job.published_unix_seconds,
+            source_event_id: job.event_id.clone(),
+            source_release_id: job.release_id.clone(),
+            job_kind: job.job_kind.clone(),
+            release_state: job.source_state.clone(),
+        };
+        let leaf_encoded = encode_leaf(&leaf)?;
+        let leaf_hash = leaf_hash(&leaf)?;
+        hashes.push(leaf_hash);
+        let root = merkle_root_from_hashes(&hashes);
+        let checkpoint = sign_checkpoint(
+            Checkpoint {
+                schema_version: TRANSPARENCY_SCHEMA_VERSION,
+                tree_size: hashes.len() as u64,
+                root_sha256: transparency_hex(&root),
+                latest_catalog_sequence: job.catalog_sequence,
+                issued_unix_seconds: job.published_unix_seconds,
+            },
+            &self.signer.secret,
+        )?;
+        let checkpoint_encoded = encode_checkpoint(&checkpoint)?;
+        Ok(PreparedTransparency {
+            tree_index: leaf.tree_index,
+            leaf_sha256: transparency_hex(&leaf_hash),
+            leaf_encoded,
+            tree_size: checkpoint.checkpoint.tree_size,
+            root_sha256: checkpoint.checkpoint.root_sha256,
+            checkpoint_encoded,
+        })
     }
 
     async fn load_release_source(
@@ -879,6 +1097,31 @@ impl StorePublisher {
         .execute(&mut *transaction)
         .await?;
 
+        sqlx::query(
+            "INSERT INTO store_transparency_leaves (tree_index, catalog_sequence, leaf_sha256, \
+             encoded_leaf, created_unix_seconds) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(i64_from_u64(prepared.transparency.tree_index)?)
+        .bind(i64_from_u64(job.catalog_sequence)?)
+        .bind(&prepared.transparency.leaf_sha256)
+        .bind(&prepared.transparency.leaf_encoded)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "INSERT INTO store_transparency_checkpoints (tree_size, catalog_sequence, \
+             root_sha256, store_key_id, encoded_checkpoint, created_unix_seconds) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(i64_from_u64(prepared.transparency.tree_size)?)
+        .bind(i64_from_u64(job.catalog_sequence)?)
+        .bind(&prepared.transparency.root_sha256)
+        .bind(&prepared.store_key_id)
+        .bind(&prepared.transparency.checkpoint_encoded)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await?;
+
         if job.job_kind == "publish-release" {
             let new_version =
                 job.source_resource_version
@@ -1191,6 +1434,33 @@ impl PublicationRoot {
             .map_err(PublisherError::Io)
     }
 
+    async fn verify_committed_generation(
+        &self,
+        sequence: u64,
+        expected_catalog: &[u8],
+        expected_leaf: &[u8],
+        expected_checkpoint: &[u8],
+        expected_public_key: &[u8; 32],
+    ) -> Result<(), PublisherError> {
+        let directory = self.generations.join(sequence.to_string());
+        let expected_catalog = expected_catalog.to_vec();
+        let expected_leaf = expected_leaf.to_vec();
+        let expected_checkpoint = expected_checkpoint.to_vec();
+        let expected_public_key = *expected_public_key;
+        tokio::task::spawn_blocking(move || {
+            verify_committed_generation_sync(
+                &directory,
+                &expected_catalog,
+                &expected_leaf,
+                &expected_checkpoint,
+                &expected_public_key,
+            )
+        })
+        .await
+        .map_err(|_| PublisherError::InvalidState("generation verifier task failed"))?
+        .map_err(PublisherError::Io)
+    }
+
     async fn require_no_current(&self) -> Result<(), PublisherError> {
         match tokio::fs::symlink_metadata(self.root.join("current")).await {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -1270,6 +1540,17 @@ struct PreparedPublication {
     package: Option<PreparedPackage>,
     store_public_key: [u8; 32],
     store_key_id: String,
+    transparency: PreparedTransparency,
+}
+
+#[derive(Clone)]
+struct PreparedTransparency {
+    tree_index: u64,
+    leaf_sha256: String,
+    leaf_encoded: Vec<u8>,
+    tree_size: u64,
+    root_sha256: String,
+    checkpoint_encoded: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -1610,6 +1891,20 @@ fn write_generation_sync(
         &prepared.catalog_encoded,
         0o444,
     )?;
+    let transparency_directory = temporary.join("transparency");
+    fs::create_dir(&transparency_directory)?;
+    fs::set_permissions(&transparency_directory, fs::Permissions::from_mode(0o755))?;
+    write_new_synced(
+        &transparency_directory.join("leaf.json"),
+        &prepared.transparency.leaf_encoded,
+        0o444,
+    )?;
+    write_new_synced(
+        &transparency_directory.join("checkpoint.json"),
+        &prepared.transparency.checkpoint_encoded,
+        0o444,
+    )?;
+    sync_directory(&transparency_directory)?;
     write_new_synced(
         &temporary.join("store.pub"),
         &prepared.store_public_key,
@@ -1647,6 +1942,22 @@ fn verify_generation_sync(directory: &Path, prepared: &PreparedPublication) -> i
     }
     verify_exact_file(&directory.join("catalog.json"), &prepared.catalog_encoded)?;
     verify_exact_file(&directory.join("store.pub"), &prepared.store_public_key)?;
+    let transparency_directory = directory.join("transparency");
+    let transparency_metadata = fs::symlink_metadata(&transparency_directory)?;
+    if transparency_metadata.file_type().is_symlink() || !transparency_metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "transparency path is not a real directory",
+        ));
+    }
+    verify_exact_file(
+        &transparency_directory.join("leaf.json"),
+        &prepared.transparency.leaf_encoded,
+    )?;
+    verify_exact_file(
+        &transparency_directory.join("checkpoint.json"),
+        &prepared.transparency.checkpoint_encoded,
+    )?;
     if let Some(package) = &prepared.package {
         let package_directory = directory.join("packages");
         verify_exact_file(
@@ -1655,8 +1966,40 @@ fn verify_generation_sync(directory: &Path, prepared: &PreparedPublication) -> i
         )?;
         fs::set_permissions(package_directory, fs::Permissions::from_mode(0o555))?;
     }
+    fs::set_permissions(transparency_directory, fs::Permissions::from_mode(0o555))?;
     fs::set_permissions(directory, fs::Permissions::from_mode(0o555))?;
     Ok(())
+}
+
+fn verify_committed_generation_sync(
+    directory: &Path,
+    expected_catalog: &[u8],
+    expected_leaf: &[u8],
+    expected_checkpoint: &[u8],
+    expected_public_key: &[u8; 32],
+) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(directory)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "committed generation is not a real directory",
+        ));
+    }
+    let transparency_directory = directory.join("transparency");
+    let transparency_metadata = fs::symlink_metadata(&transparency_directory)?;
+    if transparency_metadata.file_type().is_symlink() || !transparency_metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "committed transparency path is not a real directory",
+        ));
+    }
+    verify_exact_file(&directory.join("catalog.json"), expected_catalog)?;
+    verify_exact_file(&transparency_directory.join("leaf.json"), expected_leaf)?;
+    verify_exact_file(
+        &transparency_directory.join("checkpoint.json"),
+        expected_checkpoint,
+    )?;
+    verify_exact_file(&directory.join("store.pub"), expected_public_key)
 }
 
 fn switch_current_sync(root: &Path, sequence: u64) -> io::Result<()> {
@@ -1770,8 +2113,17 @@ fn classify_preparation_error(error: &PublisherError) -> (&'static str, bool) {
         PublisherError::Package(_)
         | PublisherError::Manifest(_)
         | PublisherError::Metadata(_)
-        | PublisherError::Protocol(_) => ("content-invalid", true),
+        | PublisherError::Protocol(_)
+        | PublisherError::Transparency(_) => ("content-invalid", true),
     }
+}
+
+fn is_retryable_transaction_error(error: &PublisherError) -> bool {
+    matches!(
+        error,
+        PublisherError::Database(sqlx::Error::Database(database_error))
+            if matches!(database_error.code().as_deref(), Some("40001" | "40P01"))
+    )
 }
 
 fn publication_job_from_row(row: sqlx::postgres::PgRow) -> Result<PublicationJob, PublisherError> {

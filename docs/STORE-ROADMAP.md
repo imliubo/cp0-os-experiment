@@ -81,7 +81,9 @@ release-manager、2FA、scope、团队隔离、并发唯一创建、预约、发
 S5G 已新增隔离文件 key Publisher/Catalog Builder：outbox 租约、不可复用 sequence、原始对象
 重算、开发者 key 复核、Store 双签名、64 App 有界确定性 Catalog、最新 Release 投影、不可变
 generation、原子 Release/audit/outbox 回写与 `current` 崩溃恢复均通过 PostgreSQL 17 验收。
-当前文件 key 是受限参考实现，不代表生产 HSM 或 key ceremony 已完成。
+S5H 已为每个成功 Catalog snapshot 增加 append-only transparency leaf 和签名 Merkle
+checkpoint，逐前缀验证、数据库/文件篡改拒绝与事务回滚均通过 PostgreSQL 17 验收。当前
+文件 key 是受限参考实现；生产 HSM/key ceremony、compact proof 和外部 witness 尚未完成。
 
 - [ ] 实现 Identity/Teams、App Registry、Submission 和 Release 服务。
   当前 App Registry、Submission 上传/finalize、单审核员 Review 和 Release 控制纵向切片已完成；
@@ -90,7 +92,9 @@ generation、原子 Release/audit/outbox 回写与 `current` 崩溃恢复均通�
   当前为无 IP 网络、只读对象根的确定性结构/能力扫描；动态规则、信誉源和运营隔离环境待生产化。
 - [ ] 实现 Review Console、结构化问题、回复、二审和双人审批。
   当前结构化问题、回复和单审核员事务流程已完成；Console UI、独立二审和双人审批待实现。
-- [ ] 实现不可变对象、事务 outbox、append-only audit 和 transparency log。
+- [x] 实现不可变发布 generation、事务 outbox、append-only audit 和 transparency log。
+  当前 transparency v1 覆盖完整 Catalog snapshot 历史；生产对象存储、compact proof 和
+  witness/gossip 属于后续基础设施。
 - [ ] 接入生产 HSM 和 key ceremony；当前隔离文件 key 参考 Signer 已保证 Web 服务不能读私钥。
 - [x] 实现确定性 Catalog Builder、sequence 分配、发布和紧急撤回。
   pause/resume/remove 生成更高 sequence，过期控制事件安全合并且 sequence 永不复用。
