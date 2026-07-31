@@ -93,6 +93,17 @@ The second run must report `storage=persist-ok`, retain the permission
 decisions without a new prompt and record a different kernel `boot_id`. Retrieve
 that RAM-backed result as well before any further reboot.
 
+Verify the two retrieved directories together:
+
+```sh
+./scripts/verify-device-acceptance-evidence.sh capability \
+  PATH_TO_FULL_RUN PATH_TO_PERSISTENCE_RUN
+```
+
+The host verifier requires the full capability/resource/sysfs/storage check
+set, validates the bounded private-storage result files and proves that the
+persistence run has a later finish time and a different kernel boot ID.
+
 The full run intentionally leaves the dedicated marker, result and permission
 decisions in place for the reboot check. It never restarts a platform service,
 reboots, mounts, formats or reads another application's result or marker file.

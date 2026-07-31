@@ -60,6 +60,18 @@ while USB powers the board, battery current is not total device power. A product
 power claim still requires an inline, calibrated USB power meter under defined
 brightness, network and workload conditions.
 
+Retrieve the complete run directory and independently verify it on the host:
+
+```sh
+./scripts/verify-device-acceptance-evidence.sh performance PATH_TO_RUN_DIR
+```
+
+The verifier parses a closed summary field set and recomputes duration, memory
+extrema, battery sample average and SD bytes from `samples.tsv`. It also checks
+all three service PID/restart continuities, memory ceilings and CPU deltas from
+`services.tsv`. A device-written `PASS` with changed thresholds or inconsistent
+raw samples is rejected.
+
 ## Current baseline
 
 Read-only sampling on the V0.6 device before implementation measured 27.939

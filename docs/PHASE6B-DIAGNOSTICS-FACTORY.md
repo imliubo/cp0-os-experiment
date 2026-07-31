@@ -64,6 +64,18 @@ Every invocation creates an isolated directory below
   write counter;
 - `status`, containing `PASS` or the number of failures.
 
+Retrieve the complete reported directory before rebooting, then validate it
+from the matching source revision instead of trusting `status` alone:
+
+```sh
+./scripts/verify-device-acceptance-evidence.sh factory PATH_TO_RUN_DIR
+```
+
+The host verifier requires the complete fixed factory check set, rejects
+symbolic or malformed evidence and cross-checks the summary failure counts.
+Warnings emitted by the nested hardware smoke remain visible but do not replace
+any required factory invariant.
+
 The gate requires the immutable OverlayFS profile, a labelled partition 3 that
 has grown to the final 1 MiB of the SD card, an ext4 filesystem expanded to the
 partition, the v1 persistent layout, clean default device modes, active core

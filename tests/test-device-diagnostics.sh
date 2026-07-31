@@ -81,6 +81,8 @@ grep -q 'result_root=/run/cardputerzero-performance' "$performance"
 grep -q 'cardputerzero-stability-acceptance.service' "$performance"
 grep -q 'FinishTimestampMonotonic' "$performance"
 grep -q 'ActiveEnterTimestampMonotonic' "$performance"
+grep -q 'record PASS image-profile product' "$performance"
+grep -q "printf 'elapsed_seconds=%s" "$performance"
 grep -q 'CPUUsageNSec' "$performance"
 grep -q 'MemoryCurrent' "$performance"
 grep -q 'start_pid.*end_pid' "$performance"
@@ -120,6 +122,16 @@ if grep -Eq 'curl|wget|scp|rsync|nc[[:space:]]|socat' "$support"; then
     echo "error: support bundle must not contain an upload path" >&2
     exit 1
 fi
+
+"$repo_root/tests/test-device-acceptance-evidence.sh"
+grep -q 'cardputerzero-factory-v1' \
+    "$repo_root/scripts/verify-device-acceptance-evidence.sh"
+grep -q 'cardputerzero-performance-v1' \
+    "$repo_root/scripts/verify-device-acceptance-evidence.sh"
+grep -q 'cardputerzero-capability-v1' \
+    "$repo_root/scripts/verify-device-acceptance-evidence.sh"
+grep -q 'cardputerzero-store-acceptance-v1' \
+    "$repo_root/scripts/verify-device-acceptance-evidence.sh"
 
 grep -q 'device-core-recovery.sh' "$build"
 grep -q 'device-capability-acceptance.sh' "$build"

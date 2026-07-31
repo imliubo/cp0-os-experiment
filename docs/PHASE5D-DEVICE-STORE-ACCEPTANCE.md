@@ -212,6 +212,20 @@ All six actions must report `PASS`. The final evidence set must show:
 - `stale=true` after expiry and an `Untrusted` install rejection;
 - root-owned Store configuration/trust and private `cp0-store` cache modes.
 
+After retrieving all six directories, independently validate their raw JSON,
+partial/restart details, catalog sequence binding and chronological order:
+
+```sh
+./scripts/verify-device-acceptance-evidence.sh store \
+  PATH_TO_REFRESH_V1 PATH_TO_RESUME_V1 PATH_TO_REFRESH_V2 \
+  PATH_TO_UPGRADE_V2 PATH_TO_OFFLINE_V2 PATH_TO_STALE_V2
+```
+
+The verifier rejects a collection of individually self-reported `PASS` runs if
+the v2 sequence does not advance, offline/stale evidence is bound to another
+sequence, a resume file is not smaller than the signed package, or the actions
+are out of order.
+
 No flashing is required for this gate if the current app-platform deployment is
 installed after the stability run. Reflash only to obtain the required fresh
 Store/app state when a previous attempt has left test data behind.

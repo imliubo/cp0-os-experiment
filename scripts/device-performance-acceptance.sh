@@ -51,6 +51,7 @@ core_cpu_millipercent=unknown
 battery_sample_count=0
 battery_power_sum_uw=0
 battery_average_power_uw=unknown
+elapsed_seconds=unknown
 
 record() {
     local result=$1 check=$2 detail=${3:-}
@@ -81,6 +82,7 @@ finish() {
         printf 'finished_epoch=%s\n' "$finished_epoch"
         printf 'duration_seconds=%s\n' "$duration_seconds"
         printf 'interval_seconds=%s\n' "$interval_seconds"
+        printf 'elapsed_seconds=%s\n' "$elapsed_seconds"
         printf 'failure_count=%s\n' "$failures"
         printf 'warning_count=%s\n' "$warnings"
         printf 'boot_ready_ms=%s\n' "$boot_ready_ms"
@@ -135,6 +137,8 @@ record PASS stability-interlock inactive
 
 if [[ $(cat /etc/cardputerzero/image-profile 2>/dev/null || true) != product ]]; then
     record FAIL image-profile "performance gate requires the product image"
+else
+    record PASS image-profile product
 fi
 
 app_list=$(/usr/bin/cp0ctl app list 2>"$run_dir/app-list.err") || {
@@ -265,7 +269,8 @@ while :; do
     sleep "$interval_seconds"
 done
 finish_epoch=$(date +%s)
-elapsed_ns=$(((finish_epoch - start_epoch) * 1000000000))
+elapsed_seconds=$((finish_epoch - start_epoch))
+elapsed_ns=$((elapsed_seconds * 1000000000))
 
 if ((maximum_used_bytes <= max_idle_used_bytes)); then
     record PASS idle-used-memory \
