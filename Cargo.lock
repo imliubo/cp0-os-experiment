@@ -413,6 +413,7 @@ dependencies = [
  "axum",
  "cp0-manifest",
  "cp0-store-control",
+ "cp0-store-metadata",
  "serde",
  "serde_json",
  "sha2",

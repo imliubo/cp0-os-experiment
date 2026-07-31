@@ -25,11 +25,13 @@ The core owns these invariants before any PostgreSQL or HTTP adapter runs:
 
 The `ControlPlane` keeps state in memory so its complete transaction semantics
 can be tested deterministically. It is not a production persistence substitute.
-The first persistence adapter is now implemented by `cp0-store-control-server`
-for `POST /v1/apps` and `GET /v1/apps/{app_id}`. One App registration maps to one
-PostgreSQL serializable transaction containing the App, idempotency result,
-audit row and outbox row. Object bytes remain in immutable object storage and
-are referenced only by their declared size and SHA-256.
+The persistence adapter is implemented by `cp0-store-control-server` for App
+registration/lookup and the create/upload/finalize/read Submission path. One
+mutation maps to one PostgreSQL serializable transaction containing resource
+state, idempotency result, audit row and outbox row. Uploaded bytes use an
+owner-only content-addressed backend and the database references only declared
+sizes, SHA-256 digests and immutable chunk descriptors. Runtime details and
+remaining gaps are documented in `STORE-CONTROL-SERVER.md`.
 
 The adapter hashes bearer tokens before lookup and validates token expiry,
 revocation, current team role, current 2FA state and scope inside the database
@@ -38,11 +40,12 @@ transaction. It accepts only bounded OpenAPI JSON, returns bounded
 to loopback by default. A non-loopback bind requires an explicit environment
 gate and TLS termination outside the process.
 
-The initial migration also enforces permanent App ownership, immutable
-Submission content and Release identity, append-only Review/Audit records, at
-least one team Owner, stable member identity, and one-way token revocation. The
-remaining Submission/Review/Release HTTP operations must reuse these
-transaction and response boundaries.
+The migrations also enforce permanent App ownership, immutable Submission
+content and uploaded chunk descriptors, one-time finalize digest, immutable
+Release identity, append-only Review/Audit records, at least one team Owner,
+stable member identity, and one-way token revocation. The remaining
+Submission/Review/Release HTTP operations must reuse these transaction and
+response boundaries.
 
 Production IDs must be allocated by the persistence adapter or an injected
 cryptographic ID source. The in-memory counter is deterministic test scaffolding

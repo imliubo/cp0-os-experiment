@@ -1,36 +1,212 @@
+use std::io;
+use std::path::{Path as FilePath, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+use axum::body::Bytes;
+use axum::extract::rejection::BytesRejection;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, Path, State};
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, WWW_AUTHENTICATE};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, IF_MATCH, WWW_AUTHENTICATE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
-use cp0_store_control::{AppRecord, is_valid_locale, register_app_request_sha256};
+use cp0_store_control::{
+    AppRecord, SubmissionSpec, create_submission_request_sha256, is_valid_locale,
+    register_app_request_sha256, validate_submission_spec,
+};
+use cp0_store_metadata::{ImageAsset, SubmissionState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Row, Transaction};
+use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 pub const MAX_REQUEST_BYTES: usize = 32 * 1024;
+pub const MAX_UPLOAD_CHUNK_BYTES: usize = 256 * 1024;
 const IDEMPOTENCY_TTL_SECONDS: i64 = 24 * 60 * 60;
 const MAX_TRANSACTION_ATTEMPTS: usize = 4;
+
+#[derive(Clone, Debug)]
+struct ContentObjectStore {
+    chunks: Arc<PathBuf>,
+    temporary: Arc<PathBuf>,
+}
+
+impl ContentObjectStore {
+    async fn open(root: &FilePath) -> Result<Self, io::Error> {
+        if !root.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Store object root must be absolute",
+            ));
+        }
+        tokio::fs::create_dir_all(root).await?;
+        restrict_directory(root).await?;
+        let root = checked_directory(root).await?;
+        let chunks = root.join("chunks");
+        let temporary = root.join("temporary");
+        tokio::fs::create_dir_all(&chunks).await?;
+        tokio::fs::create_dir_all(&temporary).await?;
+        restrict_directory(&chunks).await?;
+        restrict_directory(&temporary).await?;
+        let chunks = checked_directory(&chunks).await?;
+        let temporary = checked_directory(&temporary).await?;
+        if !chunks.starts_with(&root) || !temporary.starts_with(&root) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Store object directories escape the configured root",
+            ));
+        }
+        Ok(Self {
+            chunks: Arc::new(chunks),
+            temporary: Arc::new(temporary),
+        })
+    }
+
+    async fn store_chunk(&self, sha256: &str, bytes: &[u8]) -> Result<(), io::Error> {
+        if !is_valid_sha256(sha256) || sha256_hex(bytes) != sha256 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "chunk digest mismatch",
+            ));
+        }
+        let directory = self.chunks.join(&sha256[..2]);
+        tokio::fs::create_dir_all(&directory).await?;
+        let directory = checked_directory(&directory).await?;
+        if !directory.starts_with(self.chunks.as_ref()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "chunk directory escapes the object root",
+            ));
+        }
+        let destination = directory.join(format!("{sha256}.chunk"));
+        if tokio::fs::symlink_metadata(&destination).await.is_ok() {
+            self.verify_chunk(sha256, bytes.len()).await?;
+            return Ok(());
+        }
+
+        let temporary = self
+            .temporary
+            .join(format!("{}.part", Uuid::new_v4().simple()));
+        let mut file = tokio::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .await?;
+        file.write_all(bytes).await?;
+        file.sync_all().await?;
+        drop(file);
+
+        match tokio::fs::hard_link(&temporary, &destination).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                let _ = tokio::fs::remove_file(&temporary).await;
+                return Err(error);
+            }
+        }
+        tokio::fs::remove_file(&temporary).await?;
+        self.verify_chunk(sha256, bytes.len()).await.map(|_| ())
+    }
+
+    async fn verify_chunk(
+        &self,
+        sha256: &str,
+        expected_bytes: usize,
+    ) -> Result<Vec<u8>, io::Error> {
+        if !is_valid_sha256(sha256) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stored chunk identifier is invalid",
+            ));
+        }
+        let path = self
+            .chunks
+            .join(&sha256[..2])
+            .join(format!("{sha256}.chunk"));
+        let metadata = tokio::fs::symlink_metadata(&path).await?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() != expected_bytes as u64
+            || expected_bytes > MAX_UPLOAD_CHUNK_BYTES
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stored chunk metadata is invalid",
+            ));
+        }
+        let bytes = tokio::fs::read(path).await?;
+        if sha256_hex(&bytes) != sha256 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stored chunk digest mismatch",
+            ));
+        }
+        Ok(bytes)
+    }
+}
+
+#[cfg(unix)]
+async fn restrict_directory(path: &FilePath) -> Result<(), io::Error> {
+    tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await
+}
+
+#[cfg(not(unix))]
+async fn restrict_directory(_path: &FilePath) -> Result<(), io::Error> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Store content object storage requires Unix permission semantics",
+    ))
+}
+
+async fn checked_directory(path: &FilePath) -> Result<PathBuf, io::Error> {
+    let metadata = tokio::fs::symlink_metadata(path).await?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Store object path is not a real directory",
+        ));
+    }
+    tokio::fs::canonicalize(path).await
+}
 
 #[derive(Clone)]
 pub struct StoreControlService {
     pool: PgPool,
+    object_store: Option<ContentObjectStore>,
 }
 
 impl StoreControlService {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            object_store: None,
+        }
+    }
+
+    pub async fn with_object_root(
+        pool: PgPool,
+        root: impl AsRef<FilePath>,
+    ) -> Result<Self, io::Error> {
+        Ok(Self {
+            pool,
+            object_store: Some(ContentObjectStore::open(root.as_ref()).await?),
+        })
     }
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    fn object_store(&self) -> Result<&ContentObjectStore, ApiError> {
+        self.object_store.as_ref().ok_or_else(ApiError::unavailable)
     }
 
     async fn create_app(
@@ -93,7 +269,7 @@ impl StoreControlService {
         );
         let now = database_now(&mut transaction).await?;
 
-        if let Some(replay) = reserve_idempotency(
+        match reserve_idempotency(
             &mut transaction,
             &identity.member_id,
             key_sha256,
@@ -102,8 +278,17 @@ impl StoreControlService {
         )
         .await?
         {
-            transaction.commit().await.map_err(TxError::Sql)?;
-            return Ok(replay);
+            IdempotencyReservation::Fresh => {}
+            IdempotencyReservation::Replay { status, body }
+                if status == StatusCode::CREATED.as_u16() as i16 =>
+            {
+                let app = serde_json::from_value(body).map_err(|_| ApiError::internal())?;
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(app);
+            }
+            IdempotencyReservation::Replay { .. } => {
+                return Err(ApiError::internal().into());
+            }
         }
 
         let inserted = sqlx::query(
@@ -218,6 +403,571 @@ impl StoreControlService {
             resource_version: row_version(&row)?,
         })
     }
+
+    async fn create_submission(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+        request_id: &str,
+        app_id: &str,
+        request: &CreateSubmissionRequest,
+    ) -> Result<SubmissionResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let key_sha256 = sha256_hex(idempotency_key.as_bytes());
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self
+                .create_submission_once(&token_sha256, &key_sha256, request_id, app_id, request)
+                .await
+            {
+                Err(TxError::Sql(error))
+                    if is_retryable_transaction_error(&error)
+                        || is_submission_revision_conflict(&error) =>
+                {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(TxError::Sql(_)) => return Err(ApiError::unavailable()),
+                Err(TxError::Api(error)) => return Err(error),
+                Ok(submission) => return Ok(submission),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    async fn create_submission_once(
+        &self,
+        token_sha256: &str,
+        key_sha256: &str,
+        request_id: &str,
+        app_id: &str,
+        request: &CreateSubmissionRequest,
+    ) -> Result<SubmissionResponse, TxError> {
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let identity = authenticate(&mut transaction, token_sha256).await?;
+        require_developer_write(&identity)?;
+
+        let owner_team_id: String =
+            sqlx::query_scalar("SELECT owner_team_id FROM apps WHERE app_id = $1 FOR UPDATE")
+                .bind(app_id)
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(TxError::Sql)?
+                .ok_or_else(ApiError::not_found)?;
+        if owner_team_id != identity.team_id {
+            return Err(ApiError::forbidden().into());
+        }
+
+        let spec = request.spec();
+        validate_submission_spec(&spec).map_err(|_| ApiError::invalid_request())?;
+        let request_sha256 = create_submission_request_sha256(app_id, &spec);
+        let now = database_now(&mut transaction).await?;
+        match reserve_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            &request_sha256,
+            now,
+        )
+        .await?
+        {
+            IdempotencyReservation::Fresh => {}
+            IdempotencyReservation::Replay { status, body }
+                if status == StatusCode::CREATED.as_u16() as i16 =>
+            {
+                let submission = serde_json::from_value(body).map_err(|_| ApiError::internal())?;
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(submission);
+            }
+            IdempotencyReservation::Replay { .. } => {
+                return Err(ApiError::internal().into());
+            }
+        }
+
+        let revision: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(revision), 0) + 1 FROM submissions \
+             WHERE app_id = $1 AND version = $2",
+        )
+        .bind(app_id)
+        .bind(&request.version)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+        let submission_id = prefixed_uuid("sub_");
+        let assets = serde_json::to_value(&request.assets).map_err(|_| ApiError::internal())?;
+        sqlx::query(
+            "INSERT INTO submissions (submission_id, app_id, version, revision, state, \
+             package_sha256, package_bytes, listing_sha256, listing_bytes, assets, \
+             resource_version, created_unix_seconds) \
+             VALUES ($1, $2, $3, $4, 'uploading', $5, $6, $7, $8, $9, 1, $10)",
+        )
+        .bind(&submission_id)
+        .bind(app_id)
+        .bind(&request.version)
+        .bind(revision)
+        .bind(&request.package_sha256)
+        .bind(i64::try_from(request.package_bytes).map_err(|_| ApiError::invalid_request())?)
+        .bind(&request.listing_sha256)
+        .bind(i64::try_from(request.listing_bytes).map_err(|_| ApiError::invalid_request())?)
+        .bind(&assets)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+
+        insert_upload_part(
+            &mut transaction,
+            &submission_id,
+            "package",
+            &request.package_sha256,
+            request.package_bytes,
+        )
+        .await?;
+        insert_upload_part(
+            &mut transaction,
+            &submission_id,
+            "listing",
+            &request.listing_sha256,
+            request.listing_bytes,
+        )
+        .await?;
+        for (index, asset) in request.assets.iter().enumerate() {
+            insert_upload_part(
+                &mut transaction,
+                &submission_id,
+                &format!("asset-{index}"),
+                &asset.sha256,
+                asset.bytes,
+            )
+            .await?;
+        }
+
+        let submission = SubmissionResponse {
+            submission_id: submission_id.clone(),
+            app_id: app_id.to_owned(),
+            version: request.version.clone(),
+            revision: u32::try_from(revision).map_err(|_| ApiError::internal())?,
+            state: SubmissionState::Uploading,
+            package_sha256: request.package_sha256.clone(),
+            listing_sha256: request.listing_sha256.clone(),
+            assets: request.assets.clone(),
+            resource_version: 1,
+            created_unix_seconds: u64::try_from(now).map_err(|_| ApiError::internal())?,
+        };
+        let response_body = serde_json::to_value(&submission).map_err(|_| ApiError::internal())?;
+        complete_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            StatusCode::CREATED,
+            &response_body,
+        )
+        .await?;
+        append_mutation(
+            &mut transaction,
+            MutationEvent {
+                now,
+                actor_id: &identity.member_id,
+                action: "submission.created",
+                topic: "submission.created",
+                object_kind: "submission",
+                object_id: &submission_id,
+                before_state: None,
+                after_state: Some("uploading"),
+                resource_version: 1,
+                request_id,
+                request_sha256: &request_sha256,
+                key_sha256,
+                payload: json!({
+                    "submission_id": submission_id,
+                    "app_id": app_id,
+                    "version": request.version,
+                    "revision": revision
+                }),
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)?;
+        Ok(submission)
+    }
+
+    async fn get_submission(
+        &self,
+        token: &str,
+        submission_id: &str,
+    ) -> Result<SubmissionResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        let identity = authenticate(&mut transaction, &token_sha256)
+            .await
+            .map_err(ApiError::from_transaction)?;
+        if !identity.has_any_scope(&["store.submit", "store.control"]) {
+            return Err(ApiError::forbidden());
+        }
+        let stored = load_submission(&mut transaction, submission_id, &identity.team_id, false)
+            .await
+            .map_err(ApiError::from_transaction)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        Ok(stored.response)
+    }
+
+    async fn upload_submission_part(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+        request_id: &str,
+        upload: UploadMutation<'_>,
+    ) -> Result<u64, ApiError> {
+        let object_store = self.object_store()?.clone();
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let key_sha256 = sha256_hex(idempotency_key.as_bytes());
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self
+                .upload_submission_part_once(
+                    &object_store,
+                    &token_sha256,
+                    &key_sha256,
+                    request_id,
+                    upload,
+                )
+                .await
+            {
+                Err(TxError::Sql(error)) if is_retryable_transaction_error(&error) => {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(TxError::Sql(_)) => return Err(ApiError::unavailable()),
+                Err(TxError::Api(error)) => return Err(error),
+                Ok(version) => return Ok(version),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    async fn upload_submission_part_once(
+        &self,
+        object_store: &ContentObjectStore,
+        token_sha256: &str,
+        key_sha256: &str,
+        request_id: &str,
+        upload: UploadMutation<'_>,
+    ) -> Result<u64, TxError> {
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let identity = authenticate(&mut transaction, token_sha256).await?;
+        require_developer_write(&identity)?;
+        let request_sha256 = mutation_request_sha256(
+            "submission.part.upload.v1",
+            &[
+                upload.submission_id,
+                upload.part_name,
+                &upload.range.start.to_string(),
+                &upload.range.end.to_string(),
+                &upload.range.total.to_string(),
+                upload.chunk_sha256,
+                &upload.expected_version.to_string(),
+            ],
+        );
+        let now = database_now(&mut transaction).await?;
+        match reserve_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            &request_sha256,
+            now,
+        )
+        .await?
+        {
+            IdempotencyReservation::Fresh => {}
+            IdempotencyReservation::Replay { status, body }
+                if status == StatusCode::NO_CONTENT.as_u16() as i16 =>
+            {
+                let version = body
+                    .get("resource_version")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(ApiError::internal)?;
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(version);
+            }
+            IdempotencyReservation::Replay { .. } => {
+                return Err(ApiError::internal().into());
+            }
+        }
+
+        let stored = load_submission(
+            &mut transaction,
+            upload.submission_id,
+            &identity.team_id,
+            true,
+        )
+        .await?;
+        if stored.response.resource_version != upload.expected_version {
+            return Err(ApiError::precondition_failed().into());
+        }
+        if stored.response.state != SubmissionState::Uploading {
+            return Err(ApiError::invalid_transition().into());
+        }
+        let part =
+            load_upload_part(&mut transaction, upload.submission_id, upload.part_name).await?;
+        if part.expected_bytes != upload.range.total || part.received_bytes != upload.range.start {
+            return Err(ApiError::upload_range_conflict().into());
+        }
+        if sha256_hex(upload.body) != upload.chunk_sha256 {
+            return Err(ApiError::digest_mismatch().into());
+        }
+        object_store
+            .store_chunk(upload.chunk_sha256, upload.body)
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+
+        sqlx::query(
+            "INSERT INTO submission_upload_chunks (submission_id, part_name, chunk_offset, \
+             chunk_bytes, chunk_sha256, created_unix_seconds) VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(upload.submission_id)
+        .bind(upload.part_name)
+        .bind(i64::try_from(upload.range.start).map_err(|_| ApiError::invalid_request())?)
+        .bind(i32::try_from(upload.body.len()).map_err(|_| ApiError::invalid_request())?)
+        .bind(upload.chunk_sha256)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+        let received_bytes = upload
+            .range
+            .end
+            .checked_add(1)
+            .ok_or_else(ApiError::invalid_request)?;
+        sqlx::query(
+            "UPDATE submission_upload_parts SET received_bytes = $1 \
+             WHERE submission_id = $2 AND part_name = $3",
+        )
+        .bind(i64::try_from(received_bytes).map_err(|_| ApiError::invalid_request())?)
+        .bind(upload.submission_id)
+        .bind(upload.part_name)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+
+        let resource_version = upload
+            .expected_version
+            .checked_add(1)
+            .ok_or_else(ApiError::internal)?;
+        sqlx::query("UPDATE submissions SET resource_version = $1 WHERE submission_id = $2")
+            .bind(i64::try_from(resource_version).map_err(|_| ApiError::internal())?)
+            .bind(upload.submission_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(TxError::Sql)?;
+        let response_body = json!({"resource_version": resource_version});
+        complete_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            StatusCode::NO_CONTENT,
+            &response_body,
+        )
+        .await?;
+        append_mutation(
+            &mut transaction,
+            MutationEvent {
+                now,
+                actor_id: &identity.member_id,
+                action: "submission.part-uploaded",
+                topic: "submission.part-uploaded",
+                object_kind: "submission",
+                object_id: upload.submission_id,
+                before_state: Some("uploading"),
+                after_state: Some("uploading"),
+                resource_version,
+                request_id,
+                request_sha256: &request_sha256,
+                key_sha256,
+                payload: json!({
+                    "submission_id": upload.submission_id,
+                    "part_name": upload.part_name,
+                    "offset": upload.range.start,
+                    "bytes": upload.body.len(),
+                    "chunk_sha256": upload.chunk_sha256
+                }),
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)?;
+        Ok(resource_version)
+    }
+
+    async fn finalize_submission(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+        request_id: &str,
+        submission_id: &str,
+        expected_version: u64,
+        content_sha256: &str,
+    ) -> Result<SubmissionResponse, ApiError> {
+        let object_store = self.object_store()?.clone();
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let key_sha256 = sha256_hex(idempotency_key.as_bytes());
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self
+                .finalize_submission_once(
+                    &object_store,
+                    &token_sha256,
+                    &key_sha256,
+                    request_id,
+                    submission_id,
+                    expected_version,
+                    content_sha256,
+                )
+                .await
+            {
+                Err(TxError::Sql(error)) if is_retryable_transaction_error(&error) => {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(TxError::Sql(_)) => return Err(ApiError::unavailable()),
+                Err(TxError::Api(error)) => return Err(error),
+                Ok(submission) => return Ok(submission),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn finalize_submission_once(
+        &self,
+        object_store: &ContentObjectStore,
+        token_sha256: &str,
+        key_sha256: &str,
+        request_id: &str,
+        submission_id: &str,
+        expected_version: u64,
+        content_sha256: &str,
+    ) -> Result<SubmissionResponse, TxError> {
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let identity = authenticate(&mut transaction, token_sha256).await?;
+        require_developer_write(&identity)?;
+        let request_sha256 = mutation_request_sha256(
+            "submission.finalize.v1",
+            &[submission_id, content_sha256, &expected_version.to_string()],
+        );
+        let now = database_now(&mut transaction).await?;
+        match reserve_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            &request_sha256,
+            now,
+        )
+        .await?
+        {
+            IdempotencyReservation::Fresh => {}
+            IdempotencyReservation::Replay { status, body }
+                if status == StatusCode::ACCEPTED.as_u16() as i16 =>
+            {
+                let submission = serde_json::from_value(body).map_err(|_| ApiError::internal())?;
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(submission);
+            }
+            IdempotencyReservation::Replay { .. } => {
+                return Err(ApiError::internal().into());
+            }
+        }
+
+        let mut stored =
+            load_submission(&mut transaction, submission_id, &identity.team_id, true).await?;
+        if stored.response.resource_version != expected_version {
+            return Err(ApiError::precondition_failed().into());
+        }
+        if stored.response.state != SubmissionState::Uploading {
+            return Err(ApiError::invalid_transition().into());
+        }
+        let parts = load_upload_parts(&mut transaction, submission_id).await?;
+        if parts.len() != stored.response.assets.len() + 2
+            || !upload_parts_match_submission(&stored, &parts)
+            || parts
+                .iter()
+                .any(|part| part.received_bytes != part.expected_bytes)
+        {
+            return Err(ApiError::upload_range_conflict().into());
+        }
+        for part in &parts {
+            verify_uploaded_part(object_store, &mut transaction, submission_id, part).await?;
+        }
+        let computed_content_sha256 = submission_content_sha256(
+            &stored.response.package_sha256,
+            &stored.response.listing_sha256,
+            &stored.response.assets,
+        );
+        if computed_content_sha256 != content_sha256 {
+            return Err(ApiError::digest_mismatch().into());
+        }
+
+        let resource_version = expected_version
+            .checked_add(1)
+            .ok_or_else(ApiError::internal)?;
+        sqlx::query(
+            "UPDATE submissions SET state = 'processing', resource_version = $1, \
+             finalized_content_sha256 = $2 WHERE submission_id = $3",
+        )
+        .bind(i64::try_from(resource_version).map_err(|_| ApiError::internal())?)
+        .bind(content_sha256)
+        .bind(submission_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+        stored.response.state = SubmissionState::Processing;
+        stored.response.resource_version = resource_version;
+        let response_body =
+            serde_json::to_value(&stored.response).map_err(|_| ApiError::internal())?;
+        complete_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            StatusCode::ACCEPTED,
+            &response_body,
+        )
+        .await?;
+        append_mutation(
+            &mut transaction,
+            MutationEvent {
+                now,
+                actor_id: &identity.member_id,
+                action: "submission.finalized",
+                topic: "submission.scan-requested",
+                object_kind: "submission",
+                object_id: submission_id,
+                before_state: Some("uploading"),
+                after_state: Some("processing"),
+                resource_version,
+                request_id,
+                request_sha256: &request_sha256,
+                key_sha256,
+                payload: json!({
+                    "submission_id": submission_id,
+                    "app_id": stored.response.app_id,
+                    "version": stored.response.version,
+                    "revision": stored.response.revision,
+                    "content_sha256": content_sha256
+                }),
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)?;
+        Ok(stored.response)
+    }
 }
 
 pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool, sqlx::Error> {
@@ -233,11 +983,27 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
 
 pub fn router(service: StoreControlService) -> Router {
     Router::new()
-        .route("/v1/apps", post(post_app))
+        .route(
+            "/v1/apps",
+            post(post_app).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
         .route("/v1/apps/{app_id}", get(get_app))
+        .route(
+            "/v1/apps/{app_id}/submissions",
+            post(post_submission).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/v1/submissions/{submission_action}",
+            get(get_submission)
+                .post(finalize_submission)
+                .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/v1/submissions/{submission_id}/parts/{part_name}",
+            put(put_submission_part).layer(DefaultBodyLimit::max(MAX_UPLOAD_CHUNK_BYTES)),
+        )
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(fallback)
-        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(service)
 }
 
@@ -246,6 +1012,87 @@ pub fn router(service: StoreControlService) -> Router {
 struct CreateAppRequest {
     app_id: String,
     default_locale: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateSubmissionRequest {
+    version: String,
+    package_sha256: String,
+    package_bytes: u64,
+    listing_sha256: String,
+    listing_bytes: u64,
+    assets: Vec<ImageAsset>,
+}
+
+impl CreateSubmissionRequest {
+    fn spec(&self) -> SubmissionSpec {
+        SubmissionSpec {
+            version: self.version.clone(),
+            package_sha256: self.package_sha256.clone(),
+            package_bytes: self.package_bytes,
+            listing_sha256: self.listing_sha256.clone(),
+            listing_bytes: self.listing_bytes,
+            assets: self.assets.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FinalizeSubmissionRequest {
+    content_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubmissionResponse {
+    submission_id: String,
+    app_id: String,
+    version: String,
+    revision: u32,
+    state: SubmissionState,
+    package_sha256: String,
+    listing_sha256: String,
+    assets: Vec<ImageAsset>,
+    resource_version: u64,
+    created_unix_seconds: u64,
+}
+
+struct StoredSubmission {
+    response: SubmissionResponse,
+    package_bytes: u64,
+    listing_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UploadRange {
+    start: u64,
+    end: u64,
+    total: u64,
+}
+
+#[derive(Clone, Copy)]
+struct UploadMutation<'a> {
+    submission_id: &'a str,
+    part_name: &'a str,
+    expected_version: u64,
+    range: UploadRange,
+    chunk_sha256: &'a str,
+    body: &'a [u8],
+}
+
+struct UploadPart {
+    name: String,
+    expected_sha256: String,
+    expected_bytes: u64,
+    received_bytes: u64,
+}
+
+struct StoredChunk {
+    offset: u64,
+    bytes: usize,
+    sha256: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -270,6 +1117,10 @@ enum ApiErrorKind {
     IdempotencyConflict,
     PayloadTooLarge,
     MethodNotAllowed,
+    PreconditionFailed,
+    InvalidTransition,
+    UploadRangeConflict,
+    DigestMismatch,
     Internal,
     Unavailable,
 }
@@ -331,6 +1182,30 @@ impl ApiError {
     const fn method_not_allowed() -> Self {
         Self {
             kind: ApiErrorKind::MethodNotAllowed,
+        }
+    }
+
+    const fn precondition_failed() -> Self {
+        Self {
+            kind: ApiErrorKind::PreconditionFailed,
+        }
+    }
+
+    const fn invalid_transition() -> Self {
+        Self {
+            kind: ApiErrorKind::InvalidTransition,
+        }
+    }
+
+    const fn upload_range_conflict() -> Self {
+        Self {
+            kind: ApiErrorKind::UploadRangeConflict,
+        }
+    }
+
+    const fn digest_mismatch() -> Self {
+        Self {
+            kind: ApiErrorKind::DigestMismatch,
         }
     }
 
@@ -403,13 +1278,39 @@ impl ApiError {
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "payload-too-large",
                 "Request body too large",
-                Some("The JSON request body exceeds 32768 bytes."),
+                Some("The request body exceeds the limit for this operation."),
             ),
             ApiErrorKind::MethodNotAllowed => (
                 StatusCode::METHOD_NOT_ALLOWED,
                 "method-not-allowed",
                 "Method not allowed",
                 None,
+            ),
+            ApiErrorKind::PreconditionFailed => (
+                StatusCode::PRECONDITION_FAILED,
+                "precondition-failed",
+                "Resource version changed",
+                Some("Read the resource again before retrying this operation."),
+            ),
+            ApiErrorKind::InvalidTransition => (
+                StatusCode::CONFLICT,
+                "invalid-transition",
+                "Invalid state transition",
+                Some("The Submission is not in a state that allows this operation."),
+            ),
+            ApiErrorKind::UploadRangeConflict => (
+                StatusCode::CONFLICT,
+                "upload-range-conflict",
+                "Upload range conflict",
+                Some("Upload the next contiguous range with the current ETag."),
+            ),
+            ApiErrorKind::DigestMismatch => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "digest-mismatch",
+                "Content digest mismatch",
+                Some(
+                    "Uploaded bytes or the finalized content digest do not match the declaration.",
+                ),
             ),
             ApiErrorKind::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -432,6 +1333,7 @@ impl ApiError {
             request_id,
             detail,
         };
+        let response_request_id = problem.request_id.clone();
         let mut response = (status, Json(problem)).into_response();
         response.headers_mut().insert(
             CONTENT_TYPE,
@@ -443,6 +1345,9 @@ impl ApiError {
                 HeaderValue::from_static("Bearer realm=\"cardputerzero-store\""),
             );
         }
+        if let Ok(value) = HeaderValue::from_str(&response_request_id) {
+            response.headers_mut().insert("x-request-id", value);
+        }
         response
     }
 }
@@ -450,6 +1355,11 @@ impl ApiError {
 enum TxError {
     Api(ApiError),
     Sql(sqlx::Error),
+}
+
+enum IdempotencyReservation {
+    Fresh,
+    Replay { status: i16, body: Value },
 }
 
 impl From<ApiError> for TxError {
@@ -473,6 +1383,358 @@ impl Identity {
             .iter()
             .any(|scope| expected.contains(&scope.as_str()))
     }
+}
+
+struct MutationEvent<'a> {
+    now: i64,
+    actor_id: &'a str,
+    action: &'a str,
+    topic: &'a str,
+    object_kind: &'a str,
+    object_id: &'a str,
+    before_state: Option<&'a str>,
+    after_state: Option<&'a str>,
+    resource_version: u64,
+    request_id: &'a str,
+    request_sha256: &'a str,
+    key_sha256: &'a str,
+    payload: Value,
+}
+
+async fn begin_serializable(pool: &PgPool) -> Result<Transaction<'_, Postgres>, TxError> {
+    let mut transaction = pool.begin().await.map_err(TxError::Sql)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+    Ok(transaction)
+}
+
+async fn retry_delay(attempt: usize) {
+    tokio::time::sleep(Duration::from_millis(5 * (attempt as u64 + 1))).await;
+}
+
+fn require_developer_write(identity: &Identity) -> Result<(), ApiError> {
+    if !matches!(identity.role.as_str(), "owner" | "developer")
+        || !identity.has_any_scope(&["store.submit", "store.control"])
+    {
+        return Err(ApiError::forbidden());
+    }
+    if !identity.two_factor_enabled {
+        return Err(ApiError::two_factor_required());
+    }
+    Ok(())
+}
+
+async fn complete_idempotency(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: &str,
+    key_sha256: &str,
+    status: StatusCode,
+    body: &Value,
+) -> Result<(), TxError> {
+    let affected = sqlx::query(
+        "UPDATE idempotency_records SET response_status = $1, response_body = $2 \
+         WHERE actor_id = $3 AND key_sha256 = $4 AND response_status IS NULL",
+    )
+    .bind(status.as_u16() as i16)
+    .bind(body)
+    .bind(actor_id)
+    .bind(key_sha256)
+    .execute(&mut **transaction)
+    .await
+    .map_err(TxError::Sql)?
+    .rows_affected();
+    if affected != 1 {
+        return Err(ApiError::internal().into());
+    }
+    Ok(())
+}
+
+async fn append_mutation(
+    transaction: &mut Transaction<'_, Postgres>,
+    event: MutationEvent<'_>,
+) -> Result<(), TxError> {
+    let version = i64::try_from(event.resource_version).map_err(|_| ApiError::internal())?;
+    sqlx::query(
+        "INSERT INTO audit_events (occurred_unix_seconds, actor_id, action, object_kind, \
+         object_id, before_state, after_state, resource_version, request_id, request_sha256, \
+         idempotency_key_sha256) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+    )
+    .bind(event.now)
+    .bind(event.actor_id)
+    .bind(event.action)
+    .bind(event.object_kind)
+    .bind(event.object_id)
+    .bind(event.before_state)
+    .bind(event.after_state)
+    .bind(version)
+    .bind(event.request_id)
+    .bind(event.request_sha256)
+    .bind(event.key_sha256)
+    .execute(&mut **transaction)
+    .await
+    .map_err(TxError::Sql)?;
+    sqlx::query(
+        "INSERT INTO outbox_events (event_id, topic, aggregate_kind, aggregate_id, \
+         aggregate_version, request_sha256, payload, created_unix_seconds) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(prefixed_uuid("evt_"))
+    .bind(event.topic)
+    .bind(event.object_kind)
+    .bind(event.object_id)
+    .bind(version)
+    .bind(event.request_sha256)
+    .bind(event.payload)
+    .bind(event.now)
+    .execute(&mut **transaction)
+    .await
+    .map_err(TxError::Sql)?;
+    Ok(())
+}
+
+async fn insert_upload_part(
+    transaction: &mut Transaction<'_, Postgres>,
+    submission_id: &str,
+    part_name: &str,
+    expected_sha256: &str,
+    expected_bytes: u64,
+) -> Result<(), TxError> {
+    sqlx::query(
+        "INSERT INTO submission_upload_parts (submission_id, part_name, expected_sha256, \
+         expected_bytes, received_bytes) VALUES ($1, $2, $3, $4, 0)",
+    )
+    .bind(submission_id)
+    .bind(part_name)
+    .bind(expected_sha256)
+    .bind(i64::try_from(expected_bytes).map_err(|_| ApiError::invalid_request())?)
+    .execute(&mut **transaction)
+    .await
+    .map_err(TxError::Sql)?;
+    Ok(())
+}
+
+async fn load_submission(
+    transaction: &mut Transaction<'_, Postgres>,
+    submission_id: &str,
+    team_id: &str,
+    lock: bool,
+) -> Result<StoredSubmission, TxError> {
+    let sql = if lock {
+        "SELECT submission.submission_id, submission.app_id, submission.version, \
+         submission.revision, submission.state, submission.package_sha256, \
+         submission.package_bytes, submission.listing_sha256, submission.listing_bytes, \
+         submission.assets, submission.resource_version, submission.created_unix_seconds \
+         FROM submissions submission JOIN apps app ON app.app_id = submission.app_id \
+         WHERE submission.submission_id = $1 AND app.owner_team_id = $2 \
+         FOR UPDATE OF submission"
+    } else {
+        "SELECT submission.submission_id, submission.app_id, submission.version, \
+         submission.revision, submission.state, submission.package_sha256, \
+         submission.package_bytes, submission.listing_sha256, submission.listing_bytes, \
+         submission.assets, submission.resource_version, submission.created_unix_seconds \
+         FROM submissions submission JOIN apps app ON app.app_id = submission.app_id \
+         WHERE submission.submission_id = $1 AND app.owner_team_id = $2"
+    };
+    let row = sqlx::query(sql)
+        .bind(submission_id)
+        .bind(team_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .ok_or_else(ApiError::not_found)?;
+    let assets: Value = row.get("assets");
+    Ok(StoredSubmission {
+        response: SubmissionResponse {
+            submission_id: row.get("submission_id"),
+            app_id: row.get("app_id"),
+            version: row.get("version"),
+            revision: u32::try_from(row.get::<i32, _>("revision"))
+                .map_err(|_| ApiError::internal())?,
+            state: parse_submission_state(row.get("state"))?,
+            package_sha256: row.get("package_sha256"),
+            listing_sha256: row.get("listing_sha256"),
+            assets: serde_json::from_value(assets).map_err(|_| ApiError::internal())?,
+            resource_version: u64::try_from(row.get::<i64, _>("resource_version"))
+                .map_err(|_| ApiError::internal())?,
+            created_unix_seconds: u64::try_from(row.get::<i64, _>("created_unix_seconds"))
+                .map_err(|_| ApiError::internal())?,
+        },
+        package_bytes: u64::try_from(row.get::<i64, _>("package_bytes"))
+            .map_err(|_| ApiError::internal())?,
+        listing_bytes: u64::try_from(row.get::<i64, _>("listing_bytes"))
+            .map_err(|_| ApiError::internal())?,
+    })
+}
+
+fn parse_submission_state(value: String) -> Result<SubmissionState, ApiError> {
+    match value.as_str() {
+        "draft" => Ok(SubmissionState::Draft),
+        "uploading" => Ok(SubmissionState::Uploading),
+        "processing" => Ok(SubmissionState::Processing),
+        "ready-for-review" => Ok(SubmissionState::ReadyForReview),
+        "in-review" => Ok(SubmissionState::InReview),
+        "needs-changes" => Ok(SubmissionState::NeedsChanges),
+        "approved" => Ok(SubmissionState::Approved),
+        "rejected" => Ok(SubmissionState::Rejected),
+        "withdrawn" => Ok(SubmissionState::Withdrawn),
+        _ => Err(ApiError::internal()),
+    }
+}
+
+async fn load_upload_part(
+    transaction: &mut Transaction<'_, Postgres>,
+    submission_id: &str,
+    part_name: &str,
+) -> Result<UploadPart, TxError> {
+    let row = sqlx::query(
+        "SELECT part_name, expected_sha256, expected_bytes, received_bytes \
+         FROM submission_upload_parts WHERE submission_id = $1 AND part_name = $2 FOR UPDATE",
+    )
+    .bind(submission_id)
+    .bind(part_name)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(TxError::Sql)?
+    .ok_or_else(ApiError::not_found)?;
+    upload_part_from_row(&row).map_err(Into::into)
+}
+
+async fn load_upload_parts(
+    transaction: &mut Transaction<'_, Postgres>,
+    submission_id: &str,
+) -> Result<Vec<UploadPart>, TxError> {
+    let rows = sqlx::query(
+        "SELECT part_name, expected_sha256, expected_bytes, received_bytes \
+         FROM submission_upload_parts WHERE submission_id = $1 ORDER BY part_name FOR UPDATE",
+    )
+    .bind(submission_id)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(TxError::Sql)?;
+    rows.iter()
+        .map(upload_part_from_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn upload_part_from_row(row: &sqlx::postgres::PgRow) -> Result<UploadPart, ApiError> {
+    Ok(UploadPart {
+        name: row.get("part_name"),
+        expected_sha256: row.get("expected_sha256"),
+        expected_bytes: u64::try_from(row.get::<i64, _>("expected_bytes"))
+            .map_err(|_| ApiError::internal())?,
+        received_bytes: u64::try_from(row.get::<i64, _>("received_bytes"))
+            .map_err(|_| ApiError::internal())?,
+    })
+}
+
+fn upload_parts_match_submission(stored: &StoredSubmission, parts: &[UploadPart]) -> bool {
+    let matches_part = |name: &str, sha256: &str, bytes: u64| {
+        parts.iter().any(|part| {
+            part.name == name && part.expected_sha256 == sha256 && part.expected_bytes == bytes
+        })
+    };
+    matches_part(
+        "package",
+        &stored.response.package_sha256,
+        stored.package_bytes,
+    ) && matches_part(
+        "listing",
+        &stored.response.listing_sha256,
+        stored.listing_bytes,
+    ) && stored
+        .response
+        .assets
+        .iter()
+        .enumerate()
+        .all(|(index, asset)| matches_part(&format!("asset-{index}"), &asset.sha256, asset.bytes))
+}
+
+async fn verify_uploaded_part(
+    object_store: &ContentObjectStore,
+    transaction: &mut Transaction<'_, Postgres>,
+    submission_id: &str,
+    part: &UploadPart,
+) -> Result<(), TxError> {
+    let rows = sqlx::query(
+        "SELECT chunk_offset, chunk_bytes, chunk_sha256 FROM submission_upload_chunks \
+         WHERE submission_id = $1 AND part_name = $2 ORDER BY chunk_offset",
+    )
+    .bind(submission_id)
+    .bind(&part.name)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(TxError::Sql)?;
+    let chunks = rows
+        .iter()
+        .map(|row| {
+            Ok(StoredChunk {
+                offset: u64::try_from(row.get::<i64, _>("chunk_offset"))
+                    .map_err(|_| ApiError::internal())?,
+                bytes: usize::try_from(row.get::<i32, _>("chunk_bytes"))
+                    .map_err(|_| ApiError::internal())?,
+                sha256: row.get("chunk_sha256"),
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let mut offset = 0_u64;
+    let mut hasher = Sha256::new();
+    for chunk in chunks {
+        if chunk.offset != offset {
+            return Err(ApiError::digest_mismatch().into());
+        }
+        let bytes = object_store
+            .verify_chunk(&chunk.sha256, chunk.bytes)
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        hasher.update(&bytes);
+        offset = offset
+            .checked_add(chunk.bytes as u64)
+            .ok_or_else(ApiError::internal)?;
+    }
+    if offset != part.expected_bytes || lower_hex(&hasher.finalize()) != part.expected_sha256 {
+        return Err(ApiError::digest_mismatch().into());
+    }
+    Ok(())
+}
+
+fn submission_content_sha256(
+    package_sha256: &str,
+    listing_sha256: &str,
+    assets: &[ImageAsset],
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"CardputerZero Store submission content v1\0");
+    hash_field(&mut hasher, package_sha256.as_bytes());
+    hash_field(&mut hasher, listing_sha256.as_bytes());
+    for asset in assets {
+        hash_field(&mut hasher, asset.path.as_bytes());
+        hash_field(&mut hasher, asset.sha256.as_bytes());
+        hasher.update(asset.bytes.to_be_bytes());
+        hasher.update(asset.width.to_be_bytes());
+        hasher.update(asset.height.to_be_bytes());
+    }
+    lower_hex(&hasher.finalize())
+}
+
+fn mutation_request_sha256(domain: &str, fields: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    hash_field(&mut hasher, domain.as_bytes());
+    for field in fields {
+        hash_field(&mut hasher, field.as_bytes());
+    }
+    lower_hex(&hasher.finalize())
+}
+
+fn hash_field(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 async fn authenticate(
@@ -514,7 +1776,7 @@ async fn reserve_idempotency(
     key_sha256: &str,
     request_sha256: &str,
     now: i64,
-) -> Result<Option<AppRecord>, TxError> {
+) -> Result<IdempotencyReservation, TxError> {
     let inserted = sqlx::query(
         "INSERT INTO idempotency_records (actor_id, key_sha256, request_sha256, \
          created_unix_seconds, expires_unix_seconds) VALUES ($1, $2, $3, $4, $5) \
@@ -530,7 +1792,7 @@ async fn reserve_idempotency(
     .map_err(TxError::Sql)?
     .rows_affected();
     if inserted == 1 {
-        return Ok(None);
+        return Ok(IdempotencyReservation::Fresh);
     }
 
     let row = sqlx::query(
@@ -563,7 +1825,7 @@ async fn reserve_idempotency(
         .execute(&mut **transaction)
         .await
         .map_err(TxError::Sql)?;
-        return Ok(None);
+        return Ok(IdempotencyReservation::Fresh);
     }
 
     let existing_request: String = row.get("request_sha256");
@@ -572,12 +1834,10 @@ async fn reserve_idempotency(
     }
     let status: Option<i16> = row.get("response_status");
     let body: Option<Value> = row.get("response_body");
-    if status != Some(StatusCode::CREATED.as_u16() as i16) {
-        return Err(ApiError::unavailable().into());
+    match (status, body) {
+        (Some(status), Some(body)) => Ok(IdempotencyReservation::Replay { status, body }),
+        _ => Err(ApiError::unavailable().into()),
     }
-    serde_json::from_value(body.ok_or_else(ApiError::internal)?)
-        .map(Some)
-        .map_err(|_| ApiError::internal().into())
 }
 
 async fn post_app(
@@ -614,7 +1874,10 @@ async fn post_app(
         .create_app(&token, &idempotency_key, &request_id, &request)
         .await
     {
-        Ok(app) => resource_response(StatusCode::CREATED, app, request_id),
+        Ok(app) => {
+            let version = app.resource_version;
+            resource_response(StatusCode::CREATED, app, version, request_id)
+        }
         Err(error) => error.response(request_id),
     }
 }
@@ -633,8 +1896,200 @@ async fn get_app(
         Err(error) => return error.response(request_id),
     };
     match service.get_app(&token, &app_id).await {
-        Ok(app) => resource_response(StatusCode::OK, app, request_id),
+        Ok(app) => {
+            let version = app.resource_version;
+            resource_response(StatusCode::OK, app, version, request_id)
+        }
         Err(error) => error.response(request_id),
+    }
+}
+
+async fn post_submission(
+    State(service): State<StoreControlService>,
+    Path(app_id): Path<String>,
+    headers: HeaderMap,
+    payload: Result<Json<CreateSubmissionRequest>, JsonRejection>,
+) -> Response {
+    let request_id = request_id();
+    if !cp0_manifest::is_valid_app_id(&app_id) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    let idempotency_key = match idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(error) => return error.response(request_id),
+    };
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => return json_rejection(rejection).response(request_id),
+    };
+    if validate_submission_spec(&request.spec()).is_err() {
+        return ApiError::invalid_request().response(request_id);
+    }
+    match service
+        .create_submission(&token, &idempotency_key, &request_id, &app_id, &request)
+        .await
+    {
+        Ok(submission) => {
+            let version = submission.resource_version;
+            resource_response(StatusCode::CREATED, submission, version, request_id)
+        }
+        Err(error) => error.response(request_id),
+    }
+}
+
+async fn get_submission(
+    State(service): State<StoreControlService>,
+    Path(submission_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = request_id();
+    if !is_valid_submission_id(&submission_id) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    match service.get_submission(&token, &submission_id).await {
+        Ok(submission) => {
+            let version = submission.resource_version;
+            resource_response(StatusCode::OK, submission, version, request_id)
+        }
+        Err(error) => error.response(request_id),
+    }
+}
+
+async fn put_submission_part(
+    State(service): State<StoreControlService>,
+    Path((submission_id, part_name)): Path<(String, String)>,
+    headers: HeaderMap,
+    payload: Result<Bytes, BytesRejection>,
+) -> Response {
+    let request_id = request_id();
+    if !is_valid_submission_id(&submission_id)
+        || !valid_part_name(&part_name)
+        || headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            != Some("application/octet-stream")
+    {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let body = match payload {
+        Ok(body) => body,
+        Err(rejection) => {
+            let error = if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                ApiError::payload_too_large()
+            } else {
+                ApiError::invalid_request()
+            };
+            return error.response(request_id);
+        }
+    };
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    let idempotency_key = match idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(error) => return error.response(request_id),
+    };
+    let expected_version = match expected_version(&headers) {
+        Ok(value) => value,
+        Err(error) => return error.response(request_id),
+    };
+    let chunk_sha256 = match content_sha256(&headers) {
+        Ok(value) => value,
+        Err(error) => return error.response(request_id),
+    };
+    let range = match upload_range(&headers, body.len()) {
+        Ok(value) => value,
+        Err(error) => return error.response(request_id),
+    };
+    if sha256_hex(&body) != chunk_sha256 {
+        return ApiError::digest_mismatch().response(request_id);
+    }
+    match service
+        .upload_submission_part(
+            &token,
+            &idempotency_key,
+            &request_id,
+            UploadMutation {
+                submission_id: &submission_id,
+                part_name: &part_name,
+                expected_version,
+                range,
+                chunk_sha256: &chunk_sha256,
+                body: &body,
+            },
+        )
+        .await
+    {
+        Ok(version) => empty_resource_response(version, request_id),
+        Err(error) => error.response(request_id),
+    }
+}
+
+async fn finalize_submission(
+    State(service): State<StoreControlService>,
+    Path(submission_action): Path<String>,
+    headers: HeaderMap,
+    payload: Result<Json<FinalizeSubmissionRequest>, JsonRejection>,
+) -> Response {
+    let request_id = request_id();
+    let Some(submission_id) = submission_action.strip_suffix(":finalize") else {
+        return ApiError::invalid_request().response(request_id);
+    };
+    if !is_valid_submission_id(submission_id) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    let idempotency_key = match idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(error) => return error.response(request_id),
+    };
+    let expected_version = match expected_version(&headers) {
+        Ok(value) => value,
+        Err(error) => return error.response(request_id),
+    };
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => return json_rejection(rejection).response(request_id),
+    };
+    if !is_valid_sha256(&request.content_sha256) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    match service
+        .finalize_submission(
+            &token,
+            &idempotency_key,
+            &request_id,
+            submission_id,
+            expected_version,
+            &request.content_sha256,
+        )
+        .await
+    {
+        Ok(submission) => {
+            let version = submission.resource_version;
+            resource_response(StatusCode::ACCEPTED, submission, version, request_id)
+        }
+        Err(error) => error.response(request_id),
+    }
+}
+
+fn json_rejection(rejection: JsonRejection) -> ApiError {
+    if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        ApiError::payload_too_large()
+    } else {
+        ApiError::invalid_request()
     }
 }
 
@@ -646,10 +2101,26 @@ async fn method_not_allowed() -> Response {
     ApiError::method_not_allowed().response(request_id())
 }
 
-fn resource_response(status: StatusCode, app: AppRecord, request_id: String) -> Response {
-    let etag = format!("\"{}\"", app.resource_version);
-    let mut response = (status, Json(app)).into_response();
+fn resource_response<T: Serialize>(
+    status: StatusCode,
+    resource: T,
+    resource_version: u64,
+    request_id: String,
+) -> Response {
+    let etag = format!("\"{resource_version}\"");
+    let mut response = (status, Json(resource)).into_response();
     if let Ok(value) = HeaderValue::from_str(&etag) {
+        response.headers_mut().insert(ETAG, value);
+    }
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert("x-request-id", value);
+    }
+    response
+}
+
+fn empty_resource_response(resource_version: u64, request_id: String) -> Response {
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    if let Ok(value) = HeaderValue::from_str(&format!("\"{resource_version}\"")) {
         response.headers_mut().insert(ETAG, value);
     }
     if let Ok(value) = HeaderValue::from_str(&request_id) {
@@ -686,6 +2157,100 @@ fn idempotency_key(headers: &HeaderMap) -> Result<String, ApiError> {
     Ok(key.to_owned())
 }
 
+fn expected_version(headers: &HeaderMap) -> Result<u64, ApiError> {
+    let value = headers
+        .get(IF_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix('"'))
+        .and_then(|value| value.strip_suffix('"'))
+        .filter(|value| is_canonical_number(value))
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(ApiError::invalid_request)?;
+    Ok(value)
+}
+
+fn content_sha256(headers: &HeaderMap) -> Result<String, ApiError> {
+    headers
+        .get("content-sha256")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| is_valid_sha256(value))
+        .map(str::to_owned)
+        .ok_or_else(ApiError::invalid_request)
+}
+
+fn upload_range(headers: &HeaderMap, body_bytes: usize) -> Result<UploadRange, ApiError> {
+    let value = headers
+        .get("content-range")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("bytes "))
+        .ok_or_else(ApiError::invalid_request)?;
+    let (range, total) = value
+        .split_once('/')
+        .ok_or_else(ApiError::invalid_request)?;
+    let (start, end) = range
+        .split_once('-')
+        .ok_or_else(ApiError::invalid_request)?;
+    if !is_canonical_number(start) || !is_canonical_number(end) || !is_canonical_number(total) {
+        return Err(ApiError::invalid_request());
+    }
+    let start = start
+        .parse::<u64>()
+        .map_err(|_| ApiError::invalid_request())?;
+    let end = end
+        .parse::<u64>()
+        .map_err(|_| ApiError::invalid_request())?;
+    let total = total
+        .parse::<u64>()
+        .map_err(|_| ApiError::invalid_request())?;
+    let declared_bytes = end
+        .checked_sub(start)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(ApiError::invalid_request)?;
+    if body_bytes == 0
+        || body_bytes > MAX_UPLOAD_CHUNK_BYTES
+        || declared_bytes != body_bytes as u64
+        || total == 0
+        || end >= total
+    {
+        return Err(ApiError::invalid_request());
+    }
+    Ok(UploadRange { start, end, total })
+}
+
+fn is_canonical_number(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && (value == "0" || !value.starts_with('0'))
+}
+
+fn is_valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn is_valid_submission_id(value: &str) -> bool {
+    valid_prefixed_hex_id(value, "sub_")
+}
+
+fn valid_part_name(value: &str) -> bool {
+    matches!(value, "package" | "listing")
+        || value
+            .strip_prefix("asset-")
+            .is_some_and(|suffix| matches!(suffix, "0" | "1" | "2" | "3" | "4" | "5"))
+}
+
+fn valid_prefixed_hex_id(value: &str, prefix: &str) -> bool {
+    value.strip_prefix(prefix).is_some_and(|suffix| {
+        suffix.len() == 32
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    })
+}
+
 fn row_version(row: &sqlx::postgres::PgRow) -> Result<u64, ApiError> {
     let value: i64 = row.get("resource_version");
     u64::try_from(value).map_err(|_| ApiError::internal())
@@ -709,6 +2274,13 @@ fn is_retryable_transaction_error(error: &sqlx::Error) -> bool {
         .as_database_error()
         .and_then(|error| error.code())
         .is_some_and(|code| matches!(code.as_ref(), "40001" | "40P01"))
+}
+
+fn is_submission_revision_conflict(error: &sqlx::Error) -> bool {
+    error.as_database_error().is_some_and(|error| {
+        error.code().as_deref() == Some("23505")
+            && error.constraint() == Some("submissions_app_id_version_revision_key")
+    })
 }
 
 #[cfg(test)]
@@ -742,5 +2314,33 @@ mod tests {
     fn retry_classifier_is_closed_by_default() {
         let error = sqlx::Error::RowNotFound;
         assert!(!is_retryable_transaction_error(&error));
+    }
+
+    #[test]
+    fn parses_only_canonical_versions_and_ranges() {
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_MATCH, HeaderValue::from_static("\"17\""));
+        headers.insert(
+            "content-range",
+            HeaderValue::from_static("bytes 262144-262160/262161"),
+        );
+        assert_eq!(expected_version(&headers).unwrap(), 17);
+        let range = upload_range(&headers, 17).unwrap();
+        assert_eq!(range.start, 262_144);
+        assert_eq!(range.end, 262_160);
+        assert_eq!(range.total, 262_161);
+
+        headers.insert(IF_MATCH, HeaderValue::from_static("W/\"17\""));
+        assert!(expected_version(&headers).is_err());
+        headers.insert("content-range", HeaderValue::from_static("bytes 01-17/18"));
+        assert!(upload_range(&headers, 17).is_err());
+    }
+
+    #[tokio::test]
+    async fn object_store_rejects_relative_roots() {
+        let error = ContentObjectStore::open(FilePath::new("relative-store"))
+            .await
+            .expect_err("relative object root must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 }

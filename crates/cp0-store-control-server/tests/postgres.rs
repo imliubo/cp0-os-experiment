@@ -1,16 +1,20 @@
 use std::env;
+use std::path::{Path, PathBuf};
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ETAG};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, IF_MATCH};
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use cp0_store_control::register_app_request_sha256;
-use cp0_store_control_server::{StoreControlService, connect, migrate, router};
+use cp0_store_control_server::{
+    MAX_UPLOAD_CHUNK_BYTES, StoreControlService, connect, migrate, router,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPool;
 use sqlx::{Executor, Row};
 use tower::ServiceExt;
+use uuid::Uuid;
 
 const OWNER_A_TOKEN: &str = "owner-a-token-0000000000000000000001";
 const OWNER_B_TOKEN: &str = "owner-b-token-0000000000000000000002";
@@ -45,12 +49,21 @@ async fn postgres_http_transaction_acceptance() {
     reset_database(&pool).await;
     seed_identities(&pool).await;
 
-    let application = router(StoreControlService::new(pool.clone()));
+    let object_root = test_object_root();
+    let service = StoreControlService::with_object_root(pool.clone(), &object_root)
+        .await
+        .expect("create content object store");
+    let application = router(service);
     verify_exact_replay(&application, &pool).await;
     verify_authorization_and_limits(&application, &pool).await;
     verify_concurrent_claim(&application, &pool).await;
     verify_atomic_rollback(&application, &pool).await;
+    verify_submission_upload(&application, &pool).await;
+    verify_concurrent_submission_revisions(&application, &pool).await;
     verify_database_immutability(&pool).await;
+    tokio::fs::remove_dir_all(object_root)
+        .await
+        .expect("remove repository-local test object store");
 }
 
 async fn verify_exact_replay(application: &Router, pool: &PgPool) {
@@ -306,6 +319,372 @@ async fn verify_atomic_rollback(application: &Router, pool: &PgPool) {
     assert_eq!(count(pool, "outbox_events").await, 2);
 }
 
+async fn verify_submission_upload(application: &Router, pool: &PgPool) {
+    let package = vec![0x55; MAX_UPLOAD_CHUNK_BYTES + 17];
+    let listing = br#"{"schema_version":1,"name":"Notes"}"#.to_vec();
+    let icon = b"verified-icon-object".to_vec();
+    let screenshot = b"verified-screenshot-object".to_vec();
+    let package_sha256 = sha256_hex(&package);
+    let listing_sha256 = sha256_hex(&listing);
+    let icon_sha256 = sha256_hex(&icon);
+    let screenshot_sha256 = sha256_hex(&screenshot);
+    let assets = vec![
+        json!({
+            "path": "icon.png",
+            "sha256": icon_sha256,
+            "bytes": icon.len(),
+            "width": 48,
+            "height": 48
+        }),
+        json!({
+            "path": "screens/main.png",
+            "sha256": screenshot_sha256,
+            "bytes": screenshot.len(),
+            "width": 320,
+            "height": 170
+        }),
+    ];
+    let request_body = json!({
+        "version": "1.0.0",
+        "package_sha256": package_sha256,
+        "package_bytes": package.len(),
+        "listing_sha256": listing_sha256,
+        "listing_bytes": listing.len(),
+        "assets": assets
+    });
+    let no_two_factor = call(
+        application.clone(),
+        Method::POST,
+        "/v1/apps/dev.cardputerzero.notes/submissions",
+        Some(NO_2FA_TOKEN),
+        Some("submission-no2fa-1"),
+        Some(request_body.clone()),
+    )
+    .await;
+    assert_problem(&no_two_factor, StatusCode::FORBIDDEN, "two-factor-required");
+    let wrong_role = call(
+        application.clone(),
+        Method::POST,
+        "/v1/apps/dev.cardputerzero.notes/submissions",
+        Some(VIEWER_TOKEN),
+        Some("submission-viewer-1"),
+        Some(request_body.clone()),
+    )
+    .await;
+    assert_problem(&wrong_role, StatusCode::FORBIDDEN, "forbidden");
+    let counts_before = (
+        count(pool, "audit_events").await,
+        count(pool, "outbox_events").await,
+        count(pool, "idempotency_records").await,
+    );
+    let created = call(
+        application.clone(),
+        Method::POST,
+        "/v1/apps/dev.cardputerzero.notes/submissions",
+        Some(OWNER_A_TOKEN),
+        Some("create-submission-001"),
+        Some(request_body.clone()),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    assert_eq!(etag_version(&created), 1);
+    let created_body: Value = serde_json::from_slice(&created.body).unwrap();
+    let submission_id = created_body["submission_id"].as_str().unwrap().to_owned();
+    assert!(submission_id.starts_with("sub_"));
+    assert_eq!(created_body["state"], "uploading");
+    assert!(created_body.get("package_bytes").is_none());
+    assert!(created_body.get("listing_bytes").is_none());
+
+    let replay = call(
+        application.clone(),
+        Method::POST,
+        "/v1/apps/dev.cardputerzero.notes/submissions",
+        Some(OWNER_A_TOKEN),
+        Some("create-submission-001"),
+        Some(request_body),
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::CREATED);
+    assert_eq!(created.body, replay.body);
+
+    let first_chunk = &package[..MAX_UPLOAD_CHUNK_BYTES];
+    let first = upload(
+        application.clone(),
+        &submission_id,
+        "package",
+        1,
+        0,
+        package.len(),
+        first_chunk,
+        &sha256_hex(first_chunk),
+        "upload-package-0001",
+    )
+    .await;
+    assert_eq!(first.status, StatusCode::NO_CONTENT);
+    assert_eq!(etag_version(&first), 2);
+    let first_replay = upload(
+        application.clone(),
+        &submission_id,
+        "package",
+        1,
+        0,
+        package.len(),
+        first_chunk,
+        &sha256_hex(first_chunk),
+        "upload-package-0001",
+    )
+    .await;
+    assert_eq!(first_replay.status, StatusCode::NO_CONTENT);
+    assert_eq!(etag_version(&first_replay), 2);
+
+    let tail = &package[MAX_UPLOAD_CHUNK_BYTES..];
+    let stale = upload(
+        application.clone(),
+        &submission_id,
+        "package",
+        1,
+        MAX_UPLOAD_CHUNK_BYTES,
+        package.len(),
+        tail,
+        &sha256_hex(tail),
+        "stale-package-0001",
+    )
+    .await;
+    assert_problem(
+        &stale,
+        StatusCode::PRECONDITION_FAILED,
+        "precondition-failed",
+    );
+    let non_contiguous = upload(
+        application.clone(),
+        &submission_id,
+        "package",
+        2,
+        1,
+        package.len(),
+        tail,
+        &sha256_hex(tail),
+        "range-package-0001",
+    )
+    .await;
+    assert_problem(
+        &non_contiguous,
+        StatusCode::CONFLICT,
+        "upload-range-conflict",
+    );
+    let wrong_digest = upload(
+        application.clone(),
+        &submission_id,
+        "package",
+        2,
+        MAX_UPLOAD_CHUNK_BYTES,
+        package.len(),
+        tail,
+        &"0".repeat(64),
+        "digest-package-001",
+    )
+    .await;
+    assert_problem(
+        &wrong_digest,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "digest-mismatch",
+    );
+
+    let second = upload(
+        application.clone(),
+        &submission_id,
+        "package",
+        2,
+        MAX_UPLOAD_CHUNK_BYTES,
+        package.len(),
+        tail,
+        &sha256_hex(tail),
+        "upload-package-0002",
+    )
+    .await;
+    assert_eq!(etag_version(&second), 3);
+    let listing_result = upload(
+        application.clone(),
+        &submission_id,
+        "listing",
+        3,
+        0,
+        listing.len(),
+        &listing,
+        &listing_sha256,
+        "upload-listing-001",
+    )
+    .await;
+    assert_eq!(etag_version(&listing_result), 4);
+    let icon_result = upload(
+        application.clone(),
+        &submission_id,
+        "asset-0",
+        4,
+        0,
+        icon.len(),
+        &icon,
+        &icon_sha256,
+        "upload-asset-0001",
+    )
+    .await;
+    assert_eq!(etag_version(&icon_result), 5);
+    let screenshot_result = upload(
+        application.clone(),
+        &submission_id,
+        "asset-1",
+        5,
+        0,
+        screenshot.len(),
+        &screenshot,
+        &screenshot_sha256,
+        "upload-asset-0002",
+    )
+    .await;
+    assert_eq!(etag_version(&screenshot_result), 6);
+
+    let invalid_finalize = finalize(
+        application.clone(),
+        &submission_id,
+        6,
+        &"0".repeat(64),
+        "finalize-invalid-01",
+    )
+    .await;
+    assert_problem(
+        &invalid_finalize,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "digest-mismatch",
+    );
+    let content_sha256 =
+        submission_content_sha256_for_test(&package_sha256, &listing_sha256, &assets);
+    let finalized = finalize(
+        application.clone(),
+        &submission_id,
+        6,
+        &content_sha256,
+        "finalize-submission-1",
+    )
+    .await;
+    assert_eq!(finalized.status, StatusCode::ACCEPTED);
+    assert_eq!(etag_version(&finalized), 7);
+    let finalized_body: Value = serde_json::from_slice(&finalized.body).unwrap();
+    assert_eq!(finalized_body["state"], "processing");
+    let finalize_replay = finalize(
+        application.clone(),
+        &submission_id,
+        6,
+        &content_sha256,
+        "finalize-submission-1",
+    )
+    .await;
+    assert_eq!(finalize_replay.status, StatusCode::ACCEPTED);
+    assert_eq!(finalize_replay.body, finalized.body);
+
+    let fetched = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/submissions/{submission_id}"),
+        Some(OWNER_A_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(fetched.status, StatusCode::OK);
+    assert_eq!(fetched.body, finalized.body);
+    assert_eq!(etag_version(&fetched), 7);
+    let cross_team = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/submissions/{submission_id}"),
+        Some(OWNER_B_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&cross_team, StatusCode::NOT_FOUND, "not-found");
+
+    let stored_digest: String = sqlx::query_scalar(
+        "SELECT finalized_content_sha256 FROM submissions WHERE submission_id = $1",
+    )
+    .bind(&submission_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_digest, content_sha256);
+    assert_eq!(count(pool, "submission_upload_parts").await, 4);
+    assert_eq!(count(pool, "submission_upload_chunks").await, 5);
+    assert_eq!(count(pool, "audit_events").await, counts_before.0 + 7);
+    assert_eq!(count(pool, "outbox_events").await, counts_before.1 + 7);
+    assert_eq!(
+        count(pool, "idempotency_records").await,
+        counts_before.2 + 7
+    );
+}
+
+async fn verify_concurrent_submission_revisions(application: &Router, pool: &PgPool) {
+    let request = json!({
+        "version": "2.0.0",
+        "package_sha256": "1".repeat(64),
+        "package_bytes": 100,
+        "listing_sha256": "2".repeat(64),
+        "listing_bytes": 100,
+        "assets": [
+            {
+                "path": "icon.png",
+                "sha256": "3".repeat(64),
+                "bytes": 100,
+                "width": 48,
+                "height": 48
+            },
+            {
+                "path": "screens/main.png",
+                "sha256": "4".repeat(64),
+                "bytes": 100,
+                "width": 320,
+                "height": 170
+            }
+        ]
+    });
+    let first = call(
+        application.clone(),
+        Method::POST,
+        "/v1/apps/dev.cardputerzero.notes/submissions",
+        Some(OWNER_A_TOKEN),
+        Some("concurrent-revision-1"),
+        Some(request.clone()),
+    );
+    let second = call(
+        application.clone(),
+        Method::POST,
+        "/v1/apps/dev.cardputerzero.notes/submissions",
+        Some(OWNER_A_TOKEN),
+        Some("concurrent-revision-2"),
+        Some(request),
+    );
+    let (first, second) = tokio::join!(first, second);
+    assert_eq!(first.status, StatusCode::CREATED);
+    assert_eq!(second.status, StatusCode::CREATED);
+    let mut revisions = [
+        serde_json::from_slice::<Value>(&first.body).unwrap()["revision"]
+            .as_u64()
+            .unwrap(),
+        serde_json::from_slice::<Value>(&second.body).unwrap()["revision"]
+            .as_u64()
+            .unwrap(),
+    ];
+    revisions.sort_unstable();
+    assert_eq!(revisions, [1, 2]);
+    let revision_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM submissions \
+         WHERE app_id = 'dev.cardputerzero.notes' AND version = '2.0.0'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(revision_count, 2);
+}
+
 async fn verify_database_immutability(pool: &PgPool) {
     assert_sqlstate(
         sqlx::query("UPDATE apps SET owner_team_id = $1 WHERE app_id = 'dev.cardputerzero.notes'")
@@ -326,11 +705,39 @@ async fn verify_database_immutability(pool: &PgPool) {
             .await,
         "55000",
     );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE submission_upload_chunks SET chunk_bytes = chunk_bytes + 1 \
+             WHERE part_name = 'package' AND chunk_offset = 0",
+        )
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE submission_upload_parts SET expected_bytes = expected_bytes + 1 \
+             WHERE part_name = 'package'",
+        )
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE submissions SET finalized_content_sha256 = $1 \
+             WHERE finalized_content_sha256 IS NOT NULL",
+        )
+        .bind("f".repeat(64))
+        .execute(pool)
+        .await,
+        "55000",
+    );
 
     sqlx::query(
         "INSERT INTO submissions (submission_id, app_id, version, revision, state, package_sha256, \
          package_bytes, listing_sha256, listing_bytes, assets, resource_version, created_unix_seconds) \
-         VALUES ('sub_11111111111111111111111111111111', 'dev.cardputerzero.notes', '1.0.0', 1, \
+         VALUES ('sub_11111111111111111111111111111111', 'dev.cardputerzero.notes', '9.9.9', 1, \
          'in-review', $1, 100, $2, 100, '[{},{}]'::jsonb, 1, 1)",
     )
     .bind("1".repeat(64))
@@ -409,7 +816,8 @@ async fn verify_database_immutability(pool: &PgPool) {
 
 async fn reset_database(pool: &PgPool) {
     pool.execute(
-        "TRUNCATE outbox_events, audit_events, idempotency_records, releases, \
+        "TRUNCATE outbox_events, audit_events, idempotency_records, \
+         submission_upload_chunks, submission_upload_parts, releases, \
          review_decisions, review_messages, submissions, apps, developer_keys, access_tokens, \
          team_members, teams, catalog_sequence RESTART IDENTITY CASCADE",
     )
@@ -418,6 +826,12 @@ async fn reset_database(pool: &PgPool) {
     pool.execute("INSERT INTO catalog_sequence (singleton, last_sequence) VALUES (TRUE, 0)")
         .await
         .unwrap();
+}
+
+fn test_object_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/test-store-control")
+        .join(Uuid::new_v4().simple().to_string())
 }
 
 async fn seed_identities(pool: &PgPool) {
@@ -461,7 +875,7 @@ async fn seed_identities(pool: &PgPool) {
         (
             OWNER_A_TOKEN,
             OWNER_A,
-            vec!["store.apps.write"],
+            vec!["store.apps.write", "store.submit"],
             now,
             now + 3600,
             false,
@@ -469,7 +883,7 @@ async fn seed_identities(pool: &PgPool) {
         (
             OWNER_B_TOKEN,
             OWNER_B,
-            vec!["store.apps.write"],
+            vec!["store.apps.write", "store.submit"],
             now,
             now + 3600,
             false,
@@ -477,7 +891,7 @@ async fn seed_identities(pool: &PgPool) {
         (
             NO_2FA_TOKEN,
             NO_2FA_MEMBER,
-            vec!["store.apps.write"],
+            vec!["store.apps.write", "store.submit"],
             now,
             now + 3600,
             false,
@@ -485,7 +899,7 @@ async fn seed_identities(pool: &PgPool) {
         (
             VIEWER_TOKEN,
             VIEWER_MEMBER,
-            vec!["store.apps.write"],
+            vec!["store.apps.write", "store.submit"],
             now,
             now + 3600,
             false,
@@ -544,6 +958,54 @@ async fn call(
     call_bytes(application, method, uri, token, idempotency_key, bytes).await
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn upload(
+    application: Router,
+    submission_id: &str,
+    part_name: &str,
+    expected_version: u64,
+    offset: usize,
+    total: usize,
+    body: &[u8],
+    chunk_sha256: &str,
+    idempotency_key: &str,
+) -> HttpResult {
+    let end = offset + body.len() - 1;
+    let request = Request::builder()
+        .method(Method::PUT)
+        .uri(format!("/v1/submissions/{submission_id}/parts/{part_name}"))
+        .header(AUTHORIZATION, format!("Bearer {OWNER_A_TOKEN}"))
+        .header("idempotency-key", idempotency_key)
+        .header(IF_MATCH, format!("\"{expected_version}\""))
+        .header("content-sha256", chunk_sha256)
+        .header("content-range", format!("bytes {offset}-{end}/{total}"))
+        .header(CONTENT_TYPE, "application/octet-stream")
+        .body(Body::from(body.to_vec()))
+        .unwrap();
+    collect_response(application.oneshot(request).await.unwrap()).await
+}
+
+async fn finalize(
+    application: Router,
+    submission_id: &str,
+    expected_version: u64,
+    content_sha256: &str,
+    idempotency_key: &str,
+) -> HttpResult {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/v1/submissions/{submission_id}:finalize"))
+        .header(AUTHORIZATION, format!("Bearer {OWNER_A_TOKEN}"))
+        .header("idempotency-key", idempotency_key)
+        .header(IF_MATCH, format!("\"{expected_version}\""))
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({"content_sha256": content_sha256})).unwrap(),
+        ))
+        .unwrap();
+    collect_response(application.oneshot(request).await.unwrap()).await
+}
+
 async fn call_bytes(
     application: Router,
     method: Method,
@@ -562,16 +1024,31 @@ async fn call_bytes(
     if body.is_some() {
         builder = builder.header(CONTENT_TYPE, "application/json");
     }
-    let response = application
+    let http_response = application
         .oneshot(builder.body(Body::from(body.unwrap_or_default())).unwrap())
         .await
         .unwrap();
+    collect_response(http_response).await
+}
+
+async fn collect_response(response: axum::response::Response) -> HttpResult {
     let (parts, body) = response.into_parts();
     HttpResult {
         status: parts.status,
         headers: parts.headers,
         body: to_bytes(body, 64 * 1024).await.unwrap().to_vec(),
     }
+}
+
+fn etag_version(result: &HttpResult) -> u64 {
+    result
+        .headers
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix('"'))
+        .and_then(|value| value.strip_suffix('"'))
+        .and_then(|value| value.parse().ok())
+        .expect("response must contain a canonical ETag")
 }
 
 fn assert_problem(result: &HttpResult, status: StatusCode, code: &str) {
@@ -608,4 +1085,40 @@ fn sha256_hex(value: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn submission_content_sha256_for_test(
+    package_sha256: &str,
+    listing_sha256: &str,
+    assets: &[Value],
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"CardputerZero Store submission content v1\0");
+    hash_field(&mut hasher, package_sha256.as_bytes());
+    hash_field(&mut hasher, listing_sha256.as_bytes());
+    for asset in assets {
+        hash_field(&mut hasher, asset["path"].as_str().unwrap().as_bytes());
+        hash_field(&mut hasher, asset["sha256"].as_str().unwrap().as_bytes());
+        hasher.update(asset["bytes"].as_u64().unwrap().to_be_bytes());
+        hasher.update(
+            u16::try_from(asset["width"].as_u64().unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        hasher.update(
+            u16::try_from(asset["height"].as_u64().unwrap())
+                .unwrap()
+                .to_be_bytes(),
+        );
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn hash_field(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
 }

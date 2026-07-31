@@ -15,8 +15,9 @@
 ### Store 产品化
 
 - Developer Portal 本地前端 MVP 已完成；Review Console、Store Operations 和真实控制面接入尚未实现；
-- Submission/Review/Release 事务域核心已完成；App Registry 的 PostgreSQL/HTTP 首个纵向切片
-  已完成，Identity/Teams 与 Submission/Review/Release 适配、隔离扫描、HSM signer 和
+- Submission/Review/Release 事务域核心已完成；App Registry 与 Submission
+  create/upload/finalize/read 的 PostgreSQL/HTTP 纵向切片已完成，Identity/Teams、
+  OAuth、其余 Submission/Review/Release 适配、生产对象存储/GC、隔离扫描、HSM signer 和
   transparency log 尚未实现；
 - 设备端 Today/Apps/Search/Updates、分页搜索、图标/截图和更新队列尚未实现；
 - 当前发布仍是手工 review JSON + `cp0ctl store publish`，不能视为开发者自助发布；

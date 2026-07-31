@@ -405,7 +405,7 @@ impl ControlPlane {
             return Err(ControlError::Forbidden);
         }
         validate_submission_spec(&spec)?;
-        let request_sha256 = submission_request_digest(app_id, &spec);
+        let request_sha256 = create_submission_request_sha256(app_id, &spec);
         if let Some(result) = self.replay(&actor.member_id, context, &request_sha256)? {
             return expect_submission(result);
         }
@@ -1008,7 +1008,7 @@ fn validate_context(context: &MutationContext) -> Result<(), ControlError> {
     Ok(())
 }
 
-fn validate_submission_spec(spec: &SubmissionSpec) -> Result<(), ControlError> {
+pub fn validate_submission_spec(spec: &SubmissionSpec) -> Result<(), ControlError> {
     if !cp0_manifest::is_valid_app_version(&spec.version)
         || !valid_sha256(&spec.package_sha256)
         || !valid_sha256(&spec.listing_sha256)
@@ -1038,7 +1038,7 @@ fn validate_submission_spec(spec: &SubmissionSpec) -> Result<(), ControlError> {
     Ok(())
 }
 
-fn submission_request_digest(app_id: &str, spec: &SubmissionSpec) -> String {
+pub fn create_submission_request_sha256(app_id: &str, spec: &SubmissionSpec) -> String {
     let mut request = RequestDigest::new("submission.create.v1");
     request.add(app_id);
     request.add(&spec.version);

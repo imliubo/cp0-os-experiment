@@ -8,6 +8,8 @@ use cp0_store_control_server::{StoreControlService, connect, migrate, router};
 async fn main() -> Result<(), Box<dyn Error>> {
     let database_url =
         env::var("CP0_STORE_DATABASE_URL").map_err(|_| "CP0_STORE_DATABASE_URL is required")?;
+    let object_root =
+        env::var("CP0_STORE_OBJECT_ROOT").map_err(|_| "CP0_STORE_OBJECT_ROOT is required")?;
     let listen_addr = env::var("CP0_STORE_LISTEN_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8787".to_owned())
         .parse::<SocketAddr>()?;
@@ -15,8 +17,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let pool = connect(&database_url, 10).await?;
     migrate(&pool).await?;
+    let service = StoreControlService::with_object_root(pool, object_root).await?;
     let listener = tokio::net::TcpListener::bind(listen_addr).await?;
-    axum::serve(listener, router(StoreControlService::new(pool)))
+    axum::serve(listener, router(service))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())

@@ -42,7 +42,7 @@ sha2 = "0.10.9"
 semver = "1.0.27"
 axum = "=0.8.4"
 sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "json", "migrate", "macros"] }
-tokio = { version = "=1.47.1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+tokio = { version = "=1.47.1", features = ["macros", "rt-multi-thread", "net", "signal", "fs", "io-util"] }
 tower = "=0.5.2"
 uuid = { version = "=1.18.0", features = ["v4"] }
 

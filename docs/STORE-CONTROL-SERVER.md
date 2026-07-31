@@ -1,0 +1,71 @@
+# Store Control Server
+
+`cp0-store-control-server` is the PostgreSQL and HTTP adapter for the frozen
+Store Control API. It is a developer/reviewer control-plane service and is not
+part of the CardputerZero device image.
+
+## Implemented API slice
+
+- `POST /v1/apps` and `GET /v1/apps/{app_id}`;
+- `POST /v1/apps/{app_id}/submissions`;
+- `PUT /v1/submissions/{submission_id}/parts/{part_name}`;
+- `POST /v1/submissions/{submission_id}:finalize`;
+- `GET /v1/submissions/{submission_id}`.
+
+All writes authenticate the hashed bearer token and re-read current team role,
+2FA state and scope inside a PostgreSQL `SERIALIZABLE` transaction. App writes
+require `store.apps.write`; Submission writes require `store.submit`. The
+internal `store.control` scope can perform either operation. Exact idempotent
+retries return the stored status/body/ETag, while a key reused for another
+request fails with `idempotency-conflict`.
+
+The upload endpoint accepts one contiguous chunk of at most 256 KiB and checks
+`If-Match`, `Content-Range` and `Content-SHA256`. Chunks are hashed again and
+stored under an owner-only `0700` content-addressed root. The database stores
+only immutable chunk descriptors. Finalize locks the Submission, reopens every
+chunk, recomputes every declared object digest and the frozen Submission content
+digest, then atomically changes `uploading` to `processing` and emits the scan
+request through the transaction outbox.
+
+A database rollback after an object write can leave an unreachable
+content-addressed chunk. It grants no Submission state and can be removed by a
+future mark-and-sweep maintenance worker. Production replication and garbage
+collection remain separate from this local filesystem reference backend.
+
+## Run
+
+The binary requires:
+
+- `CP0_STORE_DATABASE_URL`: PostgreSQL connection URL;
+- `CP0_STORE_OBJECT_ROOT`: absolute, service-owned object directory;
+- `CP0_STORE_LISTEN_ADDR`: optional, defaults to `127.0.0.1:8787`.
+
+Non-loopback binding is rejected unless `CP0_STORE_ALLOW_NON_LOOPBACK=1` is set.
+That gate does not add TLS: a production deployment must terminate HTTPS in a
+separate, hardened ingress and keep the service/database/object root private.
+
+```sh
+CP0_STORE_DATABASE_URL=postgres://... \
+CP0_STORE_OBJECT_ROOT=/var/lib/cardputerzero-store/objects \
+cargo run -p cp0-store-control-server
+```
+
+## Verification
+
+```sh
+cargo test -p cp0-store-control-server
+cargo clippy -p cp0-store-control-server --all-targets -- -D warnings
+cargo +1.85.1 check -p cp0-store-control-server --all-targets
+
+# Requires a disposable PostgreSQL 17 database.
+CP0_STORE_TEST_DATABASE_URL=postgres://... make store-control-db-check
+```
+
+The database gate covers exact replay, competing App IDs, concurrent Submission
+revision allocation, live RBAC/2FA/scope checks, 256 KiB chunk boundaries,
+stale ETags, non-contiguous ranges, digest mismatches, finalize replay, injected
+transaction rollback and append-only database triggers.
+
+OAuth Device Flow, withdraw/messages, Scan Worker, Review, Release, production
+object storage, outbox delivery, garbage collection and transparency logging are
+not implemented by this slice.
