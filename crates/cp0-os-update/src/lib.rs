@@ -276,9 +276,14 @@ impl BootState {
         if self.format != BOOT_STATE_FORMAT {
             return Err(UpdateError::new("unsupported A/B boot state format"));
         }
-        if self.confirmed_sequence > MAX_JSON_INTEGER {
+        if self.generation > MAX_JSON_INTEGER {
             return Err(UpdateError::new(
-                "confirmed sequence exceeds the exact JSON integer range",
+                "boot state generation exceeds the exact JSON integer range",
+            ));
+        }
+        if self.confirmed_sequence == 0 || self.confirmed_sequence > MAX_JSON_INTEGER {
+            return Err(UpdateError::new(
+                "confirmed sequence is outside the exact JSON integer range",
             ));
         }
         if let Some(pending) = &self.pending {
@@ -300,6 +305,23 @@ impl BootState {
                     "pending boot attempt count exceeds policy",
                 ));
             }
+            let expected_attempt = if pending.attempts_remaining == MAX_BOOT_ATTEMPTS {
+                None
+            } else {
+                Some(pending.slot)
+            };
+            if self.last_attempted != expected_attempt {
+                return Err(UpdateError::new(
+                    "pending attempt count and last attempted slot are inconsistent",
+                ));
+            }
+        } else if self
+            .last_attempted
+            .is_some_and(|slot| slot != self.confirmed_slot)
+        {
+            return Err(UpdateError::new(
+                "last attempted slot is not the confirmed slot",
+            ));
         }
         Ok(())
     }
@@ -448,6 +470,9 @@ impl BootState {
     }
 
     fn next_generation(&self) -> Result<Self, UpdateError> {
+        if self.generation >= MAX_JSON_INTEGER {
+            return Err(UpdateError::new("boot state generation is exhausted"));
+        }
         let mut next = self.clone();
         next.generation = next
             .generation
@@ -649,6 +674,52 @@ mod tests {
         let a = BootState::factory(BootSlot::A, 1).encode_record().unwrap();
         let b = BootState::factory(BootSlot::B, 1).encode_record().unwrap();
         assert!(BootState::newest_valid_record([a.as_slice(), b.as_slice()]).is_err());
+    }
+
+    #[test]
+    fn logically_impossible_boot_states_fail_with_valid_checksums() {
+        fn encoded_record(state: BootState) -> Vec<u8> {
+            let state_bytes = serde_json::to_vec(&state).unwrap();
+            serde_json::to_vec(&BootStateRecord {
+                format: BOOT_STATE_RECORD_FORMAT.into(),
+                checksum: state_checksum(&state_bytes),
+                state,
+            })
+            .unwrap()
+        }
+
+        let mut invalid = BootState::factory(BootSlot::A, 1);
+        invalid.generation = MAX_JSON_INTEGER + 1;
+        assert!(BootState::decode_record(&encoded_record(invalid)).is_err());
+
+        let invalid = BootState::factory(BootSlot::A, 0);
+        assert!(BootState::decode_record(&encoded_record(invalid)).is_err());
+
+        let mut invalid = BootState::factory(BootSlot::A, 1)
+            .stage(BootSlot::B, 2)
+            .unwrap();
+        invalid.last_attempted = Some(BootSlot::A);
+        assert!(BootState::decode_record(&encoded_record(invalid)).is_err());
+
+        let staged = BootState::factory(BootSlot::A, 1)
+            .stage(BootSlot::B, 2)
+            .unwrap();
+        let (mut invalid, _) = staged.prepare_boot().unwrap();
+        invalid.last_attempted = None;
+        assert!(BootState::decode_record(&encoded_record(invalid)).is_err());
+
+        let mut invalid = BootState::factory(BootSlot::A, 1);
+        invalid.last_attempted = Some(BootSlot::B);
+        assert!(BootState::decode_record(&encoded_record(invalid)).is_err());
+    }
+
+    #[test]
+    fn exact_json_generation_limit_cannot_advance() {
+        let mut state = BootState::factory(BootSlot::A, 1);
+        state.generation = MAX_JSON_INTEGER;
+        assert!(state.validate().is_ok());
+        assert!(state.prepare_boot().is_err());
+        assert!(state.stage(BootSlot::B, 2).is_err());
     }
 
     #[test]

@@ -13,6 +13,7 @@ grep -q 'Callers must not treat successful JSON validation as signature verifica
     "$library"
 grep -q 'persisted before transferring' "$library"
 grep -q 'booted slot and sequence do not match the pending release' "$library"
+grep -q 'logically_impossible_boot_states_fail_with_valid_checksums' "$library"
 grep -q 'one_hundred_interrupted_updates_always_retain_a_bootable_slot' "$library"
 grep -q -- '--data-block-size=4096' "$verifier"
 grep -q -- '--hash-block-size=4096' "$verifier"

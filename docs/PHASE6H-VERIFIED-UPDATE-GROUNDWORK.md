@@ -53,6 +53,13 @@ corrupt copy may be ignored. The checksum detects accidental corruption and
 torn writes only. It is not a MAC, signature, anti-replay counter or physical
 attacker defense.
 
+Record validation also rejects state-machine combinations that the boot chooser
+cannot produce: a zero confirmed sequence, a generation outside JSON's exact
+integer range, a fresh three-attempt pending slot with a recorded attempt, a
+decremented pending slot without its matching attempted slot, or a non-pending
+state whose last attempt differs from the confirmed slot. These checks apply
+even when a malformed state carries an internally correct checksum.
+
 ## Local verification
 
 Run the policy and rollback tests with:
