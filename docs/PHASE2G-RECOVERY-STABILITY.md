@@ -41,6 +41,17 @@ fourth argument can set a stricter byte limit.
 Both tools are copied into the image as explicit diagnostics under
 `/usr/libexec/cardputerzero/`; neither is enabled as a boot service.
 
+Completed evidence is not accepted solely because the device wrote `PASS`.
+After retrieval, `verify-stability-evidence.sh` independently parses the files
+without sourcing `summary.env`. It requires an exact field set, one block-I/O
+row and exactly three distinct core-service rows per epoch, monotonic wall and
+uptime coverage for the requested duration, constant service PIDs/restart
+counts, memory limits/growth, summary-to-raw agreement and the SD write bound.
+When the optional stored service is present, it must appear in every epoch with
+a stable PID/restart count and remain below its memory limit.
+Unknown/duplicate fields, a non-empty failure log, missing samples, oversized
+gaps or a forged summary fail closed. Its mutation tests run in `make check`.
+
 ## V0.6 validation
 
 The recovery test passed on 2026-07-31 without a reboot or image flash:

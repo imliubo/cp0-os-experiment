@@ -34,6 +34,7 @@ check: fmt
 	./tests/test-simulator.sh
 	./tests/test-runtime-display.sh
 	./tests/test-device-diagnostics.sh
+	./tests/test-stability-evidence.sh
 	./tests/test-device-capability-acceptance.sh
 	./tests/test-store-acceptance.sh
 	./tests/test-store-origin.sh
