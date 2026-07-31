@@ -82,6 +82,7 @@ pub const DEFAULT_RUNTIME: &str = "/usr/libexec/cardputerzero/app-runtime";
 pub const DEFAULT_BROKER_SOCKET: &str = "/run/cardputerzero-broker/runtime.sock";
 pub const DEFAULT_WAYLAND_SOCKET: &str = "/run/cardputerzero/wayland-0";
 pub const BWRAP_PATH: &str = "/usr/bin/bwrap";
+pub const STABILITY_ACCEPTANCE_UNIT: &str = "cardputerzero-stability-acceptance.service";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppLayout {
@@ -235,6 +236,7 @@ pub fn build_sandbox_plan(
         "CPUQuota=60%".into(),
         "CPUWeight=50".into(),
         "TasksMax=32".into(),
+        format!("Conflicts={STABILITY_ACCEPTANCE_UNIT}"),
         "UMask=0077".into(),
         "NoNewPrivileges=yes".into(),
         "PrivateDevices=yes".into(),
@@ -433,6 +435,10 @@ mod tests {
         assert!(plan.systemd_properties.contains(&"CPUWeight=50".into()));
         assert!(
             plan.systemd_properties
+                .contains(&format!("Conflicts={STABILITY_ACCEPTANCE_UNIT}"))
+        );
+        assert!(
+            plan.systemd_properties
                 .contains(&"PrivateDevices=yes".into())
         );
         assert_eq!(
@@ -470,6 +476,7 @@ mod tests {
         assert!(arguments.contains(&"--property=MemoryMax=25165824".into()));
         assert!(arguments.contains(&"--property=CPUQuota=60%".into()));
         assert!(arguments.contains(&"--property=CPUWeight=50".into()));
+        assert!(arguments.contains(&format!("--property=Conflicts={STABILITY_ACCEPTANCE_UNIT}")));
         assert!(arguments.contains(&BWRAP_PATH.into()));
     }
 

@@ -40,6 +40,8 @@ resulting ELF is aarch64 and has no dynamic library dependencies.
 
 - a stable `cp0-app-N` host account;
 - a transient systemd service and cgroup v2;
+- a systemd conflict with the explicit 24-hour stability acceptance service,
+  so starting any application terminates and invalidates an idle acceptance;
 - `MemoryMax` equal to the manifest budget and `MemorySwapMax=0`;
 - an empty bubblewrap root, PID/mount/network/IPC/UTS/cgroup namespaces;
 - a read-only package at `/app` and runtime at `/runtime`;

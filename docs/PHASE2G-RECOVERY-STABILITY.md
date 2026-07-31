@@ -43,6 +43,13 @@ failure, `failures.log`. `block-io.tsv` contains the raw write counter and
 default idle acceptance permits at most 64 MiB of SD writes over the run; a
 fourth argument can set a stricter byte limit.
 
+Application transient units also declare a systemd conflict with the named
+stability acceptance service. Once that platform version is deployed, starting
+an application stops the monitor and its exit trap writes `FAILED`, including
+for an application that runs entirely between two 60-second samples. This hard
+interlock complements rather than replaces the independently verified
+`foreground.tsv` timeline.
+
 Both tools are copied into the image as explicit diagnostics under
 `/usr/libexec/cardputerzero/`; neither is enabled as a boot service.
 
