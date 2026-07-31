@@ -14,6 +14,7 @@ check: fmt
 		image/pi-gen/stage-cardputerzero-os/00-bsp/01-run.sh \
 		image/pi-gen/stage-cardputerzero-os/01-compositor/01-run.sh \
 		image/pi-gen/stage-cardputerzero-os/02-app-platform/01-run.sh
+	node --check scripts/test-store-origin.mjs
 	./tests/test-image-profile.sh
 	./tests/test-overlay-root-profile.sh
 	./tests/test-recovery-image-profile.sh
@@ -31,6 +32,7 @@ check: fmt
 	./tests/test-device-diagnostics.sh
 	./tests/test-device-capability-acceptance.sh
 	./tests/test-store-acceptance.sh
+	./tests/test-store-origin.sh
 	./tests/test-device-deployment.sh
 	./tests/test-malicious-apps.sh
 	./tests/test-security-validation.sh

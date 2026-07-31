@@ -23,7 +23,75 @@ The acceptance packages, developer key and Store signing key remain below the
 ignored host `target/test-store` directory. They are not embedded in a product
 image. Only the 32-byte Store public key is provisioned on the test device.
 
-## Build the static origins
+## Controlled public origin
+
+The recommended acceptance origin is the repository's loopback-only server
+behind a Cloudflare Quick Tunnel. The runner prefers the repository-local
+source build at
+`target/tools/cloudflared-2026.7.3/source/cloudflared`, then the absolute path
+in `CP0_CLOUDFLARED`, and finally `cloudflared` from `PATH`. Confirm the selected
+executable without starting a tunnel:
+
+```sh
+./scripts/run-test-store-origin.sh --print-cloudflared
+```
+
+The repository-local acceptance binary was built from the vendored dependencies
+at Cloudflare tag `2026.7.3`, commit
+`3a2b45c2a511fcdd81b68c190938e4ffadbea5dc`, with the verified Go 1.26.5
+darwin/arm64 toolchain. Its SHA-256 is
+`0a59c7b61dedf9096d3df3ee52c7cef81ab31614e8fc8457e864506eae7aa672`.
+The generated binary and source checkout remain below ignored `target/` and are
+not image inputs. The runner verifies that exact digest and stops if a file at
+the repository-local path does not match; `CP0_CLOUDFLARED` and `PATH` are
+explicit operator trust choices. Build or select a trusted executable before
+continuing; the runner does not download or update `cloudflared`.
+
+Run this in a dedicated host terminal shortly before device acceptance:
+
+```sh
+./scripts/run-test-store-origin.sh 18080 1800 524288
+```
+
+The runner performs the order-sensitive setup automatically:
+
+1. creates a root-only control file with throttled v1 selected;
+2. binds the origin only to `127.0.0.1`;
+3. obtains a random public `https://*.trycloudflare.com` URL;
+4. builds and signs both catalogs against that exact URL and current time;
+5. remains in the foreground so stopping the runner also stops both processes.
+
+The public endpoint serves only the active signed catalog, its public key and
+the matching test package. It never serves the developer key, Store signing
+key, review files, control file or arbitrary paths, and sends `Cache-Control:
+no-store`. The generated catalog and package are non-sensitive test artifacts,
+but they transit Cloudflare and the random URL is publicly reachable for the
+life of the runner.
+
+The runner prints the exact control commands. Initially v1 is limited to 512
+KiB/s, which leaves a reliable interruption window for an 8 MiB package while
+remaining inside `cp0-stored`'s 45-second download timeout. After the v1 resume
+test, switch to unthrottled v2 from another host terminal:
+
+```sh
+node scripts/test-store-origin.mjs set \
+  target/test-store/origin-control.json v2
+```
+
+Before the offline-cache action, switch the same HTTPS endpoint to a controlled
+HTTP 503 fault:
+
+```sh
+node scripts/test-store-origin.mjs set \
+  target/test-store/origin-control.json offline-v2
+```
+
+This keeps DNS and TLS stable while ensuring the refresh reaches a real public
+origin failure. Host-side request logs, tunnel logs, URL, PIDs and validity
+times are retained below the printed `target/test-store-origin/<run-id>`
+directory. Keep the runner alive through the stale-catalog action.
+
+## Manual static origin
 
 Choose a public HTTPS base URL whose document root can be switched atomically
 between two static directories. Use a short lifetime only when the complete
@@ -53,11 +121,12 @@ cp0_present_rgb565
 cp0_wait_event
 ```
 
-Serve `catalog-v1` as the base URL root first. Configure the package response
-for low, steady throughput before the resume action; the default 8 MiB padding
-must remain partially downloaded long enough for the harness to observe and
-interrupt it. The origin must support a correct `Range` request and return HTTP
-206 with a matching `Content-Range`.
+When using a manually managed origin, serve `catalog-v1` as the base URL root
+first. Configure the package response for low, steady throughput before the
+resume action; the default 8 MiB padding must remain partially downloaded long
+enough for the harness to observe and interrupt it, but the resumed transfer
+must still finish inside 45 seconds. The origin must support a correct `Range`
+request and return HTTP 206 with a matching `Content-Range`.
 
 ## Provision the test device
 
