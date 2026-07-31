@@ -107,6 +107,7 @@ cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-gpiod" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-networkd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-radiod" \
+    "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-recovery" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-storaged" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-stored" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0ctl" \
@@ -130,6 +131,7 @@ if [[ -n ${CP0_STORE_PUBLIC_KEY:-} ]]; then
 fi
 cp "$repo_root/scripts/device-core-recovery.sh" \
     "$repo_root/scripts/device-factory-acceptance.sh" \
+    "$repo_root/scripts/device-recovery-data.sh" \
     "$repo_root/scripts/device-stability-monitor.sh" \
     "$repo_root/scripts/device-support-bundle.sh" \
     "$platform_payload/diagnostics/"

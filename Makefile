@@ -13,6 +13,7 @@ check: fmt
 	./tests/test-image-profile.sh
 	./tests/test-overlay-root-profile.sh
 	./tests/test-recovery-image-profile.sh
+	./tests/test-recovery-data.sh
 	./tests/test-compositor-profile.sh
 	./tests/test-system-shell-ui.sh
 	./tests/test-appd-profile.sh

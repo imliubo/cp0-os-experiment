@@ -15,6 +15,7 @@ members = [
     "crates/cp0-package",
     "crates/cp0-radio-protocol",
     "crates/cp0-radiod",
+    "crates/cp0-recovery",
     "crates/cp0-storage-protocol",
     "crates/cp0-storaged",
     "crates/cp0-store-protocol",

@@ -19,6 +19,7 @@ esac
 
 required_executables=(
     usr/bin/cardputerzero-system-shell
+    usr/bin/cp0-recovery
     usr/bin/cp0ctl
     usr/libexec/cardputerzero/app-runtime
     usr/libexec/cardputerzero/cp0-appd
@@ -32,6 +33,7 @@ required_executables=(
     usr/libexec/cardputerzero/cp0-stored
     usr/libexec/cardputerzero/device-core-recovery
     usr/libexec/cardputerzero/device-factory-acceptance
+    usr/libexec/cardputerzero/device-recovery-data
     usr/libexec/cardputerzero/device-smoke.sh
     usr/libexec/cardputerzero/device-stability-monitor
     usr/libexec/cardputerzero/device-support-bundle
@@ -66,6 +68,7 @@ done
 
 enabled_units=(
     multi-user.target.wants/cardputerzero-console-banner.service
+    sysinit.target.wants/regenerate_ssh_host_keys.service
     getty.target.wants/getty@tty1.service
 )
 if [[ $image_profile == product ]]; then
@@ -130,12 +133,24 @@ grep -qx 'kernel.unprivileged_bpf_disabled=1' \
 test -s "$bootfs/initramfs8"
 grep -qx 'auto_initramfs=1' "$bootfs/config.txt"
 if [[ $image_profile == product ]]; then
+    factory_bundle=/usr/share/cardputerzero/factory-data-v1.cp0backup
+    test -s "$rootfs$factory_bundle"
+    factory_summary=$(chroot "$rootfs" /usr/bin/cp0-recovery verify "$factory_bundle")
+    if [[ $factory_summary != *" profile=product" ]]; then
+        echo "error: product factory seed has the wrong profile" >&2
+        exit 1
+    fi
     if ! grep -qw 'cp0.overlay_root=volatile' "$bootfs/cmdline.txt"; then
         echo "error: immutable root is not enabled in the product image" >&2
         exit 1
     fi
 elif grep -qw 'cp0.overlay_root=volatile' "$bootfs/cmdline.txt"; then
     echo "error: recovery image unexpectedly enables immutable root" >&2
+    exit 1
+fi
+if [[ $image_profile == recovery &&
+      -e $rootfs/usr/share/cardputerzero/factory-data-v1.cp0backup ]]; then
+    echo "error: recovery image contains an incomplete product factory seed" >&2
     exit 1
 fi
 if grep -qw 'resize' "$bootfs/cmdline.txt"; then

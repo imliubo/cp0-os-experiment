@@ -200,6 +200,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp0-recovery"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "sha2",
+]
+
+[[package]]
 name = "cp0-sdk"
 version = "1.0.0"
 dependencies = [

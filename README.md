@@ -85,6 +85,8 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
   原始服务日志，以及只读检查 V0.6 硬件、不可变根、服务与 socket 的工厂验收器。
 - Phase 6C 独立恢复镜像 profile：默认 tty1/LCD/SSH 维修环境、可写 lower root、
   compositor/appd/broker 全部禁用，以及与产品镜像分离的发布门禁和产物名称。
+- Phase 6D 有界持久数据恢复：版本化单文件备份、逐文件/整体完整性校验、严格路径与
+  类型白名单、只向空目标恢复，以及明确确认后的恢复出厂设置。
 
 ## 快速验证
 
@@ -156,3 +158,5 @@ Rust SDK 公共 API 和真机迁移结果见
 [privacy-preserving diagnostics and factory acceptance](docs/PHASE6B-DIAGNOSTICS-FACTORY.md)。
 独立维修介质的构建、启动约束和发布门禁见
 [independent recovery image profile](docs/PHASE6C-RECOVERY-IMAGE.md)。
+有界离线备份、恢复和产品 factory seed 约束见
+[bounded backup, restore and factory reset](docs/PHASE6D-RECOVERY-DATA.md)。

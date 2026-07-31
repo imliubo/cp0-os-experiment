@@ -227,3 +227,10 @@ Phase 6 的设备诊断同样不常驻且不自动上传。默认支持包只导
 参数并 mask compositor、System Shell、appd 和全部 capability socket，只保留 tty1、
 LCD 启动摘要、网络和 SSH。恢复启动不会自动扩容、挂载或绑定 `cp0-data`，避免把
 待修复的安全状态隐式带入可写维修根；详见 `docs/PHASE6C-RECOVERY-IMAGE.md`。
+
+完整持久数据迁移使用版本化 `CP0 backup v1` 流格式，而不是通用归档解包。格式只接受
+`cp0-data-layout-v1` 白名单，记录权限/所有者并对每个文件及完整 payload 做 SHA-256，
+拒绝链接、特殊文件、路径逃逸、危险权限和非空恢复目标。设备包装器仅在独立 recovery
+或 product lower-root 维护启动下挂载分区；恢复在完整校验和固定确认词之后才重建
+`cp0-data`。产品镜像带自身可信 factory seed，恢复镜像不复制不完整的产品信任根。
+详细边界见 `docs/PHASE6D-RECOVERY-DATA.md`。

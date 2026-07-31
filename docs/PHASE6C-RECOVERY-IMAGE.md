@@ -83,9 +83,9 @@ sha256:   2895e90f592c4e9c892873eb328f097e6d45598d15cff95b6f7c4b1c59746d92
 Flashing this image overwrites the selected SD card. It cannot back up the same
 card that it replaces. User data must therefore be exported from the running
 product recovery console before reflashing, or the original card must be read on
-a separate trusted computer. An audited streaming backup/restore format and
-factory-reset workflow remain separate roadmap items; this phase does not claim
-them by treating an unrestricted `tar` command as a recovery protocol.
+a separate trusted computer. The audited bounded backup/restore format and
+factory-reset workflow are defined in `docs/PHASE6D-RECOVERY-DATA.md`; they do
+not treat an unrestricted `tar` command as a recovery protocol.
 
 Final acceptance requires building the compressed artifact, flashing a separate
 SD card with user assistance, confirming the LCD recovery banner and keyboard,

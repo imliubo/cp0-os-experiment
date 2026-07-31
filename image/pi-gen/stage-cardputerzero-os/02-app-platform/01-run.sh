@@ -25,6 +25,8 @@ install -D -m 0755 "${payload}/cp0-gpiod" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-gpiod"
 install -D -m 0755 "${payload}/cp0-radiod" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-radiod"
+install -D -m 0755 "${payload}/cp0-recovery" \
+    "${ROOTFS_DIR}/usr/bin/cp0-recovery"
 install -D -m 0755 "${payload}/cp0-storaged" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-storaged"
 install -D -m 0755 "${payload}/cp0-stored" \
@@ -101,6 +103,8 @@ install -D -m 0755 "${payload}/diagnostics/device-core-recovery.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-core-recovery"
 install -D -m 0755 "${payload}/diagnostics/device-factory-acceptance.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-factory-acceptance"
+install -D -m 0755 "${payload}/diagnostics/device-recovery-data.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-recovery-data"
 install -D -m 0755 "${payload}/diagnostics/device-stability-monitor.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-stability-monitor"
 install -D -m 0755 "${payload}/diagnostics/device-support-bundle.sh" \
@@ -216,6 +220,37 @@ systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-store.conf
 CHROOT
 
 if [[ $image_profile == product ]]; then
+    factory_root="${ROOTFS_DIR}/tmp/cardputerzero-factory-data"
+    factory_bundle="${ROOTFS_DIR}/usr/share/cardputerzero/factory-data-v1.cp0backup"
+    rm -rf "$factory_root"
+    rm -f "$factory_bundle"
+    install -d -o root -g root -m 0700 \
+        "$factory_root" \
+        "$factory_root/cardputerzero" \
+        "$factory_root/etc-cardputerzero" \
+        "$factory_root/network-connections" \
+        "$factory_root/network-state" \
+        "$factory_root/ssh"
+    cp -a "${ROOTFS_DIR}/var/lib/cardputerzero/." \
+        "$factory_root/cardputerzero/"
+    cp -a "${ROOTFS_DIR}/etc/cardputerzero/." \
+        "$factory_root/etc-cardputerzero/"
+    printf '%s\n' cp0-data-layout-v1 >"$factory_root/layout-version"
+    printf '%s\n' product >"$factory_root/etc-cardputerzero/image-profile"
+    : >"$factory_root/machine-id"
+    : >"$factory_root/random-seed"
+    chmod 0644 "$factory_root/layout-version" "$factory_root/machine-id"
+    chmod 0600 "$factory_root/random-seed"
+    install -d -o root -g root -m 0755 \
+        "${ROOTFS_DIR}/usr/share/cardputerzero"
+    on_chroot <<'CHROOT'
+set -e
+/usr/bin/cp0-recovery backup \
+    /tmp/cardputerzero-factory-data \
+    /usr/share/cardputerzero/factory-data-v1.cp0backup
+CHROOT
+    rm -rf "$factory_root"
+
     on_chroot <<'CHROOT'
 set -e
 systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
