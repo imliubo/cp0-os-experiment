@@ -27,3 +27,13 @@ receive a native descriptor.
 `cp0_gpio_read` and `cp0_gpio_write` accept only `cp0_gpio_line_t`. The enum
 contains four V0.6 logical connector outputs; it deliberately cannot represent
 a BCM GPIO number, gpiochip, path, pin direction or pinmux mode.
+
+`cp0_lora_send` and `cp0_lora_receive` exchange at most 64 bytes with the fixed
+external SX1276 configuration. Applications cannot select SPI, frequency,
+modulation or power. The image keeps the radio disabled until root supplies a
+valid regional configuration.
+
+`cp0_storage_put`, `cp0_storage_get` and `cp0_storage_delete` provide private
+key/value storage. Keys are bounded to 64 safe ASCII bytes and values to 8 KiB;
+the installed manifest's `storage_mb` field is enforced by the storage broker.
+The Runtime does not expose a writable host filesystem.

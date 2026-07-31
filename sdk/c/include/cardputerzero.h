@@ -29,6 +29,8 @@
 #define CP0_CAMERA_PIXEL_COUNT (CP0_CAMERA_WIDTH * CP0_CAMERA_HEIGHT)
 #define CP0_MAX_LORA_PAYLOAD_BYTES 64U
 #define CP0_LORA_METADATA_BYTES 4U
+#define CP0_MAX_STORAGE_KEY_BYTES 64U
+#define CP0_MAX_STORAGE_VALUE_BYTES (8U * 1024U)
 
 #if !defined(__wasm32__)
 #error "CardputerZero applications must target wasm32"
@@ -154,6 +156,18 @@ CP0_IMPORT("cp0_lora_receive")
 int32_t cp0_lora_receive_raw(uint8_t *payload, uint32_t payload_capacity,
                              uint8_t *metadata, uint32_t metadata_bytes,
                              uint32_t timeout_milliseconds);
+
+CP0_IMPORT("cp0_storage_put")
+cp0_result_t cp0_storage_put_raw(const uint8_t *key, uint32_t key_length,
+                                 const uint8_t *value,
+                                 uint32_t value_length);
+
+CP0_IMPORT("cp0_storage_get")
+int32_t cp0_storage_get_raw(const uint8_t *key, uint32_t key_length,
+                            uint8_t *value, uint32_t value_capacity);
+
+CP0_IMPORT("cp0_storage_delete")
+int32_t cp0_storage_delete_raw(const uint8_t *key, uint32_t key_length);
 
 static inline cp0_result_t cp0_http_get(const uint8_t *url,
                                         uint32_t url_length, uint8_t *body,
@@ -332,6 +346,72 @@ static inline cp0_result_t cp0_lora_receive(
     if ((uint32_t)result > payload_capacity)
         return CP0_ERROR_INTERNAL;
     *payload_length = (uint32_t)result;
+    return CP0_OK;
+}
+
+static inline uint8_t cp0_storage_key_is_valid(const uint8_t *key,
+                                               uint32_t key_length) {
+    uint32_t index;
+
+    if (key == NULL || key_length == 0U ||
+        key_length > CP0_MAX_STORAGE_KEY_BYTES || key[0] == '.')
+        return 0U;
+    for (index = 0; index < key_length; index++) {
+        uint8_t byte = key[index];
+        if (!((byte >= 'A' && byte <= 'Z') ||
+              (byte >= 'a' && byte <= 'z') ||
+              (byte >= '0' && byte <= '9') || byte == '.' || byte == '_' ||
+              byte == '-'))
+            return 0U;
+    }
+    return 1U;
+}
+
+static inline cp0_result_t cp0_storage_put(const uint8_t *key,
+                                           uint32_t key_length,
+                                           const uint8_t *value,
+                                           uint32_t value_length) {
+    if (!cp0_storage_key_is_valid(key, key_length) || value == NULL ||
+        value_length == 0U || value_length > CP0_MAX_STORAGE_VALUE_BYTES)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    return cp0_storage_put_raw(key, key_length, value, value_length);
+}
+
+static inline cp0_result_t cp0_storage_get(const uint8_t *key,
+                                           uint32_t key_length,
+                                           uint8_t *value,
+                                           uint32_t value_capacity,
+                                           uint32_t *value_length) {
+    int32_t result;
+
+    if (!cp0_storage_key_is_valid(key, key_length) || value == NULL ||
+        value_capacity == 0U || value_capacity > CP0_MAX_STORAGE_VALUE_BYTES ||
+        value_length == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    result = cp0_storage_get_raw(key, key_length, value, value_capacity);
+    if (result < 0)
+        return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
+                                           : CP0_ERROR_INTERNAL;
+    if ((uint32_t)result > value_capacity)
+        return CP0_ERROR_INTERNAL;
+    *value_length = (uint32_t)result;
+    return CP0_OK;
+}
+
+static inline cp0_result_t cp0_storage_delete(const uint8_t *key,
+                                              uint32_t key_length,
+                                              uint8_t *existed) {
+    int32_t result;
+
+    if (!cp0_storage_key_is_valid(key, key_length) || existed == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    result = cp0_storage_delete_raw(key, key_length);
+    if (result < 0)
+        return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
+                                           : CP0_ERROR_INTERNAL;
+    if (result > 1)
+        return CP0_ERROR_INTERNAL;
+    *existed = (uint8_t)result;
     return CP0_OK;
 }
 

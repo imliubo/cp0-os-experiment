@@ -115,5 +115,18 @@ int main(void) {
                                            sizeof(lora), metadata,
                                            sizeof(metadata)) == 0);
     assert(memcmp(metadata, "\x00\x00\x00\x00", sizeof(metadata)) == 0);
+
+    static const char storage_value[] =
+        "{\"protocol_version\":1,\"request_id\":12,\"outcome\":{"
+        "\"status\":\"storage-value\",\"value_base64\":\"AAH+/w==\"}}\n";
+    static const char storage_missing[] =
+        "{\"protocol_version\":1,\"request_id\":12,\"outcome\":{"
+        "\"status\":\"storage-not-found\"}}\n";
+    uint8_t stored[8] = {0};
+    assert(cp0_broker_decode_storage_get_response(storage_value, stored,
+                                                  sizeof(stored)) == 4);
+    assert(memcmp(stored, "\x00\x01\xfe\xff", 4U) == 0);
+    assert(cp0_broker_decode_storage_get_response(storage_missing, stored,
+                                                  sizeof(stored)) == 0);
     return 0;
 }

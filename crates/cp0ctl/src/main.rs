@@ -226,7 +226,11 @@ fn send_broker_command(command: BrokerCommand) -> Result<(), String> {
         | BrokerOutcome::GpioWritten { .. }
         | BrokerOutcome::LoraSent { .. }
         | BrokerOutcome::LoraPacket { .. }
-        | BrokerOutcome::LoraNoPacket => {
+        | BrokerOutcome::LoraNoPacket
+        | BrokerOutcome::StorageStored { .. }
+        | BrokerOutcome::StorageValue { .. }
+        | BrokerOutcome::StorageNotFound
+        | BrokerOutcome::StorageDeleted { .. } => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&response)

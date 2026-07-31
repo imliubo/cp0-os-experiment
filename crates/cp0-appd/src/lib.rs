@@ -18,6 +18,7 @@ mod protocol;
 mod radio_client;
 mod registry;
 mod server;
+mod storage_client;
 
 pub use audio_client::{AudioClient, AudioClientError, DEFAULT_AUDIO_SOCKET};
 pub use broker::{
@@ -58,6 +59,7 @@ pub use registry::{
     AppAccount, AppRegistry, FIRST_APP_ACCOUNT_ID, LAST_APP_ACCOUNT_ID, RegistryError,
 };
 pub use server::{AppdServer, CapabilityServices, ServerError};
+pub use storage_client::{DEFAULT_STORAGE_SOCKET, StorageClient, StorageClientError};
 
 pub const DEFAULT_APPS_ROOT: &str = "/var/lib/cardputerzero/apps";
 pub const DEFAULT_DATA_ROOT: &str = "/var/lib/cardputerzero/data";
@@ -179,9 +181,6 @@ pub fn build_sandbox_plan(
         "--ro-bind".into(),
         package.clone(),
         "/app".into(),
-        "--bind".into(),
-        data.clone(),
-        "/data".into(),
         "--ro-bind".into(),
         broker_socket,
         "/run/cardputerzero/broker.sock".into(),
@@ -224,7 +223,6 @@ pub fn build_sandbox_plan(
         "PrivateDevices=yes".into(),
         "PrivateTmp=yes".into(),
         "ProtectSystem=strict".into(),
-        format!("ReadWritePaths={data}"),
         "ProtectHome=yes".into(),
         "ProtectKernelModules=yes".into(),
         "ProtectControlGroups=yes".into(),
@@ -344,7 +342,7 @@ mod tests {
                 "/var/lib/cardputerzero/apps/dev.cardputerzero.hello/1.2.3",
                 "/app"
             ]));
-        assert!(plan.arguments.windows(3).any(|values| values
+        assert!(!plan.arguments.windows(3).any(|values| values
             == [
                 "--bind",
                 "/var/lib/cardputerzero/data/dev.cardputerzero.hello",
@@ -382,9 +380,12 @@ mod tests {
             plan.systemd_properties
                 .contains(&"PrivateDevices=yes".into())
         );
-        assert!(plan.systemd_properties.contains(
-            &"ReadWritePaths=/var/lib/cardputerzero/data/dev.cardputerzero.hello".into()
-        ));
+        assert!(
+            !plan
+                .systemd_properties
+                .iter()
+                .any(|property| property.starts_with("ReadWritePaths="))
+        );
         assert!(
             plan.systemd_properties
                 .contains(&"OpenFile=/run/cardputerzero/wayland-0:wayland".into())

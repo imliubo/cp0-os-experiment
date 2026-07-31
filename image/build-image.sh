@@ -87,6 +87,7 @@ cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-gpiod" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-networkd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-radiod" \
+    "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-storaged" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0ctl" \
     "$repo_root/target/app-runtime-aarch64/cardputerzero-app-runtime" \
     "$platform_payload/"

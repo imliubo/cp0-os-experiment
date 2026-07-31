@@ -1,0 +1,15 @@
+[Unit]
+Description=CardputerZero privileged private storage broker socket
+
+[Socket]
+ListenStream=/run/cardputerzero-storaged/storage.sock
+FileDescriptorName=storage
+Service=cardputerzero-storaged.service
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

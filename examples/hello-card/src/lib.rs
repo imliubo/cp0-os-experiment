@@ -1,7 +1,9 @@
 #![no_std]
 
 use core::panic::PanicInfo;
-use cp0_sdk::{Error, audio, camera, display, documents, gpio, input, network, radio, system};
+use cp0_sdk::{
+    Error, audio, camera, display, documents, gpio, input, network, radio, storage, system,
+};
 
 const FRAME_BYTES: usize =
     display::WIDTH as usize * display::STANDARD_HEIGHT as usize * 2;
@@ -18,6 +20,7 @@ const KEY_R: u16 = 19;
 const KEY_C: u16 = 46;
 const KEY_G: u16 = 34;
 const KEY_L: u16 = 38;
+const KEY_S: u16 = 31;
 
 fn prepare_frame() -> &'static mut [u8] {
     // The frame lives in the WASM data section rather than the 64 KiB call
@@ -196,6 +199,15 @@ fn request_lora_receive(frame: &mut [u8]) {
     show_action_status(frame, color);
 }
 
+fn request_private_storage(frame: &mut [u8]) {
+    let color = match storage::put("hello.state", b"stored") {
+        Ok(()) => 0x07e0,
+        Err(Error::Unavailable) => 0xffe0,
+        Err(_) => 0xf81f,
+    };
+    show_action_status(frame, color);
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
     const TITLE: &str = "Hello Card";
@@ -241,6 +253,9 @@ pub extern "C" fn main() -> i32 {
                 }
                 if event.code == KEY_L {
                     request_lora_receive(frame);
+                }
+                if event.code == KEY_S {
+                    request_private_storage(frame);
                 }
                 show_key(frame, event.code);
                 rendered = false;

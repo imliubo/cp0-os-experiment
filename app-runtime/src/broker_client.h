@@ -46,5 +46,13 @@ int32_t cp0_broker_decode_lora_response(const char *response,
                                         size_t payload_capacity,
                                         uint8_t *metadata,
                                         size_t metadata_bytes);
+int32_t cp0_broker_storage_put(const uint8_t *key, size_t key_length,
+                               const uint8_t *value, size_t value_length);
+int32_t cp0_broker_storage_get(const uint8_t *key, size_t key_length,
+                               uint8_t *value, size_t value_capacity);
+int32_t cp0_broker_decode_storage_get_response(const char *response,
+                                               uint8_t *value,
+                                               size_t value_capacity);
+int32_t cp0_broker_storage_delete(const uint8_t *key, size_t key_length);
 
 #endif

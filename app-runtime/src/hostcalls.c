@@ -137,6 +137,28 @@ static int32_t cp0_lora_receive(wasm_exec_env_t execution_environment,
                                    (size_t)metadata_bytes, timeout_ms);
 }
 
+static int32_t cp0_storage_put(wasm_exec_env_t execution_environment,
+                               const uint8_t *key, uint32_t key_length,
+                               const uint8_t *value, uint32_t value_length) {
+    (void)execution_environment;
+    return cp0_broker_storage_put(key, (size_t)key_length, value,
+                                  (size_t)value_length);
+}
+
+static int32_t cp0_storage_get(wasm_exec_env_t execution_environment,
+                               const uint8_t *key, uint32_t key_length,
+                               uint8_t *value, uint32_t value_capacity) {
+    (void)execution_environment;
+    return cp0_broker_storage_get(key, (size_t)key_length, value,
+                                  (size_t)value_capacity);
+}
+
+static int32_t cp0_storage_delete(wasm_exec_env_t execution_environment,
+                                  const uint8_t *key, uint32_t key_length) {
+    (void)execution_environment;
+    return cp0_broker_storage_delete(key, (size_t)key_length);
+}
+
 static NativeSymbol symbols[] = {
     {"cp0_monotonic_milliseconds", (void *)cp0_monotonic_milliseconds, "()I",
      NULL},
@@ -160,6 +182,9 @@ static NativeSymbol symbols[] = {
     {"cp0_gpio_write", (void *)cp0_gpio_write, "(ii)i", NULL},
     {"cp0_lora_send", (void *)cp0_lora_send, "(*~)i", NULL},
     {"cp0_lora_receive", (void *)cp0_lora_receive, "(*~*~i)i", NULL},
+    {"cp0_storage_put", (void *)cp0_storage_put, "(*~*~)i", NULL},
+    {"cp0_storage_get", (void *)cp0_storage_get, "(*~*~)i", NULL},
+    {"cp0_storage_delete", (void *)cp0_storage_delete, "(*~)i", NULL},
 };
 
 NativeSymbol *cp0_host_symbols(uint32_t *count) {

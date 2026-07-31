@@ -41,6 +41,7 @@ dependencies = [
  "cp0-manifest",
  "cp0-network-protocol",
  "cp0-radio-protocol",
+ "cp0-storage-protocol",
  "libc",
  "serde",
  "serde_json",
@@ -156,6 +157,23 @@ dependencies = [
 [[package]]
 name = "cp0-sdk"
 version = "0.1.0"
+
+[[package]]
+name = "cp0-storage-protocol"
+version = "0.1.0"
+dependencies = [
+ "cp0-manifest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cp0-storaged"
+version = "0.1.0"
+dependencies = [
+ "cp0-storage-protocol",
+ "libc",
+]
 
 [[package]]
 name = "cp0ctl"

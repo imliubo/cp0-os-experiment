@@ -145,6 +145,13 @@ LoRa 能力仅面向外接 SX1276 系列模块；V0.6 本身没有板载 LoRa。
 应用间调用通过 Intent Broker 路由，接收方必须显式声明 Intent，不提供任意应用间
 socket。
 
+应用私有数据只通过 SDK key/value API 访问。`cp0-storaged` 独占
+`/var/lib/cardputerzero/data`，appd 根据经过 UID/cgroup 认证的调用者和 root-owned
+manifest 传递应用 ID 与 `storage_mb` 配额。每个值最多 8 KiB、每个应用最多 256 个
+键，写入先核算替换后的总逻辑字节数，再使用同目录临时文件、`fsync` 和原子重命名。
+Runtime 的 `/data` 是沙箱内空目录，不再绑定任何宿主可写路径；即使 Runtime 被攻破，
+也不能绕过 broker 读取其他应用数据或直接消耗 SD 空间。
+
 ## 7. 包与应用商店
 
 `.capp` 是签名的不可变应用包，至少包含 `app.json`、WASM/AOT 模块、资源和签名。

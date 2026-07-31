@@ -14,6 +14,8 @@ members = [
     "crates/cp0-networkd",
     "crates/cp0-radio-protocol",
     "crates/cp0-radiod",
+    "crates/cp0-storage-protocol",
+    "crates/cp0-storaged",
     "crates/cp0ctl",
     "sdk/rust",
 ]

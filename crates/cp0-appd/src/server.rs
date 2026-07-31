@@ -14,6 +14,7 @@ use cp0_gpio_protocol::GpioErrorCode as ServiceGpioErrorCode;
 use cp0_manifest::Permission;
 use cp0_network_protocol::NetworkErrorCode as ServiceNetworkErrorCode;
 use cp0_radio_protocol::RadioErrorCode as ServiceRadioErrorCode;
+use cp0_storage_protocol::StorageErrorCode as ServiceStorageErrorCode;
 
 use crate::protocol::APPD_PROTOCOL_VERSION;
 use crate::{
@@ -23,8 +24,8 @@ use crate::{
     DocumentCoordinator, DocumentPromptError, DocumentRequestResult, ErrorCode, GpioClient,
     GpioClientError, NetworkClient, NetworkClientError, NotificationQueue, PermissionChoice,
     PermissionCoordinator, PermissionPromptError, PermissionRequestResult, RadioClient,
-    RadioClientError, ResponseData, encode_broker_response, peer_credentials, read_broker_request,
-    read_request, write_broker_response, write_response,
+    RadioClientError, ResponseData, StorageClient, StorageClientError, encode_broker_response,
+    peer_credentials, read_broker_request, read_request, write_broker_response, write_response,
 };
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -70,6 +71,7 @@ pub struct CapabilityServices {
     pub camera: CameraClient,
     pub gpio: GpioClient,
     pub radio: RadioClient,
+    pub storage: StorageClient,
 }
 
 #[derive(Debug)]
@@ -553,6 +555,72 @@ impl AppdServer {
                     }
                 }
             }
+            BrokerCommand::StoragePut { key, value_base64 } => {
+                let app = match self.authenticate_broker_caller(peer, request_id) {
+                    Ok(app) => app,
+                    Err(response) => return response,
+                };
+                let value = match cp0_storage_protocol::decode_value(&value_base64) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return BrokerResponse::error(
+                            request_id,
+                            BrokerErrorCode::InvalidRequest,
+                            "invalid bounded private storage value",
+                        );
+                    }
+                };
+                match self.capabilities.storage.put(
+                    request_id,
+                    &app.app_id,
+                    app.storage_quota_bytes,
+                    &key,
+                    &value,
+                ) {
+                    Ok(used_bytes) => BrokerResponse::storage_stored(request_id, used_bytes),
+                    Err(error) => {
+                        eprintln!("cp0-appd: private storage put failed: {error}");
+                        storage_error_response(request_id, &error)
+                    }
+                }
+            }
+            BrokerCommand::StorageGet { key } => {
+                let app = match self.authenticate_broker_caller(peer, request_id) {
+                    Ok(app) => app,
+                    Err(response) => return response,
+                };
+                match self.capabilities.storage.get(
+                    request_id,
+                    &app.app_id,
+                    app.storage_quota_bytes,
+                    &key,
+                ) {
+                    Ok(Some(value)) => BrokerResponse::storage_value(request_id, &value),
+                    Ok(None) => BrokerResponse::storage_not_found(request_id),
+                    Err(error) => {
+                        eprintln!("cp0-appd: private storage get failed: {error}");
+                        storage_error_response(request_id, &error)
+                    }
+                }
+            }
+            BrokerCommand::StorageDelete { key } => {
+                let app = match self.authenticate_broker_caller(peer, request_id) {
+                    Ok(app) => app,
+                    Err(response) => return response,
+                };
+                match self.capabilities.storage.delete(
+                    request_id,
+                    &app.app_id,
+                    app.storage_quota_bytes,
+                    &key,
+                ) {
+                    Ok(existed) => BrokerResponse::storage_deleted(request_id, existed),
+                    Err(error) => {
+                        eprintln!("cp0-appd: private storage delete failed: {error}");
+                        storage_error_response(request_id, &error)
+                    }
+                }
+            }
         }
     }
 
@@ -710,13 +778,12 @@ impl AppdServer {
         }
     }
 
-    fn authorize_broker_caller(
+    fn authenticate_broker_caller(
         &self,
         peer: crate::PeerCredentials,
         request_id: u64,
-        permission: Permission,
     ) -> Result<AuthorizedApp, BrokerResponse> {
-        let mut state = match self.state.lock() {
+        let state = match self.state.lock() {
             Ok(state) => state,
             Err(_) => {
                 return Err(BrokerResponse::error(
@@ -792,10 +859,47 @@ impl AppdServer {
                 ));
             }
         };
+        Ok(AuthorizedApp {
+            app_id: manifest.id,
+            app_name: manifest.name,
+            storage_quota_bytes: u64::from(manifest.resources.storage_mb)
+                * cp0_storage_protocol::MIB,
+        })
+    }
+
+    fn authorize_broker_caller(
+        &self,
+        peer: crate::PeerCredentials,
+        request_id: u64,
+        permission: Permission,
+    ) -> Result<AuthorizedApp, BrokerResponse> {
+        let app = self.authenticate_broker_caller(peer, request_id)?;
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                return Err(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "application service state is unavailable",
+                ));
+            }
+        };
+        let manifest = match state.manager.installed_manifest(&app.app_id) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                eprintln!("cp0-appd: cannot reload broker caller manifest: {error}");
+                return Err(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "installed application metadata is unavailable",
+                ));
+            }
+        };
         match state.permissions.request(&manifest, permission) {
             Ok(PermissionRequestResult::Allow) => Ok(AuthorizedApp {
                 app_id: manifest.id,
                 app_name: manifest.name,
+                storage_quota_bytes: app.storage_quota_bytes,
             }),
             Ok(PermissionRequestResult::Prompt(prompt)) => Err(BrokerResponse::permission_pending(
                 request_id,
@@ -832,6 +936,7 @@ impl AppdServer {
 struct AuthorizedApp {
     app_id: String,
     app_name: String,
+    storage_quota_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -1127,6 +1232,34 @@ fn radio_error_response(request_id: u64, error: &RadioClientError) -> BrokerResp
         | RadioClientError::Service(ServiceRadioErrorCode::Internal) => (
             BrokerErrorCode::Internal,
             "radio service returned an invalid response",
+        ),
+    };
+    BrokerResponse::error(request_id, code, message)
+}
+
+fn storage_error_response(request_id: u64, error: &StorageClientError) -> BrokerResponse {
+    let (code, message) = match error {
+        StorageClientError::Service(ServiceStorageErrorCode::InvalidRequest) => (
+            BrokerErrorCode::InvalidRequest,
+            "private storage request is invalid",
+        ),
+        StorageClientError::Service(ServiceStorageErrorCode::QuotaExceeded) => (
+            BrokerErrorCode::ResourceExhausted,
+            "private storage quota was exceeded",
+        ),
+        StorageClientError::Service(ServiceStorageErrorCode::Unavailable)
+        | StorageClientError::Io(_)
+        | StorageClientError::EmptyResponse => (
+            BrokerErrorCode::Unavailable,
+            "private storage service is unavailable",
+        ),
+        StorageClientError::Protocol(_)
+        | StorageClientError::MismatchedRequestId
+        | StorageClientError::MismatchedOutcome
+        | StorageClientError::Service(ServiceStorageErrorCode::Unauthorized)
+        | StorageClientError::Service(ServiceStorageErrorCode::Internal) => (
+            BrokerErrorCode::Internal,
+            "private storage service returned an invalid response",
         ),
     };
     BrokerResponse::error(request_id, code, message)

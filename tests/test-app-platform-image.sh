@@ -35,8 +35,15 @@ grep -q 'cp0-radiod' "$stage"
 grep -q 'cardputerzero-radiod.socket' "$stage"
 grep -q 'useradd --system --gid cp0-radio --groups spi' "$stage"
 grep -q '/etc/cardputerzero/lora.conf' "$stage"
+grep -q 'cp0-storaged' "$stage"
+grep -q 'cardputerzero-storaged.socket' "$stage"
+grep -q 'useradd --system --gid cp0-storage' "$stage"
+grep -q 'cp0-storage -g cp0-storage -m 0700' "$stage"
 grep -q 'device-core-recovery' "$stage"
 grep -q 'device-stability-monitor' "$stage"
 grep -q 'chown -R root:root' "$stage"
-grep -q 'cp0-app-20000 -g cp0-app-20000 -m 0700' "$stage"
+if grep -q 'cp0-app-20000 -g cp0-app-20000 -m 0700' "$stage"; then
+    echo "error: application data must not be mounted from an app-owned host directory" >&2
+    exit 1
+fi
 grep -qx 'systemctl enable cardputerzero-compositor.service' "$compositor"

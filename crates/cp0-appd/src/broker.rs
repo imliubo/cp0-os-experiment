@@ -5,7 +5,7 @@ use std::io::{self, BufRead, Write};
 use serde::{Deserialize, Serialize};
 
 pub const BROKER_PROTOCOL_VERSION: u32 = 1;
-pub const MAX_BROKER_FRAME_BYTES: usize = 4 * 1024;
+pub const MAX_BROKER_FRAME_BYTES: usize = 16 * 1024;
 pub const MAX_NOTIFICATION_TITLE_CHARS: usize = 32;
 pub const MAX_NOTIFICATION_BODY_CHARS: usize = 160;
 pub const MAX_PENDING_NOTIFICATIONS: usize = 8;
@@ -48,6 +48,16 @@ pub enum BrokerCommand {
     },
     ReceiveLora {
         timeout_ms: u16,
+    },
+    StoragePut {
+        key: String,
+        value_base64: String,
+    },
+    StorageGet {
+        key: String,
+    },
+    StorageDelete {
+        key: String,
     },
 }
 
@@ -108,6 +118,16 @@ pub enum BrokerOutcome {
         snr_quarter_db: i8,
     },
     LoraNoPacket,
+    StorageStored {
+        used_bytes: u64,
+    },
+    StorageValue {
+        value_base64: String,
+    },
+    StorageNotFound,
+    StorageDeleted {
+        existed: bool,
+    },
     Error {
         code: BrokerErrorCode,
         message: String,
@@ -156,6 +176,7 @@ pub enum BrokerProtocolError {
     InvalidAudio,
     InvalidCameraResponse,
     InvalidRadio,
+    InvalidStorage,
 }
 
 impl fmt::Display for BrokerProtocolError {
@@ -186,6 +207,7 @@ impl fmt::Display for BrokerProtocolError {
                 formatter.write_str("invalid fixed camera frame metadata")
             }
             Self::InvalidRadio => formatter.write_str("invalid bounded LoRa operation"),
+            Self::InvalidStorage => formatter.write_str("invalid private storage operation"),
         }
     }
 }
@@ -242,6 +264,15 @@ impl BrokerRequest {
                     || *timeout_ms > cp0_radio_protocol::MAX_LORA_RECEIVE_TIMEOUT_MS =>
             {
                 Err(BrokerProtocolError::InvalidRadio)
+            }
+            BrokerCommand::StoragePut { key, value_base64 } => {
+                cp0_storage_protocol::validate_key(key)
+                    .and_then(|()| cp0_storage_protocol::decode_value(value_base64).map(|_| ()))
+                    .map_err(|_| BrokerProtocolError::InvalidStorage)
+            }
+            BrokerCommand::StorageGet { key } | BrokerCommand::StorageDelete { key } => {
+                cp0_storage_protocol::validate_key(key)
+                    .map_err(|_| BrokerProtocolError::InvalidStorage)
             }
             _ => Ok(()),
         }
@@ -368,6 +399,40 @@ impl BrokerResponse {
         }
     }
 
+    pub fn storage_stored(request_id: u64, used_bytes: u64) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::StorageStored { used_bytes },
+        }
+    }
+
+    pub fn storage_value(request_id: u64, value: &[u8]) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::StorageValue {
+                value_base64: cp0_storage_protocol::encode_base64(value),
+            },
+        }
+    }
+
+    pub fn storage_not_found(request_id: u64) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::StorageNotFound,
+        }
+    }
+
+    pub fn storage_deleted(request_id: u64, existed: bool) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::StorageDeleted { existed },
+        }
+    }
+
     pub fn validate(&self) -> Result<(), BrokerProtocolError> {
         if self.protocol_version != BROKER_PROTOCOL_VERSION {
             return Err(BrokerProtocolError::UnsupportedVersion(
@@ -431,6 +496,16 @@ impl BrokerResponse {
                 || !(-200..=50).contains(rssi_dbm) =>
             {
                 return Err(BrokerProtocolError::InvalidRadio);
+            }
+            BrokerOutcome::StorageStored { used_bytes }
+                if *used_bytes > cp0_storage_protocol::MAX_STORAGE_QUOTA_BYTES =>
+            {
+                return Err(BrokerProtocolError::InvalidStorage);
+            }
+            BrokerOutcome::StorageValue { value_base64 }
+                if cp0_storage_protocol::decode_value(value_base64).is_err() =>
+            {
+                return Err(BrokerProtocolError::InvalidStorage);
             }
             _ => {}
         }
@@ -827,5 +902,30 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn round_trips_bounded_private_storage_operations() {
+        let request = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 12,
+            command: BrokerCommand::StoragePut {
+                key: "state.v1".into(),
+                value_base64: cp0_storage_protocol::encode_base64(b"value"),
+            },
+        };
+        let mut frame = Vec::new();
+        write_broker_request(&mut frame, &request).unwrap();
+        assert_eq!(
+            read_broker_request(&mut Cursor::new(frame)).unwrap(),
+            Some(request)
+        );
+        assert!(
+            BrokerResponse::storage_value(12, b"value")
+                .validate()
+                .is_ok()
+        );
+        assert!(BrokerResponse::storage_not_found(12).validate().is_ok());
+        assert!(BrokerResponse::storage_deleted(12, true).validate().is_ok());
     }
 }

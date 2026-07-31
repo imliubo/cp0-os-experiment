@@ -305,7 +305,6 @@ impl AppManager {
             &self.paths.layout.apps_root.join(&plan.app_id),
             "application directory",
         )?;
-        require_root_directory(&self.paths.layout.data_root, "data root")?;
         let runtime = secure_metadata(Path::new(&self.paths.layout.runtime_path), "runtime")?;
         require_owner_mode(&runtime, 0, 0o022, "runtime")?;
         if !runtime.is_file() || runtime.mode() & 0o111 == 0 {
@@ -347,13 +346,6 @@ impl AppManager {
         )?;
         require_owner_mode(&entrypoint, 0, 0o022, "entrypoint")?;
 
-        let data = secure_metadata(Path::new(&plan.data_dir), "data directory")?;
-        require_owner_mode(&data, account.unix_uid, 0o077, "data directory")?;
-        if !data.is_dir() {
-            return Err(AppManagerError::InvalidHostIdentity(
-                "data path is not a directory".into(),
-            ));
-        }
         Ok(())
     }
 

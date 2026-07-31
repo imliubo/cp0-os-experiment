@@ -17,6 +17,8 @@ install -D -m 0755 "${payload}/cp0-gpiod" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-gpiod"
 install -D -m 0755 "${payload}/cp0-radiod" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-radiod"
+install -D -m 0755 "${payload}/cp0-storaged" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-storaged"
 install -D -m 0755 "${payload}/cp0ctl" \
     "${ROOTFS_DIR}/usr/bin/cp0ctl"
 install -D -m 0755 "${payload}/cardputerzero-app-runtime" \
@@ -51,10 +53,16 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-radiod.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-radiod.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-radiod.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-radiod.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-storaged.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-storaged.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-storaged.socket" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-storaged.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-gpio.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-gpio.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-appd.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-appd.conf"
+install -D -m 0644 "${payload}/systemd/cardputerzero-storage.conf" \
+    "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-storage.conf"
 install -D -o root -g root -m 0644 "${payload}/lora.conf" \
     "${ROOTFS_DIR}/etc/cardputerzero/lora.conf"
 install -D -m 0755 "${payload}/diagnostics/device-core-recovery.sh" \
@@ -114,6 +122,13 @@ if ! id cp0-radio >/dev/null 2>&1; then
     useradd --system --gid cp0-radio --groups spi --home-dir /nonexistent \
         --shell /usr/sbin/nologin cp0-radio
 fi
+if ! getent group cp0-storage >/dev/null 2>&1; then
+    groupadd --system cp0-storage
+fi
+if ! id cp0-storage >/dev/null 2>&1; then
+    useradd --system --gid cp0-storage --home-dir /nonexistent \
+        --shell /usr/sbin/nologin cp0-storage
+fi
 if ! getent group cp0-app-20000 >/dev/null 2>&1; then
     groupadd --system --gid 20000 cp0-app-20000
 fi
@@ -127,9 +142,10 @@ install -d -o root -g root -m 0755 \
     /var/lib/cardputerzero/apps \
     /var/lib/cardputerzero/apps/dev.cardputerzero.hello \
     /var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0 \
-    /var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/bin \
-    /var/lib/cardputerzero/data
+    /var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/bin
 install -d -o root -g root -m 0700 /var/lib/cardputerzero/registry
+install -d -o cp0-storage -g cp0-storage -m 0700 \
+    /var/lib/cardputerzero/data
 install -d -o cp0-document -g cp0-document -m 0750 \
     /var/lib/cardputerzero/documents
 printf '%s\n' 'CardputerZero Document Portal is ready.' \
@@ -137,8 +153,6 @@ printf '%s\n' 'CardputerZero Document Portal is ready.' \
 chown cp0-document:cp0-document \
     /var/lib/cardputerzero/documents/welcome.txt
 chmod 0640 /var/lib/cardputerzero/documents/welcome.txt
-install -d -o cp0-app-20000 -g cp0-app-20000 -m 0700 \
-    /var/lib/cardputerzero/data/dev.cardputerzero.hello
 chown -R root:root /var/lib/cardputerzero/apps/dev.cardputerzero.hello
 chmod -R go-w /var/lib/cardputerzero/apps/dev.cardputerzero.hello
 /usr/libexec/cardputerzero/cp0-appd register-installed \
@@ -146,8 +160,10 @@ chmod -R go-w /var/lib/cardputerzero/apps/dev.cardputerzero.hello
 
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-appd.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-gpio.conf
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-storage.conf
 systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
     cardputerzero-audiod.socket cardputerzero-camerad.socket \
-    cardputerzero-gpiod.socket cardputerzero-radiod.socket
+    cardputerzero-gpiod.socket cardputerzero-radiod.socket \
+    cardputerzero-storaged.socket
 CHROOT
