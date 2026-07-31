@@ -42,6 +42,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     "$repo_root/system-shell/src/json.c" \
     "$repo_root/system-shell/src/appd_client.c" \
     "$repo_root/system-shell/src/store_client.c" \
+    "$repo_root/system-shell/src/system_info.c" \
     "$output/cardputerzero-system-shell-protocol.c" \
     "$weston_build/protocol/xdg-shell-protocol.c" \
     $(pkg-config --cflags --libs wayland-client) \

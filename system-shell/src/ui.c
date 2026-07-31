@@ -1,5 +1,6 @@
 #include "cp0_ui.h"
 
+#include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -118,6 +119,11 @@ static void draw_text(struct canvas *canvas, int x, int y, const char *text,
 
 static void draw_prompt_line(struct canvas *canvas, int y, const char *text,
                              size_t start, size_t maximum);
+static void draw_text_slice(struct canvas *canvas, int x, int y,
+                            const char *text, size_t start, size_t maximum,
+                            uint32_t color);
+static bool copy_optional_text(char *output, size_t capacity,
+                               const char *input);
 
 static const char *screen_title(const struct cp0_ui *ui)
 {
@@ -129,7 +135,7 @@ static const char *screen_title(const struct cp0_ui *ui)
     case CP0_UI_HOME:
         return "HOME";
     case CP0_UI_APPS:
-        return "APPS";
+        return ui->app_detail ? "APP DETAIL" : "APPS";
     case CP0_UI_STORE:
         return ui->store_detail ? "STORE APP" : "STORE";
     case CP0_UI_DEVICE:
@@ -137,7 +143,7 @@ static const char *screen_title(const struct cp0_ui *ui)
     case CP0_UI_NETWORK:
         return "NETWORK";
     case CP0_UI_SETTINGS:
-        return "SETTINGS";
+        return ui->settings_detail ? "POLICY" : "SETTINGS";
     case CP0_UI_TASKS:
         return "TASKS";
     }
@@ -284,8 +290,8 @@ static void draw_apps_page(struct canvas *canvas, const struct cp0_ui *ui)
                   ui->apps[index].state == CP0_UI_APP_RUNNING
                       ? COLOR_GREEN
                       : (selected ? COLOR_YELLOW : COLOR_MUTED));
-        draw_text(canvas, 36, y + 6, ui->apps[index].name, 1,
-                  selected ? COLOR_TEXT : COLOR_MUTED);
+        draw_text_slice(canvas, 36, y + 6, ui->apps[index].name, 0, 28,
+                        selected ? COLOR_TEXT : COLOR_MUTED);
         draw_text(canvas, 218, y + 17, states[ui->apps[index].state], 1,
                   ui->apps[index].state == CP0_UI_APP_FAILED
                       ? COLOR_RED
@@ -293,6 +299,36 @@ static void draw_apps_page(struct canvas *canvas, const struct cp0_ui *ui)
     }
     if (ui->app_list_truncated)
         draw_text(canvas, 284, 159, "32+", 1, COLOR_YELLOW);
+}
+
+static void draw_labeled_value(struct canvas *canvas, int y, const char *label,
+                               const char *value, uint32_t color)
+{
+    draw_text(canvas, 20, y, label, 1, COLOR_MUTED);
+    draw_text_slice(canvas, 142, y, value, 0, 27, color);
+}
+
+static void draw_app_detail(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    static const char *states[] = {"READY", "STARTING", "RUNNING", "FAILED"};
+    const struct cp0_ui_app *app = &ui->apps[ui->app_selected];
+    const char *action = app->state == CP0_UI_APP_RUNNING ? "STOP" : "OPEN";
+
+    fill_rect(canvas, 8, 28, 304, 135, COLOR_SURFACE);
+    fill_rect(canvas, 8, 28, 4, 135, COLOR_GREEN);
+    draw_prompt_line(canvas, 36, app->name, 0, 46);
+    draw_labeled_value(canvas, 57, "VERSION", app->version, COLOR_TEXT);
+    draw_labeled_value(canvas, 73, "STATE", states[app->state],
+                       app->state == CP0_UI_APP_FAILED ? COLOR_RED : COLOR_GREEN);
+    draw_labeled_value(canvas, 89, "DISPLAY",
+                       app->immersive ? "IMMERSIVE" : "STANDARD", COLOR_TEXT);
+    draw_text(canvas, 20, 106, "ID", 1, COLOR_MUTED);
+    draw_prompt_line(canvas, 119, app->app_id, 0, 46);
+    fill_rect(canvas, 214, 135, 82, 22, COLOR_SELECTED);
+    stroke_rect(canvas, 214, 135, 82, 22, 2,
+                app->state == CP0_UI_APP_STARTING ? COLOR_MUTED : COLOR_GREEN);
+    draw_text(canvas, 239, 143, action, 1,
+              app->state == CP0_UI_APP_STARTING ? COLOR_MUTED : COLOR_TEXT);
 }
 
 static const char *store_state_label(const struct cp0_ui_store_app *app,
@@ -416,7 +452,7 @@ static void draw_tasks_page(struct canvas *canvas, const struct cp0_ui *ui)
     fill_rect(canvas, 8, 31, 304, 126, COLOR_SURFACE);
     fill_rect(canvas, 8, 31, 4, 126, COLOR_YELLOW);
     draw_text(canvas, 28, 49, "TASKS", 2, COLOR_TEXT);
-    draw_text(canvas, 28, 78, ui->apps[index].name, 1, COLOR_TEXT);
+    draw_text_slice(canvas, 28, 78, ui->apps[index].name, 0, 44, COLOR_TEXT);
     draw_text(canvas, 28, 94,
               ui->apps[index].state == CP0_UI_APP_STARTING ? "STARTING"
                                                            : "RUNNING",
@@ -440,38 +476,177 @@ static const char *settings_state(bool enabled, bool allowed)
     return enabled ? "ON" : "OFF";
 }
 
+static void format_bytes(char output[16], uint64_t bytes)
+{
+    const uint64_t mib = 1024U * 1024U;
+    const uint64_t gib = 1024U * mib;
+    uint64_t units = bytes >= gib ? bytes / gib : bytes / mib;
+    unsigned int bounded_units =
+        units > UINT_MAX ? UINT_MAX : (unsigned int)units;
+    if (bytes >= gib)
+        snprintf(output, 16, "%u.%u GB", bounded_units,
+                 (unsigned int)((bytes % gib) * 10U / gib));
+    else
+        snprintf(output, 16, "%u MB", bounded_units);
+}
+
+static void draw_page_mark(struct canvas *canvas, unsigned int page)
+{
+    draw_text(canvas, 286, 154, page == 0 ? "1/2" : "2/2", 1, COLOR_MUTED);
+}
+
+static void draw_device_page(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    char value[32];
+    fill_rect(canvas, 8, 28, 304, 135, COLOR_SURFACE);
+    fill_rect(canvas, 8, 28, 4, 135, COLOR_YELLOW);
+    if (!ui->device_available) {
+        draw_text(canvas, 28, 57, "DEVICE DATA UNAVAILABLE", 1, COLOR_RED);
+        return;
+    }
+    if (ui->device_page == 0) {
+        draw_labeled_value(canvas, 39, "MODEL", ui->device_model, COLOR_TEXT);
+        draw_labeled_value(canvas, 59, "HARDWARE", "V0.6 / CM0", COLOR_TEXT);
+        draw_labeled_value(canvas, 79, "OS", ui->os_version, COLOR_TEXT);
+        snprintf(value, sizeof(value), "%llu H %llu M",
+                 (unsigned long long)(ui->uptime_seconds / 3600U),
+                 (unsigned long long)((ui->uptime_seconds / 60U) % 60U));
+        draw_labeled_value(canvas, 99, "UPTIME", value, COLOR_TEXT);
+        if (ui->temperature_millicelsius >= 0)
+            snprintf(value, sizeof(value), "%d.%d C",
+                     ui->temperature_millicelsius / 1000,
+                     (ui->temperature_millicelsius % 1000) / 100);
+        else
+            snprintf(value, sizeof(value), "UNKNOWN");
+        draw_labeled_value(
+            canvas, 119, "CPU TEMP", value,
+            ui->temperature_millicelsius < 0
+                ? COLOR_MUTED
+                : (ui->temperature_millicelsius >= 80000 ? COLOR_RED
+                                                          : COLOR_GREEN));
+    } else {
+        char total[16];
+        char available[16];
+        format_bytes(total, ui->memory_total_bytes);
+        format_bytes(available, ui->memory_available_bytes);
+        snprintf(value, sizeof(value), "%s FREE", available);
+        draw_labeled_value(canvas, 43, "MEMORY", value, COLOR_TEXT);
+        snprintf(value, sizeof(value), "%s TOTAL", total);
+        draw_labeled_value(canvas, 61, "", value, COLOR_MUTED);
+        format_bytes(total, ui->storage_total_bytes);
+        format_bytes(available, ui->storage_available_bytes);
+        snprintf(value, sizeof(value), "%s FREE", available);
+        draw_labeled_value(canvas, 87, "STORAGE", value, COLOR_TEXT);
+        snprintf(value, sizeof(value), "%s TOTAL", total);
+        draw_labeled_value(canvas, 105, "", value, COLOR_MUTED);
+        if (ui->battery_percent >= 0)
+            snprintf(value, sizeof(value), "%d%%", ui->battery_percent);
+        else
+            snprintf(value, sizeof(value), "UNKNOWN");
+        draw_labeled_value(
+            canvas, 133, "BATTERY", value,
+            ui->battery_percent < 0
+                ? COLOR_MUTED
+                : (ui->battery_percent <= 15 ? COLOR_RED : COLOR_GREEN));
+    }
+    draw_page_mark(canvas, ui->device_page);
+}
+
+static void draw_network_page(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    const char *status = ui->network_online
+                             ? "ONLINE"
+                             : (ui->network_link_up ? "LINK ONLY" : "OFFLINE");
+    uint32_t status_color = ui->network_online
+                                ? COLOR_GREEN
+                                : (ui->network_link_up ? COLOR_YELLOW : COLOR_RED);
+    fill_rect(canvas, 8, 28, 304, 135, COLOR_SURFACE);
+    fill_rect(canvas, 8, 28, 4, 135, status_color);
+    if (!ui->network_available) {
+        draw_text(canvas, 28, 57, "NO NETWORK INTERFACE", 1, COLOR_RED);
+        return;
+    }
+    if (ui->network_page == 0) {
+        draw_text(canvas, 28, 48, status, 2, status_color);
+        draw_labeled_value(canvas, 84, "INTERFACE", ui->network_interface,
+                           COLOR_TEXT);
+        draw_labeled_value(canvas, 106, "ADDRESS", ui->network_ipv4[0] != '\0'
+                                                    ? ui->network_ipv4
+                                                    : "NO ADDRESS",
+                           ui->network_online ? COLOR_TEXT : COLOR_MUTED);
+    } else {
+        draw_labeled_value(canvas, 47, "LINK",
+                           ui->network_link_up ? "UP" : "DOWN", status_color);
+        draw_labeled_value(canvas, 69, "CONNECTIVITY",
+                           ui->network_online ? "READY" : "NOT READY",
+                           status_color);
+        draw_labeled_value(canvas, 91, "IPV4", ui->network_ipv4[0] != '\0'
+                                               ? ui->network_ipv4
+                                               : "UNASSIGNED",
+                           COLOR_TEXT);
+        draw_labeled_value(canvas, 113, "MANAGEMENT", "READ ONLY", COLOR_MUTED);
+    }
+    draw_page_mark(canvas, ui->network_page);
+}
+
 static void draw_settings_page(struct canvas *canvas, const struct cp0_ui *ui)
 {
-    static const char *titles[] = {"DEVELOPER MODE", "RECOVERY BOOT"};
+    static const char *titles[] = {"DEVELOPER MODE", "RECOVERY BOOT", "POLICY"};
     static const char *details[] = {"INSTALL TRUSTED DEV PACKAGES",
-                                    "NEXT BOOT USES CONSOLE"};
+                                    "NEXT BOOT USES CONSOLE",
+                                    "AUTHORITY AND RESTRICTIONS"};
     static const char *authorities[] = {"PERSONAL POLICY", "PARENT POLICY",
                                         "ORGANIZATION POLICY"};
     if (!ui->settings_available) {
         draw_empty_page(canvas, "SETTINGS", "SETTINGS UNAVAILABLE", COLOR_RED);
         return;
     }
-    for (unsigned int row = 0; row < 2; row++) {
-        int y = 30 + (int)row * 54;
+    for (unsigned int row = 0; row < 3; row++) {
+        int y = 27 + (int)row * 40;
         bool selected = ui->settings_selected == row;
         bool enabled = row == 0 ? ui->developer_mode : ui->recovery_mode;
         bool allowed =
             row == 0 ? ui->developer_mode_allowed : ui->recovery_mode_allowed;
-        fill_rect(canvas, 8, y, 304, 48,
+        fill_rect(canvas, 8, y, 304, 36,
                   selected ? COLOR_SELECTED : COLOR_SURFACE);
-        stroke_rect(canvas, 8, y, 304, 48, selected ? 2 : 1,
+        stroke_rect(canvas, 8, y, 304, 36, selected ? 2 : 1,
                     selected ? COLOR_GREEN : COLOR_BAR);
-        draw_text(canvas, 20, y + 10, titles[row], 1, COLOR_TEXT);
-        draw_text(canvas, 230, y + 10, settings_state(enabled, allowed), 1,
-                  !allowed ? COLOR_MUTED : (enabled ? COLOR_YELLOW : COLOR_GREEN));
-        draw_text(canvas, 20, y + 29, details[row], 1, COLOR_MUTED);
+        draw_text(canvas, 20, y + 7, titles[row], 1, COLOR_TEXT);
+        if (row < 2)
+            draw_text(canvas, 230, y + 7, settings_state(enabled, allowed), 1,
+                      !allowed ? COLOR_MUTED
+                               : (enabled ? COLOR_YELLOW : COLOR_GREEN));
+        else
+            draw_text(canvas, 254, y + 7, "VIEW", 1, COLOR_GREEN);
+        draw_text(canvas, 20, y + 22, details[row], 1, COLOR_MUTED);
     }
-    draw_text(canvas, 8, 145, authorities[ui->settings_authority], 1,
+    draw_text(canvas, 8, 151, authorities[ui->settings_authority], 1,
               ui->settings_authority == CP0_UI_AUTHORITY_PERSONAL ? COLOR_MUTED
                                                                   : COLOR_YELLOW);
     if (!ui->store_install_allowed || ui->app_launch_restricted ||
         ui->denied_permission_count > 0)
-        draw_text(canvas, 200, 145, "RESTRICTED", 1, COLOR_YELLOW);
+        draw_text(canvas, 230, 151, "LOCKED", 1, COLOR_YELLOW);
+}
+
+static void draw_policy_detail(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    static const char *authorities[] = {"PERSONAL", "PARENT", "ORGANIZATION"};
+    char denied[16];
+    snprintf(denied, sizeof(denied), "%u DENIED", ui->denied_permission_count);
+    fill_rect(canvas, 8, 28, 304, 135, COLOR_SURFACE);
+    fill_rect(canvas, 8, 28, 4, 135, COLOR_YELLOW);
+    draw_labeled_value(canvas, 43, "AUTHORITY",
+                       authorities[ui->settings_authority], COLOR_TEXT);
+    draw_labeled_value(canvas, 67, "STORE",
+                       ui->store_install_allowed ? "ALLOWED" : "BLOCKED",
+                       ui->store_install_allowed ? COLOR_GREEN : COLOR_YELLOW);
+    draw_labeled_value(canvas, 91, "APP LAUNCH",
+                       ui->app_launch_restricted ? "RESTRICTED" : "ALLOWED",
+                       ui->app_launch_restricted ? COLOR_YELLOW : COLOR_GREEN);
+    draw_labeled_value(canvas, 115, "CAPABILITIES", denied,
+                       ui->denied_permission_count > 0 ? COLOR_YELLOW
+                                                       : COLOR_GREEN);
+    draw_labeled_value(canvas, 139, "SOURCE", "DEVICE POLICY", COLOR_MUTED);
 }
 
 static void draw_settings_confirm(struct canvas *canvas,
@@ -505,22 +680,25 @@ static void draw_page(struct canvas *canvas, const struct cp0_ui *ui)
 {
     switch (ui->screen) {
     case CP0_UI_APPS:
-        draw_apps_page(canvas, ui);
+        if (ui->app_detail && ui->app_selected < ui->app_count)
+            draw_app_detail(canvas, ui);
+        else
+            draw_apps_page(canvas, ui);
         break;
     case CP0_UI_STORE:
         draw_store_page(canvas, ui);
         break;
     case CP0_UI_DEVICE:
-        draw_empty_page(canvas, "CARDPUTER ZERO", "V0.6  320 X 170  512 MB",
-                        COLOR_YELLOW);
+        draw_device_page(canvas, ui);
         break;
     case CP0_UI_NETWORK:
-        draw_empty_page(canvas, "NETWORK",
-                        ui->network_online ? "CONNECTED" : "OFFLINE",
-                        ui->network_online ? COLOR_GREEN : COLOR_RED);
+        draw_network_page(canvas, ui);
         break;
     case CP0_UI_SETTINGS:
-        draw_settings_page(canvas, ui);
+        if (ui->settings_detail)
+            draw_policy_detail(canvas, ui);
+        else
+            draw_settings_page(canvas, ui);
         break;
     case CP0_UI_TASKS:
         draw_tasks_page(canvas, ui);
@@ -551,8 +729,9 @@ static void draw_power_dialog(struct canvas *canvas, const struct cp0_ui *ui)
     }
 }
 
-static void draw_prompt_line(struct canvas *canvas, int y, const char *text,
-                             size_t start, size_t maximum)
+static void draw_text_slice(struct canvas *canvas, int x, int y,
+                            const char *text, size_t start, size_t maximum,
+                            uint32_t color)
 {
     char line[47];
     size_t length = strlen(text);
@@ -563,7 +742,13 @@ static void draw_prompt_line(struct canvas *canvas, int y, const char *text,
         line[output++] = byte >= 0x20U && byte < 0x7fU ? (char)byte : ' ';
     }
     line[output] = '\0';
-    draw_text(canvas, 20, y, line, 1, COLOR_TEXT);
+    draw_text(canvas, x, y, line, 1, color);
+}
+
+static void draw_prompt_line(struct canvas *canvas, int y, const char *text,
+                             size_t start, size_t maximum)
+{
+    draw_text_slice(canvas, 20, y, text, start, maximum, COLOR_TEXT);
 }
 
 static void draw_notification_banner(struct canvas *canvas,
@@ -646,7 +831,39 @@ void cp0_ui_init(struct cp0_ui *ui)
     ui->screen = CP0_UI_HOME;
     ui->store_status = CP0_UI_STORE_LOADING;
     ui->battery_percent = -1;
+    ui->temperature_millicelsius = -1;
     memcpy(ui->clock_text, "--:--", sizeof(ui->clock_text));
+}
+
+void cp0_ui_set_device_info(struct cp0_ui *ui,
+                            const struct cp0_ui_device_info *info)
+{
+    if (ui == NULL || info == NULL)
+        return;
+    ui->device_available = info->available;
+    ui->battery_percent = info->battery_percent;
+    ui->temperature_millicelsius = info->temperature_millicelsius;
+    ui->uptime_seconds = info->uptime_seconds;
+    ui->memory_total_bytes = info->memory_total_bytes;
+    ui->memory_available_bytes = info->memory_available_bytes;
+    ui->storage_total_bytes = info->storage_total_bytes;
+    ui->storage_available_bytes = info->storage_available_bytes;
+    copy_optional_text(ui->device_model, sizeof(ui->device_model), info->model);
+    copy_optional_text(ui->os_version, sizeof(ui->os_version), info->os_version);
+}
+
+void cp0_ui_set_network_info(struct cp0_ui *ui,
+                             const struct cp0_ui_network_info *info)
+{
+    if (ui == NULL || info == NULL)
+        return;
+    ui->network_available = info->available;
+    ui->network_online = info->online;
+    ui->network_link_up = info->link_up;
+    copy_optional_text(ui->network_interface, sizeof(ui->network_interface),
+                       info->interface_name);
+    copy_optional_text(ui->network_ipv4, sizeof(ui->network_ipv4),
+                       info->ipv4_address);
 }
 
 void cp0_ui_set_status(struct cp0_ui *ui, const char *clock_text,
@@ -745,6 +962,8 @@ void cp0_ui_add_app(struct cp0_ui *ui, uint32_t token, const char *app_id)
             !copy_text(ui->apps[index].name, sizeof(ui->apps[index].name),
                        app_id))
             return;
+        copy_text(ui->apps[index].version,
+                  sizeof(ui->apps[index].version), "UNKNOWN");
         ui->app_count++;
     } else if (ui->apps[index].app_id[0] == '\0') {
         if (!copy_text(ui->apps[index].app_id,
@@ -788,6 +1007,8 @@ void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
         if (!copy_text(app.app_id, sizeof(app.app_id), apps[source].app_id) ||
             !copy_text(app.name, sizeof(app.name), apps[source].name))
             continue;
+        if (!copy_text(app.version, sizeof(app.version), apps[source].version))
+            copy_text(app.version, sizeof(app.version), "UNKNOWN");
         for (unsigned int old = 0; old < previous_count; old++) {
             if (strcmp(previous[old].app_id, app.app_id) != 0)
                 continue;
@@ -812,6 +1033,8 @@ void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
             break;
         }
     }
+    if (ui->app_count == 0)
+        ui->app_detail = false;
 }
 
 void cp0_ui_set_app_display_mode(struct cp0_ui *ui, uint32_t token,
@@ -1193,6 +1416,8 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         ui->power_dialog = false;
         ui->settings_confirm = false;
         ui->store_detail = false;
+        ui->app_detail = false;
+        ui->settings_detail = false;
         ui->screen = CP0_UI_HOME;
         return CP0_UI_EVENT_NONE;
     }
@@ -1247,8 +1472,16 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     }
 
     if (action == CP0_UI_BACK) {
+        if (ui->screen == CP0_UI_APPS && ui->app_detail) {
+            ui->app_detail = false;
+            return CP0_UI_EVENT_NONE;
+        }
         if (ui->screen == CP0_UI_STORE && ui->store_detail) {
             ui->store_detail = false;
+            return CP0_UI_EVENT_NONE;
+        }
+        if (ui->screen == CP0_UI_SETTINGS && ui->settings_detail) {
+            ui->settings_detail = false;
             return CP0_UI_EVENT_NONE;
         }
         ui->screen = CP0_UI_HOME;
@@ -1267,6 +1500,20 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     }
 
     if (ui->screen == CP0_UI_APPS) {
+        if (ui->app_detail) {
+            enum cp0_ui_app_state state = cp0_ui_selected_app_state(ui);
+            if (action == CP0_UI_LEFT) {
+                ui->app_detail = false;
+            } else if (action == CP0_UI_ACCEPT &&
+                       state == CP0_UI_APP_RUNNING) {
+                return CP0_UI_EVENT_STOP_APP;
+            } else if (action == CP0_UI_ACCEPT &&
+                       (state == CP0_UI_APP_STOPPED ||
+                        state == CP0_UI_APP_FAILED)) {
+                return CP0_UI_EVENT_OPEN_APP;
+            }
+            return CP0_UI_EVENT_NONE;
+        }
         if (action == CP0_UI_UP && ui->app_selected > 0)
             ui->app_selected--;
         else if (action == CP0_UI_DOWN &&
@@ -1274,6 +1521,24 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             ui->app_selected++;
         else if (action == CP0_UI_ACCEPT && ui->app_count > 0)
             return CP0_UI_EVENT_OPEN_APP;
+        else if (action == CP0_UI_RIGHT && ui->app_count > 0)
+            ui->app_detail = true;
+        return CP0_UI_EVENT_NONE;
+    }
+
+    if (ui->screen == CP0_UI_DEVICE) {
+        if (action == CP0_UI_LEFT)
+            ui->device_page = 0;
+        else if (action == CP0_UI_RIGHT)
+            ui->device_page = 1;
+        return CP0_UI_EVENT_NONE;
+    }
+
+    if (ui->screen == CP0_UI_NETWORK) {
+        if (action == CP0_UI_LEFT)
+            ui->network_page = 0;
+        else if (action == CP0_UI_RIGHT)
+            ui->network_page = 1;
         return CP0_UI_EVENT_NONE;
     }
 
@@ -1305,11 +1570,17 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     if (ui->screen == CP0_UI_SETTINGS) {
         if (!ui->settings_available)
             return CP0_UI_EVENT_NONE;
-        if (action == CP0_UI_UP)
-            ui->settings_selected = 0;
-        else if (action == CP0_UI_DOWN)
-            ui->settings_selected = 1;
+        if (ui->settings_detail)
+            return CP0_UI_EVENT_NONE;
+        if (action == CP0_UI_UP && ui->settings_selected > 0)
+            ui->settings_selected--;
+        else if (action == CP0_UI_DOWN && ui->settings_selected < 2)
+            ui->settings_selected++;
         else if (action == CP0_UI_ACCEPT) {
+            if (ui->settings_selected == 2) {
+                ui->settings_detail = true;
+                return CP0_UI_EVENT_NONE;
+            }
             bool recovery = ui->settings_selected == 1;
             bool allowed = recovery ? ui->recovery_mode_allowed
                                     : ui->developer_mode_allowed;
@@ -1342,19 +1613,23 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         switch (ui->selected) {
         case 0:
             ui->screen = CP0_UI_APPS;
+            ui->app_detail = false;
             break;
         case 1:
             ui->screen = CP0_UI_STORE;
             break;
         case 2:
             ui->screen = CP0_UI_DEVICE;
+            ui->device_page = 0;
             break;
         case 3:
             ui->screen = CP0_UI_NETWORK;
+            ui->network_page = 0;
             break;
         default:
             ui->screen = CP0_UI_SETTINGS;
             ui->settings_selected = 0;
+            ui->settings_detail = false;
             break;
         }
     }

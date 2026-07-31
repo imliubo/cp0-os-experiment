@@ -3,10 +3,10 @@
 #include "cardputerzero-system-shell-client-protocol.h"
 #include "cp0_appd_client.h"
 #include "cp0_store_client.h"
+#include "cp0_system_info.h"
 #include "cp0_ui.h"
 #include "xdg-shell-client-protocol.h"
 
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input-event-codes.h>
@@ -183,6 +183,7 @@ static void poll_app_catalog(struct shell *shell)
             .immersive = list.apps[index].immersive,
             .app_id = list.apps[index].app_id,
             .name = list.apps[index].name,
+            .version = list.apps[index].version,
         };
     }
     cp0_ui_sync_app_catalog(&shell->ui, catalog, list.count, list.truncated);
@@ -407,63 +408,40 @@ static bool create_buffer(struct shell *shell, struct shell_buffer *buffer,
     return true;
 }
 
-static bool read_line(const char *path, char *value, size_t value_size)
-{
-    FILE *input = fopen(path, "r");
-    if (input == NULL)
-        return false;
-    bool ok = fgets(value, (int)value_size, input) != NULL;
-    fclose(input);
-    if (!ok)
-        return false;
-    value[strcspn(value, "\r\n")] = '\0';
-    return true;
-}
-
-static int read_battery_percent(void)
-{
-    DIR *directory = opendir("/sys/class/power_supply");
-    if (directory == NULL)
-        return -1;
-
-    int result = -1;
-    struct dirent *entry;
-    while ((entry = readdir(directory)) != NULL) {
-        if (entry->d_name[0] == '.')
-            continue;
-        char path[512];
-        char value[32];
-        snprintf(path, sizeof(path), "/sys/class/power_supply/%s/type",
-                 entry->d_name);
-        if (!read_line(path, value, sizeof(value)) ||
-            strcmp(value, "Battery") != 0)
-            continue;
-        snprintf(path, sizeof(path), "/sys/class/power_supply/%s/capacity",
-                 entry->d_name);
-        if (read_line(path, value, sizeof(value)))
-            result = (int)strtol(value, NULL, 10);
-        break;
-    }
-    closedir(directory);
-    return result;
-}
-
-static bool read_network_online(void)
-{
-    char state[32];
-    return read_line("/sys/class/net/wlan0/operstate", state, sizeof(state)) &&
-           strcmp(state, "up") == 0;
-}
-
 static void update_status(struct shell *shell)
 {
     char clock_text[6] = "--:--";
+    struct cp0_system_info info;
+    struct cp0_ui_device_info device;
+    struct cp0_ui_network_info network;
     time_t now = time(NULL);
     struct tm local_time;
     if (localtime_r(&now, &local_time) != NULL)
         strftime(clock_text, sizeof(clock_text), "%H:%M", &local_time);
-    cp0_ui_set_status(&shell->ui, clock_text, read_network_online(),
-                      read_battery_percent());
+    cp0_system_info_collect(&info);
+    device = (struct cp0_ui_device_info){
+        .available = info.device_available,
+        .battery_percent = info.battery_percent,
+        .temperature_millicelsius = info.temperature_millicelsius,
+        .uptime_seconds = info.uptime_seconds,
+        .memory_total_bytes = info.memory_total_bytes,
+        .memory_available_bytes = info.memory_available_bytes,
+        .storage_total_bytes = info.storage_total_bytes,
+        .storage_available_bytes = info.storage_available_bytes,
+        .model = info.model,
+        .os_version = info.os_version,
+    };
+    network = (struct cp0_ui_network_info){
+        .available = info.network_available,
+        .online = info.network_online,
+        .link_up = info.network_link_up,
+        .interface_name = info.network_interface,
+        .ipv4_address = info.network_ipv4,
+    };
+    cp0_ui_set_status(&shell->ui, clock_text, info.network_online,
+                      info.battery_percent);
+    cp0_ui_set_device_info(&shell->ui, &device);
+    cp0_ui_set_network_info(&shell->ui, &network);
 }
 
 static struct shell_buffer *next_buffer(struct shell *shell)

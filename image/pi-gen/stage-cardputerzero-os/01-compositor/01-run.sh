@@ -23,6 +23,9 @@ install -D -m 0644 \
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/cp0_store_client.h" \
     "${shell_source}/cp0_store_client.h"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/cp0_system_info.h" \
+    "${shell_source}/cp0_system_info.h"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/ui.c" \
     "${shell_source}/ui.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/json.c" \
@@ -31,6 +34,8 @@ install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/appd_client.c" \
     "${shell_source}/appd_client.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/store_client.c" \
     "${shell_source}/store_client.c"
+install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/system_info.c" \
+    "${shell_source}/system_info.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/main.c" \
     "${shell_source}/main.c"
 install -D -m 0644 \
@@ -154,6 +159,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     /tmp/cardputerzero-system-shell/json.c \
     /tmp/cardputerzero-system-shell/appd_client.c \
     /tmp/cardputerzero-system-shell/store_client.c \
+    /tmp/cardputerzero-system-shell/system_info.c \
     /tmp/cardputerzero-policy/cardputerzero-system-shell-protocol.c \
     /tmp/cardputerzero-weston-build/protocol/xdg-shell-protocol.c \
     \$(pkg-config --cflags --libs wayland-client) \

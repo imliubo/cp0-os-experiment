@@ -61,15 +61,20 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
         {.running = false,
          .immersive = false,
          .app_id = "dev.cardputerzero.first",
-         .name = "First Card"},
+         .name = "First Card",
+         .version = "1.2.3"},
         {.running = true,
          .immersive = true,
          .app_id = "dev.cardputerzero.second",
-         .name = "Second Card"},
+         .name = "Second Card",
+         .version = "2.0.0"},
     };
     cp0_ui_init(ui);
     cp0_ui_set_status(ui, "12:34", true, 73);
     write_snapshot(directory, "home", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    write_snapshot(directory, "apps-empty", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_BACK);
 
     static const struct cp0_ui_store_catalog_app store_apps[] = {
         {.package_bytes = 4096,
@@ -104,6 +109,9 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
     cp0_ui_handle_action(ui, CP0_UI_DOWN);
     write_snapshot(directory, "apps", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "app-detail", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_BACK);
 
     cp0_ui_handle_action(ui, CP0_UI_SHOW_TASKS);
     write_snapshot(directory, "tasks", ui, frame);
@@ -138,7 +146,62 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     cp0_ui_clear_documents(ui);
     cp0_ui_handle_action(ui, CP0_UI_GO_HOME);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    const struct cp0_ui_device_info device = {
+        .available = true,
+        .battery_percent = 73,
+        .temperature_millicelsius = 48750,
+        .uptime_seconds = 93784,
+        .memory_total_bytes = 512U * 1024U * 1024U,
+        .memory_available_bytes = 318U * 1024U * 1024U,
+        .storage_total_bytes = 16ULL * 1024U * 1024U * 1024U,
+        .storage_available_bytes = 11ULL * 1024U * 1024U * 1024U,
+        .model = "CARDPUTER ZERO",
+        .os_version = "CARDPUTERZERO OS 0.1",
+    };
+    cp0_ui_set_device_info(ui, &device);
+    write_snapshot(directory, "device", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "device-resources", ui, frame);
+    const struct cp0_ui_device_info unavailable_device = {
+        .battery_percent = -1,
+        .temperature_millicelsius = -1,
+        .model = "",
+        .os_version = "",
+    };
+    cp0_ui_set_device_info(ui, &unavailable_device);
+    write_snapshot(directory, "device-unavailable", ui, frame);
+    cp0_ui_set_device_info(ui, &device);
+
+    cp0_ui_handle_action(ui, CP0_UI_GO_HOME);
+    cp0_ui_handle_action(ui, CP0_UI_LEFT);
+    cp0_ui_handle_action(ui, CP0_UI_LEFT);
     cp0_ui_handle_action(ui, CP0_UI_DOWN);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    const struct cp0_ui_network_info network = {
+        .available = true,
+        .online = true,
+        .link_up = true,
+        .interface_name = "eth0",
+        .ipv4_address = "192.168.20.146",
+    };
+    cp0_ui_set_network_info(ui, &network);
+    write_snapshot(directory, "network", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "network-detail", ui, frame);
+    const struct cp0_ui_network_info offline_network = {
+        .available = true,
+        .interface_name = "eth0",
+        .ipv4_address = "",
+    };
+    cp0_ui_set_network_info(ui, &offline_network);
+    cp0_ui_handle_action(ui, CP0_UI_LEFT);
+    write_snapshot(directory, "network-offline", ui, frame);
+    cp0_ui_set_network_info(ui, &network);
+
+    cp0_ui_handle_action(ui, CP0_UI_GO_HOME);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
     cp0_ui_set_device_settings(
         ui, CP0_UI_AUTHORITY_ORGANIZATION, false, false, false, true,
@@ -147,6 +210,10 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     cp0_ui_handle_action(ui, CP0_UI_DOWN);
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
     write_snapshot(directory, "settings-confirm", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_BACK);
+    cp0_ui_handle_action(ui, CP0_UI_DOWN);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    write_snapshot(directory, "settings-policy", ui, frame);
 }
 
 int main(int argc, char **argv)
@@ -198,6 +265,12 @@ int main(int argc, char **argv)
     cp0_ui_handle_action(&ui, CP0_UI_LEFT);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_RECOVERY_ENABLE);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(ui.settings_selected == 2);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+    assert(ui.settings_detail);
+    cp0_ui_handle_action(&ui, CP0_UI_BACK);
+    assert(!ui.settings_detail && ui.screen == CP0_UI_SETTINGS);
 
     cp0_ui_handle_action(&ui, CP0_UI_SHOW_POWER);
     render(&ui, frame);
@@ -304,6 +377,12 @@ int main(int argc, char **argv)
            CP0_UI_EVENT_OPEN_APP);
     render(&ui, frame);
     assert(pixel(frame, 8, 60) == GREEN);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    assert(ui.app_detail);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STOP_APP);
+    cp0_ui_handle_action(&ui, CP0_UI_BACK);
+    assert(!ui.app_detail && ui.screen == CP0_UI_APPS);
     cp0_ui_remove_app(&ui, 42);
     assert(ui.app_count == 2);
     assert(cp0_ui_selected_app_token(&ui) == 0);

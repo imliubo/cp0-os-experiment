@@ -10,6 +10,7 @@
 #define CP0_UI_MAX_APPS 32
 #define CP0_UI_APP_ID_MAX 128
 #define CP0_UI_APP_NAME_MAX 128
+#define CP0_UI_APP_VERSION_MAX 64
 #define CP0_UI_PROMPT_APP_NAME_MAX 32
 #define CP0_UI_PROMPT_PERMISSION_MAX 31
 #define CP0_UI_PROMPT_REASON_MAX 160
@@ -99,6 +100,7 @@ struct cp0_ui_catalog_app {
     bool immersive;
     const char *app_id;
     const char *name;
+    const char *version;
 };
 
 struct cp0_ui_app {
@@ -108,6 +110,28 @@ struct cp0_ui_app {
     enum cp0_ui_app_state state;
     char app_id[CP0_UI_APP_ID_MAX + 1];
     char name[CP0_UI_APP_NAME_MAX + 1];
+    char version[CP0_UI_APP_VERSION_MAX + 1];
+};
+
+struct cp0_ui_device_info {
+    bool available;
+    int battery_percent;
+    int temperature_millicelsius;
+    uint64_t uptime_seconds;
+    uint64_t memory_total_bytes;
+    uint64_t memory_available_bytes;
+    uint64_t storage_total_bytes;
+    uint64_t storage_available_bytes;
+    const char *model;
+    const char *os_version;
+};
+
+struct cp0_ui_network_info {
+    bool available;
+    bool online;
+    bool link_up;
+    const char *interface_name;
+    const char *ipv4_address;
 };
 
 struct cp0_ui_store_catalog_app {
@@ -154,10 +178,14 @@ struct cp0_ui {
     unsigned int store_count;
     unsigned int task_action_selected;
     unsigned int settings_selected;
+    unsigned int device_page;
+    unsigned int network_page;
     bool app_list_truncated;
     bool store_list_truncated;
     bool store_catalog_stale;
     bool store_detail;
+    bool app_detail;
+    bool settings_detail;
     enum cp0_ui_store_status store_status;
     unsigned int dialog_selected;
     bool power_dialog;
@@ -177,6 +205,19 @@ struct cp0_ui {
     bool notification_banner;
     bool network_online;
     int battery_percent;
+    bool device_available;
+    int temperature_millicelsius;
+    uint64_t uptime_seconds;
+    uint64_t memory_total_bytes;
+    uint64_t memory_available_bytes;
+    uint64_t storage_total_bytes;
+    uint64_t storage_available_bytes;
+    char device_model[33];
+    char os_version[33];
+    bool network_available;
+    bool network_link_up;
+    char network_interface[17];
+    char network_ipv4[16];
     char clock_text[6];
     uint64_t prompt_id;
     unsigned int prompt_selected;
@@ -199,6 +240,10 @@ struct cp0_ui {
 void cp0_ui_init(struct cp0_ui *ui);
 void cp0_ui_set_status(struct cp0_ui *ui, const char *clock_text,
                        bool network_online, int battery_percent);
+void cp0_ui_set_device_info(struct cp0_ui *ui,
+                            const struct cp0_ui_device_info *info);
+void cp0_ui_set_network_info(struct cp0_ui *ui,
+                             const struct cp0_ui_network_info *info);
 void cp0_ui_set_device_settings(
     struct cp0_ui *ui, enum cp0_ui_authority authority,
     bool developer_mode, bool developer_mode_allowed, bool recovery_mode,
