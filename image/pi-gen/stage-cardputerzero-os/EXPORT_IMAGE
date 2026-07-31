@@ -1,9 +1,11 @@
 IMAGE_PROFILE=$(cat "${EXPORT_DIR}/image-profile")
-case "$IMAGE_PROFILE" in
-    product) IMG_SUFFIX="-cp0-os-dev" ;;
-    recovery) IMG_SUFFIX="-cp0-os-recovery" ;;
+ACCESS_PROFILE=$(cat "${EXPORT_DIR}/access-profile")
+case "$IMAGE_PROFILE:$ACCESS_PROFILE" in
+    product:development) IMG_SUFFIX="-cp0-os-dev" ;;
+    product:production) IMG_SUFFIX="-cp0-os-production" ;;
+    recovery:development) IMG_SUFFIX="-cp0-os-recovery" ;;
     *)
-        echo "error: invalid CardputerZero image profile: $IMAGE_PROFILE" >&2
+        echo "error: invalid CardputerZero image/access profile: $IMAGE_PROFILE/$ACCESS_PROFILE" >&2
         return 1
         ;;
 esac

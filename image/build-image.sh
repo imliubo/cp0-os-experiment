@@ -13,6 +13,7 @@ apt_proxy=${CP0_APT_PROXY:-${http_proxy:-}}
 resume_build=${CP0_RESUME_BUILD:-0}
 image_name=${CP0_IMAGE_NAME:-}
 image_profile=${CP0_IMAGE_PROFILE:-product}
+access_profile=${CP0_ACCESS_PROFILE:-development}
 
 case "$image_profile" in
     product | recovery) ;;
@@ -22,13 +23,36 @@ case "$image_profile" in
         ;;
 esac
 
+case "$access_profile" in
+    development | production) ;;
+    *)
+        echo "error: CP0_ACCESS_PROFILE must be development or production" >&2
+        exit 2
+        ;;
+esac
+if [[ $image_profile == recovery && $access_profile != development ]]; then
+    echo "error: recovery images require the development access profile" >&2
+    exit 2
+fi
+
 if [[ $(uname -s) == Darwin && -n "$apt_proxy" ]]; then
     apt_proxy=${apt_proxy/127.0.0.1/host.docker.internal}
     apt_proxy=${apt_proxy/localhost/host.docker.internal}
 fi
 
-if [[ -z "$password" ]]; then
-    echo "error: CP0_FIRST_USER_PASSWORD is required for the development image" >&2
+if [[ $access_profile == production ]]; then
+    if [[ -n $password ]]; then
+        echo "error: production images reject CP0_FIRST_USER_PASSWORD" >&2
+        exit 2
+    fi
+    if [[ -n ${CP0_SSH_PUBLIC_KEY:-} ]]; then
+        echo "error: production images reject CP0_SSH_PUBLIC_KEY" >&2
+        exit 2
+    fi
+    command -v openssl >/dev/null
+    password=$(openssl rand -hex 32)
+elif [[ -z $password ]]; then
+    echo "error: CP0_FIRST_USER_PASSWORD is required for the development access profile" >&2
     exit 1
 fi
 
@@ -77,6 +101,8 @@ cp -R "$repo_root/image/pi-gen/stage-cardputerzero-os" \
     "$pi_gen_dir/stage-cardputerzero-os"
 printf '%s\n' "$image_profile" \
     >"$pi_gen_dir/stage-cardputerzero-os/image-profile"
+printf '%s\n' "$access_profile" \
+    >"$pi_gen_dir/stage-cardputerzero-os/access-profile"
 mkdir -p "$pi_gen_dir/stage-cardputerzero-os/01-compositor/system-shell"
 cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$repo_root/system-shell/include/cp0_json.h" \
@@ -117,6 +143,7 @@ cp "$repo_root/appd/systemd/"* "$platform_payload/systemd/"
 cp "$repo_root/appd/lora.conf" "$platform_payload/"
 cp "$repo_root/appd/store.conf" "$platform_payload/"
 cp "$repo_root/appd/device-policy.json" "$platform_payload/"
+cp "$repo_root/appd/device-policy-production.json" "$platform_payload/"
 if [[ -n ${CP0_STORE_PUBLIC_KEY:-} ]]; then
     if [[ $image_profile == recovery ]]; then
         echo "error: a recovery image cannot embed a Store trust key" >&2

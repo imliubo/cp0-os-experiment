@@ -3,6 +3,7 @@
 check: fmt
 	jq empty schemas/app-manifest-v1.schema.json schemas/store-review-v1.schema.json \
 		schemas/device-policy-v1.schema.json appd/device-policy.json \
+		appd/device-policy-production.json \
 		examples/hello-card/app.json \
 		examples/device-capability-probe/app.json \
 		examples/storage-isolation-probe/app.json \
@@ -18,6 +19,7 @@ check: fmt
 	./tests/test-image-profile.sh
 	./tests/test-overlay-root-profile.sh
 	./tests/test-recovery-image-profile.sh
+	./tests/test-production-access-profile.sh
 	./tests/test-recovery-data.sh
 	./tests/test-compositor-profile.sh
 	./tests/test-system-shell-ui.sh

@@ -154,6 +154,10 @@ Shell 和其他应用数据。
   的条件式架构评估；当前开发镜像不宣称 verified boot。
 - [x] 为 manifest、`.capp`、Store、appd 控制帧和恢复备份建立 libFuzzer/ASan 入口、
   有界本地 smoke 和定期 CI。
+- [x] 增加独立 production access profile：拒绝共享密码和 SSH key，锁定维护账户、
+  SSH/getty 与产品内开发/恢复模式，并以独立 recovery SD 作为物理维护入口。
+- [ ] 在可擦写介质上启动 production access 候选，确认 System Shell 正常且 SSH、
+  tty 登录、sudo 与产品内恢复入口全部不可用。
 - [ ] 在备用硬件/可擦写 SD 上实现并验证 A/B、verity、签名启动元数据、故障注入和
   自动回滚；不得在唯一 V0.6 设备上写入不可逆 OTP 状态。
 - [ ] 委托第三方安全评审，跟踪并关闭或由产品负责人明确接受全部发现。

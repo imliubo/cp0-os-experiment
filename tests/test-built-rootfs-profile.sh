@@ -16,6 +16,18 @@ case "$image_profile" in
         exit 1
         ;;
 esac
+access_profile=$(cat "$rootfs/etc/cardputerzero/access-profile" 2>/dev/null || true)
+case "$access_profile" in
+    development | production) ;;
+    *)
+        echo "error: missing or invalid access profile: ${access_profile:-missing}" >&2
+        exit 1
+        ;;
+esac
+if [[ $image_profile == recovery && $access_profile != development ]]; then
+    echo "error: recovery image has production access profile" >&2
+    exit 1
+fi
 
 required_executables=(
     usr/bin/cardputerzero-system-shell
@@ -75,10 +87,14 @@ done
 
 enabled_units=(
     multi-user.target.wants/cardputerzero-console-banner.service
-    multi-user.target.wants/ssh.service
-    ssh.service.requires/cardputerzero-ssh-prepare.service
-    sysinit.target.wants/regenerate_ssh_host_keys.service
 )
+if [[ $access_profile == development ]]; then
+    enabled_units+=(
+        multi-user.target.wants/ssh.service
+        ssh.service.requires/cardputerzero-ssh-prepare.service
+        sysinit.target.wants/regenerate_ssh_host_keys.service
+    )
+fi
 if [[ $image_profile == product ]]; then
     enabled_units+=(
         multi-user.target.wants/cardputerzero-overlay-root-status.service
@@ -101,6 +117,42 @@ for path in "${enabled_units[@]}"; do
         exit 1
     fi
 done
+if [[ $access_profile == production ]]; then
+    for unit in ssh.service ssh.socket ssh@.service sshd.service sshd@.service \
+        cardputerzero-ssh-prepare.service regenerate_ssh_host_keys.service \
+        getty@.service getty@tty1.service serial-getty@.service \
+        serial-getty@serial0.service cardputerzero-recovery-console.service; do
+        mask="$rootfs/etc/systemd/system/$unit"
+        if [[ ! -L $mask || $(readlink "$mask") != /dev/null ]]; then
+            echo "error: production access unit is not masked: $unit" >&2
+            exit 1
+        fi
+    done
+    first_user_shadow=$(awk -F: '$1 == "pi" { print $2 }' "$rootfs/etc/shadow")
+    first_user_shell=$(awk -F: '$1 == "pi" { print $7 }' "$rootfs/etc/passwd")
+    if [[ $first_user_shadow != \!* || $first_user_shell != /usr/sbin/nologin ]]; then
+        echo "error: production operator account is not locked" >&2
+        exit 1
+    fi
+    first_user_groups=$(chroot "$rootfs" /usr/bin/id -nG pi)
+    for privileged_group in sudo adm dialout audio video input gpio spi i2c \
+        netdev render; do
+        if grep -qw "$privileged_group" <<<"$first_user_groups"; then
+            echo "error: production operator retains group: $privileged_group" >&2
+            exit 1
+        fi
+    done
+    if [[ -e $rootfs/home/pi/.ssh ]]; then
+        echo "error: production operator has an SSH directory" >&2
+        exit 1
+    fi
+    chroot "$rootfs" /usr/bin/jq -e \
+        '.developer_mode_allowed == false and .recovery_mode_allowed == false' \
+        /etc/cardputerzero/device-policy.json >/dev/null
+elif [[ ! -L $rootfs/etc/systemd/system/multi-user.target.wants/ssh.service ]]; then
+    echo "error: development access does not enable SSH" >&2
+    exit 1
+fi
 machine_id_commit_mask="$rootfs/etc/systemd/system/systemd-machine-id-commit.service"
 if [[ $image_profile == product ]]; then
     if [[ ! -L $machine_id_commit_mask ||
@@ -252,6 +304,8 @@ fi
 grep -qx 'cp0-data-layout-v1' "$data_root/layout-version"
 grep -qx "$image_profile" \
     "$data_root/etc-cardputerzero/image-profile"
+grep -qx "$access_profile" \
+    "$data_root/etc-cardputerzero/access-profile"
 for path in cardputerzero etc-cardputerzero network-connections \
     network-state ssh; do
     if [[ ! -d $data_root/$path || -L $data_root/$path ]]; then

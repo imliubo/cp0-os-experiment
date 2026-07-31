@@ -75,9 +75,10 @@ development image passes functional tests:
 
 1. Any artifact named or configured as development may contain an operator-set
    password and enabled SSH. It must not be redistributed as a production
-   image. A production provisioning design must use per-device credentials or
-   a physical onboarding ceremony and must define how maintenance access is
-   revoked.
+   image. The production access profile instead locks all product login paths
+   and uses a separate operator-provisioned recovery SD as the physical
+   maintenance ceremony; removing that media revokes maintenance access. Its
+   final hardware acceptance remains a release gate.
 2. The mutable FAT boot partition and unsigned root hash mean the current image
    cannot resist physical SD modification. The verified-update decision and
    limitations are in ADR 0006.

@@ -3,10 +3,18 @@
 payload="${STAGE_DIR}/02-app-platform/payload"
 hello_root="${ROOTFS_DIR}/var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0"
 image_profile=$(cat "${STAGE_DIR}/image-profile")
+access_profile=$(cat "${STAGE_DIR}/access-profile")
 case "$image_profile" in
     product | recovery) ;;
     *)
         echo "error: invalid CardputerZero image profile: $image_profile" >&2
+        exit 1
+        ;;
+esac
+case "$access_profile" in
+    development | production) ;;
+    *)
+        echo "error: invalid CardputerZero access profile: $access_profile" >&2
         exit 1
         ;;
 esac
@@ -97,7 +105,12 @@ install -D -o root -g root -m 0644 "${payload}/lora.conf" \
     "${ROOTFS_DIR}/etc/cardputerzero/lora.conf"
 install -D -o root -g root -m 0644 "${payload}/store.conf" \
     "${ROOTFS_DIR}/etc/cardputerzero/store.conf"
-install -D -o root -g root -m 0644 "${payload}/device-policy.json" \
+if [[ $access_profile == production ]]; then
+    device_policy="${payload}/device-policy-production.json"
+else
+    device_policy="${payload}/device-policy.json"
+fi
+install -D -o root -g root -m 0644 "$device_policy" \
     "${ROOTFS_DIR}/etc/cardputerzero/device-policy.json"
 install -D -m 0755 "${payload}/diagnostics/device-core-recovery.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-core-recovery"

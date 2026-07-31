@@ -91,6 +91,8 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
   以及 dm-verity、RAUC A/B、U-Boot/FIT 与硬件信任根的条件式架构决策。
 - Phase 6F 资源与性能门禁：应用 60% CPU quota、Runtime 30 FPS 上限，以及只写
   RAM 的启动、空闲资源、短时 SD 写入和电池遥测验收报告。
+- Phase 6G 量产访问 profile：量产镜像拒绝共享密码/SSH key，锁定本地维护账户和
+  SSH/tty 入口，并把独立 recovery SD 作为可撤销的物理维护仪式。
 
 ## 快速验证
 
@@ -103,6 +105,13 @@ make check
 
 ```sh
 CP0_FIRST_USER_PASSWORD='development-password' make image
+make verify-image
+```
+
+构建无共享登录入口的量产候选不传密码或 SSH key：
+
+```sh
+CP0_ACCESS_PROFILE=production make image
 make verify-image
 ```
 
@@ -169,3 +178,5 @@ Rust SDK 公共 API 和真机迁移结果见
 [Phase 6E security validation](docs/PHASE6E-SECURITY-VALIDATION.md)。
 资源上限、30 FPS 强制和真机性能报告见
 [Phase 6F resource and performance acceptance](docs/PHASE6F-RESOURCE-PERFORMANCE.md)。
+量产镜像的账户锁定、SSH/tty 门禁和独立恢复介质维护流程见
+[Phase 6G production access profile](docs/PHASE6G-PRODUCTION-ACCESS.md)。

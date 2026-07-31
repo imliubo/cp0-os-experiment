@@ -1,6 +1,7 @@
 #!/bin/bash -e
 
 image_profile=$(cat "${STAGE_DIR}/image-profile")
+access_profile=$(cat "${STAGE_DIR}/access-profile")
 case "$image_profile" in
     product | recovery) ;;
     *)
@@ -8,6 +9,17 @@ case "$image_profile" in
         exit 1
         ;;
 esac
+case "$access_profile" in
+    development | production) ;;
+    *)
+        echo "error: invalid CardputerZero access profile: $access_profile" >&2
+        exit 1
+        ;;
+esac
+if [[ $image_profile == recovery && $access_profile != development ]]; then
+    echo "error: recovery image requires development access" >&2
+    exit 1
+fi
 
 BSP_REPOSITORY="https://github.com/m5stack/m5stack-linux-dtoverlays.git"
 BSP_COMMIT="c3b254819307c177a34100b66fe19e52059ce8c4"
@@ -141,6 +153,9 @@ install -d -o root -g root -m 0755 \
 printf '%s\n' "$image_profile" \
     >"${ROOTFS_DIR}/etc/cardputerzero/image-profile"
 chmod 0644 "${ROOTFS_DIR}/etc/cardputerzero/image-profile"
+printf '%s\n' "$access_profile" \
+    >"${ROOTFS_DIR}/etc/cardputerzero/access-profile"
+chmod 0644 "${ROOTFS_DIR}/etc/cardputerzero/access-profile"
 
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/device-smoke.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-smoke.sh"
@@ -252,10 +267,9 @@ rm -f /etc/systemd/system/fb_load.service
 systemctl mask apt-daily.service apt-daily.timer \
     apt-daily-upgrade.service apt-daily-upgrade.timer \
     fb_load.service 2>/dev/null || true
-systemctl enable NetworkManager.service ssh.service apparmor.service \
+systemctl enable NetworkManager.service apparmor.service \
     cardputerzero-console-banner.service \
-    cardputerzero-overlay-root-status.service \
-    cardputerzero-ssh-prepare.service
+    cardputerzero-overlay-root-status.service
 systemctl set-default multi-user.target
 for module in \
     overlay gpio-forwarder panel-mipi-dbi-m pwm_bl_m5stack st7789v_m5stack \
@@ -298,3 +312,27 @@ rm -f /var/lib/systemd/random-seed
 rm -f /etc/ssh/ssh_host_*_key*
 apt-get clean
 CHROOT
+
+if [[ $access_profile == development ]]; then
+    on_chroot <<'CHROOT'
+set -e
+systemctl enable ssh.service cardputerzero-ssh-prepare.service
+CHROOT
+else
+    on_chroot <<'CHROOT'
+set -e
+usermod --lock "$FIRST_USER_NAME"
+usermod --shell /usr/sbin/nologin "$FIRST_USER_NAME"
+usermod --groups users "$FIRST_USER_NAME"
+rm -rf "/home/$FIRST_USER_NAME/.ssh"
+systemctl disable ssh.service ssh.socket ssh@.service sshd.service \
+    sshd@.service cardputerzero-ssh-prepare.service \
+    regenerate_ssh_host_keys.service getty@tty1.service \
+    serial-getty@serial0.service 2>/dev/null || true
+systemctl mask --force ssh.service ssh.socket ssh@.service sshd.service \
+    sshd@.service cardputerzero-ssh-prepare.service \
+    regenerate_ssh_host_keys.service getty@.service getty@tty1.service \
+    serial-getty@.service serial-getty@serial0.service \
+    cardputerzero-recovery-console.service
+CHROOT
+fi
