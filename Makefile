@@ -1,7 +1,8 @@
 .PHONY: check test fmt fuzz-check fuzz-smoke compositor app-runtime appd example-app malicious-apps image verify-image
 
 check: fmt
-	jq empty schemas/app-manifest-v1.schema.json schemas/store-review-v1.schema.json \
+	jq empty schemas/app-manifest-v1.schema.json schemas/os-release-v1.schema.json \
+		schemas/store-review-v1.schema.json \
 		schemas/device-policy-v1.schema.json appd/device-policy.json \
 		appd/device-policy-production.json \
 		examples/hello-card/app.json \
@@ -20,6 +21,7 @@ check: fmt
 	./tests/test-overlay-root-profile.sh
 	./tests/test-recovery-image-profile.sh
 	./tests/test-production-access-profile.sh
+	./tests/test-os-update-profile.sh
 	./tests/test-recovery-data.sh
 	./tests/test-compositor-profile.sh
 	./tests/test-system-shell-ui.sh

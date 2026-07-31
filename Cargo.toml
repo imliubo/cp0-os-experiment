@@ -12,6 +12,7 @@ members = [
     "crates/cp0-manifest",
     "crates/cp0-network-protocol",
     "crates/cp0-networkd",
+    "crates/cp0-os-update",
     "crates/cp0-package",
     "crates/cp0-radio-protocol",
     "crates/cp0-radiod",

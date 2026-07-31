@@ -245,7 +245,10 @@ LCD 启动摘要、网络和 SSH。恢复启动不会自动扩容、挂载或绑
 的 SSH/显式密码也不是量产身份方案。`production` access profile 因而拒绝外部密码
 和 SSH key，锁定产品内账户、SSH/getty、Developer Mode 与 Recovery Boot；管理员只
 能通过独立、显式插入的 recovery SD 维护，移除介质即撤销访问。未来 OS 更新采用独立
-签名根、A/B boot/root、dm-verity 和健康确认后提交，且只有在更早的不可变阶段能够
-认证 U-Boot/FIT 时才形成可验证启动链；详见
+签名根、A/B boot/root、dm-verity 和健康确认后提交。Phase 6H 已实现不接入启动链的
+发布策略、verity 产物校验和三次失败回滚状态机；启动前必须先把递减后的双副本状态
+持久化，启动后只有 compositor、appd 和 `cp0-data` 都健康才能确认新槽。校验和只能
+检测撕裂写入，只有在更早的不可变阶段能够认证 U-Boot/FIT 时才形成可验证启动链；详见
 `docs/PHASE6G-PRODUCTION-ACCESS.md` 与
+`docs/PHASE6H-VERIFIED-UPDATE-GROUNDWORK.md` 以及
 `docs/adr/0006-verified-updates-and-rollback.md`。

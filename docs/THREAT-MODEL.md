@@ -100,6 +100,12 @@ development image passes functional tests:
 - The scheduled fuzz workflow preserves any crash corpus as a CI artifact.
 - Image release requires both the compressed-image checksum gate and the
   mounted rootfs/initramfs profile gate.
+- `cp0-os-update` tests the monotonic release policy, persist-before-boot
+  state transition, three-attempt fallback, redundant-record selection and
+  100 interrupted update cycles. `verify-os-release-artifacts.sh` binds
+  rootfs, verity tree and FIT bytes to authenticated metadata and invokes
+  `veritysetup verify`; neither mechanism authenticates RAUC CMS or FIT by
+  itself.
 - Hardware acceptance results are evidence only when their full run directory,
   duration, failure count and restart/memory/SD-write summaries are retained.
 

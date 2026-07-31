@@ -93,6 +93,9 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
   RAM 的启动、空闲资源、短时 SD 写入和电池遥测验收报告。
 - Phase 6G 量产访问 profile：量产镜像拒绝共享密码/SSH key，锁定本地维护账户和
   SSH/tty 入口，并把独立 recovery SD 作为可撤销的物理维护仪式。
+- Phase 6H verified-update 基础：严格的 OS 发布元数据策略、dm-verity 产物离线
+  验证、双副本启动状态、三次待确认启动和 100 轮断电回滚模型；当前镜像仍未启用
+  updater 或可信启动。
 
 ## 快速验证
 
@@ -180,3 +183,5 @@ Rust SDK 公共 API 和真机迁移结果见
 [Phase 6F resource and performance acceptance](docs/PHASE6F-RESOURCE-PERFORMANCE.md)。
 量产镜像的账户锁定、SSH/tty 门禁和独立恢复介质维护流程见
 [Phase 6G production access profile](docs/PHASE6G-PRODUCTION-ACCESS.md)。
+签名 A/B、dm-verity 产物与断电回滚的离线实现边界见
+[Phase 6H verified-update groundwork](docs/PHASE6H-VERIFIED-UPDATE-GROUNDWORK.md)。
