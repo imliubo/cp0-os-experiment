@@ -70,9 +70,11 @@ cargo run -p cp0ctl -- run examples/camera \
   --permissions allow --keys enter --output /tmp/camera.ppm
 ```
 
-The simulator records submitted frames, capability calls, input count, linear
-memory and timing in the JSON profile. It is a deterministic SDK test harness,
-not a security substitute for the device namespace, seccomp and cgroup tests.
+The simulator records submitted frames, capability calls, input count, private
+storage bytes/keys, linear memory and timing in the JSON profile. Its private
+storage fixture enforces the manifest byte quota, 256-key limit and missing-key
+semantics. It is a deterministic SDK test harness, not a security substitute
+for the device namespace, seccomp and cgroup tests.
 
 ## Package, sign and install
 

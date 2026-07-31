@@ -73,4 +73,6 @@ Automated coverage includes:
 
 Hello Card binds `G` to read and invert only `grove-function`. The power lines
 are never changed by the example. Physical read/write and denial acceptance is
-deferred until the active 24-hour compositor/Shell/appd stability run ends.
+automated through the real-identity probe in
+`PHASE3M-DEVICE-CAPABILITY-ACCEPTANCE.md`, but execution remains deferred until
+the active 24-hour compositor/Shell/appd stability run ends.

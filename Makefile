@@ -3,7 +3,9 @@
 check: fmt
 	jq empty schemas/app-manifest-v1.schema.json schemas/store-review-v1.schema.json \
 		schemas/device-policy-v1.schema.json appd/device-policy.json \
-		examples/hello-card/app.json
+		examples/hello-card/app.json \
+		examples/device-capability-probe/app.json \
+		examples/storage-isolation-probe/app.json
 	bash -n scripts/*.sh tests/*.sh image/build-image.sh \
 		image/pi-gen/export-image-prerun.sh \
 		image/pi-gen/stage-cardputerzero-os/prerun.sh \
@@ -25,6 +27,7 @@ check: fmt
 	./tests/test-simulator.sh
 	./tests/test-runtime-display.sh
 	./tests/test-device-diagnostics.sh
+	./tests/test-device-capability-acceptance.sh
 	./tests/test-device-deployment.sh
 	./tests/test-malicious-apps.sh
 	./tests/test-security-validation.sh

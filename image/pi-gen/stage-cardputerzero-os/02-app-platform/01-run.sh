@@ -101,6 +101,8 @@ install -D -o root -g root -m 0644 "${payload}/device-policy.json" \
     "${ROOTFS_DIR}/etc/cardputerzero/device-policy.json"
 install -D -m 0755 "${payload}/diagnostics/device-core-recovery.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-core-recovery"
+install -D -m 0755 "${payload}/diagnostics/device-capability-acceptance.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-capability-acceptance"
 install -D -m 0755 "${payload}/diagnostics/device-factory-acceptance.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-factory-acceptance"
 install -D -m 0755 "${payload}/diagnostics/device-recovery-data.sh" \

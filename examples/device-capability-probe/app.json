@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "dev.cardputerzero.acceptance",
+  "name": "Device Acceptance",
+  "version": "0.1.0",
+  "sdk_version": "1.0",
+  "runtime": "wamr",
+  "entrypoint": "bin/device_capability_probe.wasm",
+  "display": "standard",
+  "resources": {
+    "memory_mb": 16,
+    "storage_mb": 1
+  },
+  "permissions": [
+    {
+      "name": "audio.playback",
+      "reason": "Play the bounded hardware acceptance tone"
+    },
+    {
+      "name": "audio.capture",
+      "reason": "Capture a bounded microphone acceptance sample"
+    },
+    {
+      "name": "hardware.gpio",
+      "reason": "Toggle and restore the logical Grove test output"
+    },
+    {
+      "name": "notifications.post",
+      "reason": "Return machine-readable acceptance results"
+    }
+  ],
+  "intents": []
+}

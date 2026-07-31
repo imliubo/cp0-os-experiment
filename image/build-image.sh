@@ -130,6 +130,7 @@ if [[ -n ${CP0_STORE_PUBLIC_KEY:-} ]]; then
     cp "$CP0_STORE_PUBLIC_KEY" "$platform_payload/trust/store/$store_key_id.pub"
 fi
 cp "$repo_root/scripts/device-core-recovery.sh" \
+    "$repo_root/scripts/device-capability-acceptance.sh" \
     "$repo_root/scripts/device-factory-acceptance.sh" \
     "$repo_root/scripts/device-recovery-data.sh" \
     "$repo_root/scripts/device-stability-monitor.sh" \

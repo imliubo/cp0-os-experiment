@@ -64,6 +64,7 @@ install -m 0755 \
     "$release/cp0ctl" \
     "$repo_root/scripts/device-install-compositor.sh" \
     "$repo_root/scripts/device-install-app-platform.sh" \
+    "$repo_root/scripts/device-capability-acceptance.sh" \
     "$repo_root/scripts/device-core-recovery.sh" \
     "$repo_root/scripts/device-stability-monitor.sh" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-generator" \

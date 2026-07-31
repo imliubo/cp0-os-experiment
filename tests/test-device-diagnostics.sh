@@ -5,11 +5,12 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 recovery="$repo_root/scripts/device-core-recovery.sh"
 monitor="$repo_root/scripts/device-stability-monitor.sh"
 factory="$repo_root/scripts/device-factory-acceptance.sh"
+capability="$repo_root/scripts/device-capability-acceptance.sh"
 support="$repo_root/scripts/device-support-bundle.sh"
 build="$repo_root/image/build-image.sh"
 stage="$repo_root/image/pi-gen/stage-cardputerzero-os/02-app-platform/01-run.sh"
 
-bash -n "$recovery" "$monitor" "$factory" "$support"
+bash -n "$recovery" "$monitor" "$factory" "$capability" "$support"
 grep -q 'stop the foreground application before recovery testing' "$recovery"
 grep -q 'systemctl kill --kill-whom=main --signal=KILL' "$recovery"
 grep -q 'cardputerzero-compositor.service' "$recovery"
@@ -59,6 +60,17 @@ if grep -Eq '(^|[[:space:]])(dd|mkfs|mount|umount|reboot|poweroff)([[:space:]]|$
     echo "error: factory acceptance contains a destructive or mount-mutating command" >&2
     exit 1
 fi
+
+grep -q 'result_root=/run/cardputerzero-capability' "$capability"
+grep -q 'cardputerzero-stability-acceptance.service' "$capability"
+grep -q -- '--persistence-only' "$capability"
+grep -q 'CP0_AUDIO_OBSERVED' "$capability"
+grep -q '/proc/sys/kernel/random/boot_id' "$capability"
+if grep -Eq '(^|[[:space:]])(dd|mkfs|mount|umount|reboot|poweroff)([[:space:]]|$)' \
+    "$capability"; then
+    echo "error: capability acceptance contains a destructive or boot-mutating command" >&2
+    exit 1
+fi
 if grep -Eq '(^|[[:space:]])rm([[:space:]]|$)' "$factory"; then
     echo "error: factory acceptance must never delete result data" >&2
     exit 1
@@ -84,10 +96,12 @@ if grep -Eq 'curl|wget|scp|rsync|nc[[:space:]]|socat' "$support"; then
 fi
 
 grep -q 'device-core-recovery.sh' "$build"
+grep -q 'device-capability-acceptance.sh' "$build"
 grep -q 'device-factory-acceptance.sh' "$build"
 grep -q 'device-stability-monitor.sh' "$build"
 grep -q 'device-support-bundle.sh' "$build"
 grep -q '/usr/libexec/cardputerzero/device-core-recovery' "$stage"
+grep -q '/usr/libexec/cardputerzero/device-capability-acceptance' "$stage"
 grep -q '/usr/libexec/cardputerzero/device-factory-acceptance' "$stage"
 grep -q '/usr/libexec/cardputerzero/device-stability-monitor' "$stage"
 grep -q '/usr/libexec/cardputerzero/device-support-bundle' "$stage"

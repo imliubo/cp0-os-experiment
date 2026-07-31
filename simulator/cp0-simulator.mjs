@@ -94,6 +94,8 @@ async function runApplication() {
   const permissions = new Set((manifest.permissions || []).map((request) => request.name));
   const keyQueue = [...keys];
   const storage = new Map();
+  const storageQuota = Number(manifest.resources.storage_mb) * 1024 * 1024;
+  let storageBytes = 0;
   const gpio = [false, false, false, false];
   const document = new TextEncoder().encode("CardputerZero simulator document\n");
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
@@ -130,6 +132,8 @@ async function runApplication() {
 
   function snapshot(frame = null) {
     metrics.memory_pages = memory().buffer.byteLength / 65536;
+    metrics.storage_bytes = storageBytes;
+    metrics.storage_keys = storage.size;
     if (frame) {
       parentPort.postMessage({ type: "frame", frame, metrics: structuredClone(metrics) }, [frame]);
     }
@@ -266,20 +270,32 @@ async function runApplication() {
     },
     cp0_storage_put(keyPointer, keyLength, valuePointer, valueLength) {
       metrics.host_calls += 1;
-      storage.set(text(keyPointer, keyLength), range(valuePointer, valueLength).slice());
+      const key = text(keyPointer, keyLength);
+      const value = range(valuePointer, valueLength).slice();
+      const existing = storage.get(key);
+      if (!existing && storage.size >= 256) return ERROR_LIMIT;
+      const projected = storageBytes - (existing?.length || 0) + value.length;
+      if (projected > storageQuota) return ERROR_LIMIT;
+      storage.set(key, value);
+      storageBytes = projected;
       return 0;
     },
     cp0_storage_get(keyPointer, keyLength, valuePointer, valueCapacity) {
       metrics.host_calls += 1;
       const value = storage.get(text(keyPointer, keyLength));
-      if (!value) return -2;
+      if (!value) return 0;
       if (value.length > (valueCapacity >>> 0)) return ERROR_LIMIT;
       range(valuePointer, valueCapacity).set(value);
       return value.length;
     },
     cp0_storage_delete(keyPointer, keyLength) {
       metrics.host_calls += 1;
-      return Number(storage.delete(text(keyPointer, keyLength)));
+      const key = text(keyPointer, keyLength);
+      const value = storage.get(key);
+      if (!value) return 0;
+      storage.delete(key);
+      storageBytes -= value.length;
+      return 1;
     },
     cp0_intent_send(actionPointer, actionLength, payloadPointer, payloadLength) {
       metrics.host_calls += 1;
@@ -310,6 +326,8 @@ function emptyMetrics() {
     key_events: 0,
     host_calls: 0,
     memory_pages: 0,
+    storage_bytes: 0,
+    storage_keys: 0,
     capability_calls: {},
   };
 }
@@ -319,7 +337,7 @@ function parseArguments(arguments_) {
   for (let index = 0; index < arguments_.length; index += 1) {
     const name = arguments_[index];
     const value = arguments_[++index];
-    if (!value) throw new Error(`missing value for ${name}`);
+    if (value === undefined) throw new Error(`missing value for ${name}`);
     if (name === "--wasm") options.wasm = value;
     else if (name === "--manifest") options.manifest = value;
     else if (name === "--duration") options.duration = Number(value);

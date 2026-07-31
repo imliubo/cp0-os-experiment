@@ -88,6 +88,8 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
   单前台切换，以及 Rust/C/C++ SDK 一次性 `take` API。
 - [x] 实现应用私有存储 broker 与 manifest 配额，移除 Runtime 的宿主数据目录挂载，
   提供原子有界 key/value Rust/C/C++ SDK API。
+- [x] 建立经过真实应用 UID/cgroup/权限链路的音频、GPIO、存储配额与跨应用隔离
+  真机验收工具，并用稳定性测试互锁避免污染 24 小时基线。
 - [ ] 稳定性监控结束后完成存储持久化、配额拒绝及应用间读取隔离真机验收。
 - [x] 建立恶意应用测试集，覆盖 WASI ambient authority、路径逃逸、设备访问、任意
   IPC、seccomp 旁路和 cgroup 资源耗尽，并纳入 `make check`。

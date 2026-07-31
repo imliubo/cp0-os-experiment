@@ -56,6 +56,8 @@ allocation overhead are deliberately not exposed to applications.
 Tests cover canonical protocol framing, maximum values, invalid keys, atomic
 replacement, deletion, exact quota exhaustion, Runtime JSON decoding, Rust and
 C/C++ SDK validation, removal of the writable host bind, systemd ownership and
-socket restrictions, and AArch64 cross-compilation. Physical persistence and
-power-loss acceptance remain pending until the current 24-hour core stability
-run completes.
+socket restrictions, and AArch64 cross-compilation. The real-identity quota,
+process-restart, reboot and cross-app probe is documented in
+`PHASE3M-DEVICE-CAPABILITY-ACCEPTANCE.md`. Physical execution and power-loss
+acceptance remain pending until the current 24-hour core stability run
+completes.

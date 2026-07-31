@@ -69,6 +69,7 @@ Automated coverage includes:
 - AArch64 audiod/appd and static Runtime plus wasm32 Hello Card builds.
 
 The device reports ES8389 playback and capture as `card 0, device 0`; HDMI is a
-separate playback-only card. Hot deployment and audible/microphone acceptance
-are intentionally deferred until the active Phase 2 24-hour stability monitor
-finishes, so the baseline process set is not replaced mid-run.
+separate playback-only card. The real-identity allow/deny probe and result
+harness are documented in `PHASE3M-DEVICE-CAPABILITY-ACCEPTANCE.md`. Execution
+and audible/microphone observation remain deferred until the active Phase 2
+24-hour stability monitor finishes, so the baseline process set is unchanged.

@@ -30,7 +30,8 @@ for file in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-gpiod cp0-networkd
     cardputerzero-storage.conf cardputerzero-store.conf store.conf \
     device-policy.json \
     cardputerzero-trust.conf \
-    device-core-recovery.sh device-stability-monitor.sh; do
+    device-capability-acceptance.sh device-core-recovery.sh \
+    device-stability-monitor.sh; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
         echo "error: invalid staged file: $file" >&2
         exit 1
@@ -228,6 +229,8 @@ install -o root -g root -m 0644 "$staging/cardputerzero-gpio.conf" \
 systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-gpio.conf
 install -o root -g root -m 0755 "$staging/device-core-recovery.sh" \
     /usr/libexec/cardputerzero/device-core-recovery
+install -o root -g root -m 0755 "$staging/device-capability-acceptance.sh" \
+    /usr/libexec/cardputerzero/device-capability-acceptance
 install -o root -g root -m 0755 "$staging/device-stability-monitor.sh" \
     /usr/libexec/cardputerzero/device-stability-monitor
 systemctl daemon-reload
