@@ -87,6 +87,8 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
   compositor/appd/broker 全部禁用，以及与产品镜像分离的发布门禁和产物名称。
 - Phase 6D 有界持久数据恢复：版本化单文件备份、逐文件/整体完整性校验、严格路径与
   类型白名单、只向空目标恢复，以及明确确认后的恢复出厂设置。
+- Phase 6E 内部安全基线：系统威胁模型、五类不可信输入的 libFuzzer/ASan 入口，
+  以及 dm-verity、RAUC A/B、U-Boot/FIT 与硬件信任根的条件式架构决策。
 
 ## 快速验证
 
@@ -160,3 +162,6 @@ Rust SDK 公共 API 和真机迁移结果见
 [independent recovery image profile](docs/PHASE6C-RECOVERY-IMAGE.md)。
 有界离线备份、恢复和产品 factory seed 约束见
 [bounded backup, restore and factory reset](docs/PHASE6D-RECOVERY-DATA.md)。
+系统级攻击面、残余风险和量产阻断项见
+[threat model](docs/THREAT-MODEL.md)，内部安全验证入口见
+[Phase 6E security validation](docs/PHASE6E-SECURITY-VALIDATION.md)。

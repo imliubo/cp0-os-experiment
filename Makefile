@@ -1,4 +1,4 @@
-.PHONY: check test fmt compositor app-runtime appd example-app malicious-apps image verify-image
+.PHONY: check test fmt fuzz-check fuzz-smoke compositor app-runtime appd example-app malicious-apps image verify-image
 
 check: fmt
 	jq empty schemas/app-manifest-v1.schema.json schemas/store-review-v1.schema.json \
@@ -27,6 +27,7 @@ check: fmt
 	./tests/test-device-diagnostics.sh
 	./tests/test-device-deployment.sh
 	./tests/test-malicious-apps.sh
+	./tests/test-security-validation.sh
 	./tests/test-patch-cm0-dtb.sh
 	cargo check --workspace --all-targets
 	cargo test --workspace
@@ -36,6 +37,12 @@ test:
 
 fmt:
 	cargo fmt --all -- --check
+
+fuzz-check:
+	PATH="$(CURDIR)/target/fuzz-tools/bin:$$PATH" cargo +nightly fuzz check
+
+fuzz-smoke:
+	./scripts/fuzz-smoke.sh
 
 compositor:
 	docker run --rm \

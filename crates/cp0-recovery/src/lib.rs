@@ -199,6 +199,11 @@ pub fn verify_backup(bundle: impl AsRef<Path>) -> Result<BackupSummary, BackupEr
     parse_backup(bundle.as_ref(), None)
 }
 
+#[cfg(any(test, feature = "fuzzing"))]
+pub fn verify_backup_bytes(encoded: &[u8]) -> Result<BackupSummary, BackupError> {
+    parse_backup_reader(std::io::Cursor::new(encoded), encoded.len() as u64, None)
+}
+
 pub fn restore_backup(
     bundle: impl AsRef<Path>,
     target_root: impl AsRef<Path>,
@@ -564,8 +569,16 @@ fn write_payload(
 }
 
 fn parse_backup(bundle: &Path, target: Option<&Path>) -> Result<BackupSummary, BackupError> {
-    let mut file = open_read_only_no_follow(bundle)?;
+    let file = open_read_only_no_follow(bundle)?;
     let file_length = file.metadata()?.len();
+    parse_backup_reader(file, file_length, target)
+}
+
+fn parse_backup_reader<R: Read>(
+    mut file: R,
+    file_length: u64,
+    target: Option<&Path>,
+) -> Result<BackupSummary, BackupError> {
     if !(FIXED_HEADER_BYTES..=FIXED_HEADER_BYTES + MAX_PAYLOAD_BYTES).contains(&file_length) {
         return Err(BackupError::Invalid(
             "backup file size is outside limits".into(),
@@ -1124,6 +1137,43 @@ mod tests {
         let trailing_path = fixture.root.join("trailing.cp0backup");
         fs::write(&trailing_path, trailing).expect("write trailing backup");
         assert!(verify_backup(&trailing_path).is_err());
+    }
+
+    #[test]
+    fn byte_slice_verifier_matches_files_and_rejects_truncation() {
+        let fixture = Fixture::new("byte-slice");
+        let source = fixture.data_root();
+        create_data_root(&source);
+        let backup = fixture.backup();
+        let expected = create_backup(&source, &backup).expect("create backup");
+        let encoded = fs::read(&backup).expect("read backup");
+
+        assert_eq!(
+            verify_backup_bytes(&encoded).expect("verify bytes"),
+            expected
+        );
+
+        let cut_points = [
+            0,
+            1,
+            MAGIC.len() - 1,
+            MAGIC.len(),
+            FIXED_HEADER_BYTES as usize - 1,
+            FIXED_HEADER_BYTES as usize,
+            FIXED_HEADER_BYTES as usize + ENTRY_HEADER_BYTES as usize - 1,
+            encoded.len() - 1,
+        ];
+        for cut in cut_points {
+            assert!(
+                verify_backup_bytes(&encoded[..cut]).is_err(),
+                "truncated backup unexpectedly passed at byte {cut}"
+            );
+        }
+
+        let mut corrupt = encoded;
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 0x80;
+        assert!(verify_backup_bytes(&corrupt).is_err());
     }
 
     #[test]

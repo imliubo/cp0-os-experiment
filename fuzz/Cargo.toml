@@ -1,0 +1,54 @@
+[package]
+name = "cardputerzero-os-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+cp0-appd = { path = "../crates/cp0-appd" }
+cp0-manifest = { path = "../crates/cp0-manifest" }
+cp0-package = { path = "../crates/cp0-package" }
+cp0-recovery = { path = "../crates/cp0-recovery", features = ["fuzzing"] }
+cp0-store-protocol = { path = "../crates/cp0-store-protocol" }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "manifest"
+path = "fuzz_targets/manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "package"
+path = "fuzz_targets/package.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "store_protocol"
+path = "fuzz_targets/store_protocol.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "appd_control"
+path = "fuzz_targets/appd_control.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "recovery_backup"
+path = "fuzz_targets/recovery_backup.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

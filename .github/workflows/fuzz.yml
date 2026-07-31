@@ -1,0 +1,29 @@
+name: fuzz
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "19 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly
+        run: rustup toolchain install nightly --profile minimal
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+      - name: Run bounded fuzz campaign
+        run: ./scripts/fuzz-smoke.sh 30
+      - name: Preserve crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts
+          if-no-files-found: ignore

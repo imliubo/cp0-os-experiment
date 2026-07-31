@@ -234,3 +234,9 @@ LCD 启动摘要、网络和 SSH。恢复启动不会自动扩容、挂载或绑
 或 product lower-root 维护启动下挂载分区；恢复在完整校验和固定确认词之后才重建
 `cp0-data`。产品镜像带自身可信 factory seed，恢复镜像不复制不完整的产品信任根。
 详细边界见 `docs/PHASE6D-RECOVERY-DATA.md`。
+
+系统级安全声明由 `docs/THREAT-MODEL.md` 约束：应用隔离不等于抵抗内核、可信原生
+服务或物理 SD 攻击。当前 OverlayFS 是运行期写保护，不是启动完整性机制；开发镜像
+的 SSH/显式密码也不是量产身份方案。未来 OS 更新采用独立签名根、A/B boot/root、
+dm-verity 和健康确认后提交，且只有在更早的不可变阶段能够认证 U-Boot/FIT 时才形成
+可验证启动链；详见 `docs/adr/0006-verified-updates-and-rollback.md`。
