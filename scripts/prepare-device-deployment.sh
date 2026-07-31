@@ -33,6 +33,7 @@ required=(
     "$release/cp0-networkd"
     "$release/cp0-radiod"
     "$release/cp0-storaged"
+    "$release/cp0-stored"
     "$release/cp0ctl"
 )
 for file in "${required[@]}"; do
@@ -55,6 +56,7 @@ install -m 0755 \
     "$release/cp0-networkd" \
     "$release/cp0-radiod" \
     "$release/cp0-storaged" \
+    "$release/cp0-stored" \
     "$release/cp0ctl" \
     "$repo_root/scripts/device-install-compositor.sh" \
     "$repo_root/scripts/device-install-app-platform.sh" \
@@ -66,6 +68,7 @@ install -m 0644 "$hello/bin/hello-card.wasm" "$output/hello-card.wasm"
 install -m 0644 \
     "$repo_root/appd/systemd/"* \
     "$repo_root/appd/lora.conf" \
+    "$repo_root/appd/store.conf" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-compositor.service" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-system-shell.service" \
     "$output/"

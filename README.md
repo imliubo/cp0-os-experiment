@@ -10,7 +10,8 @@ WebAssembly；应用不能直接访问 Linux 设备节点、系统总线或其�
 
 Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真机验收，Phase 2
 已完成 compositor、System Shell、可信单前台策略、Launcher 与通知覆盖层，
-Phase 3 已贯通 WAMR 强隔离运行时、权限系统和首个 capability broker。
+Phase 3 已贯通 WAMR 强隔离运行时和 capability brokers，Phase 4 已冻结 SDK 1.0，
+Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x170 Store UI。
 当前仓库包含：
 
 - 系统架构与资源预算；
@@ -75,6 +76,9 @@ Phase 3 已贯通 WAMR 强隔离运行时、权限系统和首个 capability bro
 - Freestanding C11/C++17 SDK 1.0 头文件与 wasm32 编译检查，不暴露 WASI/Linux ABI。
 - 三分区不可变根产品配置：只读 ext4 lower、64 MiB RAM upper、可自动扩容的
   `cp0-data`，以及应用/权限/信任、网络、SSH 和设备身份的持久路径白名单。
+- Phase 5 双签名商店：审核记录精确绑定提交/权限/WASM imports，`cp0ctl store
+  publish` 生成确定性签名目录，设备端 `cp0-stored` 提供 HTTPS 公网下载、断点续传、
+  目录防回滚和 appd 独立复验，System Shell 提供 Store 列表、详情与安装进度。
 
 ## 快速验证
 
@@ -138,3 +142,5 @@ V0.6 逻辑输出映射、GPIO 隔离和 sysfs 权限收紧见
 [malicious application regression set](docs/PHASE3N-MALICIOUS-APPLICATIONS.md)。
 Rust SDK 公共 API 和真机迁移结果见
 [Rust SDK foundation](docs/PHASE4A-RUST-SDK.md)。
+应用审核、确定性发布、设备 Store 信任边界和离线行为见
+[reviewed application store](docs/PHASE5B-APPLICATION-STORE.md)。

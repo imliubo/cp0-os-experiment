@@ -62,7 +62,9 @@ if grep -q 'usermod -a -G cp0-wayland cp0-shell' "$stage"; then
     exit 1
 fi
 grep -q 'system-shell/include/cp0_ui.h' "$repo_root/image/build-image.sh"
+grep -q 'system-shell/include/cp0_store_client.h' "$repo_root/image/build-image.sh"
 grep -q 'cardputerzero-system-shell/main.c' "$stage"
+grep -q 'cardputerzero-system-shell/store_client.c' "$stage"
 grep -q '/dev/dri/cardputer-zero-internal' "$launcher"
 grep -q -- '--seat=seat-cardputer-zero' "$launcher"
 grep -q -- '--renderer=pixman' "$launcher"

@@ -71,6 +71,34 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     cp0_ui_set_status(ui, "12:34", true, 73);
     write_snapshot(directory, "home", ui, frame);
 
+    static const struct cp0_ui_store_catalog_app store_apps[] = {
+        {.package_bytes = 4096,
+         .permissions = (1U << 2) | (1U << 5),
+         .progress_percent = 0,
+         .state = CP0_UI_STORE_AVAILABLE,
+         .app_id = "dev.cardputerzero.camera",
+         .name = "Camera Notes",
+         .version = "1.2.0",
+         .summary = "Capture a photo and attach it to a field note"},
+        {.package_bytes = 8192,
+         .permissions = 1U << 6,
+         .progress_percent = 38,
+         .state = CP0_UI_STORE_DOWNLOADING,
+         .app_id = "dev.cardputerzero.notify",
+         .name = "Notify",
+         .version = "2.0.1",
+         .summary = "Deliver reviewed status notifications"},
+    };
+    cp0_ui_sync_store_catalog(ui, store_apps, 2, false, false);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    cp0_ui_handle_action(ui, CP0_UI_DOWN);
+    write_snapshot(directory, "store", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    write_snapshot(directory, "store-detail", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_GO_HOME);
+    cp0_ui_handle_action(ui, CP0_UI_LEFT);
+
     cp0_ui_sync_app_catalog(ui, apps, 2, false);
     cp0_ui_add_app(ui, 42, "dev.cardputerzero.second");
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
@@ -137,6 +165,62 @@ int main(int argc, char **argv)
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_RESTART);
     assert(!ui.power_dialog);
+
+    cp0_ui_init(&ui);
+    static const struct cp0_ui_store_catalog_app store_catalog[] = {
+        {.package_bytes = 1024,
+         .permissions = (1U << 2) | (1U << 5),
+         .progress_percent = 0,
+         .state = CP0_UI_STORE_AVAILABLE,
+         .app_id = "dev.cardputerzero.alpha",
+         .name = "Alpha",
+         .version = "1.0.0",
+         .summary = "First reviewed store application",
+         .installed_version = "1.0.0"},
+        {.package_bytes = 2048,
+         .permissions = 1U << 6,
+         .progress_percent = 0,
+         .state = CP0_UI_STORE_AVAILABLE,
+         .app_id = "dev.cardputerzero.beta",
+         .name = "Beta",
+         .version = "2.0.0",
+         .summary = "An update ready for installation",
+         .installed_version = "1.0.0"},
+    };
+    cp0_ui_sync_store_catalog(&ui, store_catalog, 2, false, true);
+    assert(ui.store_apps[0].state == CP0_UI_STORE_INSTALLED);
+    assert(ui.store_apps[1].state == CP0_UI_STORE_UPDATE);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    assert(ui.screen == CP0_UI_STORE && !ui.store_detail);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_RIGHT) ==
+           CP0_UI_EVENT_STORE_REFRESH);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(strcmp(cp0_ui_selected_store_app_id(&ui),
+                  "dev.cardputerzero.beta") == 0);
+    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    assert(ui.store_detail);
+    assert(cp0_ui_selected_store_app_state(&ui) == CP0_UI_STORE_UPDATE);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_INSTALL);
+    cp0_ui_set_store_app_state(&ui, "dev.cardputerzero.beta",
+                               CP0_UI_STORE_QUEUED, 0);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+
+    struct cp0_ui_store_catalog_app stale_update = store_catalog[1];
+    stale_update.state = CP0_UI_STORE_UPDATE;
+    cp0_ui_sync_store_catalog(&ui, &stale_update, 1, false, false);
+    assert(cp0_ui_selected_store_app_state(&ui) == CP0_UI_STORE_QUEUED);
+    cp0_ui_handle_action(&ui, CP0_UI_BACK);
+    assert(!ui.store_detail && ui.screen == CP0_UI_STORE);
+    cp0_ui_handle_action(&ui, CP0_UI_BACK);
+    assert(ui.screen == CP0_UI_HOME);
+    cp0_ui_set_store_status(&ui, CP0_UI_STORE_UNCONFIGURED);
+    assert(ui.store_status == CP0_UI_STORE_UNCONFIGURED);
+    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    assert(ui.screen == CP0_UI_STORE && !ui.store_detail);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_RIGHT) ==
+           CP0_UI_EVENT_STORE_REFRESH);
 
     cp0_ui_handle_action(&ui, CP0_UI_SHOW_TASKS);
     assert(ui.screen == CP0_UI_TASKS);

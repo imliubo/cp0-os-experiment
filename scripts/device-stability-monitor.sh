@@ -94,7 +94,7 @@ read_unit_properties() {
 }
 
 sample_once() {
-    local epoch uptime unit sectors_written
+    local epoch uptime unit sectors_written store_unit
     epoch=$(date +%s)
     uptime=${EPOCHREALTIME:-$epoch}
     if [[ -r /proc/uptime ]]; then
@@ -138,9 +138,29 @@ sample_once() {
         fi
         final_memory[$unit]=$property_memory
     done
+    store_unit=cardputerzero-stored.service
+    if systemctl is-active --quiet "$store_unit"; then
+        if ! read_unit_properties "$store_unit"; then
+            record_failure "$store_unit invalid-properties"
+        else
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$epoch" "$uptime" "$store_unit" "$property_active" \
+                "$property_sub" "$property_pid" "$property_restarts" \
+                "$property_memory" >>"$samples"
+            if [[ $property_sub != running || $property_pid == 0 ]]; then
+                record_failure "$store_unit inactive state=$property_active/$property_sub pid=$property_pid"
+            fi
+            if ((property_memory > 40 * 1024 * 1024)); then
+                record_failure "$store_unit memory-limit=$property_memory>$((40 * 1024 * 1024))"
+            fi
+        fi
+    elif systemctl is-failed --quiet "$store_unit"; then
+        record_failure "$store_unit failed"
+    fi
     [[ -S /run/cardputerzero/wayland-0 ]] || record_failure "wayland-socket-missing"
     [[ -S /run/cardputerzero-appd/control.sock ]] || record_failure "control-socket-missing"
     [[ -S /run/cardputerzero-broker/runtime.sock ]] || record_failure "broker-socket-missing"
+    [[ -S /run/cardputerzero-store/control.sock ]] || record_failure "store-socket-missing"
 }
 
 start_epoch=$(date +%s)

@@ -1,17 +1,14 @@
 [package]
-name = "cp0ctl"
+name = "cp0-stored"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
-publish = false
 
 [dependencies]
 cp0-appd = { path = "../cp0-appd" }
-cp0-manifest = { path = "../cp0-manifest" }
+cp0-networkd = { path = "../cp0-networkd" }
 cp0-package = { path = "../cp0-package" }
 cp0-store-protocol = { path = "../cp0-store-protocol" }
 libc.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 sha2.workspace = true
-wasmparser = "=0.245.1"
+ureq = { version = "=3.3.0", default-features = false, features = ["rustls"] }

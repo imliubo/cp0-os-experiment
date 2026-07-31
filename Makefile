@@ -1,7 +1,8 @@
 .PHONY: check test fmt compositor app-runtime appd example-app malicious-apps image verify-image
 
 check: fmt
-	jq empty schemas/app-manifest-v1.schema.json examples/hello-card/app.json
+	jq empty schemas/app-manifest-v1.schema.json schemas/store-review-v1.schema.json \
+		examples/hello-card/app.json
 	bash -n scripts/*.sh tests/*.sh image/build-image.sh \
 		image/pi-gen/export-image-prerun.sh \
 		image/pi-gen/stage-cardputerzero-os/prerun.sh \

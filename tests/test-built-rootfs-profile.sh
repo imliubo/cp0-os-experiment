@@ -21,6 +21,7 @@ required_executables=(
     usr/libexec/cardputerzero/cp0-networkd
     usr/libexec/cardputerzero/cp0-radiod
     usr/libexec/cardputerzero/cp0-storaged
+    usr/libexec/cardputerzero/cp0-stored
     usr/libexec/cardputerzero/device-core-recovery
     usr/libexec/cardputerzero/device-smoke.sh
     usr/libexec/cardputerzero/device-stability-monitor
@@ -59,6 +60,7 @@ enabled_units=(
     sockets.target.wants/cardputerzero-networkd.socket
     sockets.target.wants/cardputerzero-radiod.socket
     sockets.target.wants/cardputerzero-storaged.socket
+    sockets.target.wants/cardputerzero-stored.socket
 )
 for path in "${enabled_units[@]}"; do
     if [[ ! -L $rootfs/etc/systemd/system/$path ]]; then

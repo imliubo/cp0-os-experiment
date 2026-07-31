@@ -23,6 +23,7 @@ struct canvas {
 
 static const uint8_t font[][5] = {
     [' ' - ' '] = {0x00, 0x00, 0x00, 0x00, 0x00},
+    ['%' - ' '] = {0x23, 0x13, 0x08, 0x64, 0x62},
     ['-' - ' '] = {0x08, 0x08, 0x08, 0x08, 0x08},
     ['.' - ' '] = {0x00, 0x60, 0x60, 0x00, 0x00},
     ['/' - ' '] = {0x20, 0x10, 0x08, 0x04, 0x02},
@@ -115,6 +116,9 @@ static void draw_text(struct canvas *canvas, int x, int y, const char *text,
     }
 }
 
+static void draw_prompt_line(struct canvas *canvas, int y, const char *text,
+                             size_t start, size_t maximum);
+
 static const char *screen_title(const struct cp0_ui *ui)
 {
     if (ui->permission_prompt)
@@ -126,6 +130,8 @@ static const char *screen_title(const struct cp0_ui *ui)
         return "HOME";
     case CP0_UI_APPS:
         return "APPS";
+    case CP0_UI_STORE:
+        return ui->store_detail ? "STORE APP" : "STORE";
     case CP0_UI_DEVICE:
         return "DEVICE";
     case CP0_UI_NETWORK:
@@ -175,6 +181,13 @@ static void draw_apps_icon(struct canvas *canvas, int x, int y,
     fill_rect(canvas, x + 11, y + 11, 8, 8, color);
 }
 
+static void draw_store_icon(struct canvas *canvas, int x, int y,
+                            uint32_t color)
+{
+    stroke_rect(canvas, x + 2, y + 6, 21, 16, 2, color);
+    stroke_rect(canvas, x + 7, y, 11, 9, 2, color);
+}
+
 static void draw_device_icon(struct canvas *canvas, int x, int y,
                              uint32_t color)
 {
@@ -201,31 +214,35 @@ static void draw_power_icon(struct canvas *canvas, int x, int y,
 
 static void draw_home(struct canvas *canvas, const struct cp0_ui *ui)
 {
-    static const char *labels[] = {"APPS", "DEVICE", "NETWORK", "POWER"};
-    for (unsigned int index = 0; index < 4; index++) {
-        int x = 8 + (int)(index % 2) * 156;
-        int y = 28 + (int)(index / 2) * 68;
+    static const char *labels[] = {"APPS", "STORE", "DEVICE", "NETWORK",
+                                   "POWER"};
+    for (unsigned int index = 0; index < 5; index++) {
+        int x = 8 + (int)(index % 3) * 103;
+        int y = 28 + (int)(index / 3) * 68;
         bool selected = index == ui->selected;
-        fill_rect(canvas, x, y, 148, 61,
+        fill_rect(canvas, x, y, 98, 61,
                   selected ? COLOR_SELECTED : COLOR_SURFACE);
-        stroke_rect(canvas, x, y, 148, 61, selected ? 2 : 1,
+        stroke_rect(canvas, x, y, 98, 61, selected ? 2 : 1,
                     selected ? COLOR_GREEN : COLOR_BAR);
         uint32_t icon_color = selected ? COLOR_GREEN : COLOR_MUTED;
         switch (index) {
         case 0:
-            draw_apps_icon(canvas, x + 17, y + 20, icon_color);
+            draw_apps_icon(canvas, x + 11, y + 12, icon_color);
             break;
         case 1:
-            draw_device_icon(canvas, x + 15, y + 19, icon_color);
+            draw_store_icon(canvas, x + 10, y + 11, icon_color);
             break;
         case 2:
-            draw_large_network_icon(canvas, x + 15, y + 18, icon_color);
+            draw_device_icon(canvas, x + 10, y + 12, icon_color);
+            break;
+        case 3:
+            draw_large_network_icon(canvas, x + 10, y + 11, icon_color);
             break;
         default:
-            draw_power_icon(canvas, x + 15, y + 18, icon_color);
+            draw_power_icon(canvas, x + 10, y + 11, icon_color);
             break;
         }
-        draw_text(canvas, x + 52, y + 27, labels[index], 1, COLOR_TEXT);
+        draw_text(canvas, x + 10, y + 44, labels[index], 1, COLOR_TEXT);
     }
 }
 
@@ -273,6 +290,105 @@ static void draw_apps_page(struct canvas *canvas, const struct cp0_ui *ui)
         draw_text(canvas, 284, 159, "32+", 1, COLOR_YELLOW);
 }
 
+static const char *store_state_label(const struct cp0_ui_store_app *app,
+                                     char label[16])
+{
+    static const char *states[] = {"GET",       "UPDATE", "QUEUED", "DOWNLOAD",
+                                   "INSTALL",   "INSTALLED", "FAILED"};
+    if (app->state == CP0_UI_STORE_DOWNLOADING) {
+        snprintf(label, 16, "DOWN %u%%", app->progress_percent);
+        return label;
+    }
+    return states[app->state];
+}
+
+static void draw_store_list(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    if (ui->store_status != CP0_UI_STORE_READY) {
+        static const char *messages[] = {"LOADING CATALOG", "", "NOT CONFIGURED",
+                                         "STORE UNAVAILABLE"};
+        draw_empty_page(canvas, "STORE", messages[ui->store_status],
+                        ui->store_status == CP0_UI_STORE_UNAVAILABLE
+                            ? COLOR_RED
+                            : COLOR_YELLOW);
+        return;
+    }
+    if (ui->store_count == 0) {
+        draw_empty_page(canvas, "STORE", "NO APPS AVAILABLE", COLOR_GREEN);
+        return;
+    }
+
+    unsigned int first =
+        ui->store_selected > 3 ? ui->store_selected - 3 : 0;
+    unsigned int visible = ui->store_count - first;
+    if (visible > 4)
+        visible = 4;
+    for (unsigned int row = 0; row < visible; row++) {
+        unsigned int index = first + row;
+        const struct cp0_ui_store_app *app = &ui->store_apps[index];
+        int y = 28 + (int)row * 32;
+        bool selected = index == ui->store_selected;
+        char state[16];
+
+        fill_rect(canvas, 8, y, 304, 28,
+                  selected ? COLOR_SELECTED : COLOR_SURFACE);
+        stroke_rect(canvas, 8, y, 304, 28, selected ? 2 : 1,
+                    selected ? COLOR_GREEN : COLOR_BAR);
+        fill_rect(canvas, 17, y + 9, 10, 10,
+                  app->state == CP0_UI_STORE_INSTALLED
+                      ? COLOR_GREEN
+                      : (app->state == CP0_UI_STORE_FAILED ? COLOR_RED
+                                                           : COLOR_YELLOW));
+        draw_prompt_line(canvas, y + 6, app->name, 0, 27);
+        draw_text(canvas, 218, y + 17, store_state_label(app, state), 1,
+                  app->state == CP0_UI_STORE_FAILED ? COLOR_RED : COLOR_MUTED);
+    }
+    if (ui->store_catalog_stale)
+        draw_text(canvas, 8, 159, "STALE", 1, COLOR_YELLOW);
+    if (ui->store_list_truncated)
+        draw_text(canvas, 284, 159, "32+", 1, COLOR_YELLOW);
+}
+
+static void draw_store_detail(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    static const char *permission_names[] = {
+        "AUDIO CAPTURE",  "AUDIO PLAYBACK", "CAMERA CAPTURE", "DOCUMENTS OPEN",
+        "HARDWARE GPIO",  "NETWORK CLIENT", "NOTIFICATIONS",  "RADIO LORA",
+    };
+    const struct cp0_ui_store_app *app = &ui->store_apps[ui->store_selected];
+    char version[76];
+    char state[16];
+    unsigned int visible_permission = 0;
+
+    fill_rect(canvas, 8, 27, 304, 136, COLOR_SURFACE);
+    fill_rect(canvas, 8, 27, 4, 136, COLOR_GREEN);
+    draw_prompt_line(canvas, 34, app->name, 0, 46);
+    snprintf(version, sizeof(version), "VERSION %s", app->version);
+    draw_prompt_line(canvas, 48, version, 0, 46);
+    draw_prompt_line(canvas, 64, app->summary, 0, 46);
+    draw_prompt_line(canvas, 77, app->summary, 46, 46);
+    draw_text(canvas, 20, 93, store_state_label(app, state), 1,
+              app->state == CP0_UI_STORE_FAILED ? COLOR_RED : COLOR_GREEN);
+    for (unsigned int bit = 0; bit < 8; bit++) {
+        if ((app->permissions & (1U << bit)) == 0)
+            continue;
+        int x = 20 + (int)(visible_permission % 2) * 146;
+        int y = 108 + (int)(visible_permission / 2) * 12;
+        draw_text(canvas, x, y, permission_names[bit], 1, COLOR_TEXT);
+        visible_permission++;
+    }
+    if (visible_permission == 0)
+        draw_text(canvas, 20, 108, "NO PERMISSIONS", 1, COLOR_MUTED);
+}
+
+static void draw_store_page(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    if (ui->store_detail && ui->store_selected < ui->store_count)
+        draw_store_detail(canvas, ui);
+    else
+        draw_store_list(canvas, ui);
+}
+
 static int running_app_index(const struct cp0_ui *ui)
 {
     for (unsigned int index = 0; index < ui->app_count; index++) {
@@ -317,6 +433,9 @@ static void draw_page(struct canvas *canvas, const struct cp0_ui *ui)
     switch (ui->screen) {
     case CP0_UI_APPS:
         draw_apps_page(canvas, ui);
+        break;
+    case CP0_UI_STORE:
+        draw_store_page(canvas, ui);
         break;
     case CP0_UI_DEVICE:
         draw_empty_page(canvas, "CARDPUTER ZERO", "V0.6  320 X 170  512 MB",
@@ -449,6 +568,7 @@ void cp0_ui_init(struct cp0_ui *ui)
 {
     memset(ui, 0, sizeof(*ui));
     ui->screen = CP0_UI_HOME;
+    ui->store_status = CP0_UI_STORE_LOADING;
     ui->battery_percent = -1;
     memcpy(ui->clock_text, "--:--", sizeof(ui->clock_text));
 }
@@ -648,6 +768,127 @@ void cp0_ui_set_app_state(struct cp0_ui *ui, const char *app_id,
     ui->apps[index].state = state;
     if (state == CP0_UI_APP_STOPPED || state == CP0_UI_APP_FAILED)
         ui->apps[index].token = 0;
+}
+
+static int store_app_index_by_id(const struct cp0_ui *ui, const char *app_id)
+{
+    if (ui == NULL || app_id == NULL)
+        return -1;
+    for (unsigned int index = 0; index < ui->store_count; index++) {
+        if (strcmp(ui->store_apps[index].app_id, app_id) == 0)
+            return (int)index;
+    }
+    return -1;
+}
+
+void cp0_ui_set_store_status(struct cp0_ui *ui,
+                             enum cp0_ui_store_status status)
+{
+    if (ui == NULL || status > CP0_UI_STORE_UNAVAILABLE)
+        return;
+    ui->store_status = status;
+    if (status != CP0_UI_STORE_READY)
+        ui->store_detail = false;
+}
+
+void cp0_ui_sync_store_catalog(
+    struct cp0_ui *ui, const struct cp0_ui_store_catalog_app *apps,
+    size_t app_count, bool truncated, bool stale)
+{
+    struct cp0_ui_store_app previous[CP0_UI_MAX_APPS];
+    char selected_id[CP0_UI_APP_ID_MAX + 1] = {0};
+    size_t previous_count;
+
+    if (ui == NULL || (apps == NULL && app_count > 0))
+        return;
+    if (ui->store_selected < ui->store_count)
+        copy_optional_text(selected_id, sizeof(selected_id),
+                           ui->store_apps[ui->store_selected].app_id);
+    previous_count = ui->store_count;
+    memcpy(previous, ui->store_apps, sizeof(previous));
+    if (app_count > CP0_UI_MAX_APPS)
+        app_count = CP0_UI_MAX_APPS;
+    memset(ui->store_apps, 0, sizeof(ui->store_apps));
+    ui->store_count = 0;
+    for (size_t index = 0; index < app_count; index++) {
+        if (apps[index].state > CP0_UI_STORE_FAILED ||
+            apps[index].progress_percent > 100)
+            continue;
+        struct cp0_ui_store_app app = {
+            .package_bytes = apps[index].package_bytes,
+            .permissions = apps[index].permissions,
+            .progress_percent = apps[index].progress_percent,
+            .state = apps[index].state,
+        };
+        if (!copy_text(app.app_id, sizeof(app.app_id), apps[index].app_id) ||
+            !copy_text(app.name, sizeof(app.name), apps[index].name) ||
+            !copy_text(app.version, sizeof(app.version), apps[index].version) ||
+            !copy_text(app.summary, sizeof(app.summary), apps[index].summary))
+            continue;
+        if (app.state == CP0_UI_STORE_AVAILABLE ||
+            app.state == CP0_UI_STORE_INSTALLED) {
+            if (apps[index].installed_version == NULL) {
+                app.state = CP0_UI_STORE_AVAILABLE;
+            } else if (strcmp(apps[index].installed_version, app.version) == 0) {
+                app.state = CP0_UI_STORE_INSTALLED;
+            } else {
+                app.state = CP0_UI_STORE_UPDATE;
+            }
+        }
+        for (size_t old = 0; old < previous_count; old++) {
+            bool old_active = previous[old].state == CP0_UI_STORE_QUEUED ||
+                              previous[old].state == CP0_UI_STORE_DOWNLOADING ||
+                              previous[old].state == CP0_UI_STORE_INSTALLING;
+            bool new_idle = app.state == CP0_UI_STORE_AVAILABLE ||
+                            app.state == CP0_UI_STORE_UPDATE;
+            if (strcmp(previous[old].app_id, app.app_id) == 0 && old_active &&
+                new_idle) {
+                app.state = previous[old].state;
+                app.progress_percent = previous[old].progress_percent;
+                break;
+            }
+        }
+        ui->store_apps[ui->store_count++] = app;
+    }
+    ui->store_status = CP0_UI_STORE_READY;
+    ui->store_list_truncated = truncated;
+    ui->store_catalog_stale = stale;
+    ui->store_selected = 0;
+    for (unsigned int index = 0; index < ui->store_count; index++) {
+        if (strcmp(ui->store_apps[index].app_id, selected_id) == 0) {
+            ui->store_selected = index;
+            break;
+        }
+    }
+    if (ui->store_count == 0)
+        ui->store_detail = false;
+}
+
+void cp0_ui_set_store_app_state(struct cp0_ui *ui, const char *app_id,
+                                enum cp0_ui_store_state state,
+                                uint8_t progress_percent)
+{
+    int index = store_app_index_by_id(ui, app_id);
+    if (index < 0 || state > CP0_UI_STORE_FAILED || progress_percent > 100)
+        return;
+    ui->store_apps[index].state = state;
+    ui->store_apps[index].progress_percent = progress_percent;
+}
+
+const char *cp0_ui_selected_store_app_id(const struct cp0_ui *ui)
+{
+    if (ui == NULL || ui->screen != CP0_UI_STORE ||
+        ui->store_selected >= ui->store_count)
+        return NULL;
+    return ui->store_apps[ui->store_selected].app_id;
+}
+
+enum cp0_ui_store_state cp0_ui_selected_store_app_state(
+    const struct cp0_ui *ui)
+{
+    return ui != NULL && ui->store_selected < ui->store_count
+               ? ui->store_apps[ui->store_selected].state
+               : CP0_UI_STORE_AVAILABLE;
 }
 
 static int selected_app_index(const struct cp0_ui *ui)
@@ -852,6 +1093,7 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     }
     if (action == CP0_UI_GO_HOME) {
         ui->power_dialog = false;
+        ui->store_detail = false;
         ui->screen = CP0_UI_HOME;
         return CP0_UI_EVENT_NONE;
     }
@@ -886,6 +1128,10 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     }
 
     if (action == CP0_UI_BACK) {
+        if (ui->screen == CP0_UI_STORE && ui->store_detail) {
+            ui->store_detail = false;
+            return CP0_UI_EVENT_NONE;
+        }
         ui->screen = CP0_UI_HOME;
         return CP0_UI_EVENT_NONE;
     }
@@ -912,26 +1158,55 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         return CP0_UI_EVENT_NONE;
     }
 
+    if (ui->screen == CP0_UI_STORE) {
+        if (ui->store_detail) {
+            enum cp0_ui_store_state state =
+                cp0_ui_selected_store_app_state(ui);
+            if (action == CP0_UI_ACCEPT &&
+                (state == CP0_UI_STORE_AVAILABLE ||
+                 state == CP0_UI_STORE_UPDATE || state == CP0_UI_STORE_FAILED))
+                return CP0_UI_EVENT_STORE_INSTALL;
+            return CP0_UI_EVENT_NONE;
+        }
+        if (ui->store_status != CP0_UI_STORE_READY)
+            return action == CP0_UI_RIGHT ? CP0_UI_EVENT_STORE_REFRESH
+                                          : CP0_UI_EVENT_NONE;
+        if (action == CP0_UI_UP && ui->store_selected > 0)
+            ui->store_selected--;
+        else if (action == CP0_UI_DOWN &&
+                 ui->store_selected + 1 < ui->store_count)
+            ui->store_selected++;
+        else if (action == CP0_UI_RIGHT)
+            return CP0_UI_EVENT_STORE_REFRESH;
+        else if (action == CP0_UI_ACCEPT && ui->store_count > 0)
+            ui->store_detail = true;
+        return CP0_UI_EVENT_NONE;
+    }
+
     if (ui->screen != CP0_UI_HOME)
         return CP0_UI_EVENT_NONE;
 
-    if (action == CP0_UI_LEFT && (ui->selected % 2) != 0)
+    if (action == CP0_UI_LEFT && (ui->selected % 3) != 0)
         ui->selected--;
-    else if (action == CP0_UI_RIGHT && (ui->selected % 2) == 0)
+    else if (action == CP0_UI_RIGHT && (ui->selected % 3) != 2 &&
+             ui->selected + 1 < 5)
         ui->selected++;
-    else if (action == CP0_UI_UP && ui->selected >= 2)
-        ui->selected -= 2;
-    else if (action == CP0_UI_DOWN && ui->selected < 2)
-        ui->selected += 2;
+    else if (action == CP0_UI_UP && ui->selected >= 3)
+        ui->selected -= 3;
+    else if (action == CP0_UI_DOWN && ui->selected + 3 < 5)
+        ui->selected += 3;
     else if (action == CP0_UI_ACCEPT) {
         switch (ui->selected) {
         case 0:
             ui->screen = CP0_UI_APPS;
             break;
         case 1:
-            ui->screen = CP0_UI_DEVICE;
+            ui->screen = CP0_UI_STORE;
             break;
         case 2:
+            ui->screen = CP0_UI_DEVICE;
+            break;
+        case 3:
             ui->screen = CP0_UI_NETWORK;
             break;
         default:

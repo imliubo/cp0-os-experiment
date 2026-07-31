@@ -14,6 +14,7 @@ use cp0_manifest::Permission;
 mod package;
 mod project;
 mod remote;
+mod store;
 
 const APPD_SOCKET: &str = "/run/cardputerzero-appd/control.sock";
 const BROKER_SOCKET: &str = "/run/cardputerzero-broker/runtime.sock";
@@ -50,6 +51,20 @@ fn main() -> ExitCode {
         [command, input] if command == "verify" => package::verify_package(input, None),
         [command, input, store_public] if command == "verify" => {
             package::verify_package(input, Some(store_public))
+        }
+        [store_command, publish, submissions, reviews, output, base_url, sequence, published, expires, secret]
+            if store_command == "store" && publish == "publish" =>
+        {
+            store::publish(store::PublishOptions {
+                submissions,
+                reviews,
+                output,
+                base_url,
+                sequence,
+                published,
+                expires,
+                secret,
+            })
         }
         [command, input] if command == "install" => install_package(input),
         [command, input, flag, device] if command == "install" && flag == "--device" => {
@@ -150,7 +165,7 @@ fn main() -> ExitCode {
             })
         }
         _ => Err(
-            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
+            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | store publish <submissions-dir> <reviews-dir> <output-dir> <base-url> <sequence> <published-unix> <expires-unix> <store-secret-key> | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
                 .into(),
         ),
     };

@@ -15,6 +15,9 @@ grep -q 'cardputerzero-system-shell.service' "$recovery"
 grep -q 'cardputerzero-appd.service' "$recovery"
 grep -q '/usr/bin/cp0ctl app ping' "$recovery"
 grep -q '/run/cardputerzero-broker/runtime.sock' "$recovery"
+grep -q 'stored=cardputerzero-stored.service' "$recovery"
+grep -q 'systemctl is-active --quiet.*stored' "$recovery"
+grep -q '/run/cardputerzero-store/control.sock' "$recovery"
 if grep -Eq 'kill.*cardputerzero-|pkill|killall' "$recovery"; then
     echo "error: recovery script uses process-name or broad kill" >&2
     exit 1
@@ -28,6 +31,9 @@ grep -q 'memory-growth' "$monitor"
 grep -q '/sys/block/mmcblk0/stat' "$monitor"
 grep -q 'sd_write_bytes' "$monitor"
 grep -q 'maximum_sd_write_bytes' "$monitor"
+grep -q 'store_unit=cardputerzero-stored.service' "$monitor"
+grep -q 'systemctl is-active --quiet.*store_unit' "$monitor"
+grep -q '/run/cardputerzero-store/control.sock' "$monitor"
 if grep -Eq '(^|[[:space:]])rm([[:space:]]|$)' "$monitor"; then
     echo "error: stability monitor must never delete result data" >&2
     exit 1

@@ -21,6 +21,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bitflags"
+version = "2.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -70,9 +76,12 @@ dependencies = [
  "cp0-package",
  "cp0-radio-protocol",
  "cp0-storage-protocol",
+ "cp0-store-protocol",
  "libc",
+ "semver",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -215,14 +224,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp0-store-protocol"
+version = "0.1.0"
+dependencies = [
+ "cp0-manifest",
+ "cp0-package",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "cp0-stored"
+version = "0.1.0"
+dependencies = [
+ "cp0-appd",
+ "cp0-networkd",
+ "cp0-package",
+ "cp0-store-protocol",
+ "libc",
+ "sha2",
+ "ureq",
+]
+
+[[package]]
 name = "cp0ctl"
 version = "0.1.0"
 dependencies = [
  "cp0-appd",
  "cp0-manifest",
  "cp0-package",
+ "cp0-store-protocol",
  "libc",
+ "serde",
  "serde_json",
+ "sha2",
+ "wasmparser",
 ]
 
 [[package]]
@@ -362,6 +400,17 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "foldhash",
+ "serde",
+ "serde_core",
+]
+
+[[package]]
+name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
@@ -398,7 +447,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
- "hashbrown",
+ "hashbrown 0.17.1",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -699,6 +750,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
+name = "wasmparser"
+version = "0.245.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f08c9adee0428b7bddf3890fc27e015ac4b761cc608c822667102b8bfd6995e"
+dependencies = [
+ "bitflags",
+ "hashbrown 0.16.1",
+ "indexmap",
+ "semver",
+ "serde",
+]
+
+[[package]]
 name = "webpki-roots"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -787,7 +851,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab5f6371fc71f15730b756c1dea3562a67adab1a7e519c4ca010173d883695bb"
 dependencies = [
  "anyhow",
- "hashbrown",
+ "hashbrown 0.17.1",
  "id-arena",
  "indexmap",
  "log",

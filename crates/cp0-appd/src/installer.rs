@@ -1,13 +1,14 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, DirBuilder, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cp0_manifest::AppManifest;
 use cp0_package::{CApp, key_id};
+use sha2::{Digest, Sha256};
 
 pub const DEFAULT_STORE_TRUST_DIR: &str = "/etc/cardputerzero/trust/store";
 pub const DEFAULT_DEVELOPER_TRUST_DIR: &str = "/etc/cardputerzero/trust/developers";
@@ -217,14 +218,50 @@ impl PackageInstaller {
     }
 
     pub fn install(&self, package_path: impl AsRef<Path>) -> Result<PreparedInstall, InstallError> {
+        self.install_inner(package_path.as_ref(), IncomingPolicy::Root)
+    }
+
+    pub fn install_store(
+        &self,
+        package_path: impl AsRef<Path>,
+        owner_uid: u32,
+        expected_app_id: &str,
+        expected_version: &str,
+        expected_sha256: &[u8; 32],
+        expected_bytes: u64,
+    ) -> Result<PreparedInstall, InstallError> {
+        self.install_inner(
+            package_path.as_ref(),
+            IncomingPolicy::Store {
+                owner_uid,
+                expected_app_id,
+                expected_version,
+                expected_sha256,
+                expected_bytes,
+            },
+        )
+    }
+
+    fn install_inner(
+        &self,
+        package_path: &Path,
+        incoming: IncomingPolicy<'_>,
+    ) -> Result<PreparedInstall, InstallError> {
         validate_secure_directory(
             &self.apps_root,
             self.enforce_root_ownership,
             "applications root",
         )?;
-        let package_path = package_path.as_ref();
-        let metadata = fs::symlink_metadata(package_path)?;
-        validate_secure_metadata(&metadata, self.enforce_root_ownership, "incoming package")?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(package_path)?;
+        let metadata = file.metadata()?;
+        validate_secure_metadata(
+            &metadata,
+            matches!(incoming, IncomingPolicy::Root) && self.enforce_root_ownership,
+            "incoming package",
+        )?;
         if !metadata.is_file() {
             return Err(InstallError::Invalid(
                 "incoming package is not a regular file".into(),
@@ -235,7 +272,40 @@ impl PackageInstaller {
                 "incoming package is too large".into(),
             ));
         }
-        let package = CApp::decode(&fs::read(package_path)?)?;
+        if let IncomingPolicy::Store {
+            owner_uid,
+            expected_bytes,
+            ..
+        } = incoming
+        {
+            if metadata.uid() != owner_uid {
+                return Err(InstallError::Invalid(
+                    "store package owner does not match the requesting service".into(),
+                ));
+            }
+            if metadata.len() != expected_bytes {
+                return Err(InstallError::Invalid(
+                    "store package size does not match the signed catalog".into(),
+                ));
+            }
+        }
+        let mut encoded = Vec::with_capacity(metadata.len() as usize);
+        file.read_to_end(&mut encoded)?;
+        if encoded.len() as u64 != metadata.len() {
+            return Err(InstallError::Invalid(
+                "incoming package changed while being read".into(),
+            ));
+        }
+        if let IncomingPolicy::Store {
+            expected_sha256, ..
+        } = incoming
+            && Sha256::digest(&encoded).as_slice() != expected_sha256
+        {
+            return Err(InstallError::Invalid(
+                "store package hash does not match the signed catalog".into(),
+            ));
+        }
+        let package = CApp::decode(&encoded)?;
         let trust = self.trust.verify(&package)?;
         let manifest = cp0_manifest::parse_and_validate(
             package
@@ -243,6 +313,17 @@ impl PackageInstaller {
                 .ok_or_else(|| InstallError::Invalid("app.json is missing".into()))?,
         )?;
         require_compatible_sdk(&manifest.sdk_version)?;
+        if let IncomingPolicy::Store {
+            expected_app_id,
+            expected_version,
+            ..
+        } = incoming
+            && (manifest.id != expected_app_id || manifest.version != expected_version)
+        {
+            return Err(InstallError::Invalid(
+                "store package identity does not match the signed catalog".into(),
+            ));
+        }
         if package.entry(&manifest.entrypoint).is_none() {
             return Err(InstallError::Invalid(format!(
                 "entrypoint {} is missing",
@@ -293,6 +374,18 @@ impl PackageInstaller {
     }
 }
 
+#[derive(Clone, Copy)]
+enum IncomingPolicy<'a> {
+    Root,
+    Store {
+        owner_uid: u32,
+        expected_app_id: &'a str,
+        expected_version: &'a str,
+        expected_sha256: &'a [u8; 32],
+        expected_bytes: u64,
+    },
+}
+
 fn require_compatible_sdk(version: &str) -> Result<(), InstallError> {
     let (major, minor) = version.split_once('.').ok_or_else(|| {
         InstallError::Invalid("SDK version must use canonical <major>.<minor> form".into())
@@ -313,7 +406,7 @@ fn require_compatible_sdk(version: &str) -> Result<(), InstallError> {
     let minor = minor
         .parse::<u32>()
         .map_err(|_| InstallError::Invalid("SDK version minor component is out of range".into()))?;
-    let is_current_line = major == DEVICE_SDK_MAJOR && minor <= DEVICE_SDK_MINOR;
+    let is_current_line = major == DEVICE_SDK_MAJOR && minor == DEVICE_SDK_MINOR;
     let is_supported_legacy = LEGACY_SDK_VERSIONS.contains(&(major, minor));
     if !is_current_line && !is_supported_legacy {
         return Err(InstallError::Invalid(format!(
@@ -735,6 +828,67 @@ mod tests {
                 .join(&manifest.version)
                 .exists()
         );
+    }
+
+    #[test]
+    fn store_install_is_bound_to_owner_hash_size_and_manifest_identity() {
+        let fixture = Fixture::new("store-bound");
+        let package = fixture.signed_package(b"store wasm", true);
+        let encoded = package.encode().unwrap();
+        let digest: [u8; 32] = Sha256::digest(&encoded).into();
+        let path = fixture.write_package("store.capp", &package);
+        let manifest = fixture.manifest();
+        let owner_uid = fs::metadata(&path).unwrap().uid();
+
+        fixture
+            .installer()
+            .install_store(
+                &path,
+                owner_uid,
+                &manifest.id,
+                &manifest.version,
+                &digest,
+                encoded.len() as u64,
+            )
+            .unwrap();
+
+        let wrong_hash = [0; 32];
+        for result in [
+            fixture.installer().install_store(
+                &path,
+                owner_uid.wrapping_add(1),
+                &manifest.id,
+                &manifest.version,
+                &digest,
+                encoded.len() as u64,
+            ),
+            fixture.installer().install_store(
+                &path,
+                owner_uid,
+                &manifest.id,
+                &manifest.version,
+                &wrong_hash,
+                encoded.len() as u64,
+            ),
+            fixture.installer().install_store(
+                &path,
+                owner_uid,
+                &manifest.id,
+                &manifest.version,
+                &digest,
+                encoded.len() as u64 + 1,
+            ),
+            fixture.installer().install_store(
+                &path,
+                owner_uid,
+                "dev.cardputerzero.other",
+                &manifest.version,
+                &digest,
+                encoded.len() as u64,
+            ),
+        ] {
+            assert!(matches!(result, Err(InstallError::Invalid(_))));
+        }
     }
 
     #[test]

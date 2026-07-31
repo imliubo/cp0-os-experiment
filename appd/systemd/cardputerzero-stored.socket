@@ -1,0 +1,17 @@
+[Unit]
+Description=CardputerZero signed application store socket
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/cardputerzero-store/control.sock
+FileDescriptorName=control
+Service=cardputerzero-stored.service
+SocketUser=root
+SocketGroup=cp0-control
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=yes
+Accept=no
+
+[Install]
+WantedBy=sockets.target

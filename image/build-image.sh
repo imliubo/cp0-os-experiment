@@ -70,9 +70,11 @@ mkdir -p "$pi_gen_dir/stage-cardputerzero-os/01-compositor/system-shell"
 cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$repo_root/system-shell/include/cp0_json.h" \
     "$repo_root/system-shell/include/cp0_appd_client.h" \
+    "$repo_root/system-shell/include/cp0_store_client.h" \
     "$repo_root/system-shell/src/ui.c" \
     "$repo_root/system-shell/src/json.c" \
     "$repo_root/system-shell/src/appd_client.c" \
+    "$repo_root/system-shell/src/store_client.c" \
     "$repo_root/system-shell/src/main.c" \
     "$pi_gen_dir/stage-cardputerzero-os/01-compositor/system-shell/"
 mkdir -p "$pi_gen_dir/stage-cardputerzero-os/01-compositor/policy"
@@ -95,11 +97,13 @@ cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-networkd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-radiod" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-storaged" \
+    "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-stored" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0ctl" \
     "$repo_root/target/app-runtime-aarch64/cardputerzero-app-runtime" \
     "$platform_payload/"
 cp "$repo_root/appd/systemd/"* "$platform_payload/systemd/"
 cp "$repo_root/appd/lora.conf" "$platform_payload/"
+cp "$repo_root/appd/store.conf" "$platform_payload/"
 if [[ -n ${CP0_STORE_PUBLIC_KEY:-} ]]; then
     if [[ ! -f $CP0_STORE_PUBLIC_KEY ]] || [[ $(wc -c <"$CP0_STORE_PUBLIC_KEY") -ne 32 ]]; then
         echo "error: CP0_STORE_PUBLIC_KEY must name a 32-byte raw Ed25519 public key" >&2

@@ -9,6 +9,7 @@ fi
 compositor=cardputerzero-compositor.service
 shell=cardputerzero-system-shell.service
 appd=cardputerzero-appd.service
+stored=cardputerzero-stored.service
 
 unit_value() {
     systemctl show --property="$2" --value "$1"
@@ -75,6 +76,11 @@ kill_and_verify_restart "$appd"
 [[ $(unit_value "$compositor" MainPID) == "$compositor_pid" ]]
 /usr/bin/cp0ctl app ping >/dev/null
 
+if systemctl is-active --quiet "$stored"; then
+    kill_and_verify_restart "$stored"
+fi
+[[ -S /run/cardputerzero-store/control.sock ]]
+
 compositor_pid=$(unit_value "$compositor" MainPID)
 kill_and_verify_restart "$shell"
 [[ $(unit_value "$compositor" MainPID) == "$compositor_pid" ]]
@@ -104,6 +110,7 @@ done
 [[ -S /run/cardputerzero/wayland-0 ]]
 [[ -S /run/cardputerzero-appd/control.sock ]]
 [[ -S /run/cardputerzero-broker/runtime.sock ]]
+[[ -S /run/cardputerzero-store/control.sock ]]
 /usr/bin/cp0ctl app ping >/dev/null
 /usr/bin/cp0ctl app list 0 8 >/dev/null
 echo "PASS core recovery and control paths"

@@ -2,6 +2,7 @@
 
 #include "cardputerzero-system-shell-client-protocol.h"
 #include "cp0_appd_client.h"
+#include "cp0_store_client.h"
 #include "cp0_ui.h"
 #include "xdg-shell-client-protocol.h"
 
@@ -62,8 +63,11 @@ struct shell {
     bool has_argb;
     bool meta_pressed;
     bool redraw_pending;
+    bool has_installed_apps;
     unsigned int catalog_ticks;
+    unsigned int store_poll_delay;
     unsigned int notification_ticks;
+    struct cp0_app_list installed_apps;
     char pending_activation[CP0_APP_ID_BYTES];
 };
 
@@ -171,6 +175,8 @@ static void poll_app_catalog(struct shell *shell)
 
     if (cp0_appd_list_apps(&list) != 0)
         return;
+    shell->installed_apps = list;
+    shell->has_installed_apps = true;
     for (size_t index = 0; index < list.count; index++) {
         catalog[index] = (struct cp0_ui_catalog_app){
             .running = list.apps[index].running,
@@ -180,6 +186,65 @@ static void poll_app_catalog(struct shell *shell)
         };
     }
     cp0_ui_sync_app_catalog(&shell->ui, catalog, list.count, list.truncated);
+}
+
+static const struct cp0_app_summary *installed_app(
+    const struct shell *shell, const char *app_id)
+{
+    if (!shell->has_installed_apps)
+        return NULL;
+    for (size_t index = 0; index < shell->installed_apps.count; index++) {
+        if (strcmp(shell->installed_apps.apps[index].app_id, app_id) == 0)
+            return &shell->installed_apps.apps[index];
+    }
+    return NULL;
+}
+
+static enum cp0_ui_store_state store_ui_state(
+    const struct cp0_store_app_summary *app)
+{
+    static const enum cp0_ui_store_state direct_states[] = {
+        CP0_UI_STORE_AVAILABLE,   CP0_UI_STORE_QUEUED,
+        CP0_UI_STORE_DOWNLOADING, CP0_UI_STORE_INSTALLING,
+        CP0_UI_STORE_INSTALLED,   CP0_UI_STORE_FAILED,
+    };
+    return direct_states[app->state];
+}
+
+static void poll_store_catalog(struct shell *shell)
+{
+    struct cp0_store_catalog catalog;
+    struct cp0_ui_store_catalog_app apps[CP0_STORE_MAX_APPS];
+    int result;
+
+    if (shell->ui.screen != CP0_UI_STORE)
+        return;
+    result = cp0_store_list(&catalog);
+    if (result == CP0_STORE_RESULT_UNCONFIGURED) {
+        cp0_ui_set_store_status(&shell->ui, CP0_UI_STORE_UNCONFIGURED);
+        return;
+    }
+    if (result != CP0_STORE_RESULT_OK) {
+        cp0_ui_set_store_status(&shell->ui, CP0_UI_STORE_UNAVAILABLE);
+        return;
+    }
+    for (size_t index = 0; index < catalog.count; index++) {
+        const struct cp0_app_summary *installed =
+            installed_app(shell, catalog.apps[index].app_id);
+        apps[index] = (struct cp0_ui_store_catalog_app){
+            .package_bytes = catalog.apps[index].package_bytes,
+            .permissions = catalog.apps[index].permissions,
+            .progress_percent = catalog.apps[index].progress_percent,
+            .state = store_ui_state(&catalog.apps[index]),
+            .app_id = catalog.apps[index].app_id,
+            .name = catalog.apps[index].name,
+            .version = catalog.apps[index].version,
+            .summary = catalog.apps[index].summary,
+            .installed_version = installed == NULL ? NULL : installed->version,
+        };
+    }
+    cp0_ui_sync_store_catalog(&shell->ui, apps, catalog.count,
+                              catalog.truncated, catalog.stale);
 }
 
 static void poll_notification(struct shell *shell)
@@ -437,6 +502,7 @@ static void shell_redraw(struct shell *shell)
 
 static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
 {
+    enum cp0_ui_screen previous_screen = shell->ui.screen;
     enum cp0_ui_event event = cp0_ui_handle_action(&shell->ui, action);
     if (event == CP0_UI_EVENT_PERMISSION_ONCE ||
         event == CP0_UI_EVENT_PERMISSION_ALWAYS ||
@@ -547,6 +613,46 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                         "system-shell: application %s stop failed\n", app_id);
             }
         }
+    } else if (event == CP0_UI_EVENT_STORE_REFRESH) {
+        int result = cp0_store_refresh();
+        if (result == CP0_STORE_RESULT_OK) {
+            cp0_ui_set_store_status(&shell->ui, CP0_UI_STORE_LOADING);
+            shell->store_poll_delay = 1;
+            fprintf(stderr, "system-shell: store refresh requested\n");
+        } else if (result == CP0_STORE_RESULT_UNCONFIGURED) {
+            cp0_ui_set_store_status(&shell->ui, CP0_UI_STORE_UNCONFIGURED);
+        } else if (result != CP0_STORE_RESULT_BUSY) {
+            cp0_ui_set_store_status(&shell->ui, CP0_UI_STORE_UNAVAILABLE);
+            fprintf(stderr, "system-shell: store refresh failed\n");
+        }
+    } else if (event == CP0_UI_EVENT_STORE_INSTALL) {
+        char app_id[CP0_STORE_APP_ID_BYTES];
+        const char *selected = cp0_ui_selected_store_app_id(&shell->ui);
+        if (selected != NULL &&
+            snprintf(app_id, sizeof(app_id), "%s", selected) > 0) {
+            int result = cp0_store_install(app_id);
+            if (result == CP0_STORE_RESULT_OK) {
+                cp0_ui_set_store_app_state(&shell->ui, app_id,
+                                           CP0_UI_STORE_QUEUED, 0);
+                shell->store_poll_delay = 1;
+                fprintf(stderr,
+                        "system-shell: store install requested for %s\n",
+                        app_id);
+            } else if (result == CP0_STORE_RESULT_UNCONFIGURED) {
+                cp0_ui_set_store_status(&shell->ui,
+                                        CP0_UI_STORE_UNCONFIGURED);
+            } else if (result != CP0_STORE_RESULT_BUSY) {
+                cp0_ui_set_store_app_state(&shell->ui, app_id,
+                                           CP0_UI_STORE_FAILED, 0);
+                fprintf(stderr, "system-shell: store install failed for %s\n",
+                        app_id);
+            }
+        }
+    }
+    if (previous_screen != CP0_UI_STORE &&
+        shell->ui.screen == CP0_UI_STORE) {
+        poll_app_catalog(shell);
+        poll_store_catalog(shell);
     }
     shell_redraw(shell);
 }
@@ -1052,7 +1158,15 @@ static int shell_dispatch(struct shell *shell)
                 poll_document_prompt(shell);
                 poll_notification(shell);
                 shell->catalog_ticks++;
-                if (shell->catalog_ticks >= 5) {
+                if (shell->ui.screen == CP0_UI_STORE) {
+                    if (shell->store_poll_delay > 0) {
+                        shell->store_poll_delay--;
+                    } else {
+                        poll_app_catalog(shell);
+                        poll_store_catalog(shell);
+                    }
+                    shell->catalog_ticks = 0;
+                } else if (shell->catalog_ticks >= 5) {
                     poll_app_catalog(shell);
                     shell->catalog_ticks = 0;
                 }

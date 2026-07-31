@@ -75,6 +75,15 @@ int main(void)
         with_null,
         &tokens[member(with_null, tokens, (size_t)count, 0, "value")]));
 
+    static const char embedded_nul[] = "{\"value\":\"safe\\u0000suffix\"}";
+    count = cp0_json_parse(embedded_nul, strlen(embedded_nul), tokens,
+                           TOKEN_COUNT);
+    assert(count == 3);
+    assert(!cp0_json_copy_string(
+        embedded_nul,
+        &tokens[member(embedded_nul, tokens, (size_t)count, 0, "value")],
+        decoded, sizeof(decoded)));
+
     static const char *invalid[] = {
         "", "{", "{\"a\":1", "{\"a\":\"\\x\"}", "{}{}",
         "{\"a\":1,\"b\"}", "[1,2}",

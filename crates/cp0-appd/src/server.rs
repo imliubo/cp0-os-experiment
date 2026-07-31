@@ -61,6 +61,7 @@ impl From<std::io::Error> for ServerError {
 pub struct AppdServer {
     state: Arc<Mutex<ServerState>>,
     trusted_uids: BTreeSet<u32>,
+    store_installer_uids: BTreeSet<u32>,
     capabilities: CapabilityServices,
     installer: PackageInstaller,
 }
@@ -149,6 +150,7 @@ impl AppdServer {
                 intents: IntentQueue::default(),
             })),
             trusted_uids: trusted_uids.into_iter().collect(),
+            store_installer_uids: BTreeSet::new(),
             capabilities,
             installer: PackageInstaller::new(
                 crate::DEFAULT_APPS_ROOT,
@@ -156,6 +158,12 @@ impl AppdServer {
                 true,
             ),
         }
+    }
+
+    pub fn allow_store_installer(mut self, uid: u32) -> Self {
+        self.trusted_uids.insert(uid);
+        self.store_installer_uids.insert(uid);
+        self
     }
 
     pub fn serve(self, listener: UnixListener) -> Result<(), ServerError> {
@@ -213,47 +221,38 @@ impl AppdServer {
                 return Ok(());
             }
         };
-        if !self.trusted_uids.contains(&credentials.uid) {
-            write_response(
-                &mut stream,
-                &AppdResponse::error(
-                    request.request_id,
-                    ErrorCode::Unauthorized,
-                    "peer UID is not authorized for application lifecycle control",
-                ),
-            )
-            .map_err(protocol_io)?;
-            return Ok(());
-        }
-
-        if matches!(
+        if !control_command_authorized(
+            credentials.uid,
             &request.command,
-            AppdCommand::Install { .. } | AppdCommand::Rollback { .. } | AppdCommand::Logs { .. }
-        ) && credentials.uid != 0
-        {
+            &self.trusted_uids,
+            &self.store_installer_uids,
+        ) {
             write_response(
                 &mut stream,
                 &AppdResponse::error(
                     request.request_id,
                     ErrorCode::Unauthorized,
-                    "application installation commands require root",
+                    "peer UID is not authorized for this application command",
                 ),
             )
             .map_err(protocol_io)?;
             return Ok(());
         }
 
-        let response = self.dispatch(request);
+        let response = self.dispatch(request, credentials.uid);
         write_response(&mut stream, &response).map_err(protocol_io)?;
         Ok(())
     }
 
-    fn dispatch(&self, request: AppdRequest) -> AppdResponse {
+    fn dispatch(&self, request: AppdRequest, peer_uid: u32) -> AppdResponse {
         let request_id = request.request_id;
         debug_assert_eq!(request.protocol_version, APPD_PROTOCOL_VERSION);
         let command = match request.command {
             AppdCommand::Install { package_name } => {
                 return self.install_package(request_id, &package_name);
+            }
+            command @ AppdCommand::StoreInstall { .. } => {
+                return self.install_store_package(request_id, peer_uid, command);
             }
             command => command,
         };
@@ -269,6 +268,9 @@ impl AppdServer {
         };
         let result: Result<ResponseData, CommandError> = match command {
             AppdCommand::Install { .. } => unreachable!("install returned before state lock"),
+            AppdCommand::StoreInstall { .. } => {
+                unreachable!("store install returned before state lock")
+            }
             AppdCommand::Ping => Ok(ResponseData::Pong),
             AppdCommand::List { offset, limit } => {
                 Self::list_apps(&state, offset, limit).map_err(CommandError::Manager)
@@ -351,6 +353,14 @@ impl AppdServer {
             Ok(prepared) => prepared,
             Err(error) => return install_error_response(request_id, &error),
         };
+        self.commit_prepared_install(request_id, prepared)
+    }
+
+    fn commit_prepared_install(
+        &self,
+        request_id: u64,
+        prepared: crate::PreparedInstall,
+    ) -> AppdResponse {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(_) => {
@@ -400,6 +410,66 @@ impl AppdServer {
             Ok(data) => AppdResponse::success(request_id, data),
             Err(error) => command_error_response(request_id, &error),
         }
+    }
+
+    fn install_store_package(
+        &self,
+        request_id: u64,
+        peer_uid: u32,
+        command: AppdCommand,
+    ) -> AppdResponse {
+        let AppdCommand::StoreInstall {
+            package_name,
+            app_id,
+            version,
+            package_sha256,
+            package_bytes,
+        } = command
+        else {
+            unreachable!("store installation requires store-install command")
+        };
+        let current_version = match self.state.lock() {
+            Ok(state) => state
+                .manager
+                .installed_apps()
+                .into_iter()
+                .find(|installed| installed.app_id == app_id)
+                .map(|installed| installed.version),
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application service state is unavailable",
+                );
+            }
+        };
+        if !store_version_is_upgrade(current_version.as_deref(), &version) {
+            return AppdResponse::error(
+                request_id,
+                ErrorCode::Conflict,
+                "store installation must increase the installed application version",
+            );
+        }
+        let Some(package_sha256) = cp0_store_protocol::decode_hex::<32>(&package_sha256) else {
+            return AppdResponse::error(
+                request_id,
+                ErrorCode::InvalidRequest,
+                "store package hash is invalid",
+            );
+        };
+        let path = std::path::Path::new("/run/cardputerzero-appd/store").join(&package_name);
+        let prepared = match self.installer.install_store(
+            path,
+            peer_uid,
+            &app_id,
+            &version,
+            &package_sha256,
+            package_bytes,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => return install_error_response(request_id, &error),
+        };
+        self.commit_prepared_install(request_id, prepared)
     }
 
     fn start_app(&self, state: &ServerState, app_id: &str) -> Result<String, AppManagerError> {
@@ -1201,6 +1271,24 @@ impl AppdServer {
     }
 }
 
+fn control_command_authorized(
+    uid: u32,
+    command: &AppdCommand,
+    trusted_uids: &BTreeSet<u32>,
+    store_installer_uids: &BTreeSet<u32>,
+) -> bool {
+    if !trusted_uids.contains(&uid) {
+        return false;
+    }
+    match command {
+        AppdCommand::Install { .. } | AppdCommand::Rollback { .. } | AppdCommand::Logs { .. } => {
+            uid == 0
+        }
+        AppdCommand::StoreInstall { .. } => store_installer_uids.contains(&uid),
+        _ => true,
+    }
+}
+
 #[derive(Debug)]
 struct AuthorizedApp {
     app_id: String,
@@ -1371,6 +1459,16 @@ fn install_error_response(request_id: u64, error: &InstallError) -> AppdResponse
         InstallError::Io(_) => (ErrorCode::Internal, "application installation failed"),
     };
     AppdResponse::error(request_id, code, message)
+}
+
+fn store_version_is_upgrade(current: Option<&str>, candidate: &str) -> bool {
+    let Ok(candidate) = semver::Version::parse(candidate) else {
+        return false;
+    };
+    let Some(current) = current else {
+        return true;
+    };
+    semver::Version::parse(current).is_ok_and(|current| candidate > current)
 }
 
 fn network_error_response(request_id: u64, error: &NetworkClientError) -> BrokerResponse {
@@ -1635,6 +1733,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn store_installation_only_accepts_strict_version_upgrades() {
+        assert!(store_version_is_upgrade(None, "1.0.0"));
+        assert!(store_version_is_upgrade(Some("1.0.0"), "1.0.1"));
+        assert!(store_version_is_upgrade(Some("1.0.0-beta.1"), "1.0.0"));
+        assert!(!store_version_is_upgrade(Some("1.0.0"), "1.0.0"));
+        assert!(!store_version_is_upgrade(Some("2.0.0"), "1.9.9"));
+        assert!(!store_version_is_upgrade(Some("1.0.0"), "invalid"));
+    }
+
+    #[test]
     fn maps_public_lifecycle_errors_without_host_details() {
         let response = manager_error_response(
             9,
@@ -1689,5 +1797,63 @@ mod tests {
             select_intent_target("dev.cardputerzero.missing", &[first]),
             Err(IntentTargetError::NotFound)
         );
+    }
+
+    #[test]
+    fn store_uid_has_only_the_catalog_bound_install_command() {
+        let root = 0;
+        let shell = 100;
+        let store = 101;
+        let trusted = BTreeSet::from([root, shell, store]);
+        let stores = BTreeSet::from([store]);
+        let normal = AppdCommand::List {
+            offset: 0,
+            limit: 1,
+        };
+        let root_install = AppdCommand::Install {
+            package_name: "incoming-test.capp".into(),
+        };
+        let store_install = AppdCommand::StoreInstall {
+            package_name: "store-test.capp".into(),
+            app_id: "dev.cardputerzero.example".into(),
+            version: "1.0.0".into(),
+            package_sha256: "11".repeat(32),
+            package_bytes: 4096,
+        };
+
+        assert!(control_command_authorized(
+            root,
+            &root_install,
+            &trusted,
+            &stores
+        ));
+        assert!(!control_command_authorized(
+            shell,
+            &root_install,
+            &trusted,
+            &stores
+        ));
+        assert!(!control_command_authorized(
+            store,
+            &root_install,
+            &trusted,
+            &stores
+        ));
+        assert!(control_command_authorized(
+            store,
+            &store_install,
+            &trusted,
+            &stores
+        ));
+        assert!(!control_command_authorized(
+            shell,
+            &store_install,
+            &trusted,
+            &stores
+        ));
+        assert!(control_command_authorized(
+            shell, &normal, &trusted, &stores
+        ));
+        assert!(!control_command_authorized(999, &normal, &trusted, &stores));
     }
 }

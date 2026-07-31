@@ -81,9 +81,10 @@ Generate a developer key once, then create and sign a reproducible `.capp`:
 ```sh
 cargo run -p cp0ctl -- key generate developer.key developer.pub
 cargo run -p cp0ctl -- package /tmp/my-clock /tmp/my-clock.capp
-cargo run -p cp0ctl -- sign /tmp/my-clock.capp developer.key
-cargo run -p cp0ctl -- verify /tmp/my-clock.capp
-cargo run -p cp0ctl -- install /tmp/my-clock.capp \
+cargo run -p cp0ctl -- sign developer /tmp/my-clock.capp \
+  /tmp/my-clock.developer.capp developer.key
+cargo run -p cp0ctl -- verify /tmp/my-clock.developer.capp
+cargo run -p cp0ctl -- install /tmp/my-clock.developer.capp \
   --device pi@192.168.20.146
 ```
 
@@ -91,6 +92,24 @@ Device installation succeeds only when the developer key is trusted or the
 device has explicitly enabled developer mode. Store distribution adds an
 independent store review signature. Trust configuration is root-owned and is
 never writable by an application.
+
+Store submission uses the developer-signed package, not an unsigned build and
+not a package that already has a store signature. Review metadata must bind the
+exact submission SHA-256, declared permissions and inspected WASM imports. The
+review/publishing operator then runs:
+
+```sh
+cargo run -p cp0ctl -- store publish \
+  submissions reviews public-store https://store.example.invalid \
+  42 1800000000 1800600000 store.key
+```
+
+This creates a new static HTTPS tree containing store-signed packages, a signed
+catalog and `store.pub`. The output directory must not already exist. Developers
+cannot self-approve a package by adding a store signature; device trust keys and
+the review signing key are controlled independently. See
+`docs/PHASE5B-APPLICATION-STORE.md` for the review schema and device trust
+boundary.
 
 Application logs are bounded and root-mediated:
 

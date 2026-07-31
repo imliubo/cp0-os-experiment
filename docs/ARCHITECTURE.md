@@ -162,9 +162,17 @@ Runtime 的 `/data` 是沙箱内空目录，不再绑定任何宿主可写路径
 `.capp` 是签名的不可变应用包，至少包含 `app.json`、WASM/AOT 模块、资源和签名。
 商店签名与开发者签名分离：开发者负责来源身份，商店在审核后为可安装产物签名。
 
-`appd` 负责校验 schema、哈希、签名、SDK 版本、权限和资源上限，再以原子方式安装
-到 `/var/lib/cardputer/apps/<app-id>/<version>`。应用数据位于独立目录，卸载时由
-用户决定是否保留。
+发布工具将审核记录绑定到开发者签名提交的完整 SHA-256、manifest 权限和实际 WASM
+imports，再生成确定性的商店签名包和 Ed25519 签名目录。设备端 `cp0-stored` 只接受
+HTTPS 公网地址，验证目录序列、有效期和签名，支持有严格 `Content-Range` 校验的断点
+续传，并在下载后校验大小与 SHA-256。
+
+`cp0-stored` 使用独立 `cp0-store` UID，只能写自己的私有缓存和
+`/run/cardputerzero-appd/store` 交接目录。Shell 只能发送 list/refresh/install-app-ID，
+不能指定 URL、路径、哈希或版本。appd 只接受固定 Store UID 的交接命令，并再次独立
+校验文件身份、manifest、双签名和严格 SemVer 升级，随后原子安装到
+`/var/lib/cardputerzero/apps/<app-id>/<version>`。目录默认未配置且镜像不内置生产
+信任根；详细边界见 `docs/PHASE5B-APPLICATION-STORE.md`。
 
 ## 8. 512 MB 内存预算
 

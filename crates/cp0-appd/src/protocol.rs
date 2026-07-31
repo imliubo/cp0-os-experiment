@@ -38,6 +38,13 @@ pub enum AppdCommand {
     Install {
         package_name: String,
     },
+    StoreInstall {
+        package_name: String,
+        app_id: String,
+        version: String,
+        package_sha256: String,
+        package_bytes: u64,
+    },
     Rollback {
         app_id: String,
     },
@@ -168,6 +175,7 @@ pub enum ProtocolError {
     InvalidPromptId,
     InvalidDocumentId,
     InvalidPackageName,
+    InvalidStoreInstall,
     InvalidLogLimit,
 }
 
@@ -198,6 +206,7 @@ impl fmt::Display for ProtocolError {
             Self::InvalidPromptId => formatter.write_str("permission prompt ID must be non-zero"),
             Self::InvalidDocumentId => formatter.write_str("invalid document ID"),
             Self::InvalidPackageName => formatter.write_str("invalid incoming package name"),
+            Self::InvalidStoreInstall => formatter.write_str("invalid store installation metadata"),
             Self::InvalidLogLimit => {
                 formatter.write_str("application log limit must be between 1 and 100")
             }
@@ -262,6 +271,20 @@ impl AppdRequest {
             }
             AppdCommand::Install { package_name } if !is_valid_package_name(package_name) => {
                 Err(ProtocolError::InvalidPackageName)
+            }
+            AppdCommand::StoreInstall {
+                package_name,
+                app_id,
+                version,
+                package_sha256,
+                package_bytes,
+            } if !is_valid_package_name(package_name)
+                || !cp0_manifest::is_valid_app_id(app_id)
+                || !cp0_manifest::is_valid_app_version(version)
+                || !cp0_store_protocol::is_lower_hex(package_sha256, 32)
+                || !(1..=cp0_store_protocol::MAX_PACKAGE_BYTES).contains(package_bytes) =>
+            {
+                Err(ProtocolError::InvalidStoreInstall)
             }
             AppdCommand::Logs { limit, .. } if !(1..=MAX_LOG_LINES).contains(limit) => {
                 Err(ProtocolError::InvalidLogLimit)
@@ -618,6 +641,27 @@ mod tests {
                 Err(ProtocolError::InvalidPackageName)
             ));
         }
+
+        let store_install = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 6,
+            command: AppdCommand::StoreInstall {
+                package_name: "store-package.capp".into(),
+                app_id: "dev.cardputerzero.example".into(),
+                version: "1.0.0".into(),
+                package_sha256: "11".repeat(32),
+                package_bytes: 4096,
+            },
+        };
+        assert!(store_install.validate().is_ok());
+        let mut invalid_store = store_install.clone();
+        if let AppdCommand::StoreInstall { package_sha256, .. } = &mut invalid_store.command {
+            *package_sha256 = "AA".repeat(32);
+        }
+        assert!(matches!(
+            invalid_store.validate(),
+            Err(ProtocolError::InvalidStoreInstall)
+        ));
     }
 
     #[test]

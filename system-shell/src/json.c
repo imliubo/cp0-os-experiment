@@ -246,6 +246,8 @@ static bool append_utf8(char *output, size_t capacity, size_t *offset,
                         uint32_t codepoint)
 {
     unsigned int bytes;
+    if (codepoint == 0)
+        return false;
     if (codepoint <= 0x7fU)
         bytes = 1;
     else if (codepoint <= 0x7ffU)

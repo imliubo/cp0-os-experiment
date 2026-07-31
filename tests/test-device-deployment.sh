@@ -17,6 +17,10 @@ if grep -q 'wait_active cardputerzero-appd.service' "$compositor"; then
 fi
 grep -q 'systemctl stop cardputerzero-system-shell.service' "$platform"
 grep -q 'cardputerzero-appd.socket cardputerzero-broker.socket' "$platform"
+grep -q 'cardputerzero-stored.socket' "$platform"
+grep -q 'cp0-stored' "$prepare"
+grep -q 'store.conf' "$prepare"
+grep -q 'useradd --system --gid cp0-store --groups cp0-control' "$platform"
 grep -q 'systemctl start cardputerzero-system-shell.service' "$platform"
 grep -q 'device-stability-monitor.sh' "$platform"
 grep -q 'output must be below repository target' "$prepare"

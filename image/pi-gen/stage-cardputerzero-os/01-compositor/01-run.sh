@@ -11,12 +11,17 @@ install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/cp0_json.h" \
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/cp0_appd_client.h" \
     "${shell_source}/cp0_appd_client.h"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/cp0_store_client.h" \
+    "${shell_source}/cp0_store_client.h"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/ui.c" \
     "${shell_source}/ui.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/json.c" \
     "${shell_source}/json.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/appd_client.c" \
     "${shell_source}/appd_client.c"
+install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/store_client.c" \
+    "${shell_source}/store_client.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/main.c" \
     "${shell_source}/main.c"
 install -D -m 0644 \
@@ -139,6 +144,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     /tmp/cardputerzero-system-shell/ui.c \
     /tmp/cardputerzero-system-shell/json.c \
     /tmp/cardputerzero-system-shell/appd_client.c \
+    /tmp/cardputerzero-system-shell/store_client.c \
     /tmp/cardputerzero-policy/cardputerzero-system-shell-protocol.c \
     /tmp/cardputerzero-weston-build/protocol/xdg-shell-protocol.c \
     \$(pkg-config --cflags --libs wayland-client) \

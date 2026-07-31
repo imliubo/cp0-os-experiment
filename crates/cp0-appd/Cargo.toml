@@ -14,6 +14,9 @@ cp0-network-protocol = { path = "../cp0-network-protocol" }
 cp0-package = { path = "../cp0-package" }
 cp0-radio-protocol = { path = "../cp0-radio-protocol" }
 cp0-storage-protocol = { path = "../cp0-storage-protocol" }
+cp0-store-protocol = { path = "../cp0-store-protocol" }
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+semver.workspace = true

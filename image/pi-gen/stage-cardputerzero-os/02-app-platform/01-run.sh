@@ -19,6 +19,8 @@ install -D -m 0755 "${payload}/cp0-radiod" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-radiod"
 install -D -m 0755 "${payload}/cp0-storaged" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-storaged"
+install -D -m 0755 "${payload}/cp0-stored" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-stored"
 install -D -m 0755 "${payload}/cp0ctl" \
     "${ROOTFS_DIR}/usr/bin/cp0ctl"
 install -D -m 0755 "${payload}/cardputerzero-app-runtime" \
@@ -57,6 +59,10 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-storaged.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-storaged.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-storaged.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-storaged.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-stored.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-stored.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-stored.socket" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-stored.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-gpio.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-gpio.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-appd.conf" \
@@ -65,6 +71,8 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-storage.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-storage.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-trust.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-trust.conf"
+install -D -m 0644 "${payload}/systemd/cardputerzero-store.conf" \
+    "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-store.conf"
 install -d -o root -g root -m 0755 \
     "${ROOTFS_DIR}/etc/cardputerzero/trust/store" \
     "${ROOTFS_DIR}/etc/cardputerzero/trust/developers" \
@@ -77,6 +85,8 @@ for store_key in "${payload}"/trust/store/*.pub; do
 done
 install -D -o root -g root -m 0644 "${payload}/lora.conf" \
     "${ROOTFS_DIR}/etc/cardputerzero/lora.conf"
+install -D -o root -g root -m 0644 "${payload}/store.conf" \
+    "${ROOTFS_DIR}/etc/cardputerzero/store.conf"
 install -D -m 0755 "${payload}/diagnostics/device-core-recovery.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-core-recovery"
 install -D -m 0755 "${payload}/diagnostics/device-stability-monitor.sh" \
@@ -92,6 +102,15 @@ if ! getent group cp0-control >/dev/null 2>&1; then
     groupadd --system cp0-control
 fi
 usermod -a -G cp0-control cp0-shell
+if ! getent group cp0-store >/dev/null 2>&1; then
+    groupadd --system cp0-store
+fi
+if ! id cp0-store >/dev/null 2>&1; then
+    useradd --system --gid cp0-store --groups cp0-control \
+        --home-dir /nonexistent --shell /usr/sbin/nologin cp0-store
+else
+    usermod -a -G cp0-control cp0-store
+fi
 if ! getent group cp0-network >/dev/null 2>&1; then
     groupadd --system cp0-network
 fi
@@ -179,9 +198,10 @@ systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-appd.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-gpio.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-storage.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-trust.conf
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-store.conf
 systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
     cardputerzero-audiod.socket cardputerzero-camerad.socket \
     cardputerzero-gpiod.socket cardputerzero-radiod.socket \
-    cardputerzero-storaged.socket
+    cardputerzero-storaged.socket cardputerzero-stored.socket
 CHROOT
