@@ -71,6 +71,13 @@ my-app/
 - 隐私和支持链接必须使用 HTTPS，禁止凭据、fragment、空白和控制字符。
 
 JSON schema 位于 `schemas/store-listing-v1.schema.json`，共享严格验证器位于
-`cp0-store-metadata` crate。它们负责字段、顺序和边界；后续 `cp0ctl store validate` 和
-扫描 worker 还必须读取实际资源，验证 PNG 格式与像素、复算大小/SHA-256，并把 Listing
-与开发者签名包的精确摘要绑定。仅通过 JSON 结构验证不能发布应用。
+`cp0-store-metadata` crate。开发者签名包和 Listing 准备好后运行：
+
+```sh
+cp0ctl store validate dev.cardputerzero.notes-1.2.0.signed.capp store/listing.json
+```
+
+该命令验证开发者签名、包/Listing 身份、资源路径、PNG 结构与像素，并复算资源大小和
+SHA-256；它拒绝已经带有 Store 签名的提交。扫描 worker 仍会在隔离环境中独立重复验证
+并完整解码资源，再把 Listing、资源和包摘要绑定为一个 Submission revision。仅通过
+本地预检不能发布应用。

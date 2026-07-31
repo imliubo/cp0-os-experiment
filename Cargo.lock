@@ -282,6 +282,7 @@ dependencies = [
  "cp0-appd",
  "cp0-manifest",
  "cp0-package",
+ "cp0-store-metadata",
  "cp0-store-protocol",
  "libc",
  "serde",

@@ -130,7 +130,16 @@ is root-owned and is never writable by an application.
 Store submission uses the developer-signed package, not an unsigned build and
 not a package that already has a store signature. Review metadata must bind the
 exact submission SHA-256, declared permissions and inspected WASM imports. The
-review/publishing operator then runs:
+developer first validates the package and Store resources locally:
+
+```sh
+cargo run -p cp0ctl -- store validate \
+  dev.cardputerzero.example-1.0.0.signed.capp store/listing.json
+```
+
+This rejects identity mismatches, invalid developer signatures, pre-existing
+Store signatures, unsafe or symbolic-link asset paths, size/digest mismatches
+and malformed PNG dimensions. The review/publishing operator then runs:
 
 ```sh
 cargo run -p cp0ctl -- store publish \

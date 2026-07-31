@@ -285,6 +285,119 @@ pub fn validate(listing: &StoreListing) -> Result<(), Vec<String>> {
     }
 }
 
+pub fn validate_png_structure(
+    encoded: &[u8],
+    expected_width: u16,
+    expected_height: u16,
+) -> Result<(), String> {
+    const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if encoded.len() < SIGNATURE.len() || &encoded[..SIGNATURE.len()] != SIGNATURE {
+        return Err("image does not have a PNG signature".into());
+    }
+
+    let mut offset = SIGNATURE.len();
+    let mut seen_header = false;
+    let mut seen_data = false;
+    let mut data_ended = false;
+    while offset < encoded.len() {
+        let header_end = offset
+            .checked_add(8)
+            .filter(|end| *end <= encoded.len())
+            .ok_or_else(|| "PNG chunk header is truncated".to_owned())?;
+        let length = u32::from_be_bytes(encoded[offset..offset + 4].try_into().unwrap()) as usize;
+        let data_end = header_end
+            .checked_add(length)
+            .filter(|end| {
+                end.checked_add(4)
+                    .is_some_and(|crc_end| crc_end <= encoded.len())
+            })
+            .ok_or_else(|| "PNG chunk length is outside the file".to_owned())?;
+        let crc_end = data_end + 4;
+        let kind: [u8; 4] = encoded[offset + 4..header_end].try_into().unwrap();
+        if !kind.iter().all(u8::is_ascii_alphabetic) {
+            return Err("PNG chunk type is invalid".into());
+        }
+        let expected_crc = u32::from_be_bytes(encoded[data_end..crc_end].try_into().unwrap());
+        if png_crc32(&encoded[offset + 4..data_end]) != expected_crc {
+            return Err("PNG chunk CRC does not match".into());
+        }
+        let data = &encoded[header_end..data_end];
+
+        match &kind {
+            b"IHDR" => {
+                if seen_header || offset != SIGNATURE.len() || data.len() != 13 {
+                    return Err("PNG must contain exactly one leading IHDR chunk".into());
+                }
+                let width = u32::from_be_bytes(data[0..4].try_into().unwrap());
+                let height = u32::from_be_bytes(data[4..8].try_into().unwrap());
+                if width != u32::from(expected_width) || height != u32::from(expected_height) {
+                    return Err(format!(
+                        "PNG dimensions must be {expected_width}x{expected_height}"
+                    ));
+                }
+                let valid_depth = matches!(
+                    (data[8], data[9]),
+                    (1 | 2 | 4 | 8 | 16, 0) | (8 | 16, 2) | (1 | 2 | 4 | 8, 3) | (8 | 16, 4 | 6)
+                );
+                if !valid_depth || data[10] != 0 || data[11] != 0 || !matches!(data[12], 0 | 1) {
+                    return Err("PNG IHDR encoding fields are invalid".into());
+                }
+                seen_header = true;
+            }
+            b"PLTE" => {
+                if !seen_header
+                    || seen_data
+                    || data.is_empty()
+                    || data.len() > 768
+                    || data.len() % 3 != 0
+                {
+                    return Err("PNG palette chunk is invalid or out of order".into());
+                }
+            }
+            b"IDAT" => {
+                if !seen_header || data_ended {
+                    return Err("PNG image data chunks are invalid or non-contiguous".into());
+                }
+                seen_data = true;
+            }
+            b"IEND" => {
+                if !seen_header || !seen_data || !data.is_empty() || crc_end != encoded.len() {
+                    return Err("PNG IEND chunk is invalid or not final".into());
+                }
+                return Ok(());
+            }
+            _ => {
+                if kind[0].is_ascii_uppercase() {
+                    return Err("PNG contains an unsupported critical chunk".into());
+                }
+                if seen_data {
+                    data_ended = true;
+                }
+            }
+        }
+        if &kind != b"IDAT" && seen_data {
+            data_ended = true;
+        }
+        offset = crc_end;
+    }
+    Err("PNG is missing a final IEND chunk".into())
+}
+
+fn png_crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xedb8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
 fn validate_asset(
     asset: &ImageAsset,
     field: &str,
@@ -443,6 +556,27 @@ mod tests {
         }
     }
 
+    fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        encoded.extend_from_slice(kind);
+        encoded.extend_from_slice(data);
+        encoded.extend_from_slice(&png_crc32(&encoded[4..]).to_be_bytes());
+        encoded
+    }
+
+    fn structural_png(width: u16, height: u16) -> Vec<u8> {
+        let mut encoded = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut header = Vec::new();
+        header.extend_from_slice(&u32::from(width).to_be_bytes());
+        header.extend_from_slice(&u32::from(height).to_be_bytes());
+        header.extend_from_slice(&[8, 6, 0, 0, 0]);
+        encoded.extend_from_slice(&png_chunk(b"IHDR", &header));
+        encoded.extend_from_slice(&png_chunk(b"IDAT", &[0x78, 0x01]));
+        encoded.extend_from_slice(&png_chunk(b"IEND", &[]));
+        encoded
+    }
+
     #[test]
     fn strict_listing_round_trips() {
         let listing = valid_listing();
@@ -514,5 +648,20 @@ mod tests {
             .map(|rating| rating.as_str())
             .collect::<BTreeSet<_>>();
         assert_eq!(ratings, rust_ratings);
+    }
+
+    #[test]
+    fn validates_png_structure_dimensions_order_and_crc() {
+        let valid = structural_png(48, 48);
+        validate_png_structure(&valid, 48, 48).unwrap();
+        assert!(validate_png_structure(&valid, 320, 170).is_err());
+
+        let mut corrupt = valid.clone();
+        corrupt[30] ^= 1;
+        assert!(validate_png_structure(&corrupt, 48, 48).is_err());
+
+        let mut trailing = valid;
+        trailing.push(0);
+        assert!(validate_png_structure(&trailing, 48, 48).is_err());
     }
 }

@@ -37,7 +37,7 @@
 ## S3：Developer Listing 与提交 CLI
 
 - [x] 新增 `store-listing-v1.schema.json` 和 Rust 严格验证器。
-- [ ] `cp0ctl store validate` 同时验证 `.capp`、Listing、资源和开发者签名。
+- [x] `cp0ctl store validate` 同时验证 `.capp`、Listing、资源和开发者签名。
 - [ ] `cp0ctl store submit` 支持 OAuth Device Flow、分片上传、重试和 finalize。
 - [ ] 输出可机器读取的 Submission ID、摘要和 Portal URL。
 - [ ] CLI 不读取/上传开发者私钥，不在日志中输出 OAuth token。
