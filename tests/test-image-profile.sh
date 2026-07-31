@@ -37,6 +37,11 @@ if grep -q 'verify_stage=' "$build_script"; then
 fi
 grep -q 'export-image-prerun.sh' "$build_script"
 grep -q 'scripts/init-bottom/cardputerzero-overlay-root' "$rootfs_verifier"
+grep -Fq 'chroot "$rootfs" /usr/bin/unmkinitramfs' "$rootfs_verifier"
+if grep -q '^unmkinitramfs ' "$rootfs_verifier"; then
+    echo "error: rootfs verification depends on the pi-gen host tools" >&2
+    exit 1
+fi
 grep -q 'build proxy configuration leaked' "$rootfs_verifier"
 grep -q 'unencrypted Debian or Raspberry Pi apt source' "$rootfs_verifier"
 grep -q 'https://archive.raspberrypi.com' "$stage"

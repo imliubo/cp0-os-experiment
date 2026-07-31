@@ -171,7 +171,7 @@ grep -qE 'usr/lib/modules/.*/kernel/fs/overlayfs/overlay\.ko' \
 grep -qx 'usr/lib/firmware/cardputerzero,st7789v_lcd.bin' \
     <<<"$initramfs_contents"
 
-verify_tmp_parent=${EXPORT_CONFIG_DIR:-$(dirname "$rootfs")}
+verify_tmp_parent="$rootfs/run"
 initramfs_extract=$(mktemp -d \
     "$verify_tmp_parent/cardputerzero-initramfs-order.XXXXXX")
 case "$initramfs_extract" in
@@ -182,7 +182,16 @@ case "$initramfs_extract" in
         ;;
 esac
 trap 'rm -rf -- "$initramfs_extract"' EXIT
-unmkinitramfs "$bootfs/initramfs8" "$initramfs_extract"
+initramfs_chroot=${initramfs_extract#"$rootfs"}
+case "$initramfs_chroot" in
+    /run/cardputerzero-initramfs-order.*) ;;
+    *)
+        echo "error: initramfs verification directory is outside rootfs" >&2
+        exit 1
+        ;;
+esac
+chroot "$rootfs" /usr/bin/unmkinitramfs \
+    /boot/firmware/initramfs8 "$initramfs_chroot"
 grep -Fqx '/scripts/init-bottom/cardputerzero-overlay-root "$@"' \
     "$initramfs_extract/scripts/init-bottom/ORDER"
 grep -Fqx '/scripts/local-premount/cardputerzero-data-grow "$@"' \
