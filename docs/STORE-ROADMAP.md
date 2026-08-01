@@ -130,7 +130,9 @@ S6E 已新增兼容的签名根索引、分类索引和有界 shard：Publisher 
   Team 读取/角色管理和受约束 Publisher outbox 均已有 PostgreSQL/HTTP 验收。
 - [x] 为本地内容寻址后端实现上传互锁、年龄门禁、dry-run 和 fail-closed 对象 GC。
   生产复制、跨区域恢复和正式保留策略不由本地文件后端替代。
-- [ ] 完成 Identity 自助闭环：成员暂停/恢复/移除已完成；账户链接、邀请、Portal 会话和生产身份提供方接入仍待实现。
+- [ ] 完成 Identity 自助闭环：成员暂停/恢复/移除已完成；Portal BFF、外部身份链接、
+  邀请和会话的 v1 安全边界与 OpenAPI 已冻结，PostgreSQL 状态机与绕过验收已完成；
+  Portal BFF/HTTP 实现及生产身份提供方接入仍待完成。
 - [x] 实现隔离 Scan Worker：包格式、WASM、权限、资源和恶意样本检查。
   当前为无 IP 网络、只读对象根的确定性结构/能力扫描；动态规则、信誉源和运营隔离环境待生产化。
 - [x] 实现 Review Console、结构化问题、回复、二审、双人审批和风险分级。

@@ -91,8 +91,12 @@ changes to ETag/idempotency headers; the local Portal UI exposes suspend/restore
 requires explicit removal confirmation, and disables suspension or removal of
 the final active Owner.
 
-Account creation/linking, invitations, OIDC callback and
-Portal session endpoints, MFA enrollment/recovery, reviewer SSO, and production
-abuse controls remain unimplemented. Re-inviting a removed external identity
+The provider-neutral account/linking, invitation, OIDC callback and Portal
+session boundary is frozen in `STORE-PORTAL-IDENTITY-V1.md` and
+`store-portal-identity-v1.openapi.json`. Its PostgreSQL Account, identity-link,
+OIDC transaction, session, invitation and Membership-binding state machines
+are implemented with SQL bypass acceptance; the Portal BFF/HTTP flow,
+MFA enrollment/recovery, reviewer SSO, and production abuse controls remain
+unimplemented. Re-inviting a removed external identity
 requires a future, separately versioned membership record design; this endpoint
 never reactivates a removed row.

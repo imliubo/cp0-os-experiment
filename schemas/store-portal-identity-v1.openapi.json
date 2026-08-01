@@ -1,0 +1,384 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "CardputerZero Store Portal Identity API",
+    "version": "1.0.0",
+    "description": "Browser-to-BFF contract for OIDC sessions, external identity links and Team invitations."
+  },
+  "servers": [{ "url": "https://developer.cardputerzero.dev" }],
+  "security": [{ "portalSession": [] }],
+  "paths": {
+    "/portal/auth/login": {
+      "get": {
+        "operationId": "beginPortalLogin",
+        "security": [],
+        "parameters": [{ "$ref": "#/components/parameters/Provider" }],
+        "responses": {
+          "302": { "description": "Redirect to the configured OIDC authorization endpoint" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/portal/auth/callback": {
+      "get": {
+        "operationId": "completePortalLogin",
+        "security": [],
+        "parameters": [
+          { "name": "code", "in": "query", "required": true, "schema": { "type": "string", "minLength": 16, "maxLength": 4096 } },
+          { "name": "state", "in": "query", "required": true, "schema": { "type": "string", "minLength": 32, "maxLength": 256 } }
+        ],
+        "responses": {
+          "303": { "description": "Create or rotate the Portal session and redirect to the same-origin Portal" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/portal/v1/session": {
+      "get": {
+        "operationId": "getPortalSession",
+        "responses": {
+          "200": {
+            "description": "Current bounded Portal session",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PortalSession" } } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/portal/v1/session:logout": {
+      "post": {
+        "operationId": "logoutPortalSession",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": {
+          "204": { "description": "Current session revoked and cookie expired" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/portal/v1/session:step-up": {
+      "post": {
+        "operationId": "beginPortalStepUp",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Same-provider OIDC step-up transaction created",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthorizationRedirect" } } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/portal/v1/identity-links": {
+      "get": {
+        "operationId": "listPortalIdentityLinks",
+        "responses": {
+          "200": {
+            "description": "Bounded external identity link metadata without OIDC subjects",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IdentityLinkList" } } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "post": {
+        "operationId": "beginPortalIdentityLink",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BeginIdentityLinkRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Fresh-provider OIDC link transaction created",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthorizationRedirect" } } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/portal/v1/identity-links/{link_id}:remove": {
+      "post": {
+        "operationId": "removePortalIdentityLink",
+        "parameters": [
+          { "$ref": "#/components/parameters/LinkId" },
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Identity link terminally revoked after a fresh step-up",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IdentityLinkList" } } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/portal/v1/teams/{team_id}/invitations": {
+      "get": {
+        "operationId": "listTeamInvitations",
+        "parameters": [{ "$ref": "#/components/parameters/TeamId" }],
+        "responses": {
+          "200": {
+            "description": "Current Team invitations",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InvitationList" } } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "post": {
+        "operationId": "createTeamInvitation",
+        "parameters": [
+          { "$ref": "#/components/parameters/TeamId" },
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateInvitationRequest" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "Invitation created and queued for delivery without returning its secret",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Invitation" } } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/portal/v1/invitations/{invitation_id}:cancel": {
+      "post": {
+        "operationId": "cancelTeamInvitation",
+        "parameters": [
+          { "$ref": "#/components/parameters/InvitationId" },
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pending invitation terminally cancelled",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Invitation" } } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/portal/v1/invitations:inspect": {
+      "post": {
+        "operationId": "inspectTeamInvitation",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InvitationTokenRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Minimal invitation metadata with a masked address",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InvitationPreview" } } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/portal/v1/invitations:accept": {
+      "post": {
+        "operationId": "acceptTeamInvitation",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InvitationTokenRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Invitation atomically accepted and Team membership created",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AcceptedInvitation" } } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "portalSession": { "type": "apiKey", "in": "cookie", "name": "__Host-cp0_portal" }
+    },
+    "headers": {
+      "ETag": { "description": "Strong resource version", "schema": { "type": "string", "pattern": "^\\\"[1-9][0-9]*\\\"$" } }
+    },
+    "parameters": {
+      "Provider": { "name": "provider", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/ProviderKey" } },
+      "CsrfToken": { "name": "X-CSRF-Token", "in": "header", "required": true, "schema": { "type": "string", "minLength": 43, "maxLength": 128 } },
+      "IdempotencyKey": { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 16, "maxLength": 128 } },
+      "IfMatch": { "name": "If-Match", "in": "header", "required": true, "schema": { "type": "string", "pattern": "^\\\"[1-9][0-9]*\\\"$" } },
+      "TeamId": { "name": "team_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/TeamId" } },
+      "InvitationId": { "name": "invitation_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/InvitationId" } },
+      "LinkId": { "name": "link_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/LinkId" } }
+    },
+    "responses": {
+      "Problem": {
+        "description": "Bounded error without identity-provider or secret details",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      }
+    },
+    "schemas": {
+      "Problem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "title", "status", "code", "request_id"],
+        "properties": {
+          "type": { "type": "string", "maxLength": 256 },
+          "title": { "type": "string", "maxLength": 160 },
+          "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+          "code": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+          "request_id": { "type": "string", "maxLength": 64 }
+        }
+      },
+      "ProviderKey": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+      "AccountId": { "type": "string", "pattern": "^account_[0-9a-f]{32}$" },
+      "TeamId": { "type": "string", "pattern": "^team_[0-9a-f]{32}$" },
+      "InvitationId": { "type": "string", "pattern": "^invite_[0-9a-f]{32}$" },
+      "LinkId": { "type": "string", "pattern": "^link_[0-9a-f]{32}$" },
+      "InviteRole": { "enum": ["developer", "release-manager", "viewer"] },
+      "InvitationState": { "enum": ["pending", "accepted", "cancelled", "expired"] },
+      "TeamSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["team_id", "name", "role", "membership_state", "resource_version"],
+        "properties": {
+          "team_id": { "$ref": "#/components/schemas/TeamId" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "role": { "enum": ["owner", "developer", "release-manager", "viewer"] },
+          "membership_state": { "enum": ["active", "suspended"] },
+          "resource_version": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "PortalSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["account_id", "email", "email_verified", "csrf_token", "mfa_step_up_fresh", "idle_expires_unix_seconds", "absolute_expires_unix_seconds", "teams", "resource_version"],
+        "properties": {
+          "account_id": { "$ref": "#/components/schemas/AccountId" },
+          "email": { "type": "string", "format": "email", "minLength": 3, "maxLength": 254 },
+          "email_verified": { "const": true },
+          "csrf_token": { "type": "string", "minLength": 43, "maxLength": 128 },
+          "mfa_step_up_fresh": { "type": "boolean" },
+          "idle_expires_unix_seconds": { "type": "integer", "minimum": 1 },
+          "absolute_expires_unix_seconds": { "type": "integer", "minimum": 1 },
+          "teams": { "type": "array", "maxItems": 8, "items": { "$ref": "#/components/schemas/TeamSummary" } },
+          "resource_version": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "AuthorizationRedirect": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["authorization_uri"],
+        "properties": { "authorization_uri": { "type": "string", "format": "uri", "maxLength": 4096, "pattern": "^https://" } }
+      },
+      "BeginIdentityLinkRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["provider"],
+        "properties": { "provider": { "$ref": "#/components/schemas/ProviderKey" } }
+      },
+      "IdentityLink": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["link_id", "provider", "linked_unix_seconds", "current", "resource_version"],
+        "properties": {
+          "link_id": { "$ref": "#/components/schemas/LinkId" },
+          "provider": { "$ref": "#/components/schemas/ProviderKey" },
+          "linked_unix_seconds": { "type": "integer", "minimum": 1 },
+          "current": { "type": "boolean" },
+          "resource_version": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "IdentityLinkList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "resource_version"],
+        "properties": {
+          "items": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/components/schemas/IdentityLink" } },
+          "resource_version": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "CreateInvitationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["email", "role"],
+        "properties": {
+          "email": { "type": "string", "format": "email", "minLength": 3, "maxLength": 254 },
+          "role": { "$ref": "#/components/schemas/InviteRole" }
+        }
+      },
+      "Invitation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["invitation_id", "team_id", "email", "role", "state", "created_unix_seconds", "expires_unix_seconds", "resource_version", "team_resource_version"],
+        "properties": {
+          "invitation_id": { "$ref": "#/components/schemas/InvitationId" },
+          "team_id": { "$ref": "#/components/schemas/TeamId" },
+          "email": { "type": "string", "format": "email", "minLength": 3, "maxLength": 254 },
+          "role": { "$ref": "#/components/schemas/InviteRole" },
+          "state": { "$ref": "#/components/schemas/InvitationState" },
+          "created_unix_seconds": { "type": "integer", "minimum": 1 },
+          "expires_unix_seconds": { "type": "integer", "minimum": 1 },
+          "resource_version": { "type": "integer", "minimum": 1 },
+          "team_resource_version": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "InvitationList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": { "items": { "type": "array", "maxItems": 100, "items": { "$ref": "#/components/schemas/Invitation" } } }
+      },
+      "InvitationTokenRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["invitation_token"],
+        "properties": { "invitation_token": { "type": "string", "minLength": 43, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$" } }
+      },
+      "InvitationPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["team_name", "masked_email", "role", "expires_unix_seconds"],
+        "properties": {
+          "team_name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "masked_email": { "type": "string", "minLength": 3, "maxLength": 254 },
+          "role": { "$ref": "#/components/schemas/InviteRole" },
+          "expires_unix_seconds": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "AcceptedInvitation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["invitation", "team"],
+        "properties": {
+          "invitation": { "$ref": "#/components/schemas/Invitation" },
+          "team": { "$ref": "#/components/schemas/TeamSummary" }
+        }
+      }
+    }
+  }
+}

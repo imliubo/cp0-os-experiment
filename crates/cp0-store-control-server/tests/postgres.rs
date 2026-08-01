@@ -106,6 +106,7 @@ async fn postgres_http_transaction_acceptance() {
     verify_moderation_backend(&application, &pool).await;
     verify_object_gc(&pool, &object_root).await;
     verify_database_immutability(&pool).await;
+    verify_portal_identity_foundation(&pool).await;
     tokio::fs::remove_dir_all(object_root)
         .await
         .expect("remove repository-local test object store");
@@ -5334,6 +5335,517 @@ async fn verify_database_immutability(pool: &PgPool) {
     );
 }
 
+async fn verify_portal_identity_foundation(pool: &PgPool) {
+    const ACCOUNT_A: &str = "account_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const ACCOUNT_B: &str = "account_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const LINK_A: &str = "link_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const LINK_A_BACKUP: &str = "link_abababababababababababababababab";
+    const LINK_B: &str = "link_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const SESSION_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SESSION_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const TEAM_C: &str = "team_cccccccccccccccccccccccccccccccc";
+    const OWNER_C: &str = "member_12121212121212121212121212121212";
+    const MEMBER_C: &str = "member_34343434343434343434343434343434";
+    const INVITATION: &str = "invite_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let now: i64 = sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO portal_accounts (account_id, email, email_verified, state, \
+         created_unix_seconds) VALUES ($1, 'portal-a@example.com', TRUE, 'active', $2)",
+    )
+    .bind(ACCOUNT_A)
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO external_identity_links (link_id, account_id, provider_key, issuer, \
+         subject_hmac_sha256, state, linked_unix_seconds) \
+         VALUES ($1, $2, 'primary', 'https://identity.example.com', $3, 'active', $4)",
+    )
+    .bind(LINK_A)
+    .bind(ACCOUNT_A)
+    .bind("1".repeat(64))
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    transaction.commit().await.unwrap();
+
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO portal_accounts (account_id, email, email_verified, state, \
+         created_unix_seconds) VALUES \
+         ('account_99999999999999999999999999999999', 'orphan@example.com', TRUE, 'active', $1)",
+    )
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    assert_sqlstate(transaction.commit().await, "23514");
+
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO portal_accounts (account_id, email, email_verified, state, \
+         created_unix_seconds) VALUES ($1, 'portal-b@example.com', TRUE, 'active', $2)",
+    )
+    .bind(ACCOUNT_B)
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO external_identity_links (link_id, account_id, provider_key, issuer, \
+         subject_hmac_sha256, state, linked_unix_seconds) \
+         VALUES ($1, $2, 'secondary', 'https://login.example.net/tenant', $3, 'active', $4)",
+    )
+    .bind(LINK_B)
+    .bind(ACCOUNT_B)
+    .bind("2".repeat(64))
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    transaction.commit().await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO portal_sessions (session_sha256, csrf_sha256, account_id, \
+         current_link_id, state, created_unix_seconds, last_seen_unix_seconds, \
+         idle_expires_unix_seconds, absolute_expires_unix_seconds, \
+         mfa_authenticated_unix_seconds) VALUES \
+         ($1, $2, $3, $4, 'active', $5, $5, $5 + 1800, $5 + 28800, $5)",
+    )
+    .bind(SESSION_A)
+    .bind("c".repeat(64))
+    .bind(ACCOUNT_A)
+    .bind(LINK_A)
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO portal_sessions (session_sha256, csrf_sha256, account_id, \
+             current_link_id, state, created_unix_seconds, last_seen_unix_seconds, \
+             idle_expires_unix_seconds, absolute_expires_unix_seconds) VALUES \
+             ($1, $2, $3, $4, 'active', $5, $5, $5 + 1800, $5 + 28800)",
+        )
+        .bind("3".repeat(64))
+        .bind("4".repeat(64))
+        .bind(ACCOUNT_A)
+        .bind(LINK_B)
+        .bind(now)
+        .execute(pool)
+        .await,
+        "23514",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO portal_sessions (session_sha256, csrf_sha256, account_id, \
+             current_link_id, state, created_unix_seconds, last_seen_unix_seconds, \
+             idle_expires_unix_seconds, absolute_expires_unix_seconds) VALUES \
+             ($1, $2, $3, $4, 'active', $5, $5, $5 + 1800, $5 + 28801)",
+        )
+        .bind("5".repeat(64))
+        .bind("6".repeat(64))
+        .bind(ACCOUNT_A)
+        .bind(LINK_A)
+        .bind(now)
+        .execute(pool)
+        .await,
+        "23514",
+    );
+
+    sqlx::query(
+        "INSERT INTO oidc_login_transactions (transaction_id, state_sha256, nonce_sha256, \
+         pkce_verifier_ciphertext, provider_key, provider_config_sha256, intent, account_id, \
+         session_sha256, state, requested_unix_seconds, expires_unix_seconds) VALUES \
+         ('oidctx_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', $1, $2, $3, 'primary', $4, \
+          'step-up', $5, $6, 'pending', $7, $7 + 600)",
+    )
+    .bind("7".repeat(64))
+    .bind("8".repeat(64))
+    .bind(vec![9_u8; 32])
+    .bind("a".repeat(64))
+    .bind(ACCOUNT_A)
+    .bind(SESSION_A)
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO oidc_login_transactions (transaction_id, state_sha256, nonce_sha256, \
+             pkce_verifier_ciphertext, provider_key, provider_config_sha256, intent, state, \
+             requested_unix_seconds, expires_unix_seconds, consumed_unix_seconds) VALUES \
+             ('oidctx_cccccccccccccccccccccccccccccccc', $1, $2, $3, 'primary', $4, \
+              'login', 'consumed', $5, $5 + 600, $5)",
+        )
+        .bind("3".repeat(64))
+        .bind("4".repeat(64))
+        .bind(vec![11_u8; 32])
+        .bind("5".repeat(64))
+        .bind(now)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO oidc_login_transactions (transaction_id, state_sha256, nonce_sha256, \
+             pkce_verifier_ciphertext, provider_key, provider_config_sha256, intent, account_id, \
+             session_sha256, state, requested_unix_seconds, expires_unix_seconds) VALUES \
+             ('oidctx_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', $1, $2, $3, 'primary', $4, \
+              'step-up', $5, $6, 'pending', $7, $7 + 600)",
+        )
+        .bind("b".repeat(64))
+        .bind("c".repeat(64))
+        .bind(vec![10_u8; 32])
+        .bind("d".repeat(64))
+        .bind(ACCOUNT_B)
+        .bind(SESSION_A)
+        .bind(now)
+        .execute(pool)
+        .await,
+        "23514",
+    );
+
+    sqlx::query(
+        "INSERT INTO external_identity_links (link_id, account_id, provider_key, issuer, \
+         subject_hmac_sha256, state, linked_unix_seconds) \
+         VALUES ($1, $2, 'backup', 'https://backup.example.org', $3, 'active', $4)",
+    )
+    .bind(LINK_A_BACKUP)
+    .bind(ACCOUNT_A)
+    .bind("e".repeat(64))
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE external_identity_links SET state = 'revoked', revoked_unix_seconds = $1, \
+         resource_version = resource_version + 1 WHERE link_id = $2",
+    )
+    .bind(now)
+    .bind(LINK_A)
+    .execute(pool)
+    .await
+    .unwrap();
+    let session_state: String =
+        sqlx::query_scalar("SELECT state FROM portal_sessions WHERE session_sha256 = $1")
+            .bind(SESSION_A)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let oidc_state: String =
+        sqlx::query_scalar("SELECT state FROM oidc_login_transactions WHERE transaction_id = $1")
+            .bind("oidctx_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        (session_state.as_str(), oidc_state.as_str()),
+        ("revoked", "expired")
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE oidc_login_transactions SET state = 'pending', consumed_unix_seconds = NULL \
+             WHERE transaction_id = 'oidctx_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+        )
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE external_identity_links SET state = 'revoked', revoked_unix_seconds = $1, \
+             resource_version = resource_version + 1 WHERE link_id = $2",
+        )
+        .bind(now)
+        .bind(LINK_A_BACKUP)
+        .execute(pool)
+        .await,
+        "23514",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE external_identity_links SET account_id = $1, resource_version = resource_version + 1 \
+             WHERE link_id = $2",
+        )
+        .bind(ACCOUNT_B)
+        .bind(LINK_A_BACKUP)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO external_identity_links (link_id, account_id, provider_key, issuer, \
+         subject_hmac_sha256, state, linked_unix_seconds) \
+         SELECT 'link_' || lpad(to_hex(4096 + value), 32, '0'), $1, 'extra', \
+             'https://extra.example.com', lpad(to_hex(8192 + value), 64, '0'), \
+             'active', $2 FROM generate_series(1, 8) AS value",
+    )
+    .bind(ACCOUNT_A)
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    assert_sqlstate(transaction.commit().await, "23514");
+
+    sqlx::query(
+        "INSERT INTO portal_sessions (session_sha256, csrf_sha256, account_id, \
+         current_link_id, state, created_unix_seconds, last_seen_unix_seconds, \
+         idle_expires_unix_seconds, absolute_expires_unix_seconds) VALUES \
+         ($1, $2, $3, $4, 'active', $5, $5, $5 + 1800, $5 + 28800)",
+    )
+    .bind(SESSION_B)
+    .bind("f".repeat(64))
+    .bind(ACCOUNT_B)
+    .bind(LINK_B)
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO teams (team_id, name) VALUES ($1, 'Portal Team')")
+        .bind(TEAM_C)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO team_members (member_id, team_id, email, role, two_factor_enabled) \
+         VALUES ($1, $2, 'portal-owner@example.com', 'owner', TRUE)",
+    )
+    .bind(OWNER_C)
+    .bind(TEAM_C)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE teams SET resource_version = 2 WHERE team_id = $1")
+        .bind(TEAM_C)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO team_invitations (invitation_id, team_id, email, role, token_sha256, \
+         state, invited_by_member_id, team_resource_version, created_unix_seconds, \
+         expires_unix_seconds) VALUES \
+         ($1, $2, 'portal-a@example.com', 'viewer', $3, 'pending', $4, 2, $5, $5 + 604800)",
+    )
+    .bind(INVITATION)
+    .bind(TEAM_C)
+    .bind("0".repeat(64))
+    .bind(OWNER_C)
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    transaction.commit().await.unwrap();
+
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO team_invitations (invitation_id, team_id, email, role, token_sha256, \
+             state, invited_by_member_id, team_resource_version, created_unix_seconds, \
+             expires_unix_seconds) VALUES \
+             ('invite_99999999999999999999999999999999', $1, 'owner@example.com', \
+              'owner', $2, 'pending', $3, 2, $4, $4 + 604800)",
+        )
+        .bind(TEAM_C)
+        .bind("9".repeat(64))
+        .bind(OWNER_C)
+        .bind(now)
+        .execute(pool)
+        .await,
+        "23514",
+    );
+
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::query("UPDATE teams SET resource_version = 3 WHERE team_id = $1")
+        .bind(TEAM_C)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO team_members (member_id, team_id, account_id, email, role, \
+         two_factor_enabled) VALUES ($1, $2, $3, 'portal-a@example.com', 'viewer', TRUE)",
+    )
+    .bind(MEMBER_C)
+    .bind(TEAM_C)
+    .bind(ACCOUNT_B)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE team_invitations SET state = 'accepted', accepted_account_id = $1, \
+         accepted_member_id = $2, decided_unix_seconds = $3, resource_version = 2, \
+         team_resource_version = 3 WHERE invitation_id = $4",
+    )
+    .bind(ACCOUNT_B)
+    .bind(MEMBER_C)
+    .bind(now)
+    .bind(INVITATION)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    assert_sqlstate(transaction.commit().await, "23514");
+
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::query("UPDATE teams SET resource_version = 3 WHERE team_id = $1")
+        .bind(TEAM_C)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO team_members (member_id, team_id, account_id, email, role, \
+         two_factor_enabled) VALUES ($1, $2, $3, 'portal-a@example.com', 'developer', TRUE)",
+    )
+    .bind(MEMBER_C)
+    .bind(TEAM_C)
+    .bind(ACCOUNT_A)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE team_invitations SET state = 'accepted', accepted_account_id = $1, \
+         accepted_member_id = $2, decided_unix_seconds = $3, resource_version = 2, \
+         team_resource_version = 3 WHERE invitation_id = $4",
+    )
+    .bind(ACCOUNT_A)
+    .bind(MEMBER_C)
+    .bind(now)
+    .bind(INVITATION)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    assert_sqlstate(transaction.commit().await, "23514");
+
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::query("UPDATE teams SET resource_version = 3 WHERE team_id = $1")
+        .bind(TEAM_C)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO team_members (member_id, team_id, account_id, email, role, \
+         two_factor_enabled) VALUES ($1, $2, $3, 'portal-a@example.com', 'viewer', TRUE)",
+    )
+    .bind(MEMBER_C)
+    .bind(TEAM_C)
+    .bind(ACCOUNT_A)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE team_invitations SET state = 'accepted', accepted_account_id = $1, \
+         accepted_member_id = $2, decided_unix_seconds = $3, resource_version = 2, \
+         team_resource_version = 3 WHERE invitation_id = $4",
+    )
+    .bind(ACCOUNT_A)
+    .bind(MEMBER_C)
+    .bind(now)
+    .bind(INVITATION)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    transaction.commit().await.unwrap();
+    let invitation_state: String =
+        sqlx::query_scalar("SELECT state FROM team_invitations WHERE invitation_id = $1")
+            .bind(INVITATION)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(invitation_state, "accepted");
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE team_invitations SET state = 'pending', accepted_account_id = NULL, \
+             accepted_member_id = NULL, decided_unix_seconds = NULL, resource_version = 3, \
+             team_resource_version = 4 WHERE invitation_id = $1",
+        )
+        .bind(INVITATION)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM team_invitations WHERE invitation_id = $1")
+            .bind(INVITATION)
+            .execute(pool)
+            .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE team_members SET account_id = $1, resource_version = resource_version + 1 \
+             WHERE member_id = $2",
+        )
+        .bind(ACCOUNT_B)
+        .bind(MEMBER_C)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO team_members (member_id, team_id, email, role, two_factor_enabled) \
+         SELECT 'member_' || lpad(to_hex(12288 + value), 32, '0'), $1, \
+             'capacity-' || value || '@example.com', 'viewer', TRUE \
+         FROM generate_series(1, 99) AS value",
+    )
+    .bind(TEAM_C)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    assert_sqlstate(transaction.commit().await, "23514");
+
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO teams (team_id, name) \
+         SELECT 'team_' || lpad(to_hex(16384 + value), 32, '0'), \
+             'Membership limit ' || value FROM generate_series(1, 8) AS value",
+    )
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO team_members (member_id, team_id, account_id, email, role, \
+         two_factor_enabled) SELECT \
+             'member_' || lpad(to_hex(20480 + value), 32, '0'), \
+             'team_' || lpad(to_hex(16384 + value), 32, '0'), $1, \
+             'portal-a@example.com', 'owner', TRUE \
+         FROM generate_series(1, 8) AS value",
+    )
+    .bind(ACCOUNT_A)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    assert_sqlstate(transaction.commit().await, "23514");
+
+    sqlx::query(
+        "UPDATE portal_accounts SET state = 'disabled', disabled_unix_seconds = $1, \
+         resource_version = resource_version + 1 WHERE account_id = $2",
+    )
+    .bind(now)
+    .bind(ACCOUNT_B)
+    .execute(pool)
+    .await
+    .unwrap();
+    let disabled_session_state: String =
+        sqlx::query_scalar("SELECT state FROM portal_sessions WHERE session_sha256 = $1")
+            .bind(SESSION_B)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(disabled_session_state, "revoked");
+}
+
 async fn reset_database(pool: &PgPool) {
     pool.execute("DROP TRIGGER IF EXISTS test_reject_audit_insert ON audit_events")
         .await
@@ -5362,7 +5874,9 @@ async fn reset_database(pool: &PgPool) {
         .await
         .unwrap();
     pool.execute(
-        "TRUNCATE store_moderation_appeal_revisions, store_moderation_appeals, \
+        "TRUNCATE oidc_login_transactions, portal_sessions, team_invitations, \
+         external_identity_links, portal_accounts, \
+         store_moderation_appeal_revisions, store_moderation_appeals, \
          store_developer_notice_revisions, store_developer_notices, \
          store_content_report_revisions, store_content_reports, \
          store_metric_batches, store_metric_aggregates, \
