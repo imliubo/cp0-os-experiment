@@ -142,8 +142,8 @@ Implementation proceeds in four acceptance slices:
 
 1. [complete] PostgreSQL identity, OIDC transaction and session state machines
    with SQL bypass tests;
-2. generic OIDC Authorization Code + PKCE callback, cookie/CSRF enforcement,
-   rotation, idle/absolute expiry and logout;
+2. [complete] generic OIDC Authorization Code + PKCE callback, cookie/CSRF
+   enforcement, rotation, idle/absolute expiry and logout;
 3. invitation create/list/inspect/cancel/accept with email-worker handoff,
    exact replay, Team limits and transaction rollback tests;
 4. Portal integration, two-provider link/unlink recovery tests, session theft

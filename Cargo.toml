@@ -23,6 +23,7 @@ members = [
     "crates/cp0-store-control-server",
     "crates/cp0-store-metrics",
     "crates/cp0-store-metadata",
+    "crates/cp0-store-portal-server",
     "crates/cp0-store-protocol",
     "crates/cp0-store-publisher",
     "crates/cp0-store-risk",
@@ -43,15 +44,24 @@ rust-version = "1.85"
 libc = "0.2.177"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+serde_with = "=3.17.0"
 ed25519-dalek = "2.2.0"
 sha2 = "0.10.9"
 semver = "1.0.27"
 axum = "=0.8.4"
+base64 = "=0.22.1"
+chacha20poly1305 = "=0.10.1"
+chrono = { version = "=0.4.42", default-features = false, features = ["clock"] }
+getrandom = "=0.3.4"
+hmac = "=0.12.1"
+openidconnect = { version = "=4.0.1", default-features = false, features = ["reqwest", "rustls-tls"] }
 sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "json", "migrate", "macros"] }
 tokio = { version = "=1.47.1", features = ["macros", "rt-multi-thread", "net", "signal", "fs", "io-util"] }
 tower = "=0.5.2"
 uuid = { version = "=1.18.0", features = ["v4"] }
+url = "=2.5.8"
 wasmparser = "=0.245.1"
+zeroize = "=1.9.0"
 
 [profile.release]
 codegen-units = 1

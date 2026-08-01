@@ -95,8 +95,11 @@ The provider-neutral account/linking, invitation, OIDC callback and Portal
 session boundary is frozen in `STORE-PORTAL-IDENTITY-V1.md` and
 `store-portal-identity-v1.openapi.json`. Its PostgreSQL Account, identity-link,
 OIDC transaction, session, invitation and Membership-binding state machines
-are implemented with SQL bypass acceptance; the Portal BFF/HTTP flow,
-MFA enrollment/recovery, reviewer SSO, and production abuse controls remain
-unimplemented. Re-inviting a removed external identity
-requires a future, separately versioned membership record design; this endpoint
-never reactivates a removed row.
+are implemented with SQL bypass acceptance. The dedicated Portal BFF implements
+the external OIDC login, callback, digest-only session, CSRF, idle/absolute
+expiry, MFA step-up rotation, and logout slice with PostgreSQL end-to-end
+acceptance. Identity-link and invitation HTTP flows, provider MFA
+enrollment/recovery, reviewer SSO, and production abuse controls remain
+unimplemented. Re-inviting a removed external identity requires a future,
+separately versioned membership record design; this endpoint never reactivates
+a removed row.

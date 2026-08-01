@@ -81,6 +81,7 @@ store-control-db-check:
 	@test -n "$$CP0_STORE_TEST_DATABASE_URL" || \
 		(echo "CP0_STORE_TEST_DATABASE_URL is required" >&2; exit 2)
 	cargo test -p cp0-store-control-server --test postgres -- --ignored --nocapture
+	cargo test -p cp0-store-portal-server --test postgres -- --ignored --nocapture
 	cargo test -p cp0-store-scan-worker --test postgres -- --ignored --nocapture
 	cargo test -p cp0-store-publisher --test postgres -- --ignored --nocapture
 
