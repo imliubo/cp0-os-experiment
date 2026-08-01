@@ -70,6 +70,8 @@ struct shell {
     unsigned int store_poll_delay;
     unsigned int notification_ticks;
     struct cp0_app_list installed_apps;
+    uint32_t store_icon_pixels[CP0_STORE_ICON_MAX_PIXELS];
+    uint32_t store_screenshot_pixels[CP0_STORE_SCREENSHOT_PIXELS];
     char pending_activation[CP0_APP_ID_BYTES];
 };
 
@@ -296,6 +298,8 @@ static void poll_store_catalog(struct shell *shell)
             .version = catalog.apps[index].version,
             .summary = catalog.apps[index].summary,
             .installed_version = installed == NULL ? NULL : installed->version,
+            .installed_permissions =
+                installed == NULL ? 0 : installed->permissions,
         };
     }
     cp0_ui_sync_store_catalog(&shell->ui, apps, catalog.count,
@@ -338,12 +342,84 @@ static void poll_store_search(struct shell *shell)
             .version = results.apps[index].version,
             .summary = results.apps[index].summary,
             .installed_version = installed == NULL ? NULL : installed->version,
+            .installed_permissions =
+                installed == NULL ? 0 : installed->permissions,
         };
     }
     cp0_ui_sync_store_search(
         &shell->ui, results.query, results.offset, results.total,
         results.has_next, results.next_offset, apps, results.count,
         results.stale);
+}
+
+static bool selected_store_identity(struct shell *shell,
+                                    char app_id[CP0_STORE_APP_ID_BYTES],
+                                    char version[CP0_STORE_VERSION_BYTES])
+{
+    const char *selected_id = cp0_ui_selected_store_app_id(&shell->ui);
+    const char *selected_version =
+        cp0_ui_selected_store_app_version(&shell->ui);
+    return selected_id != NULL && selected_version != NULL &&
+           snprintf(app_id, CP0_STORE_APP_ID_BYTES, "%s", selected_id) > 0 &&
+           snprintf(version, CP0_STORE_VERSION_BYTES, "%s", selected_version) >
+               0;
+}
+
+static void load_store_details(struct shell *shell)
+{
+    static const char *categories[] = {
+        "DEVELOPER TOOLS", "EDUCATION", "ENTERTAINMENT", "GAMES",
+        "HARDWARE",        "MEDIA",     "PRODUCTIVITY",  "UTILITIES",
+    };
+    static const char *ratings[] = {"4+", "9+", "12+", "17+"};
+    char app_id[CP0_STORE_APP_ID_BYTES];
+    char version[CP0_STORE_VERSION_BYTES];
+    struct cp0_store_app_details details;
+    struct cp0_store_image_metadata metadata;
+
+    if (!selected_store_identity(shell, app_id, version))
+        return;
+    int result = cp0_store_get_details(app_id, version, &details);
+    if (result == CP0_STORE_RESULT_OK &&
+        details.category <= CP0_STORE_CATEGORY_UTILITIES &&
+        details.age_rating <= CP0_STORE_AGE_17_PLUS) {
+        cp0_ui_set_store_details(
+            &shell->ui, app_id, version, details.developer,
+            categories[details.category], ratings[details.age_rating],
+            details.description, details.release_notes,
+            details.screenshot_count);
+    } else {
+        cp0_ui_set_store_details_unavailable(&shell->ui, app_id, version);
+    }
+    if (cp0_store_get_icon(app_id, version, shell->store_icon_pixels,
+                           CP0_STORE_ICON_MAX_PIXELS, &metadata) ==
+        CP0_STORE_RESULT_OK)
+        cp0_ui_set_store_icon(&shell->ui, app_id, version,
+                              shell->store_icon_pixels,
+                              metadata.width, metadata.height);
+}
+
+static void load_store_screenshot(struct shell *shell)
+{
+    char app_id[CP0_STORE_APP_ID_BYTES];
+    char version[CP0_STORE_VERSION_BYTES];
+    uint8_t index = cp0_ui_selected_store_screenshot(&shell->ui);
+    struct cp0_store_image_metadata metadata;
+
+    if (!selected_store_identity(shell, app_id, version)) {
+        return;
+    }
+    if (cp0_store_get_screenshot(app_id, version, index,
+                                 shell->store_screenshot_pixels,
+                                 CP0_STORE_SCREENSHOT_PIXELS, &metadata) ==
+            CP0_STORE_RESULT_OK) {
+        cp0_ui_set_store_screenshot(
+            &shell->ui, app_id, version, index,
+            shell->store_screenshot_pixels, metadata.width, metadata.height);
+    } else {
+        cp0_ui_set_store_screenshot_unavailable(&shell->ui, app_id, version,
+                                                index);
+    }
 }
 
 static void poll_notification(struct shell *shell)
@@ -723,6 +799,16 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         fprintf(stderr, "system-shell: media action requested; broker unavailable\n");
     } else if (event == CP0_UI_EVENT_SCREENSHOT) {
         fprintf(stderr, "system-shell: screenshot requested; broker unavailable\n");
+    } else if (event == CP0_UI_EVENT_STORE_DETAILS) {
+        shell_redraw(shell);
+        wl_display_flush(shell->display);
+        load_store_details(shell);
+        fprintf(stderr, "system-shell: store details loaded\n");
+    } else if (event == CP0_UI_EVENT_STORE_SCREENSHOT) {
+        shell_redraw(shell);
+        wl_display_flush(shell->display);
+        load_store_screenshot(shell);
+        fprintf(stderr, "system-shell: store screenshot loaded\n");
     } else if (event == CP0_UI_EVENT_STORE_REFRESH) {
         int result = cp0_store_refresh();
         if (result == CP0_STORE_RESULT_OK) {

@@ -88,8 +88,9 @@ version. Screenshots are fetched on demand and use file modification time for a
 stable oldest-first LRU. Startup removes unreferenced icon/details objects,
 rejects symlinks and invalid file modes, rechecks retained icon/details objects,
 cleans interrupted temporary files without following them, and rechecks each
-screenshot when accessed. Exposing verified media to the System Shell remains
-the next S6 slice.
+screenshot when accessed. S6D exposes verified media to the System Shell through
+one read-only descriptor bound to strict response metadata; private cache paths
+never leave `cp0-stored`. See `STORE-DEVICE-RICH-DETAILS-V1.md`.
 
 ## Verification
 

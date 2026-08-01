@@ -1,6 +1,9 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io::{self, BufRead, Write};
+use std::mem;
+use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
+use std::os::unix::net::UnixStream;
 
 use cp0_manifest::Permission;
 use cp0_store_metadata::{AgeRating, StoreCategory};
@@ -132,6 +135,20 @@ pub enum StoreCommand {
     Install {
         app_id: String,
     },
+    Details {
+        app_id: String,
+    },
+    Media {
+        app_id: String,
+        media: StoreMediaSelector,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum StoreMediaSelector {
+    Icon,
+    Screenshot { index: u8 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,6 +195,41 @@ pub enum StoreResponseData {
     InstallAccepted {
         app_id: String,
         version: String,
+    },
+    AppDetails {
+        app_id: String,
+        version: String,
+        developer: String,
+        category: StoreCategory,
+        age_rating: AgeRating,
+        privacy_url: String,
+        support_url: String,
+        description: String,
+        release_notes: String,
+        screenshot_count: u8,
+    },
+    Media {
+        app_id: String,
+        version: String,
+        media: StoreMediaMetadata,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum StoreMediaMetadata {
+    Icon {
+        sha256: String,
+        bytes: u64,
+        width: u16,
+        height: u16,
+    },
+    Screenshot {
+        index: u8,
+        sha256: String,
+        bytes: u64,
+        width: u16,
+        height: u16,
     },
 }
 
@@ -226,6 +278,7 @@ pub enum StoreProtocolError {
     FrameTooLarge,
     UnterminatedFrame,
     Invalid(String),
+    InvalidDescriptor,
     Signature(String),
 }
 
@@ -239,6 +292,9 @@ impl fmt::Display for StoreProtocolError {
             }
             Self::UnterminatedFrame => formatter.write_str("store frame is not newline terminated"),
             Self::Invalid(error) => write!(formatter, "invalid store data: {error}"),
+            Self::InvalidDescriptor => {
+                formatter.write_str("invalid store media descriptor transfer")
+            }
             Self::Signature(error) => write!(formatter, "store signature error: {error}"),
         }
     }
@@ -563,14 +619,27 @@ impl StoreRequest {
                 validate_search_query(query)?;
                 validate_search_page(*offset, *limit)?;
             }
-            StoreCommand::Install { app_id } => {
+            StoreCommand::Install { app_id }
+            | StoreCommand::Details { app_id }
+            | StoreCommand::Media { app_id, .. } => {
                 if !cp0_manifest::is_valid_app_id(app_id) {
                     return Err(StoreProtocolError::Invalid(
-                        "store install application ID is invalid".into(),
+                        "store command application ID is invalid".into(),
                     ));
                 }
             }
             StoreCommand::List | StoreCommand::Refresh => {}
+        }
+        if let StoreCommand::Media {
+            media: StoreMediaSelector::Screenshot { index },
+            ..
+        } = &self.command
+        {
+            if usize::from(*index) >= cp0_store_metadata::MAX_SCREENSHOTS {
+                return Err(StoreProtocolError::Invalid(
+                    "store screenshot index is outside limits".into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -722,7 +791,116 @@ impl StoreResponseData {
                 }
                 Ok(())
             }
+            Self::AppDetails {
+                app_id,
+                version,
+                developer,
+                privacy_url,
+                support_url,
+                description,
+                release_notes,
+                screenshot_count,
+                ..
+            } => {
+                if !cp0_manifest::is_valid_app_id(app_id)
+                    || !cp0_manifest::is_valid_app_version(version)
+                {
+                    return Err(StoreProtocolError::Invalid(
+                        "store details response identity is invalid".into(),
+                    ));
+                }
+                let developer_chars = developer.chars().count();
+                if !(1..=80).contains(&developer_chars) || has_unsafe_text(developer) {
+                    return Err(StoreProtocolError::Invalid(
+                        "store details developer is invalid".into(),
+                    ));
+                }
+                if !is_valid_https_url(privacy_url) || !is_valid_https_url(support_url) {
+                    return Err(StoreProtocolError::Invalid(
+                        "store details links are invalid".into(),
+                    ));
+                }
+                validate_detail_text(description, 1024, "response description")?;
+                validate_detail_text(release_notes, 512, "response release notes")?;
+                if !(1..=cp0_store_metadata::MAX_SCREENSHOTS)
+                    .contains(&usize::from(*screenshot_count))
+                {
+                    return Err(StoreProtocolError::Invalid(
+                        "store details screenshot count is outside limits".into(),
+                    ));
+                }
+                Ok(())
+            }
+            Self::Media {
+                app_id,
+                version,
+                media,
+            } => {
+                if !cp0_manifest::is_valid_app_id(app_id)
+                    || !cp0_manifest::is_valid_app_version(version)
+                {
+                    return Err(StoreProtocolError::Invalid(
+                        "store media response identity is invalid".into(),
+                    ));
+                }
+                media.validate()
+            }
         }
+    }
+}
+
+impl StoreMediaMetadata {
+    fn validate(&self) -> Result<(), StoreProtocolError> {
+        let (sha256, bytes, width, height, maximum_bytes) = match self {
+            Self::Icon {
+                sha256,
+                bytes,
+                width,
+                height,
+            } => {
+                if !matches!((*width, *height), (32, 32) | (48, 48)) {
+                    return Err(StoreProtocolError::Invalid(
+                        "store icon response dimensions are invalid".into(),
+                    ));
+                }
+                (
+                    sha256,
+                    bytes,
+                    width,
+                    height,
+                    cp0_store_metadata::MAX_ICON_BYTES,
+                )
+            }
+            Self::Screenshot {
+                index,
+                sha256,
+                bytes,
+                width,
+                height,
+            } => {
+                if usize::from(*index) >= cp0_store_metadata::MAX_SCREENSHOTS
+                    || (*width, *height) != (320, 170)
+                {
+                    return Err(StoreProtocolError::Invalid(
+                        "store screenshot response metadata is invalid".into(),
+                    ));
+                }
+                (
+                    sha256,
+                    bytes,
+                    width,
+                    height,
+                    cp0_store_metadata::MAX_SCREENSHOT_BYTES,
+                )
+            }
+        };
+        if !is_lower_hex(sha256, 32) || !(1..=maximum_bytes).contains(bytes) {
+            return Err(StoreProtocolError::Invalid(
+                "store media response descriptor is invalid".into(),
+            ));
+        }
+        let _ = (width, height);
+        Ok(())
     }
 }
 
@@ -907,6 +1085,74 @@ pub fn write_response(
     write_frame(writer, response)
 }
 
+pub fn response_requires_descriptor(response: &StoreResponse) -> bool {
+    matches!(
+        response.outcome,
+        StoreOutcome::Ok {
+            data: StoreResponseData::Media { .. }
+        }
+    )
+}
+
+pub fn encode_response_frame(response: &StoreResponse) -> Result<Vec<u8>, StoreProtocolError> {
+    response.validate()?;
+    encode_frame(response)
+}
+
+pub fn send_response_with_fd(
+    stream: &mut UnixStream,
+    response: &StoreResponse,
+    descriptor: BorrowedFd<'_>,
+) -> Result<(), StoreProtocolError> {
+    if !response_requires_descriptor(response) {
+        return Err(StoreProtocolError::InvalidDescriptor);
+    }
+    let frame = encode_response_frame(response)?;
+    let mut io_vector = libc::iovec {
+        iov_base: frame.as_ptr().cast_mut().cast(),
+        iov_len: frame.len(),
+    };
+    let control_length = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as u32) } as usize;
+    let control_words = control_length.div_ceil(mem::size_of::<usize>());
+    let mut control = vec![0_usize; control_words];
+    let mut message: libc::msghdr = unsafe { mem::zeroed() };
+    message.msg_iov = &raw mut io_vector;
+    message.msg_iovlen = 1;
+    message.msg_control = control.as_mut_ptr().cast();
+    message.msg_controllen = control_length
+        .try_into()
+        .map_err(|_| StoreProtocolError::InvalidDescriptor)?;
+
+    unsafe {
+        let header = libc::CMSG_FIRSTHDR(&message);
+        if header.is_null() {
+            return Err(StoreProtocolError::InvalidDescriptor);
+        }
+        (*header).cmsg_level = libc::SOL_SOCKET;
+        (*header).cmsg_type = libc::SCM_RIGHTS;
+        (*header).cmsg_len = libc::CMSG_LEN(mem::size_of::<RawFd>() as u32) as _;
+        libc::CMSG_DATA(header)
+            .cast::<RawFd>()
+            .write(descriptor.as_raw_fd());
+    }
+    let count = loop {
+        let result = unsafe { libc::sendmsg(stream.as_raw_fd(), &message, libc::MSG_NOSIGNAL) };
+        if result < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        if result < 0 {
+            return Err(StoreProtocolError::Io(io::Error::last_os_error()));
+        }
+        break result as usize;
+    };
+    if count == 0 || count > frame.len() {
+        return Err(StoreProtocolError::InvalidDescriptor);
+    }
+    stream.write_all(&frame[count..])?;
+    stream.flush()?;
+    Ok(())
+}
+
 fn canonical_catalog(catalog: &Catalog) -> Result<Vec<u8>, StoreProtocolError> {
     catalog.validate()?;
     serde_json::to_vec(catalog).map_err(StoreProtocolError::InvalidJson)
@@ -1000,19 +1246,25 @@ fn read_frame<T: for<'de> Deserialize<'de>>(
 }
 
 fn write_frame<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<(), StoreProtocolError> {
-    let mut encoded = serde_json::to_vec(value)?;
-    encoded.push(b'\n');
-    if encoded.len() > MAX_FRAME_BYTES {
-        return Err(StoreProtocolError::FrameTooLarge);
-    }
+    let encoded = encode_frame(value)?;
     writer.write_all(&encoded)?;
     writer.flush()?;
     Ok(())
 }
 
+fn encode_frame<T: Serialize>(value: &T) -> Result<Vec<u8>, StoreProtocolError> {
+    let mut encoded = serde_json::to_vec(value)?;
+    encoded.push(b'\n');
+    if encoded.len() > MAX_FRAME_BYTES {
+        return Err(StoreProtocolError::FrameTooLarge);
+    }
+    Ok(encoded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::AsFd;
 
     fn catalog() -> Catalog {
         Catalog {
@@ -1370,6 +1622,117 @@ mod tests {
 
         let wrong_version = br#"{"protocol_version":2,"request_id":4,"outcome":{"status":"ok","data":{"kind":"refresh-accepted"}}}\n"#;
         assert!(read_response(&mut wrong_version.as_slice()).is_err());
+    }
+
+    #[test]
+    fn validates_rich_details_and_media_contracts() {
+        let details = StoreResponse::success(
+            41,
+            StoreResponseData::AppDetails {
+                app_id: "dev.cardputerzero.example".into(),
+                version: "1.2.3".into(),
+                developer: "CardputerZero Labs".into(),
+                category: StoreCategory::Utilities,
+                age_rating: AgeRating::FourPlus,
+                privacy_url: "https://example.com/privacy".into(),
+                support_url: "https://example.com/support".into(),
+                description: "A complete signed description.".into(),
+                release_notes: "Adds verified screenshots.".into(),
+                screenshot_count: 2,
+            },
+        );
+        let mut encoded = Vec::new();
+        write_response(&mut encoded, &details).unwrap();
+        assert_eq!(
+            read_response(&mut encoded.as_slice()).unwrap(),
+            Some(details)
+        );
+
+        let media = StoreResponse::success(
+            42,
+            StoreResponseData::Media {
+                app_id: "dev.cardputerzero.example".into(),
+                version: "1.2.3".into(),
+                media: StoreMediaMetadata::Screenshot {
+                    index: 1,
+                    sha256: "44".repeat(32),
+                    bytes: 8192,
+                    width: 320,
+                    height: 170,
+                },
+            },
+        );
+        assert!(response_requires_descriptor(&media));
+        assert!(write_response(&mut Vec::new(), &media).is_ok());
+
+        let invalid_request = StoreRequest {
+            protocol_version: STORE_PROTOCOL_VERSION,
+            request_id: 43,
+            command: StoreCommand::Media {
+                app_id: "dev.cardputerzero.example".into(),
+                media: StoreMediaSelector::Screenshot { index: 5 },
+            },
+        };
+        assert!(invalid_request.validate().is_err());
+
+        let mut invalid_media = media;
+        if let StoreOutcome::Ok {
+            data:
+                StoreResponseData::Media {
+                    media: StoreMediaMetadata::Screenshot { width, .. },
+                    ..
+                },
+        } = &mut invalid_media.outcome
+        {
+            *width = 319;
+        }
+        assert!(invalid_media.validate().is_err());
+    }
+
+    #[test]
+    fn transfers_exactly_one_media_descriptor() {
+        let response = StoreResponse::success(
+            51,
+            StoreResponseData::Media {
+                app_id: "dev.cardputerzero.example".into(),
+                version: "1.2.3".into(),
+                media: StoreMediaMetadata::Icon {
+                    sha256: "22".repeat(32),
+                    bytes: 2048,
+                    width: 48,
+                    height: 48,
+                },
+            },
+        );
+        let descriptor = std::fs::File::open("Cargo.toml").unwrap();
+        let (mut sender, receiver) = UnixStream::pair().unwrap();
+        send_response_with_fd(&mut sender, &response, descriptor.as_fd()).unwrap();
+
+        let mut frame = [0_u8; MAX_FRAME_BYTES];
+        let mut io_vector = libc::iovec {
+            iov_base: frame.as_mut_ptr().cast(),
+            iov_len: frame.len(),
+        };
+        let control_length = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as u32) } as usize;
+        let mut control = vec![0_u8; control_length];
+        let mut message: libc::msghdr = unsafe { mem::zeroed() };
+        message.msg_iov = &raw mut io_vector;
+        message.msg_iovlen = 1;
+        message.msg_control = control.as_mut_ptr().cast();
+        message.msg_controllen = control_length.try_into().unwrap();
+        let count = unsafe { libc::recvmsg(receiver.as_raw_fd(), &raw mut message, 0) };
+        assert!(count > 0);
+        assert_eq!(frame[count as usize - 1], b'\n');
+        unsafe {
+            let header = libc::CMSG_FIRSTHDR(&message);
+            assert!(!header.is_null());
+            assert_eq!((*header).cmsg_level, libc::SOL_SOCKET);
+            assert_eq!((*header).cmsg_type, libc::SCM_RIGHTS);
+            let received = libc::CMSG_DATA(header).cast::<RawFd>().read();
+            assert!(received >= 0);
+            libc::close(received);
+            assert!(libc::CMSG_NXTHDR(&message, header).is_null());
+        }
     }
 
     #[test]

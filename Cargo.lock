@@ -441,6 +441,7 @@ dependencies = [
  "cp0-package",
  "cp0-store-metadata",
  "ed25519-dalek",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

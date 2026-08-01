@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
+use std::os::fd::AsFd;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -20,9 +21,10 @@ use cp0_networkd::PublicResolver;
 use cp0_store_metadata::validate_png_structure;
 use cp0_store_protocol::{
     CatalogApp, CatalogImageResource, CatalogObjectResource, SignedCatalog, StoreAppDetails,
-    StoreAppState, StoreAppSummary, StoreCommand, StoreErrorCode, StoreRequest, StoreResponse,
-    StoreResponseData, decode_app_details, decode_signed_catalog, is_lower_hex, is_valid_https_url,
-    read_request, verify_catalog, write_response,
+    StoreAppState, StoreAppSummary, StoreCommand, StoreErrorCode, StoreMediaMetadata,
+    StoreMediaSelector, StoreRequest, StoreResponse, StoreResponseData, decode_app_details,
+    decode_signed_catalog, is_lower_hex, is_valid_https_url, read_request,
+    response_requires_descriptor, send_response_with_fd, verify_catalog, write_response,
 };
 use sha2::{Digest, Sha256};
 use ureq::config::Config;
@@ -420,6 +422,20 @@ pub struct StoreService {
     state: Mutex<MutableState>,
 }
 
+struct DispatchedResponse {
+    response: StoreResponse,
+    descriptor: Option<File>,
+}
+
+impl DispatchedResponse {
+    fn without_descriptor(response: StoreResponse) -> Self {
+        Self {
+            response,
+            descriptor: None,
+        }
+    }
+}
+
 impl StoreConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, StoreServiceError> {
         let encoded = fs::read_to_string(path)?;
@@ -512,26 +528,53 @@ impl StoreService {
                 return Ok(());
             }
         };
-        let response = if !self.trusted_uids.contains(&uid) {
-            StoreResponse::error(
+        let dispatched = if !self.trusted_uids.contains(&uid) {
+            DispatchedResponse::without_descriptor(StoreResponse::error(
                 request.request_id,
                 StoreErrorCode::Unauthorized,
                 "peer UID is not authorized to use the store",
-            )
+            ))
         } else if let Err(error) = request.validate() {
-            StoreResponse::error(
+            DispatchedResponse::without_descriptor(StoreResponse::error(
                 request.request_id,
                 StoreErrorCode::InvalidRequest,
                 error.to_string(),
-            )
+            ))
         } else {
-            self.dispatch(request)
+            self.dispatch_connection(request)
         };
-        write_response(&mut stream, &response).map_err(protocol_io)
+        if response_requires_descriptor(&dispatched.response) != dispatched.descriptor.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "store response descriptor invariant failed",
+            ));
+        }
+        match dispatched.descriptor {
+            Some(descriptor) => {
+                send_response_with_fd(&mut stream, &dispatched.response, descriptor.as_fd())
+                    .map_err(protocol_io)
+            }
+            None => write_response(&mut stream, &dispatched.response).map_err(protocol_io),
+        }
     }
 
     pub fn dispatch(self: &Arc<Self>, request: StoreRequest) -> StoreResponse {
+        self.dispatch_connection(request).response
+    }
+
+    fn dispatch_connection(self: &Arc<Self>, request: StoreRequest) -> DispatchedResponse {
         let request_id = request.request_id;
+        if let StoreCommand::Media { app_id, media } = request.command {
+            return match self.media_response(&app_id, media) {
+                Ok((data, descriptor)) => DispatchedResponse {
+                    response: StoreResponse::success(request_id, data),
+                    descriptor: Some(descriptor),
+                },
+                Err(error) => DispatchedResponse::without_descriptor(service_error_response(
+                    request_id, &error,
+                )),
+            };
+        }
         let result = match request.command {
             StoreCommand::List => self.catalog_response(),
             StoreCommand::Search {
@@ -545,11 +588,113 @@ impl StoreService {
             StoreCommand::Install { app_id } => self
                 .start_install(&app_id)
                 .map(|version| StoreResponseData::InstallAccepted { app_id, version }),
+            StoreCommand::Details { app_id } => self.details_response(&app_id),
+            StoreCommand::Media { .. } => unreachable!(),
         };
-        match result {
+        DispatchedResponse::without_descriptor(match result {
             Ok(data) => StoreResponse::success(request_id, data),
             Err(error) => service_error_response(request_id, &error),
-        }
+        })
+    }
+
+    fn details_response(&self, app_id: &str) -> Result<StoreResponseData, StoreServiceError> {
+        self.reserve_job()?;
+        let result = (|| {
+            let app = self.catalog_app(app_id)?;
+            let discovery = app.discovery.as_ref().ok_or(StoreServiceError::NotFound)?;
+            let details = self.cache_app_details_inner(app_id)?;
+            Ok(StoreResponseData::AppDetails {
+                app_id: app.app_id,
+                version: app.version,
+                developer: discovery.developer.clone(),
+                category: discovery.category,
+                age_rating: discovery.age_rating,
+                privacy_url: discovery.privacy_url.clone(),
+                support_url: discovery.support_url.clone(),
+                description: details.description,
+                release_notes: details.release_notes,
+                screenshot_count: details.screenshots.len() as u8,
+            })
+        })();
+        self.release_job();
+        result
+    }
+
+    fn media_response(
+        &self,
+        app_id: &str,
+        selector: StoreMediaSelector,
+    ) -> Result<(StoreResponseData, File), StoreServiceError> {
+        self.reserve_job()?;
+        let result = (|| {
+            let app = self.catalog_app(app_id)?;
+            let (metadata, descriptor) = match selector {
+                StoreMediaSelector::Icon => {
+                    let resource = app
+                        .resources
+                        .as_ref()
+                        .ok_or(StoreServiceError::NotFound)?
+                        .icon
+                        .clone();
+                    let descriptor = cache_image_descriptor(
+                        &self.paths,
+                        self.network.as_ref(),
+                        MediaKind::Icon,
+                        &resource,
+                    )?;
+                    let metadata = StoreMediaMetadata::Icon {
+                        sha256: resource.sha256,
+                        bytes: resource.bytes,
+                        width: resource.width,
+                        height: resource.height,
+                    };
+                    (metadata, descriptor)
+                }
+                StoreMediaSelector::Screenshot { index } => {
+                    let details = self.cache_app_details_inner(app_id)?;
+                    let resource = details
+                        .screenshots
+                        .get(usize::from(index))
+                        .cloned()
+                        .ok_or(StoreServiceError::NotFound)?;
+                    let descriptor = cache_image_descriptor(
+                        &self.paths,
+                        self.network.as_ref(),
+                        MediaKind::Screenshot,
+                        &resource,
+                    )?;
+                    let metadata = StoreMediaMetadata::Screenshot {
+                        index,
+                        sha256: resource.sha256,
+                        bytes: resource.bytes,
+                        width: resource.width,
+                        height: resource.height,
+                    };
+                    (metadata, descriptor)
+                }
+            };
+            Ok((
+                StoreResponseData::Media {
+                    app_id: app.app_id,
+                    version: app.version,
+                    media: metadata,
+                },
+                descriptor,
+            ))
+        })();
+        self.release_job();
+        result
+    }
+
+    fn catalog_app(&self, app_id: &str) -> Result<CatalogApp, StoreServiceError> {
+        self.state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.catalog.apps.iter().find(|app| app.app_id == app_id))
+            .cloned()
+            .ok_or(StoreServiceError::NotFound)
     }
 
     fn catalog_response(&self) -> Result<StoreResponseData, StoreServiceError> {
@@ -1163,6 +1308,27 @@ fn cache_image_resource(
     )
 }
 
+fn cache_image_descriptor(
+    paths: &StorePaths,
+    network: &dyn StoreNetwork,
+    kind: MediaKind,
+    resource: &CatalogImageResource,
+) -> Result<File, StoreServiceError> {
+    cache_image_resource(paths, network, kind, resource)?;
+    let path = media_path(paths, kind, &resource.sha256)?;
+    let descriptor = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    let metadata = descriptor.metadata()?;
+    if !metadata.is_file() || metadata.mode() & 0o777 != 0o600 || metadata.len() != resource.bytes {
+        return Err(StoreServiceError::Untrusted(
+            "cached media descriptor metadata is invalid".into(),
+        ));
+    }
+    Ok(descriptor)
+}
+
 fn cache_object_resource(
     paths: &StorePaths,
     network: &dyn StoreNetwork,
@@ -1636,6 +1802,7 @@ mod tests {
         MEDIA_CATALOG_SCHEMA_VERSION, RICH_CATALOG_SCHEMA_VERSION, StoreAppDetails,
         encode_app_details, encode_signed_catalog, sign_catalog,
     };
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     #[derive(Debug)]
@@ -2041,6 +2208,49 @@ mod tests {
             fs::metadata(&screenshot_path).unwrap().permissions().mode() & 0o077,
             0
         );
+
+        let rich = service.dispatch_connection(StoreRequest {
+            protocol_version: cp0_store_protocol::STORE_PROTOCOL_VERSION,
+            request_id: 71,
+            command: StoreCommand::Details {
+                app_id: app.app_id.clone(),
+            },
+        });
+        assert!(rich.descriptor.is_none());
+        assert!(matches!(
+            rich.response.outcome,
+            cp0_store_protocol::StoreOutcome::Ok {
+                data: StoreResponseData::AppDetails {
+                    screenshot_count: 1,
+                    ..
+                }
+            }
+        ));
+
+        for (request_id, selector, expected) in [
+            (72, StoreMediaSelector::Icon, png_fixture(48, 48)),
+            (
+                73,
+                StoreMediaSelector::Screenshot { index: 0 },
+                png_fixture(320, 170),
+            ),
+        ] {
+            let media = service.dispatch_connection(StoreRequest {
+                protocol_version: cp0_store_protocol::STORE_PROTOCOL_VERSION,
+                request_id,
+                command: StoreCommand::Media {
+                    app_id: app.app_id.clone(),
+                    media: selector,
+                },
+            });
+            assert!(response_requires_descriptor(&media.response));
+            let mut descriptor = media.descriptor.unwrap();
+            let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFL) };
+            assert_eq!(flags & libc::O_ACCMODE, libc::O_RDONLY);
+            let mut received = Vec::new();
+            descriptor.read_to_end(&mut received).unwrap();
+            assert_eq!(received, expected);
+        }
     }
 
     #[test]

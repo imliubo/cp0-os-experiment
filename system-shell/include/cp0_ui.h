@@ -26,6 +26,13 @@
 #define CP0_UI_STORE_SEARCH_QUERY_MAX 96
 #define CP0_UI_STORE_SEARCH_PAGE_MAX 8
 #define CP0_UI_STORE_RECENT_MAX 4
+#define CP0_UI_STORE_DEVELOPER_MAX 320
+#define CP0_UI_STORE_DESCRIPTION_MAX 4096
+#define CP0_UI_STORE_RELEASE_NOTES_MAX 2048
+#define CP0_UI_STORE_CATEGORY_MAX 20
+#define CP0_UI_STORE_AGE_RATING_MAX 3
+#define CP0_UI_STORE_ICON_MAX_PIXELS (48U * 48U)
+#define CP0_UI_STORE_SCREENSHOT_PIXELS (320U * 170U)
 
 enum cp0_ui_screen {
     CP0_UI_HOME,
@@ -74,6 +81,8 @@ enum cp0_ui_event {
     CP0_UI_EVENT_STORE_REFRESH,
     CP0_UI_EVENT_STORE_INSTALL,
     CP0_UI_EVENT_STORE_SEARCH,
+    CP0_UI_EVENT_STORE_DETAILS,
+    CP0_UI_EVENT_STORE_SCREENSHOT,
     CP0_UI_EVENT_DEVELOPER_ENABLE,
     CP0_UI_EVENT_DEVELOPER_DISABLE,
     CP0_UI_EVENT_RECOVERY_ENABLE,
@@ -120,6 +129,12 @@ enum cp0_ui_store_section {
     CP0_UI_STORE_APPS,
     CP0_UI_STORE_SEARCH,
     CP0_UI_STORE_UPDATES,
+};
+
+enum cp0_ui_store_detail_status {
+    CP0_UI_STORE_DETAIL_LOADING,
+    CP0_UI_STORE_DETAIL_READY,
+    CP0_UI_STORE_DETAIL_UNAVAILABLE,
 };
 
 struct cp0_ui_catalog_app {
@@ -190,11 +205,13 @@ struct cp0_ui_store_catalog_app {
     const char *version;
     const char *summary;
     const char *installed_version;
+    uint16_t installed_permissions;
 };
 
 struct cp0_ui_store_app {
     uint64_t package_bytes;
     uint16_t permissions;
+    uint16_t installed_permissions;
     uint8_t progress_percent;
     enum cp0_ui_store_state state;
     char app_id[CP0_UI_APP_ID_MAX + 1];
@@ -227,6 +244,9 @@ struct cp0_ui {
     unsigned int store_search_count;
     unsigned int store_recent_selected;
     unsigned int store_recent_count;
+    unsigned int store_detail_page;
+    unsigned int store_screenshot_index;
+    unsigned int store_detail_text_offset;
     uint16_t store_search_offset;
     uint16_t store_search_total;
     uint16_t store_search_next_offset;
@@ -250,6 +270,7 @@ struct cp0_ui {
     bool settings_detail;
     enum cp0_ui_store_status store_status;
     enum cp0_ui_store_status store_search_status;
+    enum cp0_ui_store_detail_status store_detail_status;
     unsigned int dialog_selected;
     bool power_dialog;
     bool settings_available;
@@ -326,6 +347,21 @@ struct cp0_ui {
     char store_search_query[CP0_UI_STORE_SEARCH_QUERY_MAX + 1];
     char store_recent_queries[CP0_UI_STORE_RECENT_MAX]
                              [CP0_UI_STORE_SEARCH_QUERY_MAX + 1];
+    uint8_t store_screenshot_count;
+    uint16_t store_icon_width;
+    uint16_t store_icon_height;
+    bool store_icon_available;
+    bool store_screenshot_available;
+    bool store_screenshot_loading;
+    char store_detail_app_id[CP0_UI_APP_ID_MAX + 1];
+    char store_detail_version[CP0_UI_STORE_VERSION_MAX + 1];
+    char store_developer[CP0_UI_STORE_DEVELOPER_MAX + 1];
+    char store_category[CP0_UI_STORE_CATEGORY_MAX + 1];
+    char store_age_rating[CP0_UI_STORE_AGE_RATING_MAX + 1];
+    char store_description[CP0_UI_STORE_DESCRIPTION_MAX + 1];
+    char store_release_notes[CP0_UI_STORE_RELEASE_NOTES_MAX + 1];
+    const uint32_t *store_icon_pixels;
+    const uint32_t *store_screenshot_pixels;
     struct cp0_ui_app apps[CP0_UI_MAX_APPS];
     struct cp0_ui_store_app store_apps[CP0_UI_MAX_APPS];
     struct cp0_ui_store_app
@@ -375,6 +411,27 @@ void cp0_ui_set_store_app_state(struct cp0_ui *ui, const char *app_id,
 const char *cp0_ui_selected_store_app_id(const struct cp0_ui *ui);
 enum cp0_ui_store_state cp0_ui_selected_store_app_state(
     const struct cp0_ui *ui);
+const char *cp0_ui_selected_store_app_version(const struct cp0_ui *ui);
+uint8_t cp0_ui_selected_store_screenshot(const struct cp0_ui *ui);
+void cp0_ui_set_store_details(
+    struct cp0_ui *ui, const char *app_id, const char *version,
+    const char *developer, const char *category, const char *age_rating,
+    const char *description, const char *release_notes,
+    uint8_t screenshot_count);
+void cp0_ui_set_store_details_unavailable(struct cp0_ui *ui,
+                                          const char *app_id,
+                                          const char *version);
+void cp0_ui_set_store_icon(struct cp0_ui *ui, const char *app_id,
+                           const char *version, const uint32_t *pixels,
+                           uint16_t width, uint16_t height);
+void cp0_ui_set_store_screenshot(struct cp0_ui *ui, const char *app_id,
+                                 const char *version, uint8_t index,
+                                 const uint32_t *pixels, uint16_t width,
+                                 uint16_t height);
+void cp0_ui_set_store_screenshot_unavailable(struct cp0_ui *ui,
+                                             const char *app_id,
+                                             const char *version,
+                                             uint8_t index);
 const char *cp0_ui_selected_app_id(const struct cp0_ui *ui);
 enum cp0_ui_app_state cp0_ui_selected_app_state(const struct cp0_ui *ui);
 uint32_t cp0_ui_selected_app_token(const struct cp0_ui *ui);

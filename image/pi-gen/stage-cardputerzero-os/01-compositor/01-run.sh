@@ -162,7 +162,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     /tmp/cardputerzero-system-shell/system_info.c \
     /tmp/cardputerzero-policy/cardputerzero-system-shell-protocol.c \
     /tmp/cardputerzero-weston-build/protocol/xdg-shell-protocol.c \
-    \$(pkg-config --cflags --libs wayland-client) \
+    \$(pkg-config --cflags --libs wayland-client libpng) \
     -o /tmp/cardputerzero-system-shell/cardputerzero-system-shell
 
 cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \
@@ -216,6 +216,10 @@ fi
 if ldd /usr/lib/aarch64-linux-gnu/weston/cardputerzero-policy.so | \
     grep -q 'not found'; then
     echo 'CardputerZero policy runtime dependency is missing' >&2
+    exit 1
+fi
+if ldd /usr/bin/cardputerzero-system-shell | grep -q 'not found'; then
+    echo 'CardputerZero System Shell runtime dependency is missing' >&2
     exit 1
 fi
 

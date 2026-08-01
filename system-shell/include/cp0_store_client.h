@@ -12,6 +12,14 @@
 #define CP0_STORE_SUMMARY_BYTES 385
 #define CP0_STORE_SEARCH_QUERY_BYTES 97
 #define CP0_STORE_SEARCH_MAX_APPS 8
+#define CP0_STORE_DEVELOPER_BYTES 321
+#define CP0_STORE_URL_BYTES 2049
+#define CP0_STORE_DESCRIPTION_BYTES 4097
+#define CP0_STORE_RELEASE_NOTES_BYTES 2049
+#define CP0_STORE_MEDIA_SHA256_BYTES 65
+#define CP0_STORE_MAX_SCREENSHOTS 5
+#define CP0_STORE_ICON_MAX_PIXELS (48U * 48U)
+#define CP0_STORE_SCREENSHOT_PIXELS (320U * 170U)
 
 enum cp0_store_result {
     CP0_STORE_RESULT_OK = 0,
@@ -74,10 +82,57 @@ struct cp0_store_search_results {
     struct cp0_store_app_summary apps[CP0_STORE_SEARCH_MAX_APPS];
 };
 
+enum cp0_store_category {
+    CP0_STORE_CATEGORY_DEVELOPER_TOOLS,
+    CP0_STORE_CATEGORY_EDUCATION,
+    CP0_STORE_CATEGORY_ENTERTAINMENT,
+    CP0_STORE_CATEGORY_GAMES,
+    CP0_STORE_CATEGORY_HARDWARE,
+    CP0_STORE_CATEGORY_MEDIA,
+    CP0_STORE_CATEGORY_PRODUCTIVITY,
+    CP0_STORE_CATEGORY_UTILITIES,
+};
+
+enum cp0_store_age_rating {
+    CP0_STORE_AGE_4_PLUS,
+    CP0_STORE_AGE_9_PLUS,
+    CP0_STORE_AGE_12_PLUS,
+    CP0_STORE_AGE_17_PLUS,
+};
+
+struct cp0_store_app_details {
+    enum cp0_store_category category;
+    enum cp0_store_age_rating age_rating;
+    uint8_t screenshot_count;
+    char app_id[CP0_STORE_APP_ID_BYTES];
+    char version[CP0_STORE_VERSION_BYTES];
+    char developer[CP0_STORE_DEVELOPER_BYTES];
+    char privacy_url[CP0_STORE_URL_BYTES];
+    char support_url[CP0_STORE_URL_BYTES];
+    char description[CP0_STORE_DESCRIPTION_BYTES];
+    char release_notes[CP0_STORE_RELEASE_NOTES_BYTES];
+};
+
+struct cp0_store_image_metadata {
+    uint64_t encoded_bytes;
+    uint16_t width;
+    uint16_t height;
+    char sha256[CP0_STORE_MEDIA_SHA256_BYTES];
+};
+
 int cp0_store_list(struct cp0_store_catalog *catalog);
 int cp0_store_search(const char *query, uint16_t offset, uint8_t limit,
                      struct cp0_store_search_results *results);
 int cp0_store_refresh(void);
 int cp0_store_install(const char *app_id);
+int cp0_store_get_details(const char *app_id, const char *expected_version,
+                          struct cp0_store_app_details *details);
+int cp0_store_get_icon(const char *app_id, const char *expected_version,
+                       uint32_t *pixels, size_t pixel_capacity,
+                       struct cp0_store_image_metadata *metadata);
+int cp0_store_get_screenshot(
+    const char *app_id, const char *expected_version, uint8_t index,
+    uint32_t *pixels, size_t pixel_capacity,
+    struct cp0_store_image_metadata *metadata);
 
 #endif

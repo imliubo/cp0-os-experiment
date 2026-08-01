@@ -106,10 +106,41 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     cp0_ui_sync_store_catalog(ui, store_apps, 2, false, false);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     cp0_ui_handle_action(ui, CP0_UI_DOWN);
     write_snapshot(directory, "store", ui, frame);
-    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    assert(cp0_ui_handle_action(ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_DETAILS);
+    static uint32_t icon_pixels[48U * 48U];
+    static uint32_t screenshot_pixels[320U * 170U];
+    for (size_t index = 0; index < 48U * 48U; index++)
+        icon_pixels[index] = 0xff35d07fU;
+    for (unsigned int y = 0; y < 170U; y++) {
+        for (unsigned int x = 0; x < 320U; x++)
+            screenshot_pixels[y * 320U + x] =
+                0xff000000U | ((x * 255U / 319U) << 16U) |
+                (y * 255U / 169U);
+    }
+    cp0_ui_set_store_details(
+        ui, "dev.cardputerzero.notify", "2.0.1", "CardputerZero Labs",
+        "UTILITIES", "4+",
+        "A detailed reviewed description for the notification application. "
+        "It remains readable on the compact display and can be scrolled.",
+        "Adds immutable screenshots and clearer permission review.", 2);
+    cp0_ui_set_store_icon(ui, "dev.cardputerzero.notify", "2.0.1",
+                          icon_pixels, 48, 48);
     write_snapshot(directory, "store-detail", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "store-description", ui, frame);
+    assert(cp0_ui_handle_action(ui, CP0_UI_RIGHT) ==
+           CP0_UI_EVENT_STORE_SCREENSHOT);
+    cp0_ui_set_store_screenshot(ui, "dev.cardputerzero.notify", "2.0.1", 0,
+                                screenshot_pixels, 320, 170);
+    write_snapshot(directory, "store-screenshot", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "store-permissions", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    write_snapshot(directory, "store-release-notes", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_BACK);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
@@ -407,14 +438,15 @@ int main(int argc, char **argv)
          .summary = "First reviewed store application",
          .installed_version = "1.0.0"},
         {.package_bytes = 2048,
-         .permissions = 1U << 6,
+         .permissions = (1U << 2) | (1U << 6),
          .progress_percent = 0,
          .state = CP0_UI_STORE_AVAILABLE,
          .app_id = "dev.cardputerzero.beta",
          .name = "Beta",
          .version = "2.0.0",
          .summary = "An update ready for installation",
-         .installed_version = "1.0.0"},
+         .installed_version = "1.0.0",
+         .installed_permissions = 1U << 6},
     };
     cp0_ui_sync_store_catalog(&ui, store_catalog, 2, false, false);
     assert(ui.store_apps[0].state == CP0_UI_STORE_INSTALLED);
@@ -428,9 +460,51 @@ int main(int argc, char **argv)
     cp0_ui_handle_action(&ui, CP0_UI_DOWN);
     assert(strcmp(cp0_ui_selected_store_app_id(&ui),
                   "dev.cardputerzero.beta") == 0);
-    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_DETAILS);
     assert(ui.store_detail);
+    assert(ui.store_detail_status == CP0_UI_STORE_DETAIL_LOADING);
     assert(cp0_ui_selected_store_app_state(&ui) == CP0_UI_STORE_UPDATE);
+    assert(strcmp(cp0_ui_selected_store_app_version(&ui), "2.0.0") == 0);
+    cp0_ui_set_store_details(&ui, "dev.cardputerzero.beta", "1.9.0",
+                             "Wrong", "UTILITIES", "4+", "Wrong", "Wrong",
+                             1);
+    assert(ui.store_detail_status == CP0_UI_STORE_DETAIL_LOADING);
+    static const char long_description[] =
+        "This is a complete reviewed application description that is long "
+        "enough to exercise scrolling on the compact screen. It explains the "
+        "application behavior, local data handling, network behavior, camera "
+        "usage, recovery behavior, and expected interaction model without "
+        "requiring a larger desktop layout. Additional bounded text keeps the "
+        "scroll position deterministic for regression coverage.";
+    cp0_ui_set_store_details(
+        &ui, "dev.cardputerzero.beta", "2.0.0", "CardputerZero Labs",
+        "UTILITIES", "9+", long_description, "Adds camera attachments.", 2);
+    assert(ui.store_detail_status == CP0_UI_STORE_DETAIL_READY &&
+           ui.store_screenshot_count == 2);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_RIGHT) == CP0_UI_EVENT_NONE);
+    assert(ui.store_detail_page == 1);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(ui.store_detail_text_offset == 1);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_RIGHT) ==
+           CP0_UI_EVENT_STORE_SCREENSHOT);
+    assert(ui.store_screenshot_loading && ui.store_screenshot_index == 0);
+    static uint32_t detail_screenshot[320U * 170U];
+    cp0_ui_set_store_screenshot(&ui, "dev.cardputerzero.beta", "2.0.0", 0,
+                                detail_screenshot, 320, 170);
+    assert(ui.store_screenshot_available && !ui.store_screenshot_loading);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_DOWN) ==
+           CP0_UI_EVENT_STORE_SCREENSHOT);
+    assert(ui.store_screenshot_index == 1 && ui.store_screenshot_loading);
+    cp0_ui_set_store_screenshot_unavailable(
+        &ui, "dev.cardputerzero.beta", "2.0.0", 1);
+    assert(!ui.store_screenshot_available && !ui.store_screenshot_loading);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    assert(ui.store_detail_page == 3);
+    cp0_ui_handle_action(&ui, CP0_UI_LEFT);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_LEFT) == CP0_UI_EVENT_NONE);
+    assert(ui.store_detail_page == 1);
+    cp0_ui_handle_action(&ui, CP0_UI_LEFT);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_STORE_INSTALL);
     cp0_ui_set_store_app_state(&ui, "dev.cardputerzero.beta",
@@ -441,7 +515,8 @@ int main(int argc, char **argv)
     stale_update.state = CP0_UI_STORE_UPDATE;
     cp0_ui_sync_store_catalog(&ui, &stale_update, 1, false, false);
     assert(cp0_ui_selected_store_app_state(&ui) == CP0_UI_STORE_QUEUED);
-    cp0_ui_handle_action(&ui, CP0_UI_BACK);
+    stale_update.version = "2.1.0";
+    cp0_ui_sync_store_catalog(&ui, &stale_update, 1, false, false);
     assert(!ui.store_detail && ui.screen == CP0_UI_STORE);
     cp0_ui_handle_action(&ui, CP0_UI_BACK);
     assert(ui.screen == CP0_UI_HOME);
@@ -456,7 +531,8 @@ int main(int argc, char **argv)
     cp0_ui_init(&search_ui);
     cp0_ui_sync_store_catalog(&search_ui, store_catalog, 2, false, false);
     cp0_ui_handle_action(&search_ui, CP0_UI_RIGHT);
-    cp0_ui_handle_action(&search_ui, CP0_UI_ACCEPT);
+    assert(cp0_ui_handle_action(&search_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_NONE);
     cp0_ui_handle_action(&search_ui, CP0_UI_RIGHT);
     cp0_ui_handle_action(&search_ui, CP0_UI_RIGHT);
     assert(search_ui.store_section == CP0_UI_STORE_SEARCH);
@@ -490,7 +566,8 @@ int main(int argc, char **argv)
     assert(search_ui.store_search_count == 8 &&
            search_ui.store_search_has_next &&
            search_ui.store_search_stale && !search_ui.store_catalog_stale);
-    cp0_ui_handle_action(&search_ui, CP0_UI_ACCEPT);
+    assert(cp0_ui_handle_action(&search_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_NONE);
     assert(!search_ui.store_search_input && search_ui.store_recent_count == 1);
     for (unsigned int index = 0; index < 7; index++)
         cp0_ui_handle_action(&search_ui, CP0_UI_DOWN);
@@ -504,11 +581,15 @@ int main(int argc, char **argv)
                              &final_result, 1, true);
     assert(strcmp(cp0_ui_selected_store_app_id(&search_ui),
                   "dev.cardputerzero.search8") == 0);
-    cp0_ui_handle_action(&search_ui, CP0_UI_ACCEPT);
+    assert(cp0_ui_handle_action(&search_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_DETAILS);
     assert(search_ui.store_detail);
     assert(cp0_ui_handle_action(&search_ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_NONE);
-    cp0_ui_handle_action(&search_ui, CP0_UI_BACK);
+    final_result.version = "1.1.0";
+    cp0_ui_sync_store_search(&search_ui, "app", 8, 9, false, 0,
+                             &final_result, 1, true);
+    assert(!search_ui.store_detail);
     assert(cp0_ui_handle_action(&search_ui, CP0_UI_UP) ==
            CP0_UI_EVENT_STORE_SEARCH);
     assert(cp0_ui_store_search_offset(&search_ui) == 0);

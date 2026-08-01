@@ -5,10 +5,12 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <png.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -21,6 +23,8 @@
 #define CP0_STORE_CATALOG_LIMIT 64U
 #define CP0_STORE_SEARCH_QUERY_CHARS 32U
 #define CP0_STORE_MAX_PACKAGE_BYTES (32U * 1024U * 1024U + 4096U)
+#define CP0_STORE_MAX_ICON_BYTES (64U * 1024U)
+#define CP0_STORE_MAX_SCREENSHOT_BYTES (512U * 1024U)
 
 static uint64_t next_request_id = 1;
 
@@ -38,9 +42,77 @@ static int write_all(int descriptor, const char *buffer, size_t length)
     return 0;
 }
 
+static void close_rights_descriptors(struct msghdr *message)
+{
+    for (struct cmsghdr *header = CMSG_FIRSTHDR(message); header != NULL;
+         header = CMSG_NXTHDR(message, header)) {
+        if (header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_RIGHTS ||
+            header->cmsg_len < CMSG_LEN(0))
+            continue;
+        size_t bytes = header->cmsg_len - CMSG_LEN(0);
+        size_t count = bytes / sizeof(int);
+        int *descriptors = (int *)CMSG_DATA(header);
+        for (size_t index = 0; index < count; index++) {
+            if (descriptors[index] >= 0)
+                close(descriptors[index]);
+        }
+    }
+}
+
+static int receive_chunk(int socket_descriptor, char *buffer, size_t capacity,
+                         int *received_descriptor)
+{
+    struct iovec vector = {.iov_base = buffer, .iov_len = capacity};
+    union {
+        struct cmsghdr alignment;
+        unsigned char bytes[CMSG_SPACE(sizeof(int))];
+    } control = {0};
+    int candidate = -1;
+    struct msghdr message = {
+        .msg_iov = &vector,
+        .msg_iovlen = 1,
+        .msg_control = control.bytes,
+        .msg_controllen = sizeof(control.bytes),
+    };
+    ssize_t count;
+
+    do {
+#ifdef MSG_CMSG_CLOEXEC
+        count = recvmsg(socket_descriptor, &message, MSG_CMSG_CLOEXEC);
+#else
+        count = recvmsg(socket_descriptor, &message, 0);
+#endif
+    } while (count < 0 && errno == EINTR);
+    if (count <= 0)
+        return -1;
+    if ((message.msg_flags & (MSG_CTRUNC | MSG_TRUNC)) != 0) {
+        close_rights_descriptors(&message);
+        return -1;
+    }
+    for (struct cmsghdr *header = CMSG_FIRSTHDR(&message); header != NULL;
+         header = CMSG_NXTHDR(&message, header)) {
+        if (header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_RIGHTS ||
+            header->cmsg_len != CMSG_LEN(sizeof(int)) ||
+            received_descriptor == NULL || *received_descriptor >= 0 ||
+            candidate >= 0) {
+            close_rights_descriptors(&message);
+            return -1;
+        }
+        memcpy(&candidate, CMSG_DATA(header), sizeof(candidate));
+        if (candidate < 0 || fcntl(candidate, F_SETFD, FD_CLOEXEC) != 0) {
+            if (candidate >= 0)
+                close(candidate);
+            return -1;
+        }
+    }
+    if (candidate >= 0)
+        *received_descriptor = candidate;
+    return (int)count;
+}
+
 static int exchange(const char *request, size_t request_length, char *response,
                     size_t response_capacity, size_t *response_length,
-                    unsigned int timeout_ms)
+                    unsigned int timeout_ms, int *received_descriptor)
 {
     const struct timeval timeout = {
         .tv_sec = (time_t)(timeout_ms / 1000U),
@@ -53,6 +125,9 @@ static int exchange(const char *request, size_t request_length, char *response,
     int descriptor = socket(AF_UNIX, SOCK_STREAM, 0);
     size_t length = 0;
     int result = -1;
+
+    if (received_descriptor != NULL)
+        *received_descriptor = -1;
 
     if (descriptor < 0 || request == NULL || response == NULL ||
         response_capacity < 2 || strlen(CP0_STORE_SOCKET) >= sizeof(address.sun_path))
@@ -73,10 +148,9 @@ static int exchange(const char *request, size_t request_length, char *response,
         goto cleanup;
 
     while (length < response_capacity - 1U) {
-        ssize_t count = read(descriptor, response + length,
-                             response_capacity - 1U - length);
-        if (count < 0 && errno == EINTR)
-            continue;
+        int count = receive_chunk(descriptor, response + length,
+                                  response_capacity - 1U - length,
+                                  received_descriptor);
         if (count <= 0)
             goto cleanup;
         length += (size_t)count;
@@ -93,6 +167,11 @@ static int exchange(const char *request, size_t request_length, char *response,
     }
 
 cleanup:
+    if (result != 0 && received_descriptor != NULL &&
+        *received_descriptor >= 0) {
+        close(*received_descriptor);
+        *received_descriptor = -1;
+    }
     if (descriptor >= 0)
         close(descriptor);
     return result;
@@ -666,6 +745,362 @@ static int parse_accepted(const char *response, size_t response_length,
     return CP0_STORE_RESULT_OK;
 }
 
+static bool valid_https_url(const char *url)
+{
+    size_t length;
+    if (url == NULL || (length = strlen(url)) < 10U ||
+        length >= CP0_STORE_URL_BYTES || strncmp(url, "https://", 8) != 0 ||
+        strchr(url, '@') != NULL || strchr(url, '#') != NULL ||
+        strchr(url + 8, '.') == NULL)
+        return false;
+    for (size_t index = 0; index < length; index++) {
+        unsigned char byte = (unsigned char)url[index];
+        if (byte <= 0x20U || byte == 0x7fU)
+            return false;
+    }
+    return true;
+}
+
+static bool valid_prose(const char *value, size_t maximum_chars,
+                        size_t maximum_bytes)
+{
+    size_t length;
+    char *single_line;
+    bool valid;
+
+    if (value == NULL || (length = strlen(value)) == 0 ||
+        length > maximum_bytes || value[0] == ' ' || value[0] == '\n' ||
+        value[length - 1U] == ' ' || value[length - 1U] == '\n')
+        return false;
+    single_line = malloc(length + 1U);
+    if (single_line == NULL)
+        return false;
+    for (size_t index = 0; index < length; index++) {
+        unsigned char byte = (unsigned char)value[index];
+        if (byte < 0x20U && byte != '\n') {
+            free(single_line);
+            return false;
+        }
+        single_line[index] = byte == '\n' ? ' ' : (char)byte;
+    }
+    single_line[length] = '\0';
+    valid = valid_text(single_line, maximum_chars, maximum_bytes);
+    free(single_line);
+    return valid;
+}
+
+static bool parse_category(const char *document,
+                           const struct cp0_json_token *token,
+                           enum cp0_store_category *category)
+{
+    static const char *names[] = {
+        "developer-tools", "education",    "entertainment", "games",
+        "hardware",        "media",        "productivity",  "utilities",
+    };
+    for (size_t index = 0; index < sizeof(names) / sizeof(names[0]); index++) {
+        if (cp0_json_string_equals(document, token, names[index])) {
+            *category = (enum cp0_store_category)index;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool parse_age_rating(const char *document,
+                             const struct cp0_json_token *token,
+                             enum cp0_store_age_rating *rating)
+{
+    static const char *names[] = {"4+", "9+", "12+", "17+"};
+    for (size_t index = 0; index < sizeof(names) / sizeof(names[0]); index++) {
+        if (cp0_json_string_equals(document, token, names[index])) {
+            *rating = (enum cp0_store_age_rating)index;
+            return true;
+        }
+    }
+    return false;
+}
+
+static int parse_details_response(const char *response, size_t response_length,
+                                  uint64_t request_id,
+                                  const char *expected_app_id,
+                                  const char *expected_version,
+                                  struct cp0_store_app_details *details)
+{
+    struct cp0_json_token *tokens =
+        calloc(CP0_STORE_JSON_TOKENS, sizeof(*tokens));
+    struct cp0_store_app_details decoded = {0};
+    size_t token_count;
+    int data;
+    int result;
+    uint64_t screenshot_count;
+
+    if (tokens == NULL || details == NULL || !valid_app_id(expected_app_id) ||
+        !valid_version(expected_version)) {
+        free(tokens);
+        return CP0_STORE_RESULT_ERROR;
+    }
+    result = parse_envelope(response, response_length, request_id, tokens,
+                            CP0_STORE_JSON_TOKENS, &token_count, &data);
+    if (result != CP0_STORE_RESULT_OK) {
+        free(tokens);
+        return result;
+    }
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int category = cp0_json_object_get(response, tokens, token_count, data,
+                                       "category");
+    int age = cp0_json_object_get(response, tokens, token_count, data,
+                                  "age_rating");
+    int screenshots = cp0_json_object_get(response, tokens, token_count, data,
+                                           "screenshot_count");
+    if (tokens[data].children != 22 || kind < 0 || category < 0 || age < 0 ||
+        screenshots < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind], "app-details") ||
+        !copy_member(response, tokens, token_count, data, "app_id",
+                     decoded.app_id, sizeof(decoded.app_id)) ||
+        strcmp(decoded.app_id, expected_app_id) != 0 ||
+        !copy_member(response, tokens, token_count, data, "version",
+                     decoded.version, sizeof(decoded.version)) ||
+        strcmp(decoded.version, expected_version) != 0 ||
+        !copy_member(response, tokens, token_count, data, "developer",
+                     decoded.developer, sizeof(decoded.developer)) ||
+        !valid_text(decoded.developer, 80, CP0_STORE_DEVELOPER_BYTES - 1U) ||
+        !parse_category(response, &tokens[category], &decoded.category) ||
+        !parse_age_rating(response, &tokens[age], &decoded.age_rating) ||
+        !copy_member(response, tokens, token_count, data, "privacy_url",
+                     decoded.privacy_url, sizeof(decoded.privacy_url)) ||
+        !valid_https_url(decoded.privacy_url) ||
+        !copy_member(response, tokens, token_count, data, "support_url",
+                     decoded.support_url, sizeof(decoded.support_url)) ||
+        !valid_https_url(decoded.support_url) ||
+        !copy_member(response, tokens, token_count, data, "description",
+                     decoded.description, sizeof(decoded.description)) ||
+        !valid_prose(decoded.description, 1024,
+                     CP0_STORE_DESCRIPTION_BYTES - 1U) ||
+        !copy_member(response, tokens, token_count, data, "release_notes",
+                     decoded.release_notes, sizeof(decoded.release_notes)) ||
+        !valid_prose(decoded.release_notes, 512,
+                     CP0_STORE_RELEASE_NOTES_BYTES - 1U) ||
+        !cp0_json_get_u64(response, &tokens[screenshots], &screenshot_count) ||
+        screenshot_count == 0 ||
+        screenshot_count > CP0_STORE_MAX_SCREENSHOTS) {
+        free(tokens);
+        return CP0_STORE_RESULT_ERROR;
+    }
+    decoded.screenshot_count = (uint8_t)screenshot_count;
+    free(tokens);
+    *details = decoded;
+    return CP0_STORE_RESULT_OK;
+}
+
+enum parsed_media_kind { PARSED_MEDIA_ICON, PARSED_MEDIA_SCREENSHOT };
+
+struct parsed_media {
+    enum parsed_media_kind kind;
+    uint8_t index;
+    struct cp0_store_image_metadata metadata;
+};
+
+static bool lower_hex_sha256(const char *digest)
+{
+    if (digest == NULL || strlen(digest) != 64U)
+        return false;
+    for (size_t index = 0; index < 64U; index++) {
+        char byte = digest[index];
+        if (!((byte >= '0' && byte <= '9') ||
+              (byte >= 'a' && byte <= 'f')))
+            return false;
+    }
+    return true;
+}
+
+static int parse_media_response(const char *response, size_t response_length,
+                                uint64_t request_id,
+                                const char *expected_app_id,
+                                const char *expected_version,
+                                enum parsed_media_kind expected_kind,
+                                uint8_t expected_index,
+                                struct parsed_media *media)
+{
+    struct cp0_json_token tokens[96];
+    size_t token_count;
+    int data;
+    int result = parse_envelope(response, response_length, request_id, tokens,
+                                96, &token_count, &data);
+    if (result != CP0_STORE_RESULT_OK)
+        return result;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int nested = cp0_json_object_get(response, tokens, token_count, data,
+                                     "media");
+    char app_id[CP0_STORE_APP_ID_BYTES];
+    char version[CP0_STORE_VERSION_BYTES];
+    if (tokens[data].children != 8 || kind < 0 || nested < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind], "media") ||
+        !copy_member(response, tokens, token_count, data, "app_id", app_id,
+                     sizeof(app_id)) || strcmp(app_id, expected_app_id) != 0 ||
+        !copy_member(response, tokens, token_count, data, "version", version,
+                     sizeof(version)) || strcmp(version, expected_version) != 0 ||
+        tokens[nested].type != CP0_JSON_OBJECT)
+        return CP0_STORE_RESULT_ERROR;
+
+    int media_kind = cp0_json_object_get(response, tokens, token_count, nested,
+                                         "kind");
+    int sha256 = cp0_json_object_get(response, tokens, token_count, nested,
+                                     "sha256");
+    int bytes = cp0_json_object_get(response, tokens, token_count, nested,
+                                    "bytes");
+    int width = cp0_json_object_get(response, tokens, token_count, nested,
+                                    "width");
+    int height = cp0_json_object_get(response, tokens, token_count, nested,
+                                     "height");
+    int index = cp0_json_object_get(response, tokens, token_count, nested,
+                                    "index");
+    uint64_t parsed_width;
+    uint64_t parsed_height;
+    uint64_t parsed_index = 0;
+    struct parsed_media decoded = {.kind = expected_kind,
+                                   .index = expected_index};
+    unsigned int expected_children =
+        expected_kind == PARSED_MEDIA_ICON ? 10U : 12U;
+    const char *expected_name =
+        expected_kind == PARSED_MEDIA_ICON ? "icon" : "screenshot";
+    uint64_t maximum_bytes = expected_kind == PARSED_MEDIA_ICON
+                                 ? CP0_STORE_MAX_ICON_BYTES
+                                 : CP0_STORE_MAX_SCREENSHOT_BYTES;
+    if (tokens[nested].children != expected_children || media_kind < 0 ||
+        sha256 < 0 || bytes < 0 || width < 0 || height < 0 ||
+        (expected_kind == PARSED_MEDIA_SCREENSHOT && index < 0) ||
+        (expected_kind == PARSED_MEDIA_ICON && index >= 0) ||
+        !cp0_json_string_equals(response, &tokens[media_kind], expected_name) ||
+        !cp0_json_copy_string(response, &tokens[sha256],
+                              decoded.metadata.sha256,
+                              sizeof(decoded.metadata.sha256)) ||
+        !lower_hex_sha256(decoded.metadata.sha256) ||
+        !cp0_json_get_u64(response, &tokens[bytes],
+                          &decoded.metadata.encoded_bytes) ||
+        decoded.metadata.encoded_bytes == 0 ||
+        decoded.metadata.encoded_bytes > maximum_bytes ||
+        !cp0_json_get_u64(response, &tokens[width], &parsed_width) ||
+        !cp0_json_get_u64(response, &tokens[height], &parsed_height) ||
+        (expected_kind == PARSED_MEDIA_SCREENSHOT &&
+         (!cp0_json_get_u64(response, &tokens[index], &parsed_index) ||
+          parsed_index != expected_index)) ||
+        (expected_kind == PARSED_MEDIA_ICON &&
+         !((parsed_width == 32U && parsed_height == 32U) ||
+           (parsed_width == 48U && parsed_height == 48U))) ||
+        (expected_kind == PARSED_MEDIA_SCREENSHOT &&
+         (parsed_width != 320U || parsed_height != 170U)))
+        return CP0_STORE_RESULT_ERROR;
+    decoded.metadata.width = (uint16_t)parsed_width;
+    decoded.metadata.height = (uint16_t)parsed_height;
+    *media = decoded;
+    return CP0_STORE_RESULT_OK;
+}
+
+struct png_decode_state {
+    FILE *input;
+    png_structp png;
+    png_infop info;
+    unsigned char *decoded;
+    png_bytep *rows;
+};
+
+static int decode_png_descriptor(
+    int descriptor, const struct cp0_store_image_metadata *metadata,
+    uint32_t *pixels, size_t pixel_capacity)
+{
+    struct stat status;
+    int descriptor_flags = fcntl(descriptor, F_GETFD);
+    int open_flags = fcntl(descriptor, F_GETFL);
+    int input_descriptor = -1;
+    struct png_decode_state *state = NULL;
+    int result = -1;
+
+    if (metadata == NULL || pixels == NULL ||
+        pixel_capacity < (size_t)metadata->width * metadata->height ||
+        descriptor_flags < 0 || (descriptor_flags & FD_CLOEXEC) == 0 ||
+        open_flags < 0 || (open_flags & O_ACCMODE) != O_RDONLY ||
+        fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode) ||
+        status.st_size < 0 || (uint64_t)status.st_size != metadata->encoded_bytes)
+        goto cleanup;
+    state = calloc(1, sizeof(*state));
+    if (state == NULL)
+        goto cleanup;
+    input_descriptor = fcntl(descriptor, F_DUPFD_CLOEXEC, 0);
+    if (input_descriptor < 0 ||
+        (state->input = fdopen(input_descriptor, "rb")) == NULL)
+        goto cleanup;
+    input_descriptor = -1;
+    state->png = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    if (state->png == NULL ||
+        (state->info = png_create_info_struct(state->png)) == NULL)
+        goto cleanup;
+    if (setjmp(png_jmpbuf(state->png)) != 0)
+        goto cleanup;
+    png_init_io(state->png, state->input);
+    png_set_crc_action(state->png, PNG_CRC_ERROR_QUIT, PNG_CRC_ERROR_QUIT);
+    png_set_user_limits(state->png, metadata->width, metadata->height);
+    png_read_info(state->png, state->info);
+    png_uint_32 width = png_get_image_width(state->png, state->info);
+    png_uint_32 height = png_get_image_height(state->png, state->info);
+    int color_type = png_get_color_type(state->png, state->info);
+    int bit_depth = png_get_bit_depth(state->png, state->info);
+    bool has_transparency =
+        png_get_valid(state->png, state->info, PNG_INFO_tRNS) != 0;
+    if (width != metadata->width || height != metadata->height)
+        goto cleanup;
+    if (bit_depth == 16)
+        png_set_strip_16(state->png);
+    if (color_type == PNG_COLOR_TYPE_PALETTE)
+        png_set_palette_to_rgb(state->png);
+    if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
+        png_set_expand_gray_1_2_4_to_8(state->png);
+    if (has_transparency)
+        png_set_tRNS_to_alpha(state->png);
+    if (color_type == PNG_COLOR_TYPE_GRAY ||
+        color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+        png_set_gray_to_rgb(state->png);
+    if ((color_type & PNG_COLOR_MASK_ALPHA) == 0 && !has_transparency)
+        png_set_add_alpha(state->png, 0xff, PNG_FILLER_AFTER);
+    png_read_update_info(state->png, state->info);
+    size_t row_bytes = png_get_rowbytes(state->png, state->info);
+    if (png_get_channels(state->png, state->info) != 4 ||
+        row_bytes != (size_t)width * 4U || height > SIZE_MAX / row_bytes)
+        goto cleanup;
+    state->decoded = malloc((size_t)height * row_bytes);
+    state->rows = malloc((size_t)height * sizeof(*state->rows));
+    if (state->decoded == NULL || state->rows == NULL)
+        goto cleanup;
+    for (png_uint_32 y = 0; y < height; y++)
+        state->rows[y] = state->decoded + (size_t)y * row_bytes;
+    png_read_image(state->png, state->rows);
+    png_read_end(state->png, state->info);
+    for (png_uint_32 y = 0; y < height; y++) {
+        for (png_uint_32 x = 0; x < width; x++) {
+            const unsigned char *source =
+                state->decoded + (size_t)y * row_bytes + (size_t)x * 4U;
+            pixels[(size_t)y * width + x] =
+                ((uint32_t)source[3] << 24U) | ((uint32_t)source[0] << 16U) |
+                ((uint32_t)source[1] << 8U) | source[2];
+        }
+    }
+    result = 0;
+
+cleanup:
+    if (state != NULL) {
+        free(state->rows);
+        free(state->decoded);
+        if (state->png != NULL)
+            png_destroy_read_struct(
+                &state->png, state->info == NULL ? NULL : &state->info, NULL);
+        if (state->input != NULL)
+            fclose(state->input);
+        free(state);
+    }
+    if (input_descriptor >= 0)
+        close(input_descriptor);
+    return result;
+}
+
 #ifdef CP0_STORE_CLIENT_TEST
 int cp0_store_test_parse_catalog_response(
     const char *response, size_t response_length, uint64_t request_id,
@@ -699,6 +1134,44 @@ int cp0_store_test_parse_search_response(
     return parse_search_response(response, response_length, request_id, query,
                                  offset, limit, results);
 }
+
+int cp0_store_test_parse_details_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *app_id, const char *version,
+    struct cp0_store_app_details *details)
+{
+    return parse_details_response(response, response_length, request_id, app_id,
+                                  version, details);
+}
+
+int cp0_store_test_parse_media_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *app_id, const char *version, bool screenshot, uint8_t index,
+    struct cp0_store_image_metadata *metadata)
+{
+    struct parsed_media media;
+    int result = parse_media_response(
+        response, response_length, request_id, app_id, version,
+        screenshot ? PARSED_MEDIA_SCREENSHOT : PARSED_MEDIA_ICON, index,
+        &media);
+    if (result == CP0_STORE_RESULT_OK)
+        *metadata = media.metadata;
+    return result;
+}
+
+int cp0_store_test_receive_chunk(int socket_descriptor, char *buffer,
+                                 size_t capacity, int *received_descriptor)
+{
+    return receive_chunk(socket_descriptor, buffer, capacity,
+                         received_descriptor);
+}
+
+int cp0_store_test_decode_png_descriptor(
+    int descriptor, const struct cp0_store_image_metadata *metadata,
+    uint32_t *pixels, size_t pixel_capacity)
+{
+    return decode_png_descriptor(descriptor, metadata, pixels, pixel_capacity);
+}
 #endif
 
 int cp0_store_list(struct cp0_store_catalog *catalog)
@@ -717,7 +1190,7 @@ int cp0_store_list(struct cp0_store_catalog *catalog)
     if (catalog != NULL && response != NULL && request_length > 0 &&
         (size_t)request_length < sizeof(request) &&
         exchange(request, (size_t)request_length, response,
-                 CP0_STORE_FRAME_BYTES, &response_length, 500) == 0)
+                 CP0_STORE_FRAME_BYTES, &response_length, 500, NULL) == 0)
         result = parse_catalog_response(response, response_length, request_id,
                                         catalog);
     free(response);
@@ -748,7 +1221,7 @@ int cp0_store_search(const char *query, uint16_t offset, uint8_t limit,
         (unsigned int)limit);
     if (request_length > 0 && (size_t)request_length < sizeof(request) &&
         exchange(request, (size_t)request_length, response,
-                 CP0_STORE_FRAME_BYTES, &response_length, 500) == 0)
+                 CP0_STORE_FRAME_BYTES, &response_length, 500, NULL) == 0)
         result = parse_search_response(response, response_length, request_id,
                                        query, offset, limit, results);
     free(response);
@@ -768,7 +1241,7 @@ int cp0_store_refresh(void)
         (unsigned long long)request_id);
     if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
         exchange(request, (size_t)request_length, response, sizeof(response),
-                 &response_length, 1000) != 0)
+                 &response_length, 1000, NULL) != 0)
         return CP0_STORE_RESULT_ERROR;
     return parse_accepted(response, response_length, request_id,
                           "refresh-accepted", NULL);
@@ -790,8 +1263,115 @@ int cp0_store_install(const char *app_id)
         (unsigned long long)request_id, app_id);
     if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
         exchange(request, (size_t)request_length, response, sizeof(response),
-                 &response_length, 1000) != 0)
+                 &response_length, 1000, NULL) != 0)
         return CP0_STORE_RESULT_ERROR;
     return parse_accepted(response, response_length, request_id,
                           "install-accepted", app_id);
+}
+
+int cp0_store_get_details(const char *app_id, const char *expected_version,
+                          struct cp0_store_app_details *details)
+{
+    char request[384];
+    char *response = malloc(CP0_STORE_FRAME_BYTES);
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int result = CP0_STORE_RESULT_ERROR;
+
+    if (response == NULL || details == NULL || !valid_app_id(app_id) ||
+        !valid_version(expected_version)) {
+        free(response);
+        return CP0_STORE_RESULT_ERROR;
+    }
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"details\",\"app_id\":\"%s\"}}\n",
+        (unsigned long long)request_id, app_id);
+    if (request_length > 0 && (size_t)request_length < sizeof(request) &&
+        exchange(request, (size_t)request_length, response,
+                 CP0_STORE_FRAME_BYTES, &response_length, 5000, NULL) == 0)
+        result = parse_details_response(response, response_length, request_id,
+                                        app_id, expected_version, details);
+    free(response);
+    return result;
+}
+
+static int get_media(const char *app_id, const char *expected_version,
+                     enum parsed_media_kind kind, uint8_t index,
+                     uint32_t *pixels, size_t pixel_capacity,
+                     struct cp0_store_image_metadata *metadata)
+{
+    char request[512];
+    char *response = malloc(CP0_STORE_FRAME_BYTES);
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int media_descriptor = -1;
+    int result = CP0_STORE_RESULT_ERROR;
+    int request_length;
+
+    if (response == NULL || pixels == NULL || metadata == NULL ||
+        !valid_app_id(app_id) || !valid_version(expected_version) ||
+        (kind == PARSED_MEDIA_SCREENSHOT &&
+         index >= CP0_STORE_MAX_SCREENSHOTS))
+        goto cleanup;
+    if (kind == PARSED_MEDIA_ICON) {
+        request_length = snprintf(
+            request, sizeof(request),
+            "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+            "\"name\":\"media\",\"app_id\":\"%s\",\"media\":{"
+            "\"kind\":\"icon\"}}}\n",
+            (unsigned long long)request_id, app_id);
+    } else {
+        request_length = snprintf(
+            request, sizeof(request),
+            "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+            "\"name\":\"media\",\"app_id\":\"%s\",\"media\":{"
+            "\"kind\":\"screenshot\",\"index\":%u}}}\n",
+            (unsigned long long)request_id, app_id, (unsigned int)index);
+    }
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response,
+                 CP0_STORE_FRAME_BYTES, &response_length, 5000,
+                 &media_descriptor) != 0)
+        goto cleanup;
+    struct parsed_media parsed;
+    result = parse_media_response(response, response_length, request_id,
+                                  app_id, expected_version, kind, index,
+                                  &parsed);
+    if (result != CP0_STORE_RESULT_OK) {
+        if (media_descriptor >= 0)
+            result = CP0_STORE_RESULT_ERROR;
+        goto cleanup;
+    }
+    if (media_descriptor < 0 ||
+        decode_png_descriptor(media_descriptor, &parsed.metadata, pixels,
+                              pixel_capacity) != 0) {
+        result = CP0_STORE_RESULT_ERROR;
+        goto cleanup;
+    }
+    *metadata = parsed.metadata;
+
+cleanup:
+    if (media_descriptor >= 0)
+        close(media_descriptor);
+    free(response);
+    return result;
+}
+
+int cp0_store_get_icon(const char *app_id, const char *expected_version,
+                       uint32_t *pixels, size_t pixel_capacity,
+                       struct cp0_store_image_metadata *metadata)
+{
+    return get_media(app_id, expected_version, PARSED_MEDIA_ICON, 0, pixels,
+                     pixel_capacity, metadata);
+}
+
+int cp0_store_get_screenshot(
+    const char *app_id, const char *expected_version, uint8_t index,
+    uint32_t *pixels, size_t pixel_capacity,
+    struct cp0_store_image_metadata *metadata)
+{
+    return get_media(app_id, expected_version, PARSED_MEDIA_SCREENSHOT, index,
+                     pixels, pixel_capacity, metadata);
 }

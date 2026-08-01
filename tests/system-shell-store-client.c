@@ -1,8 +1,15 @@
 #include "cp0_store_client.h"
 
 #include <assert.h>
+#include <fcntl.h>
+#include <png.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 int cp0_store_test_parse_catalog_response(
     const char *response, size_t response_length, uint64_t request_id,
@@ -18,6 +25,19 @@ int cp0_store_test_parse_search_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *query, uint16_t offset, uint8_t limit,
     struct cp0_store_search_results *results);
+int cp0_store_test_parse_details_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *app_id, const char *version,
+    struct cp0_store_app_details *details);
+int cp0_store_test_parse_media_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *app_id, const char *version, bool screenshot, uint8_t index,
+    struct cp0_store_image_metadata *metadata);
+int cp0_store_test_receive_chunk(int socket_descriptor, char *buffer,
+                                 size_t capacity, int *received_descriptor);
+int cp0_store_test_decode_png_descriptor(
+    int descriptor, const struct cp0_store_image_metadata *metadata,
+    uint32_t *pixels, size_t pixel_capacity);
 
 #define ENVELOPE_START(ID)                                                     \
     "{\"protocol_version\":1,\"request_id\":" ID ",\"outcome\":{"      \
@@ -39,6 +59,49 @@ int cp0_store_test_parse_search_response(
     ",\"next_offset\":" NEXT ",\"sequence\":4,"                           \
     "\"expires_unix_seconds\":200,\"stale\":" STALE ",\"apps\":["
 #define SEARCH_END "]}}}"
+
+static void send_descriptors(int socket_descriptor, const int *descriptors,
+                             size_t descriptor_count)
+{
+    char byte = 'x';
+    struct iovec vector = {.iov_base = &byte, .iov_len = 1};
+    unsigned char control[CMSG_SPACE(sizeof(int) * 2U)] = {0};
+    struct msghdr message = {
+        .msg_iov = &vector,
+        .msg_iovlen = 1,
+        .msg_control = control,
+        .msg_controllen = CMSG_SPACE(sizeof(int) * descriptor_count),
+    };
+    struct cmsghdr *header = CMSG_FIRSTHDR(&message);
+    header->cmsg_level = SOL_SOCKET;
+    header->cmsg_type = SCM_RIGHTS;
+    header->cmsg_len = CMSG_LEN(sizeof(int) * descriptor_count);
+    memcpy(CMSG_DATA(header), descriptors, sizeof(int) * descriptor_count);
+    assert(sendmsg(socket_descriptor, &message, 0) == 1);
+}
+
+static void write_red_png(const char *path)
+{
+    FILE *output = fopen(path, "wb");
+    assert(output != NULL);
+    png_structp png =
+        png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    assert(png != NULL);
+    png_infop info = png_create_info_struct(png);
+    assert(info != NULL);
+    assert(setjmp(png_jmpbuf(png)) == 0);
+    png_init_io(png, output);
+    png_set_IHDR(png, info, 1, 1, 8, PNG_COLOR_TYPE_RGBA,
+                 PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
+                 PNG_FILTER_TYPE_DEFAULT);
+    png_write_info(png, info);
+    unsigned char red[] = {0xff, 0x00, 0x00, 0xff};
+    png_bytep rows[] = {red};
+    png_write_image(png, rows);
+    png_write_end(png, info);
+    png_destroy_write_struct(&png, &info);
+    assert(fclose(output) == 0);
+}
 
 static int parse_catalog(const char *response, uint64_t request_id,
                          struct cp0_store_catalog *catalog)
@@ -223,5 +286,123 @@ int main(void)
     assert(cp0_store_test_parse_search_response(
                empty_search, strlen(empty_search), 25, "bad\"query", 0, 8,
                &search) == CP0_STORE_RESULT_ERROR);
+
+    struct cp0_store_app_details details;
+    static const char valid_details[] =
+        ENVELOPE_START("28")
+        "\"kind\":\"app-details\","
+        "\"app_id\":\"dev.cardputerzero.alpha\",\"version\":\"1.2.3\","
+        "\"developer\":\"CardputerZero Labs\",\"category\":\"utilities\","
+        "\"age_rating\":\"4+\","
+        "\"privacy_url\":\"https://example.com/privacy\","
+        "\"support_url\":\"https://example.com/support\","
+        "\"description\":\"First line.\\nSecond line.\","
+        "\"release_notes\":\"Adds verified media.\","
+        "\"screenshot_count\":2}}}";
+    assert(cp0_store_test_parse_details_response(
+               valid_details, strlen(valid_details), 28,
+               "dev.cardputerzero.alpha", "1.2.3", &details) ==
+           CP0_STORE_RESULT_OK);
+    assert(details.category == CP0_STORE_CATEGORY_UTILITIES &&
+           details.age_rating == CP0_STORE_AGE_4_PLUS &&
+           details.screenshot_count == 2 &&
+           strcmp(details.description, "First line.\nSecond line.") == 0);
+    assert(cp0_store_test_parse_details_response(
+               valid_details, strlen(valid_details), 28,
+               "dev.cardputerzero.alpha", "1.2.4", &details) ==
+           CP0_STORE_RESULT_ERROR);
+
+    static const char extra_details[] =
+        ENVELOPE_START("29")
+        "\"kind\":\"app-details\","
+        "\"app_id\":\"dev.cardputerzero.alpha\",\"version\":\"1.2.3\","
+        "\"developer\":\"CardputerZero Labs\",\"category\":\"utilities\","
+        "\"age_rating\":\"4+\","
+        "\"privacy_url\":\"https://example.com/privacy\","
+        "\"support_url\":\"https://example.com/support\","
+        "\"description\":\"Description\",\"release_notes\":\"Notes\","
+        "\"screenshot_count\":1,\"extra\":true}}}";
+    assert(cp0_store_test_parse_details_response(
+               extra_details, strlen(extra_details), 29,
+               "dev.cardputerzero.alpha", "1.2.3", &details) ==
+           CP0_STORE_RESULT_ERROR);
+
+    struct cp0_store_image_metadata media;
+    static const char valid_icon[] =
+        ENVELOPE_START("30")
+        "\"kind\":\"media\",\"app_id\":\"dev.cardputerzero.alpha\","
+        "\"version\":\"1.2.3\",\"media\":{\"kind\":\"icon\","
+        "\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\","
+        "\"bytes\":2048,\"width\":48,\"height\":48}}}}";
+    assert(cp0_store_test_parse_media_response(
+               valid_icon, strlen(valid_icon), 30,
+               "dev.cardputerzero.alpha", "1.2.3", false, 0, &media) ==
+           CP0_STORE_RESULT_OK);
+    assert(media.width == 48 && media.height == 48 &&
+           media.encoded_bytes == 2048);
+
+    static const char valid_screenshot[] =
+        ENVELOPE_START("31")
+        "\"kind\":\"media\",\"app_id\":\"dev.cardputerzero.alpha\","
+        "\"version\":\"1.2.3\",\"media\":{\"kind\":\"screenshot\","
+        "\"index\":1,"
+        "\"sha256\":\"4444444444444444444444444444444444444444444444444444444444444444\","
+        "\"bytes\":8192,\"width\":320,\"height\":170}}}}";
+    assert(cp0_store_test_parse_media_response(
+               valid_screenshot, strlen(valid_screenshot), 31,
+               "dev.cardputerzero.alpha", "1.2.3", true, 1, &media) ==
+           CP0_STORE_RESULT_OK);
+    assert(cp0_store_test_parse_media_response(
+               valid_screenshot, strlen(valid_screenshot), 31,
+               "dev.cardputerzero.alpha", "1.2.3", true, 0, &media) ==
+           CP0_STORE_RESULT_ERROR);
+
+    int sockets[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    int source = open(__FILE__, O_RDONLY);
+    assert(source >= 0);
+    send_descriptors(sockets[0], &source, 1);
+    char received_byte;
+    int received_descriptor = -1;
+    assert(cp0_store_test_receive_chunk(sockets[1], &received_byte, 1,
+                                        &received_descriptor) == 1);
+    assert(received_byte == 'x' && received_descriptor >= 0);
+    assert((fcntl(received_descriptor, F_GETFD) & FD_CLOEXEC) != 0);
+    close(received_descriptor);
+    close(sockets[0]);
+    close(sockets[1]);
+
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    int duplicate_sources[] = {source, source};
+    send_descriptors(sockets[0], duplicate_sources, 2);
+    received_descriptor = -1;
+    assert(cp0_store_test_receive_chunk(sockets[1], &received_byte, 1,
+                                        &received_descriptor) == -1);
+    assert(received_descriptor == -1);
+    close(source);
+    close(sockets[0]);
+    close(sockets[1]);
+
+    char png_path[] = "target/test-tmp/store-client-png.XXXXXX";
+    int temporary = mkstemp(png_path);
+    assert(temporary >= 0);
+    close(temporary);
+    write_red_png(png_path);
+    int png_descriptor = open(png_path, O_RDONLY);
+    assert(png_descriptor >= 0 &&
+           fcntl(png_descriptor, F_SETFD, FD_CLOEXEC) == 0);
+    struct stat png_status;
+    assert(fstat(png_descriptor, &png_status) == 0);
+    struct cp0_store_image_metadata png_metadata = {
+        .encoded_bytes = (uint64_t)png_status.st_size,
+        .width = 1,
+        .height = 1,
+    };
+    uint32_t pixel = 0;
+    assert(cp0_store_test_decode_png_descriptor(
+               png_descriptor, &png_metadata, &pixel, 1) == 0);
+    assert(pixel == 0xffff0000U);
+    close(png_descriptor);
+    assert(unlink(png_path) == 0);
     return 0;
 }

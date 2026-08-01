@@ -81,6 +81,53 @@ static void fill_rect(struct canvas *canvas, int x, int y, int width,
     }
 }
 
+static void draw_scaled_image(struct canvas *canvas, int x, int y,
+                              int destination_width, int destination_height,
+                              const uint32_t *pixels, unsigned int width,
+                              unsigned int height)
+{
+    if (pixels == NULL || width == 0 || height == 0 ||
+        destination_width <= 0 || destination_height <= 0)
+        return;
+    for (int dy = 0; dy < destination_height; dy++) {
+        unsigned int source_y =
+            (unsigned int)(((uint64_t)dy * height) /
+                           (unsigned int)destination_height);
+        int py = y + dy;
+        if (py < 0 || py >= canvas->height)
+            continue;
+        for (int dx = 0; dx < destination_width; dx++) {
+            int px = x + dx;
+            if (px < 0 || px >= canvas->width)
+                continue;
+            unsigned int source_x =
+                (unsigned int)(((uint64_t)dx * width) /
+                               (unsigned int)destination_width);
+            uint32_t source = pixels[(size_t)source_y * width + source_x];
+            unsigned int alpha = source >> 24U;
+            if (alpha == 0)
+                continue;
+            uint32_t *destination =
+                &canvas->pixels[py * canvas->stride + px];
+            if (alpha == 255U) {
+                *destination = source & 0x00ffffffU;
+                continue;
+            }
+            unsigned int inverse = 255U - alpha;
+            unsigned int red = (((source >> 16U) & 0xffU) * alpha +
+                                ((*destination >> 16U) & 0xffU) * inverse) /
+                               255U;
+            unsigned int green = (((source >> 8U) & 0xffU) * alpha +
+                                  ((*destination >> 8U) & 0xffU) * inverse) /
+                                 255U;
+            unsigned int blue = ((source & 0xffU) * alpha +
+                                 (*destination & 0xffU) * inverse) /
+                                255U;
+            *destination = (red << 16U) | (green << 8U) | blue;
+        }
+    }
+}
+
 static void stroke_rect(struct canvas *canvas, int x, int y, int width,
                         int height, int thickness, uint32_t color)
 {
@@ -122,6 +169,12 @@ static void draw_prompt_line(struct canvas *canvas, int y, const char *text,
 static void draw_text_slice(struct canvas *canvas, int x, int y,
                             const char *text, size_t start, size_t maximum,
                             uint32_t color);
+static size_t wrapped_line_start(const char *text, size_t line,
+                                 size_t maximum);
+static size_t wrapped_line_count(const char *text, size_t maximum);
+static void draw_wrapped_line(struct canvas *canvas, int x, int y,
+                              const char *text, size_t line, size_t maximum,
+                              uint32_t color);
 static bool copy_optional_text(char *output, size_t capacity,
                                const char *input);
 static void format_bytes(char output[16], uint64_t bytes);
@@ -685,36 +738,144 @@ static void draw_store_search(struct canvas *canvas, const struct cp0_ui *ui)
         draw_text(canvas, 8, 159, "STALE", 1, COLOR_YELLOW);
 }
 
-static void draw_store_detail(struct canvas *canvas, const struct cp0_ui *ui)
+static void draw_store_detail_footer(struct canvas *canvas,
+                                     const struct cp0_ui *ui)
 {
-    static const char *permission_names[] = {
-        "AUDIO CAPTURE",  "AUDIO PLAYBACK", "CAMERA CAPTURE", "DOCUMENTS OPEN",
-        "HARDWARE GPIO",  "NETWORK CLIENT", "NOTIFICATIONS",  "RADIO LORA",
-    };
-    const struct cp0_ui_store_app *app = selected_store_app(ui);
+    char page[12];
+    snprintf(page, sizeof(page), "%u/5", ui->store_detail_page + 1U);
+    fill_rect(canvas, 8, 150, 304, 13, COLOR_BAR);
+    draw_text(canvas, 278, 154, page, 1, COLOR_MUTED);
+}
+
+static void draw_store_overview(struct canvas *canvas, const struct cp0_ui *ui,
+                                const struct cp0_ui_store_app *app)
+{
     char version[76];
     char state[16];
-    unsigned int visible_permission = 0;
-
     fill_rect(canvas, 8, 27, 304, 136, COLOR_SURFACE);
     fill_rect(canvas, 8, 27, 4, 136, COLOR_GREEN);
-    draw_prompt_line(canvas, 34, app->name, 0, 46);
+    if (ui->store_icon_available)
+        draw_scaled_image(canvas, 20, 36, 48, 48, ui->store_icon_pixels,
+                          ui->store_icon_width, ui->store_icon_height);
+    else
+        draw_store_icon(canvas, 31, 48, COLOR_MUTED);
+    draw_text_slice(canvas, 78, 35, app->name, 0, 36, COLOR_TEXT);
     snprintf(version, sizeof(version), "VERSION %s", app->version);
-    draw_prompt_line(canvas, 48, version, 0, 46);
-    draw_prompt_line(canvas, 64, app->summary, 0, 46);
-    draw_prompt_line(canvas, 77, app->summary, 46, 46);
-    draw_text(canvas, 20, 93, store_state_label(app, state), 1,
+    draw_text_slice(canvas, 78, 49, version, 0, 36, COLOR_MUTED);
+    if (ui->store_detail_status == CP0_UI_STORE_DETAIL_READY) {
+        draw_text_slice(canvas, 78, 63, ui->store_developer, 0, 36,
+                        COLOR_TEXT);
+        snprintf(version, sizeof(version), "%s  AGE %s", ui->store_category,
+                 ui->store_age_rating);
+        draw_text_slice(canvas, 78, 77, version, 0, 36, COLOR_MUTED);
+    } else {
+        draw_text(canvas, 78, 63,
+                  ui->store_detail_status == CP0_UI_STORE_DETAIL_LOADING
+                      ? "LOADING DETAILS"
+                      : "DETAILS UNAVAILABLE",
+                  1, ui->store_detail_status == CP0_UI_STORE_DETAIL_LOADING
+                         ? COLOR_YELLOW
+                         : COLOR_RED);
+    }
+    draw_text_slice(canvas, 20, 96, app->summary, 0, 46, COLOR_TEXT);
+    draw_text_slice(canvas, 20, 109, app->summary, 46, 46, COLOR_TEXT);
+    draw_text(canvas, 20, 132, store_state_label(app, state), 1,
               app->state == CP0_UI_STORE_FAILED ? COLOR_RED : COLOR_GREEN);
+    draw_store_detail_footer(canvas, ui);
+}
+
+static void draw_store_prose(struct canvas *canvas, const struct cp0_ui *ui,
+                             const char *title, const char *prose)
+{
+    fill_rect(canvas, 8, 27, 304, 136, COLOR_SURFACE);
+    fill_rect(canvas, 8, 27, 4, 136, COLOR_GREEN);
+    draw_text(canvas, 20, 34, title, 1, COLOR_GREEN);
+    for (unsigned int line = 0; line < 7; line++)
+        draw_wrapped_line(canvas, 20, 50 + (int)line * 13, prose,
+                          ui->store_detail_text_offset + line, 46, COLOR_TEXT);
+    draw_store_detail_footer(canvas, ui);
+}
+
+static void draw_store_screenshot(struct canvas *canvas,
+                                  const struct cp0_ui *ui)
+{
+    fill_rect(canvas, 8, 27, 304, 136, COLOR_SURFACE);
+    if (ui->store_screenshot_available) {
+        draw_scaled_image(canvas, 32, 27, 256, 136,
+                          ui->store_screenshot_pixels, 320, 170);
+    } else {
+        draw_text(canvas, ui->store_screenshot_loading ? 110 : 92, 86,
+                  ui->store_screenshot_loading ? "LOADING SCREENSHOT"
+                                               : "SCREENSHOT UNAVAILABLE",
+                  1, ui->store_screenshot_loading ? COLOR_YELLOW : COLOR_RED);
+    }
+    char position[16];
+    snprintf(position, sizeof(position), "%u/%u",
+             ui->store_screenshot_index + 1U, ui->store_screenshot_count);
+    draw_store_detail_footer(canvas, ui);
+    draw_text(canvas, 20, 154, position, 1, COLOR_TEXT);
+}
+
+static void draw_store_permissions(struct canvas *canvas,
+                                   const struct cp0_ui *ui,
+                                   const struct cp0_ui_store_app *app)
+{
+    static const char *permission_names[] = {
+        "AUDIO CAPTURE", "AUDIO PLAYBACK", "CAMERA", "DOCUMENTS",
+        "GPIO",          "NETWORK",        "NOTIFICATIONS", "LORA",
+    };
+    unsigned int visible = 0;
+    unsigned int new_permissions = 0;
+    bool update = app->state == CP0_UI_STORE_UPDATE;
+    fill_rect(canvas, 8, 27, 304, 136, COLOR_SURFACE);
+    fill_rect(canvas, 8, 27, 4, 136, COLOR_GREEN);
+    for (unsigned int bit = 0; bit < 8; bit++)
+        new_permissions += update && (app->permissions & (1U << bit)) != 0 &&
+                           (app->installed_permissions & (1U << bit)) == 0;
+    char heading[24];
+    if (update)
+        snprintf(heading, sizeof(heading), "%u NEW PERMISSIONS",
+                 new_permissions);
+    else
+        snprintf(heading, sizeof(heading), "REQUESTED PERMISSIONS");
+    draw_text(canvas, 20, 34, heading, 1,
+              new_permissions > 0 ? COLOR_YELLOW : COLOR_GREEN);
     for (unsigned int bit = 0; bit < 8; bit++) {
         if ((app->permissions & (1U << bit)) == 0)
             continue;
-        int x = 20 + (int)(visible_permission % 2) * 146;
-        int y = 108 + (int)(visible_permission / 2) * 12;
-        draw_text(canvas, x, y, permission_names[bit], 1, COLOR_TEXT);
-        visible_permission++;
+        int x = 20 + (int)(visible % 2U) * 146;
+        int y = 55 + (int)(visible / 2U) * 21;
+        bool added = update &&
+                     (app->installed_permissions & (1U << bit)) == 0;
+        draw_text(canvas, x, y, permission_names[bit], 1,
+                  added ? COLOR_YELLOW : COLOR_TEXT);
+        if (added)
+            draw_text(canvas, x, y + 10, "NEW", 1, COLOR_YELLOW);
+        visible++;
     }
-    if (visible_permission == 0)
-        draw_text(canvas, 20, 108, "NO PERMISSIONS", 1, COLOR_MUTED);
+    if (visible == 0)
+        draw_text(canvas, 20, 60, "NO PERMISSIONS", 1, COLOR_MUTED);
+    draw_store_detail_footer(canvas, ui);
+}
+
+static void draw_store_detail(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    const struct cp0_ui_store_app *app = selected_store_app(ui);
+    if (ui->store_detail_page == 0) {
+        draw_store_overview(canvas, ui, app);
+    } else if (ui->store_detail_status != CP0_UI_STORE_DETAIL_READY) {
+        fill_rect(canvas, 8, 27, 304, 136, COLOR_SURFACE);
+        draw_text(canvas, 88, 86, "DETAILS UNAVAILABLE", 1, COLOR_RED);
+        draw_store_detail_footer(canvas, ui);
+    } else if (ui->store_detail_page == 1) {
+        draw_store_prose(canvas, ui, "DESCRIPTION", ui->store_description);
+    } else if (ui->store_detail_page == 2) {
+        draw_store_screenshot(canvas, ui);
+    } else if (ui->store_detail_page == 3) {
+        draw_store_permissions(canvas, ui, app);
+    } else {
+        draw_store_prose(canvas, ui, "WHAT'S NEW", ui->store_release_notes);
+    }
 }
 
 static void draw_store_page(struct canvas *canvas, const struct cp0_ui *ui)
@@ -1332,6 +1493,82 @@ static void draw_text_slice(struct canvas *canvas, int x, int y,
     draw_text(canvas, x, y, line, 1, color);
 }
 
+static size_t next_wrapped_offset(const char *text, size_t start,
+                                  size_t maximum)
+{
+    size_t length = strlen(text);
+    while (start < length && (text[start] == ' ' || text[start] == '\n'))
+        start++;
+    if (start >= length)
+        return length;
+    size_t limit = length - start < maximum ? length : start + maximum;
+    size_t last_space = SIZE_MAX;
+    for (size_t cursor = start; cursor < limit; cursor++) {
+        if (text[cursor] == '\n')
+            return cursor + 1U;
+        if (text[cursor] == ' ')
+            last_space = cursor;
+    }
+    size_t next = limit < length && last_space != SIZE_MAX && last_space > start
+                      ? last_space + 1U
+                      : limit;
+    while (next < length && text[next] == ' ')
+        next++;
+    return next;
+}
+
+static size_t wrapped_line_start(const char *text, size_t line,
+                                 size_t maximum)
+{
+    size_t start = 0;
+    size_t length = strlen(text);
+    while (start < length && (text[start] == ' ' || text[start] == '\n'))
+        start++;
+    for (size_t index = 0; index < line && start < length; index++) {
+        size_t next = next_wrapped_offset(text, start, maximum);
+        if (next <= start)
+            return length;
+        start = next;
+        while (start < length &&
+               (text[start] == ' ' || text[start] == '\n'))
+            start++;
+    }
+    return start;
+}
+
+static size_t wrapped_line_count(const char *text, size_t maximum)
+{
+    size_t length = strlen(text);
+    size_t start = wrapped_line_start(text, 0, maximum);
+    size_t lines = 0;
+    while (start < length) {
+        size_t next = next_wrapped_offset(text, start, maximum);
+        lines++;
+        if (next <= start)
+            break;
+        start = next;
+        while (start < length &&
+               (text[start] == ' ' || text[start] == '\n'))
+            start++;
+    }
+    return lines;
+}
+
+static void draw_wrapped_line(struct canvas *canvas, int x, int y,
+                              const char *text, size_t line, size_t maximum,
+                              uint32_t color)
+{
+    size_t start = wrapped_line_start(text, line, maximum);
+    size_t next = next_wrapped_offset(text, start, maximum);
+    size_t length = next > start ? next - start : 0;
+    while (length > 0 &&
+           (text[start + length - 1U] == ' ' ||
+            text[start + length - 1U] == '\n'))
+        length--;
+    draw_text_slice(canvas, x, y, text, start,
+                    length < maximum ? length : maximum, color);
+}
+
 static void draw_prompt_line(struct canvas *canvas, int y, const char *text,
                              size_t start, size_t maximum)
 {
@@ -1846,6 +2083,7 @@ static bool copy_store_app(struct cp0_ui_store_app *app,
     *app = (struct cp0_ui_store_app){
         .package_bytes = source->package_bytes,
         .permissions = source->permissions,
+        .installed_permissions = source->installed_permissions,
         .progress_percent = source->progress_percent,
         .state = source->state,
     };
@@ -1868,6 +2106,17 @@ static bool copy_store_app(struct cp0_ui_store_app *app,
         }
     }
     return true;
+}
+
+static void reconcile_store_detail_identity(struct cp0_ui *ui)
+{
+    const struct cp0_ui_store_app *app;
+    if (ui == NULL || !ui->store_detail)
+        return;
+    app = selected_store_app(ui);
+    if (app == NULL || strcmp(ui->store_detail_app_id, app->app_id) != 0 ||
+        strcmp(ui->store_detail_version, app->version) != 0)
+        ui->store_detail = false;
 }
 
 void cp0_ui_set_store_status(struct cp0_ui *ui,
@@ -1930,6 +2179,7 @@ void cp0_ui_sync_store_catalog(
     }
     if (ui->store_count == 0)
         ui->store_detail = false;
+    reconcile_store_detail_identity(ui);
 }
 
 void cp0_ui_set_store_search_status(struct cp0_ui *ui,
@@ -1987,6 +2237,7 @@ void cp0_ui_sync_store_search(
             break;
         }
     }
+    reconcile_store_detail_identity(ui);
 }
 
 void cp0_ui_set_store_app_state(struct cp0_ui *ui, const char *app_id,
@@ -2024,6 +2275,125 @@ enum cp0_ui_store_state cp0_ui_selected_store_app_state(
     const struct cp0_ui_store_app *app =
         ui == NULL ? NULL : selected_store_app(ui);
     return app == NULL ? CP0_UI_STORE_AVAILABLE : app->state;
+}
+
+const char *cp0_ui_selected_store_app_version(const struct cp0_ui *ui)
+{
+    const struct cp0_ui_store_app *app =
+        ui == NULL ? NULL : selected_store_app(ui);
+    return app == NULL ? NULL : app->version;
+}
+
+uint8_t cp0_ui_selected_store_screenshot(const struct cp0_ui *ui)
+{
+    return ui == NULL ? 0 : (uint8_t)ui->store_screenshot_index;
+}
+
+static bool store_detail_identity_matches(const struct cp0_ui *ui,
+                                          const char *app_id,
+                                          const char *version)
+{
+    return ui != NULL && ui->store_detail && app_id != NULL &&
+           version != NULL && strcmp(ui->store_detail_app_id, app_id) == 0 &&
+           strcmp(ui->store_detail_version, version) == 0;
+}
+
+static void begin_store_detail(struct cp0_ui *ui)
+{
+    const struct cp0_ui_store_app *app = selected_store_app(ui);
+    if (app == NULL)
+        return;
+    ui->store_detail = true;
+    ui->store_detail_page = 0;
+    ui->store_detail_text_offset = 0;
+    ui->store_screenshot_index = 0;
+    ui->store_screenshot_count = 0;
+    ui->store_detail_status = CP0_UI_STORE_DETAIL_LOADING;
+    ui->store_icon_available = false;
+    ui->store_screenshot_available = false;
+    ui->store_screenshot_loading = false;
+    ui->store_icon_pixels = NULL;
+    ui->store_screenshot_pixels = NULL;
+    memset(ui->store_developer, 0, sizeof(ui->store_developer));
+    memset(ui->store_category, 0, sizeof(ui->store_category));
+    memset(ui->store_age_rating, 0, sizeof(ui->store_age_rating));
+    memset(ui->store_description, 0, sizeof(ui->store_description));
+    memset(ui->store_release_notes, 0, sizeof(ui->store_release_notes));
+    copy_optional_text(ui->store_detail_app_id,
+                       sizeof(ui->store_detail_app_id), app->app_id);
+    copy_optional_text(ui->store_detail_version,
+                       sizeof(ui->store_detail_version), app->version);
+}
+
+void cp0_ui_set_store_details(
+    struct cp0_ui *ui, const char *app_id, const char *version,
+    const char *developer, const char *category, const char *age_rating,
+    const char *description, const char *release_notes,
+    uint8_t screenshot_count)
+{
+    if (!store_detail_identity_matches(ui, app_id, version) ||
+        screenshot_count == 0 || screenshot_count > 5 ||
+        !copy_text(ui->store_developer, sizeof(ui->store_developer),
+                   developer) ||
+        !copy_text(ui->store_category, sizeof(ui->store_category), category) ||
+        !copy_text(ui->store_age_rating, sizeof(ui->store_age_rating),
+                   age_rating) ||
+        !copy_text(ui->store_description, sizeof(ui->store_description),
+                   description) ||
+        !copy_text(ui->store_release_notes, sizeof(ui->store_release_notes),
+                   release_notes))
+        return;
+    ui->store_screenshot_count = screenshot_count;
+    ui->store_detail_status = CP0_UI_STORE_DETAIL_READY;
+}
+
+void cp0_ui_set_store_details_unavailable(struct cp0_ui *ui,
+                                          const char *app_id,
+                                          const char *version)
+{
+    if (!store_detail_identity_matches(ui, app_id, version))
+        return;
+    ui->store_detail_status = CP0_UI_STORE_DETAIL_UNAVAILABLE;
+    ui->store_screenshot_count = 0;
+}
+
+void cp0_ui_set_store_icon(struct cp0_ui *ui, const char *app_id,
+                           const char *version, const uint32_t *pixels,
+                           uint16_t width, uint16_t height)
+{
+    if (!store_detail_identity_matches(ui, app_id, version) || pixels == NULL ||
+        !((width == 32 && height == 32) || (width == 48 && height == 48)))
+        return;
+    ui->store_icon_pixels = pixels;
+    ui->store_icon_width = width;
+    ui->store_icon_height = height;
+    ui->store_icon_available = true;
+}
+
+void cp0_ui_set_store_screenshot(struct cp0_ui *ui, const char *app_id,
+                                 const char *version, uint8_t index,
+                                 const uint32_t *pixels, uint16_t width,
+                                 uint16_t height)
+{
+    if (!store_detail_identity_matches(ui, app_id, version) || pixels == NULL ||
+        index != ui->store_screenshot_index || width != 320 || height != 170)
+        return;
+    ui->store_screenshot_pixels = pixels;
+    ui->store_screenshot_available = true;
+    ui->store_screenshot_loading = false;
+}
+
+void cp0_ui_set_store_screenshot_unavailable(struct cp0_ui *ui,
+                                             const char *app_id,
+                                             const char *version,
+                                             uint8_t index)
+{
+    if (!store_detail_identity_matches(ui, app_id, version) ||
+        index != ui->store_screenshot_index)
+        return;
+    ui->store_screenshot_available = false;
+    ui->store_screenshot_loading = false;
+    ui->store_screenshot_pixels = NULL;
 }
 
 static bool store_ascii_character(char character)
@@ -2595,7 +2965,54 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         if (ui->store_detail) {
             enum cp0_ui_store_state state =
                 cp0_ui_selected_store_app_state(ui);
-            if (action == CP0_UI_ACCEPT &&
+            if (action == CP0_UI_LEFT && ui->store_detail_page > 0) {
+                ui->store_detail_page--;
+                ui->store_detail_text_offset = 0;
+                if (ui->store_detail_page == 2 &&
+                    ui->store_detail_status == CP0_UI_STORE_DETAIL_READY) {
+                    ui->store_screenshot_available = false;
+                    ui->store_screenshot_loading = true;
+                    return CP0_UI_EVENT_STORE_SCREENSHOT;
+                }
+            } else if (action == CP0_UI_RIGHT &&
+                       ui->store_detail_page < 4) {
+                ui->store_detail_page++;
+                ui->store_detail_text_offset = 0;
+                if (ui->store_detail_page == 2 &&
+                    ui->store_detail_status == CP0_UI_STORE_DETAIL_READY) {
+                    ui->store_screenshot_available = false;
+                    ui->store_screenshot_loading = true;
+                    return CP0_UI_EVENT_STORE_SCREENSHOT;
+                }
+            } else if (ui->store_detail_page == 2 && action == CP0_UI_UP &&
+                       ui->store_screenshot_index > 0) {
+                ui->store_screenshot_index--;
+                ui->store_screenshot_available = false;
+                ui->store_screenshot_loading = true;
+                return CP0_UI_EVENT_STORE_SCREENSHOT;
+            } else if (ui->store_detail_page == 2 && action == CP0_UI_DOWN &&
+                       ui->store_screenshot_index + 1U <
+                           ui->store_screenshot_count) {
+                ui->store_screenshot_index++;
+                ui->store_screenshot_available = false;
+                ui->store_screenshot_loading = true;
+                return CP0_UI_EVENT_STORE_SCREENSHOT;
+            } else if ((ui->store_detail_page == 1 ||
+                        ui->store_detail_page == 4) &&
+                       action == CP0_UI_UP) {
+                if (ui->store_detail_text_offset > 0)
+                    ui->store_detail_text_offset--;
+            } else if ((ui->store_detail_page == 1 ||
+                        ui->store_detail_page == 4) &&
+                       action == CP0_UI_DOWN) {
+                const char *prose = ui->store_detail_page == 1
+                                        ? ui->store_description
+                                        : ui->store_release_notes;
+                if (ui->store_detail_text_offset + 7U <
+                    wrapped_line_count(prose, 46))
+                    ui->store_detail_text_offset++;
+            } else if (ui->store_detail_page == 0 &&
+                       action == CP0_UI_ACCEPT &&
                 !(ui->store_section == CP0_UI_STORE_SEARCH
                       ? ui->store_search_stale
                       : ui->store_catalog_stale) &&
@@ -2686,7 +3103,8 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             } else if (action == CP0_UI_ACCEPT &&
                        ui->store_search_count > 0) {
                 remember_store_query(ui);
-                ui->store_detail = true;
+                begin_store_detail(ui);
+                return CP0_UI_EVENT_STORE_DETAILS;
             }
             return CP0_UI_EVENT_NONE;
         }
@@ -2698,8 +3116,10 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             ui->store_selected--;
         else if (action == CP0_UI_DOWN && ui->store_selected + 1 < count)
             ui->store_selected++;
-        else if (action == CP0_UI_ACCEPT && count > 0)
-            ui->store_detail = true;
+        else if (action == CP0_UI_ACCEPT && count > 0) {
+            begin_store_detail(ui);
+            return CP0_UI_EVENT_STORE_DETAILS;
+        }
         return CP0_UI_EVENT_NONE;
     }
 
