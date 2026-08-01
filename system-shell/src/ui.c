@@ -234,9 +234,25 @@ static void draw_battery(struct canvas *canvas, int percent)
 
 static void draw_status_bar(struct canvas *canvas, const struct cp0_ui *ui)
 {
+    char store_status[12];
+
     fill_rect(canvas, 0, 0, CP0_UI_WIDTH, 21, COLOR_BAR);
     fill_rect(canvas, 0, 20, CP0_UI_WIDTH, 1, COLOR_GREEN);
     draw_text(canvas, 8, 7, screen_title(ui), 1, COLOR_TEXT);
+    if (ui->store_activity) {
+        if (ui->store_activity_state == CP0_UI_STORE_DOWNLOADING)
+            snprintf(store_status, sizeof(store_status), "DL %u%%",
+                     ui->store_activity_progress_percent);
+        else if (ui->store_activity_state == CP0_UI_STORE_INSTALLING)
+            snprintf(store_status, sizeof(store_status), "INSTALL");
+        else
+            snprintf(store_status, sizeof(store_status), "QUEUE %u",
+                     ui->store_activity_count);
+        draw_text(canvas, 92, 7, store_status, 1,
+                  ui->store_activity_state == CP0_UI_STORE_DOWNLOADING
+                      ? COLOR_GREEN
+                      : COLOR_YELLOW);
+    }
     draw_text(canvas, 145, 7, ui->clock_text, 1, COLOR_MUTED);
     draw_network_icon(canvas, ui->network_online);
     draw_battery(canvas, ui->battery_percent);
@@ -565,6 +581,46 @@ static bool store_update_batch_eligible(const struct cp0_ui_store_app *app)
            (app->state == CP0_UI_STORE_UPDATE ||
             app->state == CP0_UI_STORE_FAILED ||
             app->state == CP0_UI_STORE_CANCELED);
+}
+
+static bool store_operation_active(enum cp0_ui_store_state state)
+{
+    return state == CP0_UI_STORE_QUEUED ||
+           state == CP0_UI_STORE_DOWNLOADING ||
+           state == CP0_UI_STORE_INSTALLING;
+}
+
+static unsigned int store_activity_priority(enum cp0_ui_store_state state)
+{
+    if (state == CP0_UI_STORE_DOWNLOADING)
+        return 3;
+    if (state == CP0_UI_STORE_INSTALLING)
+        return 2;
+    return state == CP0_UI_STORE_QUEUED ? 1 : 0;
+}
+
+static void sync_store_activity(struct cp0_ui *ui)
+{
+    unsigned int priority = 0;
+    ui->store_activity = false;
+    ui->store_activity_count = 0;
+    ui->store_activity_progress_percent = 0;
+    ui->store_activity_state = CP0_UI_STORE_AVAILABLE;
+    for (unsigned int index = 0; index < ui->store_count; index++) {
+        const struct cp0_ui_store_app *app = &ui->store_apps[index];
+        if (!store_operation_active(app->operation_state))
+            continue;
+        ui->store_activity = true;
+        if (ui->store_activity_count < UINT8_MAX)
+            ui->store_activity_count++;
+        unsigned int app_priority =
+            store_activity_priority(app->operation_state);
+        if (app_priority > priority) {
+            priority = app_priority;
+            ui->store_activity_state = app->operation_state;
+            ui->store_activity_progress_percent = app->progress_percent;
+        }
+    }
 }
 
 static unsigned int store_update_batch_count(const struct cp0_ui *ui)
@@ -2181,6 +2237,7 @@ static bool copy_store_app(struct cp0_ui_store_app *app,
         .installed_permissions = source->installed_permissions,
         .progress_percent = source->progress_percent,
         .state = source->state,
+        .operation_state = source->state,
         .failure_reason = source->failure_reason,
     };
     if (!copy_text(app->app_id, sizeof(app->app_id), source->app_id) ||
@@ -2204,6 +2261,37 @@ static bool copy_store_app(struct cp0_ui_store_app *app,
         }
     }
     return true;
+}
+
+static void record_store_completions(
+    struct cp0_ui *ui, const struct cp0_ui_store_catalog_app *apps,
+    size_t app_count)
+{
+    if (!ui->store_catalog_observed)
+        return;
+    for (size_t source_index = 0; source_index < app_count; source_index++) {
+        struct cp0_ui_store_app current;
+        if (!copy_store_app(&current, &apps[source_index]) ||
+            current.operation_state != CP0_UI_STORE_INSTALLED)
+            continue;
+        for (unsigned int previous = 0; previous < ui->store_count; previous++) {
+            const struct cp0_ui_store_app *old = &ui->store_apps[previous];
+            if (strcmp(old->app_id, current.app_id) != 0 ||
+                strcmp(old->version, current.version) != 0)
+                continue;
+            if (old->operation_state != CP0_UI_STORE_INSTALLED &&
+                ui->store_completion_count < CP0_UI_MAX_APPS) {
+                if (ui->store_completion_count == 0) {
+                    memcpy(ui->store_completion_app_name, current.name,
+                           sizeof(ui->store_completion_app_name));
+                    memcpy(ui->store_completion_version, current.version,
+                           sizeof(ui->store_completion_version));
+                }
+                ui->store_completion_count++;
+            }
+            break;
+        }
+    }
 }
 
 static void reconcile_store_detail_identity(struct cp0_ui *ui)
@@ -2242,13 +2330,14 @@ void cp0_ui_sync_store_catalog(
 
     if (ui == NULL || (apps == NULL && app_count > 0))
         return;
+    if (app_count > CP0_UI_MAX_APPS)
+        app_count = CP0_UI_MAX_APPS;
+    record_store_completions(ui, apps, app_count);
     selected_app = selected_store_app(ui);
     update_all_selected = ui->store_update_all_selected;
     if (selected_app != NULL)
         copy_optional_text(selected_id, sizeof(selected_id),
                            selected_app->app_id);
-    if (app_count > CP0_UI_MAX_APPS)
-        app_count = CP0_UI_MAX_APPS;
     memset(ui->store_apps, 0, sizeof(ui->store_apps));
     ui->store_count = 0;
     for (size_t index = 0; index < app_count; index++) {
@@ -2260,6 +2349,7 @@ void cp0_ui_sync_store_catalog(
     ui->store_status = CP0_UI_STORE_READY;
     ui->store_list_truncated = truncated;
     ui->store_catalog_stale = stale;
+    ui->store_catalog_observed = true;
     ui->store_selected = 0;
     if (ui->store_section == CP0_UI_STORE_UPDATES) {
         unsigned int update_index = 0;
@@ -2285,6 +2375,7 @@ void cp0_ui_sync_store_catalog(
         store_update_batch_count(ui) > 0;
     if (ui->store_count == 0)
         ui->store_detail = false;
+    sync_store_activity(ui);
     reconcile_store_detail_identity(ui);
 }
 
@@ -2359,6 +2450,7 @@ void cp0_ui_set_store_app_state(struct cp0_ui *ui, const char *app_id,
         ui->store_operation_action_selected = 0;
     if (index >= 0) {
         ui->store_apps[index].state = state;
+        ui->store_apps[index].operation_state = state;
         ui->store_apps[index].progress_percent = progress_percent;
         ui->store_apps[index].failure_reason =
             state == CP0_UI_STORE_FAILED ? CP0_UI_STORE_FAILURE_INTERNAL
@@ -2367,6 +2459,7 @@ void cp0_ui_set_store_app_state(struct cp0_ui *ui, const char *app_id,
     for (unsigned int search = 0; search < ui->store_search_count; search++) {
         if (strcmp(ui->store_search_apps[search].app_id, app_id) == 0) {
             ui->store_search_apps[search].state = state;
+            ui->store_search_apps[search].operation_state = state;
             ui->store_search_apps[search].progress_percent = progress_percent;
             ui->store_search_apps[search].failure_reason =
                 state == CP0_UI_STORE_FAILED ? CP0_UI_STORE_FAILURE_INTERNAL
@@ -2375,6 +2468,7 @@ void cp0_ui_set_store_app_state(struct cp0_ui *ui, const char *app_id,
     }
     if (store_update_batch_count(ui) == 0)
         ui->store_update_all_selected = false;
+    sync_store_activity(ui);
 }
 
 size_t cp0_ui_collect_store_update_batch(const struct cp0_ui *ui,
@@ -2407,6 +2501,25 @@ size_t cp0_ui_collect_store_update_batch(const struct cp0_ui *ui,
         app_ids[position] = app_id;
     }
     return count;
+}
+
+bool cp0_ui_take_store_completion(
+    struct cp0_ui *ui, struct cp0_ui_store_completion *completion)
+{
+    if (ui == NULL || completion == NULL || ui->store_completion_count == 0)
+        return false;
+    memset(completion, 0, sizeof(*completion));
+    completion->count = ui->store_completion_count;
+    memcpy(completion->app_name, ui->store_completion_app_name,
+           sizeof(completion->app_name));
+    memcpy(completion->version, ui->store_completion_version,
+           sizeof(completion->version));
+    ui->store_completion_count = 0;
+    memset(ui->store_completion_app_name, 0,
+           sizeof(ui->store_completion_app_name));
+    memset(ui->store_completion_version, 0,
+           sizeof(ui->store_completion_version));
+    return true;
 }
 
 const char *cp0_ui_selected_store_app_id(const struct cp0_ui *ui)

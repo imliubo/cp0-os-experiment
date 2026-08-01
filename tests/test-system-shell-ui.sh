@@ -50,7 +50,7 @@ mkdir -p "$snapshot_dir"
     -o "$work_dir/system-shell-system-info-test"
 "$work_dir/system-shell-system-info-test"
 
-snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm store-description.ppm store-detail.ppm store-failed.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
+snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm store-background-progress.ppm store-description.ppm store-detail.ppm store-failed.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
 if command -v sha256sum >/dev/null 2>&1; then
     actual=$(cd "$snapshot_dir" && sha256sum $snapshot_files)
 else
@@ -87,19 +87,20 @@ e215ec94d5623d91197c512594fb1b3543fe8bc483d9918c999ea9c3d12efa8f  settings-confi
 f10e4e270371f6eaab38e4125f37e40f1fb9a17c3b5ef5473425e7b057fd3be4  settings-sound.ppm
 fb1ac2961e301b90c29719745d313c17910f4c938a7a03992abb4fc1e225e3ef  settings-system.ppm
 cc4e5bbf3f6dee26b0b6514661481c9217abe354a1dfa3459eac8cc7c7b27340  settings.ppm
-9fa64ab85ba9544597115a8c28cb48dd5b002b0a974e8148d9e808390fa71af6  store-description.ppm
-151b8f050097327326c4b0f6dcc244425dd2ed84cd0f478778932a417a9f502a  store-detail.ppm
+22ab6d4b687a348cd5fc6f045aa71f7638258a530ed0673be62661364cbcd0c3  store-background-progress.ppm
+4c6117c8ed1a6ceb6555f2e058d7a42892f03f5fc5dc3c29d59890e803a13fab  store-description.ppm
+714a26b2be741003e0699b8b20e718c454168655db52a7ba5c36e7656c711d94  store-detail.ppm
 0d206108475fe5ed7b3e5bb59f500b3926f5c19c02359962e9aa145c3fdde3f1  store-failed.ppm
-f861273f2cff17f44827f8bc1a4a64f4e0bcd9e8d0a95645e3db98ab31f3fc3a  store-permissions.ppm
-591fdc97fcd426f64f2b4d398fb39689ce1b9dd4999a4b445fa5d41ee4948e70  store-release-notes.ppm
-0c97e5b6920fbf4e1e996e664fed17fc324f1070bfb3cc7376bf89d6ffd26f7b  store-screenshot.ppm
-af89fb4cc3c6ef1271a16f426ca466bd61f356b3341f93d8986b4427091545e3  store-search-empty.ppm
-6704a2c898e02428dd74b19825352c7fb99eca065cab9a960e2ca884d0ec127b  store-search-max.ppm
-68e125d3d5654ebc8c69820403b6d5bcc14862856eac0b69228920d63a213b0a  store-search-none.ppm
-47628325924e59aa26ab5bbd6f7277cba302b32f05de959d6150bf5c9dd460ac  store-search-recent.ppm
-db5707db2c655a8a5c890156eb604ee4792111f86bdb28c3ccb6012ed5bf93b6  store-search.ppm
+592c72d76f15abd7db0cc6d172376b65eace4554215ec0f8eae56f8746bad881  store-permissions.ppm
+1326fd73dc44ffa1424cee18058783d3f3cb9f0885c0a82217d2085722a49237  store-release-notes.ppm
+77168cfa3d1c0fb9d4840aa4e03a03d852a7565f4d96c4add814ad15a7af64a8  store-screenshot.ppm
+acc6d50ba0ad6ab34f606b42708090e27f440632376199f8fe45ad40a342a104  store-search-empty.ppm
+cfd18ef5f9110ee2c908d09ca62720b1f37e3d020478f8842d57b2d3b61b51cb  store-search-max.ppm
+67083cf393e6e9e477cf5026b8c19c5fa14dca9d596599fce2f75c990f340e98  store-search-none.ppm
+66147ca2c4d5a1b657c7edadbd67ef7adea421a0338b3522687c0c21e2b52e97  store-search-recent.ppm
+3b6e5012e93115b55fbe224ed49d6057404ada973bbbb1ca604d898c2cc3c7af  store-search.ppm
 54f4f4baed4d74492ce1940a0864c66522b0215eebbb70719a826c4cc43c95cf  store-updates.ppm
-c83723b50faed6fcc65f8e93a4994895691c582f8cc63301f2946d2b1e1a4684  store.ppm
+1dd93ca475967d20190e96bb9eaacef42e9f674de162c39ab15c8004d78e4bf3  store.ppm
 c8f03c8a917c9dfb0cecd57f32df1e6e11d913a75480e5ca11c2a35b04b0d62e  system-brightness.ppm
 34e659c664795fb8b2cef00fd6fd168c3fdf6e845421342b29cc41dc97b88558  system-help.ppm
 a6035c53a535cab44d6065cbd27f70a57d2655ee1e13baf24c87ef9176e40239  theme-high-contrast.ppm

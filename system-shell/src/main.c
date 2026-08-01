@@ -72,6 +72,7 @@ struct shell {
     unsigned int catalog_ticks;
     unsigned int store_poll_delay;
     unsigned int notification_ticks;
+    uint64_t store_notification_serial;
     struct cp0_app_list installed_apps;
     uint32_t store_icon_pixels[CP0_STORE_ICON_MAX_PIXELS];
     uint32_t store_screenshot_pixels[CP0_STORE_SCREENSHOT_PIXELS];
@@ -293,8 +294,6 @@ static void poll_store_catalog(struct shell *shell)
     struct cp0_ui_store_catalog_app apps[CP0_STORE_MAX_APPS];
     int result;
 
-    if (shell->ui.screen != CP0_UI_STORE)
-        return;
     result = cp0_store_list(&catalog);
     if (result == CP0_STORE_RESULT_UNCONFIGURED) {
         cp0_ui_set_store_status(&shell->ui, CP0_UI_STORE_UNCONFIGURED);
@@ -468,6 +467,46 @@ static void poll_notification(struct shell *shell)
     fprintf(stderr, "system-shell: notification=%llu visible\n",
             (unsigned long long)notification.notification_id);
     shell_redraw(shell);
+}
+
+static void show_store_completion_notification(struct shell *shell)
+{
+    struct cp0_ui_store_completion completion;
+    char title[CP0_UI_NOTIFICATION_TITLE_MAX + 1];
+    char body[CP0_UI_NOTIFICATION_BODY_MAX + 1];
+    const char *app_name;
+
+    if (shell->ui.permission_prompt || shell->ui.document_prompt ||
+        shell->ui.power_dialog || shell->ui.settings_confirm ||
+        shell->ui.notification_banner || shell->ui.system_action_overlay)
+        return;
+    if (!cp0_ui_take_store_completion(&shell->ui, &completion))
+        return;
+    if (completion.count == 1) {
+        app_name = completion.app_name;
+        snprintf(title, sizeof(title), "INSTALL COMPLETE");
+        snprintf(body, sizeof(body), "VERSION %s IS READY", completion.version);
+    } else {
+        app_name = "App Store";
+        snprintf(title, sizeof(title), "%u UPDATES INSTALLED",
+                 (unsigned int)completion.count);
+        snprintf(body, sizeof(body), "ALL UPDATES ARE READY");
+    }
+    uint64_t notification_id = UINT64_MAX - shell->store_notification_serial++;
+    if (!cp0_ui_show_notification(&shell->ui, notification_id, app_name, title,
+                                  body))
+        return;
+    shell->notification_restore_mode = shell->overlay_mode;
+    shell->notification_ticks = 4;
+    if (shell->overlay_mode == CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS ||
+        shell->overlay_mode == CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN) {
+        shell->overlay_mode =
+            CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION;
+        cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                              shell->overlay_mode);
+    }
+    fprintf(stderr, "system-shell: store completion notification=%llu visible\n",
+            (unsigned long long)notification_id);
 }
 
 static void update_notification_timer(struct shell *shell)
@@ -1536,6 +1575,7 @@ static int shell_dispatch(struct shell *shell)
     int display_fd = wl_display_get_fd(shell->display);
 
     poll_app_catalog(shell);
+    poll_store_catalog(shell);
     shell_redraw(shell);
 
     while (!stop_requested) {
@@ -1595,22 +1635,25 @@ static int shell_dispatch(struct shell *shell)
                 }
                 poll_permission_prompt(shell);
                 poll_document_prompt(shell);
+                show_store_completion_notification(shell);
                 poll_notification(shell);
                 shell->catalog_ticks++;
-                if (shell->ui.screen == CP0_UI_STORE) {
+                if (shell->ui.screen == CP0_UI_STORE ||
+                    shell->ui.store_activity) {
                     if (shell->store_poll_delay > 0) {
                         shell->store_poll_delay--;
                     } else {
                         poll_app_catalog(shell);
                         poll_store_catalog(shell);
+                        show_store_completion_notification(shell);
                     }
-                    shell->catalog_ticks = 0;
-                } else if (shell->ui.screen == CP0_UI_SETTINGS &&
-                           shell->catalog_ticks >= 5) {
-                    poll_device_settings(shell);
                     shell->catalog_ticks = 0;
                 } else if (shell->catalog_ticks >= 5) {
                     poll_app_catalog(shell);
+                    poll_store_catalog(shell);
+                    show_store_completion_notification(shell);
+                    if (shell->ui.screen == CP0_UI_SETTINGS)
+                        poll_device_settings(shell);
                     shell->catalog_ticks = 0;
                 }
                 shell_redraw(shell);

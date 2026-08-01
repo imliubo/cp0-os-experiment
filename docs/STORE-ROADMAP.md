@@ -160,10 +160,14 @@ S7A 已增加严格 `control` 协议和 `paused`/`canceled` 状态；暂停保�
 S7B 已增加 1 至 8 项的严格 `install-batch` 协议；daemon 在同一 Catalog 身份快照下原子接受、
 串行执行整批任务，单项暂停、取消或失败不会阻塞后续项。Updates 页只收集可重试更新，排除
 活动任务并在 stale Catalog 上禁止提交。具体契约见 `STORE-UPDATE-QUEUE-V1.md`。
+S7C 已增加全局 Store 后台状态：Store 页面或活动任务期间每秒轮询，其它页面每五秒轮询；
+Home、Tasks 和普通前台应用均可显示有界 `DL n%`、`INSTALL` 或 `QUEUE N` 状态。安装完成只由
+同一 App ID/版本的状态转换生成，首次 Catalog 不回放历史通知，多项完成聚合且不抢占权限、文档
+或确认界面。具体契约见 `STORE-BACKGROUND-STATUS-V1.md`。
 
 - [x] 增加暂停、继续、取消和失败原因的稳定协议。
 - [x] 增加 Updates 页、单项更新和有界 Update All 队列。
-- [ ] 增加下载状态栏、离开 Store 后进度和安装完成通知。
+- [x] 增加下载状态栏、离开 Store 后进度和安装完成通知。
 - [ ] 增加新增权限确认、策略限制和存储空间预检。
 - [ ] 验证断电、断网、HTTP Range 错误、摘要错误和 appd handoff 崩溃恢复。
 - [ ] 自动更新保持默认关闭；后续按充电/网络/策略显式启用。

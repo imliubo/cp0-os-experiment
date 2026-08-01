@@ -200,6 +200,9 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
                              NULL, 0, false);
     write_snapshot(directory, "store-search-max", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_GO_HOME);
+    write_snapshot(directory, "store-background-progress", ui, frame);
+    cp0_ui_set_store_app_state(ui, "dev.cardputerzero.notify",
+                               CP0_UI_STORE_PAUSED, 38);
     cp0_ui_handle_action(ui, CP0_UI_LEFT);
 
     cp0_ui_sync_app_catalog(ui, apps, 2, false);
@@ -780,6 +783,74 @@ int main(int argc, char **argv)
            cp0_ui_collect_store_update_batch(
                &update_queue_ui, update_batch,
                CP0_UI_STORE_UPDATE_BATCH_MAX) == 0);
+
+    struct cp0_ui activity_ui;
+    cp0_ui_init(&activity_ui);
+    struct cp0_ui_store_catalog_app activity_apps[] = {
+        {.package_bytes = 4096,
+         .state = CP0_UI_STORE_QUEUED,
+         .app_id = "dev.cardputerzero.activity-alpha",
+         .name = "Activity Alpha",
+         .version = "2.0.0",
+         .summary = "Queued background update",
+         .installed_version = "1.0.0"},
+        {.package_bytes = 8192,
+         .progress_percent = 42,
+         .state = CP0_UI_STORE_DOWNLOADING,
+         .app_id = "dev.cardputerzero.activity-beta",
+         .name = "Activity Beta",
+         .version = "3.0.0",
+         .summary = "Downloading background update",
+         .installed_version = "2.0.0"},
+    };
+    cp0_ui_sync_store_catalog(&activity_ui, activity_apps, 2, false, false);
+    assert(activity_ui.store_activity &&
+           activity_ui.store_activity_count == 2 &&
+           activity_ui.store_activity_state == CP0_UI_STORE_DOWNLOADING &&
+           activity_ui.store_activity_progress_percent == 42);
+    struct cp0_ui_store_completion completion;
+    assert(!cp0_ui_take_store_completion(&activity_ui, &completion));
+    cp0_ui_set_store_app_state(&activity_ui, activity_apps[1].app_id,
+                               CP0_UI_STORE_PAUSED, 42);
+    assert(activity_ui.store_activity &&
+           activity_ui.store_activity_count == 1 &&
+           activity_ui.store_activity_state == CP0_UI_STORE_QUEUED);
+    cp0_ui_set_store_app_state(&activity_ui, activity_apps[0].app_id,
+                               CP0_UI_STORE_INSTALLING, 100);
+    assert(activity_ui.store_activity &&
+           activity_ui.store_activity_state == CP0_UI_STORE_INSTALLING);
+    cp0_ui_set_store_app_state(&activity_ui, activity_apps[0].app_id,
+                               CP0_UI_STORE_PAUSED, 100);
+    assert(!activity_ui.store_activity &&
+           activity_ui.store_activity_count == 0);
+    activity_apps[0].state = CP0_UI_STORE_INSTALLED;
+    activity_apps[0].progress_percent = 100;
+    activity_apps[1].state = CP0_UI_STORE_INSTALLED;
+    activity_apps[1].progress_percent = 100;
+    cp0_ui_sync_store_catalog(&activity_ui, activity_apps, 2, false, false);
+    assert(cp0_ui_take_store_completion(&activity_ui, &completion) &&
+           completion.count == 2);
+    assert(!cp0_ui_take_store_completion(&activity_ui, &completion));
+    cp0_ui_sync_store_catalog(&activity_ui, activity_apps, 2, false, false);
+    assert(!cp0_ui_take_store_completion(&activity_ui, &completion));
+
+    struct cp0_ui initial_installed_ui;
+    cp0_ui_init(&initial_installed_ui);
+    cp0_ui_sync_store_catalog(&initial_installed_ui, &activity_apps[0], 1,
+                              false, false);
+    assert(!cp0_ui_take_store_completion(&initial_installed_ui, &completion));
+    activity_apps[0].state = CP0_UI_STORE_QUEUED;
+    activity_apps[0].progress_percent = 0;
+    cp0_ui_sync_store_catalog(&initial_installed_ui, &activity_apps[0], 1,
+                              false, false);
+    activity_apps[0].state = CP0_UI_STORE_INSTALLED;
+    activity_apps[0].progress_percent = 100;
+    cp0_ui_sync_store_catalog(&initial_installed_ui, &activity_apps[0], 1,
+                              false, false);
+    assert(cp0_ui_take_store_completion(&initial_installed_ui, &completion) &&
+           completion.count == 1 &&
+           strcmp(completion.app_name, "Activity Alpha") == 0 &&
+           strcmp(completion.version, "2.0.0") == 0);
 
     cp0_ui_handle_action(&ui, CP0_UI_SHOW_TASKS);
     assert(ui.screen == CP0_UI_TASKS);

@@ -232,12 +232,19 @@ struct cp0_ui_store_app {
     uint16_t installed_permissions;
     uint8_t progress_percent;
     enum cp0_ui_store_state state;
+    enum cp0_ui_store_state operation_state;
     enum cp0_ui_store_failure_reason failure_reason;
     bool update_available;
     char app_id[CP0_UI_APP_ID_MAX + 1];
     char name[CP0_UI_APP_NAME_MAX + 1];
     char version[CP0_UI_STORE_VERSION_MAX + 1];
     char summary[CP0_UI_STORE_SUMMARY_MAX + 1];
+};
+
+struct cp0_ui_store_completion {
+    uint8_t count;
+    char app_name[CP0_UI_APP_NAME_MAX + 1];
+    char version[CP0_UI_STORE_VERSION_MAX + 1];
 };
 
 struct cp0_ui_document_option {
@@ -268,6 +275,8 @@ struct cp0_ui {
     unsigned int store_operation_action_selected;
     unsigned int store_screenshot_index;
     unsigned int store_detail_text_offset;
+    uint8_t store_activity_count;
+    uint8_t store_activity_progress_percent;
     uint16_t store_search_offset;
     uint16_t store_search_total;
     uint16_t store_search_next_offset;
@@ -285,6 +294,8 @@ struct cp0_ui {
     bool store_list_truncated;
     bool store_catalog_stale;
     bool store_search_stale;
+    bool store_activity;
+    bool store_catalog_observed;
     bool store_update_all_selected;
     bool store_detail;
     bool app_detail;
@@ -366,6 +377,10 @@ struct cp0_ui {
     char notification_app_name[CP0_UI_NOTIFICATION_APP_NAME_MAX + 1];
     char notification_title[CP0_UI_NOTIFICATION_TITLE_MAX + 1];
     char notification_body[CP0_UI_NOTIFICATION_BODY_MAX + 1];
+    uint8_t store_completion_count;
+    char store_completion_app_name[CP0_UI_APP_NAME_MAX + 1];
+    char store_completion_version[CP0_UI_STORE_VERSION_MAX + 1];
+    enum cp0_ui_store_state store_activity_state;
     char store_search_query[CP0_UI_STORE_SEARCH_QUERY_MAX + 1];
     char store_recent_queries[CP0_UI_STORE_RECENT_MAX]
                              [CP0_UI_STORE_SEARCH_QUERY_MAX + 1];
@@ -433,6 +448,8 @@ void cp0_ui_set_store_app_state(struct cp0_ui *ui, const char *app_id,
 size_t cp0_ui_collect_store_update_batch(const struct cp0_ui *ui,
                                          const char *app_ids[],
                                          size_t app_capacity);
+bool cp0_ui_take_store_completion(
+    struct cp0_ui *ui, struct cp0_ui_store_completion *completion);
 const char *cp0_ui_selected_store_app_id(const struct cp0_ui *ui);
 enum cp0_ui_store_state cp0_ui_selected_store_app_state(
     const struct cp0_ui *ui);
