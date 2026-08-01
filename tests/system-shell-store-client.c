@@ -21,6 +21,9 @@ int cp0_store_test_parse_install_response(const char *response,
                                           size_t response_length,
                                           uint64_t request_id,
                                           const char *app_id);
+int cp0_store_test_parse_control_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *app_id, enum cp0_store_control_action action);
 int cp0_store_test_parse_search_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *query, uint16_t offset, uint8_t limit,
@@ -47,6 +50,11 @@ int cp0_store_test_decode_png_descriptor(
     "\",\"version\":\"1.2.3\",\"summary\":\"A reviewed application\"," \
     "\"package_bytes\":4096,\"permissions\":" PERMISSIONS ",\"state\":\"" \
     STATE "\",\"progress_percent\":" PROGRESS "}"
+#define FAILED_APP(ID, REASON)                                                 \
+    "{\"app_id\":\"dev.cardputerzero." ID "\",\"name\":\"App " ID       \
+    "\",\"version\":\"1.2.3\",\"summary\":\"A reviewed application\"," \
+    "\"package_bytes\":4096,\"permissions\":[],\"state\":\"failed\","   \
+    "\"progress_percent\":0,\"failure_reason\":\"" REASON "\"}"
 #define CATALOG_START(ID)                                                      \
     ENVELOPE_START(ID)                                                        \
     "\"kind\":\"catalog\",\"sequence\":4,\"expires_unix_seconds\":200," \
@@ -182,7 +190,7 @@ int main(void)
         CATALOG_END;
     static const char invalid_state[] =
         CATALOG_START("16")
-        APP("alpha", "[]", "paused", "0")
+        APP("alpha", "[]", "waiting", "0")
         CATALOG_END;
     assert(parse_catalog(invalid_available_progress, 14, &catalog) ==
            CP0_STORE_RESULT_ERROR);
@@ -216,6 +224,52 @@ int main(void)
            CP0_STORE_RESULT_OK);
     assert(cp0_store_test_parse_install_response(
                install, strlen(install), 20, "dev.cardputerzero.beta") ==
+           CP0_STORE_RESULT_ERROR);
+
+    static const char paused[] =
+        CATALOG_START("28") APP("alpha", "[]", "paused", "42") CATALOG_END;
+    assert(parse_catalog(paused, 28, &catalog) == CP0_STORE_RESULT_OK);
+    assert(catalog.apps[0].state == CP0_STORE_APP_PAUSED &&
+           catalog.apps[0].progress_percent == 42 &&
+           catalog.apps[0].failure_reason == CP0_STORE_FAILURE_NONE);
+    static const char canceled[] =
+        CATALOG_START("29") APP("alpha", "[]", "canceled", "0") CATALOG_END;
+    assert(parse_catalog(canceled, 29, &catalog) == CP0_STORE_RESULT_OK);
+    static const char failed[] =
+        CATALOG_START("30") FAILED_APP("alpha", "network") CATALOG_END;
+    assert(parse_catalog(failed, 30, &catalog) == CP0_STORE_RESULT_OK);
+    assert(catalog.apps[0].state == CP0_STORE_APP_FAILED &&
+           catalog.apps[0].failure_reason == CP0_STORE_FAILURE_NETWORK);
+    static const char failed_without_reason[] =
+        CATALOG_START("31") APP("alpha", "[]", "failed", "0") CATALOG_END;
+    assert(parse_catalog(failed_without_reason, 31, &catalog) ==
+           CP0_STORE_RESULT_ERROR);
+    static const char failed_unknown_reason[] =
+        CATALOG_START("33") FAILED_APP("alpha", "timeout") CATALOG_END;
+    assert(parse_catalog(failed_unknown_reason, 33, &catalog) ==
+           CP0_STORE_RESULT_ERROR);
+    static const char paused_with_reason[] =
+        CATALOG_START("34")
+        "{\"app_id\":\"dev.cardputerzero.alpha\",\"name\":\"App alpha\","
+        "\"version\":\"1.2.3\",\"summary\":\"A reviewed application\","
+        "\"package_bytes\":4096,\"permissions\":[],\"state\":\"paused\","
+        "\"progress_percent\":42,\"failure_reason\":\"network\"}"
+        CATALOG_END;
+    assert(parse_catalog(paused_with_reason, 34, &catalog) ==
+           CP0_STORE_RESULT_ERROR);
+
+    static const char pause_accepted[] =
+        ENVELOPE_START("32")
+        "\"kind\":\"operation-accepted\","
+        "\"app_id\":\"dev.cardputerzero.alpha\",\"version\":\"1.2.3\","
+        "\"action\":\"pause\"}}}";
+    assert(cp0_store_test_parse_control_response(
+               pause_accepted, strlen(pause_accepted), 32,
+               "dev.cardputerzero.alpha", CP0_STORE_CONTROL_PAUSE) ==
+           CP0_STORE_RESULT_OK);
+    assert(cp0_store_test_parse_control_response(
+               pause_accepted, strlen(pause_accepted), 32,
+               "dev.cardputerzero.alpha", CP0_STORE_CONTROL_CANCEL) ==
            CP0_STORE_RESULT_ERROR);
 
     static const char prerelease_install[] =

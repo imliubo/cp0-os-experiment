@@ -93,6 +93,13 @@ fn response_matches(command: &StoreCommand, data: &StoreResponseData) -> bool {
             StoreCommand::Install { app_id: requested },
             StoreResponseData::InstallAccepted { app_id, .. },
         ) => requested == app_id,
+        (
+            StoreCommand::Control {
+                app_id: requested_app,
+                action: requested_action,
+            },
+            StoreResponseData::OperationAccepted { app_id, action, .. },
+        ) => requested_app == app_id && requested_action == action,
         _ => false,
     }
 }
@@ -162,6 +169,24 @@ mod tests {
         assert!(
             exchange_stream(stream, StoreCommand::Install { app_id: requested }, TIMEOUT).is_err()
         );
+        worker.join().unwrap();
+
+        let requested = StoreCommand::Control {
+            app_id: "dev.cardputerzero.requested".into(),
+            action: cp0_store_protocol::StoreControlAction::Pause,
+        };
+        let (stream, worker) = serve_once(
+            requested.clone(),
+            StoreResponse::success(
+                REQUEST_ID,
+                StoreResponseData::OperationAccepted {
+                    app_id: "dev.cardputerzero.requested".into(),
+                    version: "1.0.0".into(),
+                    action: cp0_store_protocol::StoreControlAction::Cancel,
+                },
+            ),
+        );
+        assert!(exchange_stream(stream, requested, TIMEOUT).is_err());
         worker.join().unwrap();
     }
 

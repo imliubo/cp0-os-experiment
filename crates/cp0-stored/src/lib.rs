@@ -21,10 +21,11 @@ use cp0_networkd::PublicResolver;
 use cp0_store_metadata::validate_png_structure;
 use cp0_store_protocol::{
     CatalogApp, CatalogImageResource, CatalogObjectResource, SignedCatalog, StoreAppDetails,
-    StoreAppState, StoreAppSummary, StoreCommand, StoreErrorCode, StoreMediaMetadata,
-    StoreMediaSelector, StoreRequest, StoreResponse, StoreResponseData, decode_app_details,
-    decode_signed_catalog, is_lower_hex, is_valid_https_url, read_request,
-    response_requires_descriptor, send_response_with_fd, verify_catalog, write_response,
+    StoreAppState, StoreAppSummary, StoreCommand, StoreControlAction, StoreErrorCode,
+    StoreFailureReason, StoreMediaMetadata, StoreMediaSelector, StoreRequest, StoreResponse,
+    StoreResponseData, decode_app_details, decode_signed_catalog, is_lower_hex, is_valid_https_url,
+    read_request, response_requires_descriptor, send_response_with_fd, verify_catalog,
+    write_response,
 };
 use sha2::{Digest, Sha256};
 use ureq::config::Config;
@@ -86,6 +87,7 @@ pub enum StoreServiceError {
     Untrusted(String),
     NotFound,
     Busy,
+    InvalidState,
 }
 
 impl fmt::Display for StoreServiceError {
@@ -98,8 +100,25 @@ impl fmt::Display for StoreServiceError {
             Self::Untrusted(error) => write!(formatter, "untrusted store data: {error}"),
             Self::NotFound => formatter.write_str("store application was not found"),
             Self::Busy => formatter.write_str("store is already processing an operation"),
+            Self::InvalidState => {
+                formatter.write_str("store operation is not valid in the current state")
+            }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadControl {
+    Continue,
+    Pause,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadOutcome {
+    Complete,
+    Paused { progress_percent: u8 },
+    Canceled,
 }
 
 impl std::error::Error for StoreServiceError {}
@@ -129,8 +148,8 @@ pub trait StoreNetwork: fmt::Debug + Send + Sync + 'static {
         url: &str,
         destination: &Path,
         expected_bytes: u64,
-        progress: &mut dyn FnMut(u8),
-    ) -> Result<(), StoreServiceError>;
+        control: &mut dyn FnMut(u8) -> DownloadControl,
+    ) -> Result<DownloadOutcome, StoreServiceError>;
 }
 
 pub trait AppInstaller: fmt::Debug + Send + Sync + 'static {
@@ -230,8 +249,8 @@ impl StoreNetwork for UreqStoreNetwork {
         url: &str,
         destination: &Path,
         expected_bytes: u64,
-        progress: &mut dyn FnMut(u8),
-    ) -> Result<(), StoreServiceError> {
+        control: &mut dyn FnMut(u8) -> DownloadControl,
+    ) -> Result<DownloadOutcome, StoreServiceError> {
         require_https(url)?;
         if !(1..=cp0_store_protocol::MAX_PACKAGE_BYTES).contains(&expected_bytes) {
             return Err(StoreServiceError::Invalid(
@@ -243,6 +262,23 @@ impl StoreNetwork for UreqStoreNetwork {
         if offset > expected_bytes {
             file.set_len(0)?;
             offset = 0;
+        }
+        let initial_progress = ((offset * 100) / expected_bytes) as u8;
+        match control(initial_progress) {
+            DownloadControl::Continue => {}
+            DownloadControl::Pause => {
+                file.sync_all()?;
+                return Ok(DownloadOutcome::Paused {
+                    progress_percent: initial_progress,
+                });
+            }
+            DownloadControl::Cancel => {
+                file.sync_all()?;
+                return Ok(DownloadOutcome::Canceled);
+            }
+        }
+        if offset == expected_bytes {
+            return Ok(DownloadOutcome::Complete);
         }
 
         let mut request = self.agent.get(url).header("Accept-Encoding", "identity");
@@ -285,7 +321,9 @@ impl StoreNetwork for UreqStoreNetwork {
         let mut buffer = [0_u8; 16 * 1024];
         let mut downloaded = offset;
         loop {
-            let read = reader.read(&mut buffer).map_err(StoreServiceError::Io)?;
+            let read = reader
+                .read(&mut buffer)
+                .map_err(|_| StoreServiceError::Unavailable("package response body read failed"))?;
             if read == 0 {
                 break;
             }
@@ -298,7 +336,18 @@ impl StoreNetwork for UreqStoreNetwork {
                 ));
             }
             file.write_all(&buffer[..read])?;
-            progress(((downloaded * 100) / expected_bytes) as u8);
+            let progress_percent = ((downloaded * 100) / expected_bytes) as u8;
+            match control(progress_percent) {
+                DownloadControl::Continue => {}
+                DownloadControl::Pause => {
+                    file.sync_all()?;
+                    return Ok(DownloadOutcome::Paused { progress_percent });
+                }
+                DownloadControl::Cancel => {
+                    file.sync_all()?;
+                    return Ok(DownloadOutcome::Canceled);
+                }
+            }
         }
         file.sync_all()?;
         if downloaded != expected_bytes {
@@ -306,7 +355,7 @@ impl StoreNetwork for UreqStoreNetwork {
                 "package download ended before the signed catalog size",
             ));
         }
-        Ok(())
+        Ok(DownloadOutcome::Complete)
     }
 }
 
@@ -369,8 +418,25 @@ impl AppInstaller for AppdInstaller {
 
 #[derive(Debug, Clone)]
 struct OperationState {
+    version: String,
+    package_sha256: String,
     state: StoreAppState,
     progress_percent: u8,
+    failure_reason: Option<StoreFailureReason>,
+    control: DownloadControl,
+}
+
+#[derive(Debug)]
+enum InstallOutcome {
+    Installed,
+    Paused { progress_percent: u8 },
+    Canceled,
+}
+
+#[derive(Debug)]
+struct InstallFailure {
+    reason: StoreFailureReason,
+    source: StoreServiceError,
 }
 
 #[derive(Debug, Default)]
@@ -588,6 +654,13 @@ impl StoreService {
             StoreCommand::Install { app_id } => self
                 .start_install(&app_id)
                 .map(|version| StoreResponseData::InstallAccepted { app_id, version }),
+            StoreCommand::Control { app_id, action } => self
+                .control_operation(&app_id, action)
+                .map(|version| StoreResponseData::OperationAccepted {
+                    app_id,
+                    version,
+                    action,
+                }),
             StoreCommand::Details { app_id } => self.details_response(&app_id),
             StoreCommand::Media { .. } => unreachable!(),
         };
@@ -796,11 +869,22 @@ impl StoreService {
     }
 
     fn start_install(self: &Arc<Self>, app_id: &str) -> Result<String, StoreServiceError> {
+        self.start_install_mode(app_id, false)
+    }
+
+    fn start_install_mode(
+        self: &Arc<Self>,
+        app_id: &str,
+        resume: bool,
+    ) -> Result<String, StoreServiceError> {
         let app = {
-            let state = self
+            let mut state = self
                 .state
                 .lock()
                 .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+            if state.active_job {
+                return Err(StoreServiceError::Busy);
+            }
             let catalog = state
                 .catalog
                 .as_ref()
@@ -811,31 +895,175 @@ impl StoreService {
                     "catalog has expired; refresh before installing".into(),
                 ));
             }
-            catalog
+            let app = catalog
                 .catalog
                 .apps
                 .iter()
                 .find(|app| app.app_id == app_id)
                 .cloned()
-                .ok_or(StoreServiceError::NotFound)?
+                .ok_or(StoreServiceError::NotFound)?;
+            if resume {
+                let operation = state
+                    .operations
+                    .get(app_id)
+                    .ok_or(StoreServiceError::InvalidState)?;
+                if operation.state != StoreAppState::Paused
+                    || operation.version != app.version
+                    || operation.package_sha256 != app.package_sha256
+                {
+                    return Err(StoreServiceError::InvalidState);
+                }
+            } else if state.operations.get(app_id).is_some_and(|operation| {
+                matches!(
+                    operation.state,
+                    StoreAppState::Queued
+                        | StoreAppState::Downloading
+                        | StoreAppState::Paused
+                        | StoreAppState::Installing
+                )
+            }) {
+                return Err(StoreServiceError::InvalidState);
+            }
+            state.active_job = true;
+            state.operations.insert(
+                app.app_id.clone(),
+                OperationState {
+                    version: app.version.clone(),
+                    package_sha256: app.package_sha256.clone(),
+                    state: StoreAppState::Queued,
+                    progress_percent: 0,
+                    failure_reason: None,
+                    control: DownloadControl::Continue,
+                },
+            );
+            app
         };
-        self.reserve_job()?;
-        self.set_operation(&app.app_id, StoreAppState::Queued, 0);
         let version = app.version.clone();
+        let app_id = app.app_id.clone();
+        let package_sha256 = app.package_sha256.clone();
         let service = Arc::clone(self);
         thread::Builder::new()
             .name("cp0-store-install".into())
             .spawn(move || {
-                if let Err(error) = service.install_now(&app) {
-                    service.set_operation(&app.app_id, StoreAppState::Failed, 0);
-                    eprintln!("cp0-stored: {} installation failed: {error}", app.app_id);
+                let result = service.install_now(&app);
+                if let Err(failure) = &result {
+                    eprintln!(
+                        "cp0-stored: {} installation failed: {}",
+                        app.app_id, failure.source
+                    );
                 }
-                service.release_job();
+                service.finish_install_operation(&app, result);
             })
             .map_err(|error| {
-                self.release_job();
+                if let Ok(mut state) = self.state.lock() {
+                    state.active_job = false;
+                    if let Some(operation) = state.operations.get_mut(&app_id) {
+                        if operation.version == version
+                            && operation.package_sha256 == package_sha256
+                        {
+                            operation.state = StoreAppState::Failed;
+                            operation.progress_percent = 0;
+                            operation.failure_reason = Some(StoreFailureReason::Internal);
+                        }
+                    }
+                }
                 StoreServiceError::Io(error)
             })?;
+        Ok(version)
+    }
+
+    fn control_operation(
+        self: &Arc<Self>,
+        app_id: &str,
+        action: StoreControlAction,
+    ) -> Result<String, StoreServiceError> {
+        if action == StoreControlAction::Resume {
+            return self.start_install_mode(app_id, true);
+        }
+        let mut deferred_cancel = None;
+        let version = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+            let operation = state
+                .operations
+                .get(app_id)
+                .ok_or(StoreServiceError::InvalidState)?;
+            let operation_state = operation.state;
+            let version = operation.version.clone();
+            let package_sha256 = operation.package_sha256.clone();
+            let reserve_cleanup_job = action == StoreControlAction::Cancel
+                && matches!(
+                    operation_state,
+                    StoreAppState::Paused | StoreAppState::Failed
+                );
+            if reserve_cleanup_job {
+                if state.active_job {
+                    return Err(StoreServiceError::Busy);
+                }
+                state.active_job = true;
+            }
+            let operation = state
+                .operations
+                .get_mut(app_id)
+                .ok_or(StoreServiceError::InvalidState)?;
+            match action {
+                StoreControlAction::Pause => match operation.state {
+                    StoreAppState::Queued | StoreAppState::Downloading => match operation.control {
+                        DownloadControl::Continue => {
+                            operation.control = DownloadControl::Pause;
+                        }
+                        DownloadControl::Pause => {}
+                        DownloadControl::Cancel => {
+                            return Err(StoreServiceError::InvalidState);
+                        }
+                    },
+                    StoreAppState::Paused => {}
+                    _ => return Err(StoreServiceError::InvalidState),
+                },
+                StoreControlAction::Cancel => match operation_state {
+                    StoreAppState::Queued | StoreAppState::Downloading => {
+                        operation.control = DownloadControl::Cancel;
+                    }
+                    StoreAppState::Paused | StoreAppState::Failed => {
+                        operation.control = DownloadControl::Cancel;
+                        deferred_cancel = Some(package_sha256);
+                    }
+                    StoreAppState::Canceled => {}
+                    _ => return Err(StoreServiceError::InvalidState),
+                },
+                StoreControlAction::Resume => unreachable!(),
+            }
+            version
+        };
+        if let Some(package_sha256) = deferred_cancel {
+            let partial = self
+                .paths
+                .cache_root
+                .join("packages")
+                .join(format!("{package_sha256}.part"));
+            let cleanup = remove_partial_package(&partial);
+            if let Ok(mut state) = self.state.lock() {
+                state.active_job = false;
+                if let Some(operation) = state.operations.get_mut(app_id) {
+                    if operation.version == version && operation.package_sha256 == package_sha256 {
+                        if cleanup.is_ok() {
+                            operation.state = StoreAppState::Canceled;
+                            operation.progress_percent = 0;
+                            operation.failure_reason = None;
+                            operation.control = DownloadControl::Continue;
+                        } else {
+                            operation.state = StoreAppState::Failed;
+                            operation.progress_percent = 0;
+                            operation.failure_reason = Some(StoreFailureReason::Storage);
+                            operation.control = DownloadControl::Continue;
+                        }
+                    }
+                }
+            }
+            cleanup?;
+        }
         Ok(version)
     }
 
@@ -884,18 +1112,6 @@ impl StoreService {
         }
     }
 
-    fn set_operation(&self, app_id: &str, state_value: StoreAppState, progress_percent: u8) {
-        if let Ok(mut state) = self.state.lock() {
-            state.operations.insert(
-                app_id.into(),
-                OperationState {
-                    state: state_value,
-                    progress_percent: progress_percent.min(100),
-                },
-            );
-        }
-    }
-
     fn refresh_now(&self) -> Result<(), StoreServiceError> {
         let url = self
             .config
@@ -936,16 +1152,26 @@ impl StoreService {
                 .state
                 .lock()
                 .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
-            let catalog_app_ids = signed
-                .catalog
-                .apps
-                .iter()
-                .map(|app| app.app_id.clone())
-                .collect::<BTreeSet<_>>();
+            state.operations.retain(|app_id, operation| {
+                let Some(app) = signed.catalog.apps.iter().find(|app| app.app_id == *app_id) else {
+                    return false;
+                };
+                let identity_changed = operation.version != app.version
+                    || operation.package_sha256 != app.package_sha256;
+                if identity_changed
+                    && matches!(
+                        operation.state,
+                        StoreAppState::Paused | StoreAppState::Failed
+                    )
+                {
+                    operation.state = StoreAppState::Failed;
+                    operation.progress_percent = 0;
+                    operation.failure_reason = Some(StoreFailureReason::CatalogChanged);
+                    operation.control = DownloadControl::Continue;
+                }
+                true
+            });
             state.catalog = Some(signed.clone());
-            state
-                .operations
-                .retain(|app_id, _| catalog_app_ids.contains(app_id));
         }
         if let Err(error) = self.prefetch_catalog_icons(&signed) {
             eprintln!("cp0-stored: Catalog accepted without complete icon cache: {error}");
@@ -1011,31 +1237,151 @@ impl StoreService {
         validate_details_for_app(&encoded, &app)
     }
 
-    fn install_now(&self, app: &CatalogApp) -> Result<(), StoreServiceError> {
+    fn update_download_control(&self, app: &CatalogApp, progress_percent: u8) -> DownloadControl {
+        let Ok(mut state) = self.state.lock() else {
+            return DownloadControl::Cancel;
+        };
+        let Some(operation) = state.operations.get_mut(&app.app_id) else {
+            return DownloadControl::Cancel;
+        };
+        if operation.version != app.version || operation.package_sha256 != app.package_sha256 {
+            return DownloadControl::Cancel;
+        }
+        if operation.control == DownloadControl::Continue {
+            operation.state = StoreAppState::Downloading;
+            operation.progress_percent = progress_percent.min(100);
+            operation.failure_reason = None;
+        }
+        operation.control
+    }
+
+    fn begin_install_handoff(&self, app: &CatalogApp) -> DownloadControl {
+        let Ok(mut state) = self.state.lock() else {
+            return DownloadControl::Cancel;
+        };
+        let Some(operation) = state.operations.get_mut(&app.app_id) else {
+            return DownloadControl::Cancel;
+        };
+        if operation.version != app.version || operation.package_sha256 != app.package_sha256 {
+            return DownloadControl::Cancel;
+        }
+        if operation.control == DownloadControl::Continue {
+            operation.state = StoreAppState::Installing;
+            operation.progress_percent = 100;
+            operation.failure_reason = None;
+        }
+        operation.control
+    }
+
+    fn finish_install_operation(
+        &self,
+        app: &CatalogApp,
+        result: Result<InstallOutcome, InstallFailure>,
+    ) {
+        if let Ok(mut state) = self.state.lock() {
+            state.active_job = false;
+            let Some(operation) = state.operations.get_mut(&app.app_id) else {
+                return;
+            };
+            if operation.version != app.version || operation.package_sha256 != app.package_sha256 {
+                return;
+            }
+            operation.control = DownloadControl::Continue;
+            match result {
+                Ok(InstallOutcome::Installed) => {
+                    operation.state = StoreAppState::Installed;
+                    operation.progress_percent = 100;
+                    operation.failure_reason = None;
+                }
+                Ok(InstallOutcome::Paused { progress_percent }) => {
+                    operation.state = StoreAppState::Paused;
+                    operation.progress_percent = progress_percent.min(100);
+                    operation.failure_reason = None;
+                }
+                Ok(InstallOutcome::Canceled) => {
+                    operation.state = StoreAppState::Canceled;
+                    operation.progress_percent = 0;
+                    operation.failure_reason = None;
+                }
+                Err(failure) => {
+                    operation.state = StoreAppState::Failed;
+                    operation.progress_percent = 0;
+                    operation.failure_reason = Some(failure.reason);
+                }
+            }
+        }
+    }
+
+    fn install_now(&self, app: &CatalogApp) -> Result<InstallOutcome, InstallFailure> {
         let packages = self.paths.cache_root.join("packages");
         let partial = packages.join(format!("{}.part", app.package_sha256));
-        self.set_operation(&app.app_id, StoreAppState::Downloading, 0);
-        self.network.download_package(
-            &app.package_url,
-            &partial,
-            app.package_bytes,
-            &mut |progress| {
-                self.set_operation(&app.app_id, StoreAppState::Downloading, progress);
-            },
-        )?;
-        verify_package_file(&partial, app)?;
-        let staged = stage_for_appd(&partial, &self.paths.appd_inbox)?;
-        self.set_operation(&app.app_id, StoreAppState::Installing, 100);
+        let download = self
+            .network
+            .download_package(
+                &app.package_url,
+                &partial,
+                app.package_bytes,
+                &mut |progress| self.update_download_control(app, progress),
+            )
+            .map_err(|source| InstallFailure {
+                reason: download_failure_reason(&source),
+                source,
+            })?;
+        match download {
+            DownloadOutcome::Paused { progress_percent } => {
+                return Ok(InstallOutcome::Paused { progress_percent });
+            }
+            DownloadOutcome::Canceled => {
+                remove_partial_package(&partial).map_err(|source| InstallFailure {
+                    reason: StoreFailureReason::Storage,
+                    source,
+                })?;
+                return Ok(InstallOutcome::Canceled);
+            }
+            DownloadOutcome::Complete => {}
+        }
+        verify_package_file(&partial, app).map_err(|source| InstallFailure {
+            reason: StoreFailureReason::Verification,
+            source,
+        })?;
+        match self.begin_install_handoff(app) {
+            DownloadControl::Continue => {}
+            DownloadControl::Pause => {
+                return Ok(InstallOutcome::Paused {
+                    progress_percent: 100,
+                });
+            }
+            DownloadControl::Cancel => {
+                remove_partial_package(&partial).map_err(|source| InstallFailure {
+                    reason: StoreFailureReason::Storage,
+                    source,
+                })?;
+                return Ok(InstallOutcome::Canceled);
+            }
+        }
+        let staged =
+            stage_for_appd(&partial, &self.paths.appd_inbox).map_err(|source| InstallFailure {
+                reason: StoreFailureReason::Storage,
+                source,
+            })?;
         let install_result = self.installer.install(app, &staged);
-        let cleanup_result = fs::remove_file(&staged);
-        install_result?;
-        cleanup_result?;
-        self.set_operation(&app.app_id, StoreAppState::Installed, 100);
-        Ok(())
+        if let Err(error) = fs::remove_file(&staged) {
+            eprintln!("cp0-stored: failed to remove appd staging file after handoff: {error}");
+        }
+        install_result.map_err(|source| InstallFailure {
+            reason: StoreFailureReason::Installer,
+            source,
+        })?;
+        Ok(InstallOutcome::Installed)
     }
 }
 
 fn store_app_summary(app: &CatalogApp, operation: Option<&OperationState>) -> StoreAppSummary {
+    let operation = operation.filter(|operation| {
+        (operation.version == app.version && operation.package_sha256 == app.package_sha256)
+            || (operation.state == StoreAppState::Failed
+                && operation.failure_reason == Some(StoreFailureReason::CatalogChanged))
+    });
     StoreAppSummary {
         app_id: app.app_id.clone(),
         name: app.name.clone(),
@@ -1049,6 +1395,29 @@ fn store_app_summary(app: &CatalogApp, operation: Option<&OperationState>) -> St
         progress_percent: operation
             .map(|operation| operation.progress_percent)
             .unwrap_or(0),
+        failure_reason: operation.and_then(|operation| operation.failure_reason),
+    }
+}
+
+fn download_failure_reason(error: &StoreServiceError) -> StoreFailureReason {
+    match error {
+        StoreServiceError::Unavailable(_) => StoreFailureReason::Network,
+        StoreServiceError::Io(_) => StoreFailureReason::Storage,
+        StoreServiceError::Invalid(_) | StoreServiceError::Untrusted(_) => {
+            StoreFailureReason::Verification
+        }
+        StoreServiceError::Unconfigured | StoreServiceError::NotFound => {
+            StoreFailureReason::CatalogChanged
+        }
+        StoreServiceError::Busy | StoreServiceError::InvalidState => StoreFailureReason::Internal,
+    }
+}
+
+fn remove_partial_package(path: &Path) -> Result<(), StoreServiceError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(StoreServiceError::Io(error)),
     }
 }
 
@@ -1727,6 +2096,10 @@ fn service_error_response(request_id: u64, error: &StoreServiceError) -> StoreRe
         ),
         StoreServiceError::NotFound => (StoreErrorCode::NotFound, "application is not in catalog"),
         StoreServiceError::Busy => (StoreErrorCode::Busy, "store operation is already active"),
+        StoreServiceError::InvalidState => (
+            StoreErrorCode::InvalidState,
+            "store operation is not valid in the current state",
+        ),
         StoreServiceError::Untrusted(_) => {
             (StoreErrorCode::Untrusted, "store trust verification failed")
         }
@@ -1804,6 +2177,8 @@ mod tests {
     };
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::sync::Barrier;
+    use std::sync::atomic::AtomicBool;
 
     #[derive(Debug)]
     struct MockNetwork {
@@ -1821,16 +2196,130 @@ mod tests {
             _url: &str,
             destination: &Path,
             expected_bytes: u64,
-            progress: &mut dyn FnMut(u8),
-        ) -> Result<(), StoreServiceError> {
+            control: &mut dyn FnMut(u8) -> DownloadControl,
+        ) -> Result<DownloadOutcome, StoreServiceError> {
             let mut file = open_resume_file(destination)?;
             let offset = file.metadata()?.len() as usize;
+            match control(((offset as u64 * 100) / expected_bytes) as u8) {
+                DownloadControl::Pause => {
+                    return Ok(DownloadOutcome::Paused {
+                        progress_percent: ((offset as u64 * 100) / expected_bytes) as u8,
+                    });
+                }
+                DownloadControl::Cancel => return Ok(DownloadOutcome::Canceled),
+                DownloadControl::Continue => {}
+            }
             file.seek(SeekFrom::End(0))?;
             file.write_all(&self.package[offset..])?;
             file.sync_all()?;
             assert_eq!(self.package.len() as u64, expected_bytes);
-            progress(100);
-            Ok(())
+            Ok(match control(100) {
+                DownloadControl::Continue => DownloadOutcome::Complete,
+                DownloadControl::Pause => DownloadOutcome::Paused {
+                    progress_percent: 100,
+                },
+                DownloadControl::Cancel => DownloadOutcome::Canceled,
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct PausableNetwork {
+        package: Vec<u8>,
+        first_download: AtomicBool,
+        first_chunk_ready: Barrier,
+        continue_first_download: Barrier,
+    }
+
+    impl PausableNetwork {
+        fn new(package: Vec<u8>) -> Self {
+            Self {
+                package,
+                first_download: AtomicBool::new(true),
+                first_chunk_ready: Barrier::new(2),
+                continue_first_download: Barrier::new(2),
+            }
+        }
+    }
+
+    impl StoreNetwork for PausableNetwork {
+        fn fetch_catalog(&self, _url: &str) -> Result<Vec<u8>, StoreServiceError> {
+            Err(StoreServiceError::Unavailable(
+                "mock refresh is unavailable",
+            ))
+        }
+
+        fn download_package(
+            &self,
+            _url: &str,
+            destination: &Path,
+            expected_bytes: u64,
+            control: &mut dyn FnMut(u8) -> DownloadControl,
+        ) -> Result<DownloadOutcome, StoreServiceError> {
+            assert_eq!(self.package.len() as u64, expected_bytes);
+            let mut file = open_resume_file(destination)?;
+            let offset = file.metadata()?.len() as usize;
+            let initial_control = control(((offset as u64 * 100) / expected_bytes) as u8);
+            if initial_control != DownloadControl::Continue {
+                return Ok(match initial_control {
+                    DownloadControl::Pause => DownloadOutcome::Paused {
+                        progress_percent: ((offset as u64 * 100) / expected_bytes) as u8,
+                    },
+                    DownloadControl::Cancel => DownloadOutcome::Canceled,
+                    DownloadControl::Continue => unreachable!(),
+                });
+            }
+            file.seek(SeekFrom::End(0))?;
+            if offset == 0 && self.first_download.swap(false, Ordering::SeqCst) {
+                let split = self.package.len() / 2;
+                file.write_all(&self.package[..split])?;
+                file.sync_all()?;
+                self.first_chunk_ready.wait();
+                self.continue_first_download.wait();
+                match control(((split as u64 * 100) / expected_bytes) as u8) {
+                    DownloadControl::Pause => {
+                        return Ok(DownloadOutcome::Paused {
+                            progress_percent: ((split as u64 * 100) / expected_bytes) as u8,
+                        });
+                    }
+                    DownloadControl::Cancel => return Ok(DownloadOutcome::Canceled),
+                    DownloadControl::Continue => {}
+                }
+                file.write_all(&self.package[split..])?;
+            } else {
+                file.write_all(&self.package[offset..])?;
+            }
+            file.sync_all()?;
+            Ok(match control(100) {
+                DownloadControl::Continue => DownloadOutcome::Complete,
+                DownloadControl::Pause => DownloadOutcome::Paused {
+                    progress_percent: 100,
+                },
+                DownloadControl::Cancel => DownloadOutcome::Canceled,
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingNetwork;
+
+    impl StoreNetwork for FailingNetwork {
+        fn fetch_catalog(&self, _url: &str) -> Result<Vec<u8>, StoreServiceError> {
+            Err(StoreServiceError::Unavailable(
+                "mock catalog is unavailable",
+            ))
+        }
+
+        fn download_package(
+            &self,
+            _url: &str,
+            _destination: &Path,
+            _expected_bytes: u64,
+            _control: &mut dyn FnMut(u8) -> DownloadControl,
+        ) -> Result<DownloadOutcome, StoreServiceError> {
+            Err(StoreServiceError::Unavailable(
+                "mock package is unavailable",
+            ))
         }
     }
 
@@ -1866,16 +2355,30 @@ mod tests {
             _url: &str,
             destination: &Path,
             expected_bytes: u64,
-            progress: &mut dyn FnMut(u8),
-        ) -> Result<(), StoreServiceError> {
+            control: &mut dyn FnMut(u8) -> DownloadControl,
+        ) -> Result<DownloadOutcome, StoreServiceError> {
             let mut file = open_resume_file(destination)?;
             let offset = file.metadata()?.len() as usize;
+            match control(((offset as u64 * 100) / expected_bytes) as u8) {
+                DownloadControl::Pause => {
+                    return Ok(DownloadOutcome::Paused {
+                        progress_percent: ((offset as u64 * 100) / expected_bytes) as u8,
+                    });
+                }
+                DownloadControl::Cancel => return Ok(DownloadOutcome::Canceled),
+                DownloadControl::Continue => {}
+            }
             file.seek(SeekFrom::End(0))?;
             file.write_all(&self.package[offset..])?;
             file.sync_all()?;
             assert_eq!(self.package.len() as u64, expected_bytes);
-            progress(100);
-            Ok(())
+            Ok(match control(100) {
+                DownloadControl::Continue => DownloadOutcome::Complete,
+                DownloadControl::Pause => DownloadOutcome::Paused {
+                    progress_percent: 100,
+                },
+                DownloadControl::Cancel => DownloadOutcome::Canceled,
+            })
         }
     }
 
@@ -1890,6 +2393,74 @@ mod tests {
             self.installed.lock().unwrap().push(app.app_id.clone());
             Ok(())
         }
+    }
+
+    #[derive(Debug)]
+    struct FailingInstaller;
+
+    impl AppInstaller for FailingInstaller {
+        fn install(&self, _app: &CatalogApp, _staged_path: &Path) -> Result<(), StoreServiceError> {
+            Err(StoreServiceError::Unavailable(
+                "mock appd handoff is unavailable",
+            ))
+        }
+    }
+
+    #[derive(Debug)]
+    struct BlockingInstaller {
+        handoff_started: Barrier,
+        finish_handoff: Barrier,
+    }
+
+    impl BlockingInstaller {
+        fn new() -> Self {
+            Self {
+                handoff_started: Barrier::new(2),
+                finish_handoff: Barrier::new(2),
+            }
+        }
+    }
+
+    impl AppInstaller for BlockingInstaller {
+        fn install(&self, _app: &CatalogApp, staged_path: &Path) -> Result<(), StoreServiceError> {
+            assert!(staged_path.is_file());
+            self.handoff_started.wait();
+            self.finish_handoff.wait();
+            Ok(())
+        }
+    }
+
+    fn install_synchronously(service: &Arc<StoreService>, app: &CatalogApp) {
+        {
+            let mut state = service.state.lock().unwrap();
+            state.active_job = true;
+            state.operations.insert(
+                app.app_id.clone(),
+                OperationState {
+                    version: app.version.clone(),
+                    package_sha256: app.package_sha256.clone(),
+                    state: StoreAppState::Queued,
+                    progress_percent: 0,
+                    failure_reason: None,
+                    control: DownloadControl::Continue,
+                },
+            );
+        }
+        let result = service.install_now(app);
+        assert!(matches!(&result, Ok(InstallOutcome::Installed)));
+        service.finish_install_operation(app, result);
+    }
+
+    fn wait_for_store_state(service: &StoreService, expected: StoreAppState) -> StoreAppSummary {
+        for _ in 0..2_000 {
+            if let StoreResponseData::Catalog { apps, .. } = service.catalog_response().unwrap() {
+                if apps[0].state == expected {
+                    return apps[0].clone();
+                }
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        panic!("store operation did not reach {expected:?}");
     }
 
     struct Fixture {
@@ -2300,7 +2871,7 @@ mod tests {
             .exists()
         );
 
-        service.install_now(&app).unwrap();
+        install_synchronously(&service, &app);
         assert_eq!(installer.installed.lock().unwrap().as_slice(), [app.app_id]);
     }
 
@@ -2385,7 +2956,7 @@ mod tests {
         )
         .unwrap();
 
-        service.install_now(&app).unwrap();
+        install_synchronously(&service, &app);
         assert_eq!(installer.installed.lock().unwrap().as_slice(), [app.app_id]);
         assert!(
             fs::read_dir(&fixture.paths.appd_inbox)
@@ -2397,6 +2968,368 @@ mod tests {
             service.catalog_response().unwrap(),
             StoreResponseData::Catalog { apps, .. }
                 if apps[0].state == StoreAppState::Installed && apps[0].progress_percent == 100
+        ));
+    }
+
+    #[test]
+    fn pauses_and_resumes_the_same_bounded_partial_download() {
+        let fixture = Fixture::new("pause-resume");
+        let catalog = fixture.signed_catalog(1);
+        fs::write(&fixture.paths.catalog_cache, &catalog).unwrap();
+        let app = decode_signed_catalog(&catalog).unwrap().catalog.apps[0].clone();
+        let network = Arc::new(PausableNetwork::new(fixture.package.clone()));
+        let installer = Arc::new(MockInstaller::default());
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            network.clone(),
+            installer.clone(),
+            [0],
+        )
+        .unwrap();
+
+        assert_eq!(service.start_install(&app.app_id).unwrap(), app.version);
+        network.first_chunk_ready.wait();
+        assert_eq!(
+            service
+                .control_operation(&app.app_id, StoreControlAction::Pause)
+                .unwrap(),
+            app.version
+        );
+        assert!(matches!(
+            service.control_operation(&app.app_id, StoreControlAction::Resume),
+            Err(StoreServiceError::Busy)
+        ));
+        network.continue_first_download.wait();
+        let paused = wait_for_store_state(&service, StoreAppState::Paused);
+        let expected_progress = ((fixture.package.len() / 2) * 100 / fixture.package.len()) as u8;
+        assert_eq!(paused.progress_percent, expected_progress);
+        let partial = fixture
+            .paths
+            .cache_root
+            .join("packages")
+            .join(format!("{}.part", app.package_sha256));
+        assert_eq!(
+            fs::metadata(&partial).unwrap().len(),
+            (fixture.package.len() / 2) as u64
+        );
+
+        assert_eq!(
+            service
+                .control_operation(&app.app_id, StoreControlAction::Resume)
+                .unwrap(),
+            app.version
+        );
+        let installed = wait_for_store_state(&service, StoreAppState::Installed);
+        assert_eq!(installed.progress_percent, 100);
+        assert_eq!(installer.installed.lock().unwrap().as_slice(), [app.app_id]);
+    }
+
+    #[test]
+    fn cancel_during_download_removes_the_partial_package() {
+        let fixture = Fixture::new("download-cancel");
+        let catalog = fixture.signed_catalog(1);
+        fs::write(&fixture.paths.catalog_cache, &catalog).unwrap();
+        let app = decode_signed_catalog(&catalog).unwrap().catalog.apps[0].clone();
+        let network = Arc::new(PausableNetwork::new(fixture.package.clone()));
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            network.clone(),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+
+        service.start_install(&app.app_id).unwrap();
+        network.first_chunk_ready.wait();
+        service
+            .control_operation(&app.app_id, StoreControlAction::Cancel)
+            .unwrap();
+        assert!(matches!(
+            service.control_operation(&app.app_id, StoreControlAction::Pause),
+            Err(StoreServiceError::InvalidState)
+        ));
+        service
+            .control_operation(&app.app_id, StoreControlAction::Cancel)
+            .unwrap();
+        network.continue_first_download.wait();
+        let canceled = wait_for_store_state(&service, StoreAppState::Canceled);
+        assert_eq!(canceled.progress_percent, 0);
+        assert!(
+            !fixture
+                .paths
+                .cache_root
+                .join("packages")
+                .join(format!("{}.part", app.package_sha256))
+                .exists()
+        );
+    }
+
+    #[test]
+    fn cancel_removes_a_paused_partial_and_allows_a_clean_retry() {
+        let fixture = Fixture::new("pause-cancel");
+        let catalog = fixture.signed_catalog(1);
+        fs::write(&fixture.paths.catalog_cache, &catalog).unwrap();
+        let app = decode_signed_catalog(&catalog).unwrap().catalog.apps[0].clone();
+        let network = Arc::new(PausableNetwork::new(fixture.package.clone()));
+        let installer = Arc::new(MockInstaller::default());
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            network.clone(),
+            installer.clone(),
+            [0],
+        )
+        .unwrap();
+
+        service.start_install(&app.app_id).unwrap();
+        network.first_chunk_ready.wait();
+        service
+            .control_operation(&app.app_id, StoreControlAction::Pause)
+            .unwrap();
+        network.continue_first_download.wait();
+        wait_for_store_state(&service, StoreAppState::Paused);
+        let partial = fixture
+            .paths
+            .cache_root
+            .join("packages")
+            .join(format!("{}.part", app.package_sha256));
+        assert!(partial.is_file());
+
+        service
+            .control_operation(&app.app_id, StoreControlAction::Cancel)
+            .unwrap();
+        assert!(!partial.exists());
+        assert_eq!(
+            wait_for_store_state(&service, StoreAppState::Canceled).progress_percent,
+            0
+        );
+        assert!(matches!(
+            service.control_operation(&app.app_id, StoreControlAction::Resume),
+            Err(StoreServiceError::InvalidState)
+        ));
+        assert!(installer.installed.lock().unwrap().is_empty());
+
+        service.start_install(&app.app_id).unwrap();
+        wait_for_store_state(&service, StoreAppState::Installed);
+        assert_eq!(installer.installed.lock().unwrap().as_slice(), [app.app_id]);
+    }
+
+    #[test]
+    fn classifies_closed_install_failure_reasons() {
+        let network_fixture = Fixture::new("failure-network");
+        let network_catalog = network_fixture.signed_catalog(1);
+        fs::write(&network_fixture.paths.catalog_cache, &network_catalog).unwrap();
+        let network_app = decode_signed_catalog(&network_catalog)
+            .unwrap()
+            .catalog
+            .apps[0]
+            .clone();
+        let network_service = StoreService::new(
+            network_fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(FailingNetwork),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+        network_service.start_install(&network_app.app_id).unwrap();
+        assert_eq!(
+            wait_for_store_state(&network_service, StoreAppState::Failed).failure_reason,
+            Some(StoreFailureReason::Network)
+        );
+
+        let storage_fixture = Fixture::new("failure-storage");
+        let storage_catalog = storage_fixture.signed_catalog(1);
+        fs::write(&storage_fixture.paths.catalog_cache, &storage_catalog).unwrap();
+        let storage_app = decode_signed_catalog(&storage_catalog)
+            .unwrap()
+            .catalog
+            .apps[0]
+            .clone();
+        let storage_service = StoreService::new(
+            storage_fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: storage_fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+        let packages = storage_fixture.paths.cache_root.join("packages");
+        fs::remove_dir(&packages).unwrap();
+        fs::write(&packages, b"not a directory").unwrap();
+        storage_service.start_install(&storage_app.app_id).unwrap();
+        assert_eq!(
+            wait_for_store_state(&storage_service, StoreAppState::Failed).failure_reason,
+            Some(StoreFailureReason::Storage)
+        );
+
+        let verification_fixture = Fixture::new("failure-verification");
+        let verification_catalog = verification_fixture.signed_catalog(1);
+        fs::write(
+            &verification_fixture.paths.catalog_cache,
+            &verification_catalog,
+        )
+        .unwrap();
+        let verification_app = decode_signed_catalog(&verification_catalog)
+            .unwrap()
+            .catalog
+            .apps[0]
+            .clone();
+        let verification_service = StoreService::new(
+            verification_fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: vec![b'x'; verification_fixture.package.len()],
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+        verification_service
+            .start_install(&verification_app.app_id)
+            .unwrap();
+        assert_eq!(
+            wait_for_store_state(&verification_service, StoreAppState::Failed).failure_reason,
+            Some(StoreFailureReason::Verification)
+        );
+
+        let installer_fixture = Fixture::new("failure-installer");
+        let installer_catalog = installer_fixture.signed_catalog(1);
+        fs::write(&installer_fixture.paths.catalog_cache, &installer_catalog).unwrap();
+        let installer_app = decode_signed_catalog(&installer_catalog)
+            .unwrap()
+            .catalog
+            .apps[0]
+            .clone();
+        let installer_service = StoreService::new(
+            installer_fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: installer_fixture.package.clone(),
+            }),
+            Arc::new(FailingInstaller),
+            [0],
+        )
+        .unwrap();
+        installer_service
+            .start_install(&installer_app.app_id)
+            .unwrap();
+        assert_eq!(
+            wait_for_store_state(&installer_service, StoreAppState::Failed).failure_reason,
+            Some(StoreFailureReason::Installer)
+        );
+    }
+
+    #[test]
+    fn rejects_control_after_appd_handoff_begins() {
+        let fixture = Fixture::new("install-control");
+        let catalog = fixture.signed_catalog(1);
+        fs::write(&fixture.paths.catalog_cache, &catalog).unwrap();
+        let app = decode_signed_catalog(&catalog).unwrap().catalog.apps[0].clone();
+        let installer = Arc::new(BlockingInstaller::new());
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: fixture.package.clone(),
+            }),
+            installer.clone(),
+            [0],
+        )
+        .unwrap();
+
+        service.start_install(&app.app_id).unwrap();
+        installer.handoff_started.wait();
+        assert_eq!(
+            wait_for_store_state(&service, StoreAppState::Installing).progress_percent,
+            100
+        );
+        for action in [StoreControlAction::Pause, StoreControlAction::Cancel] {
+            assert!(matches!(
+                service.control_operation(&app.app_id, action),
+                Err(StoreServiceError::InvalidState)
+            ));
+        }
+        installer.finish_handoff.wait();
+        wait_for_store_state(&service, StoreAppState::Installed);
+    }
+
+    #[test]
+    fn catalog_digest_change_invalidates_resume_and_remains_cancelable() {
+        let fixture = Fixture::new("catalog-changed");
+        let original_catalog = fixture.signed_catalog(1);
+        fs::write(&fixture.paths.catalog_cache, &original_catalog).unwrap();
+        let original_app = decode_signed_catalog(&original_catalog)
+            .unwrap()
+            .catalog
+            .apps[0]
+            .clone();
+        let replacement_package = b"replacement signed package fixture".to_vec();
+        let mut replacement_app = original_app.clone();
+        replacement_app.package_sha256 =
+            cp0_store_protocol::lower_hex(&Sha256::digest(&replacement_package));
+        replacement_app.package_bytes = replacement_package.len() as u64;
+        let replacement_catalog =
+            fixture.signed_catalog_with_apps(2, unix_time() + 3600, vec![replacement_app.clone()]);
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: Some("https://store.example.com/catalog.json".into()),
+            },
+            Arc::new(MockNetwork {
+                catalog: replacement_catalog,
+                package: replacement_package,
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+        let original_partial = fixture
+            .paths
+            .cache_root
+            .join("packages")
+            .join(format!("{}.part", original_app.package_sha256));
+        fs::write(&original_partial, &fixture.package[..7]).unwrap();
+        fs::set_permissions(&original_partial, fs::Permissions::from_mode(0o600)).unwrap();
+        service.state.lock().unwrap().operations.insert(
+            original_app.app_id.clone(),
+            OperationState {
+                version: original_app.version.clone(),
+                package_sha256: original_app.package_sha256.clone(),
+                state: StoreAppState::Paused,
+                progress_percent: 20,
+                failure_reason: None,
+                control: DownloadControl::Continue,
+            },
+        );
+
+        service.refresh_now().unwrap();
+        let changed = wait_for_store_state(&service, StoreAppState::Failed);
+        assert_eq!(
+            changed.failure_reason,
+            Some(StoreFailureReason::CatalogChanged)
+        );
+        assert_eq!(changed.version, replacement_app.version);
+        assert!(matches!(
+            service.control_operation(&original_app.app_id, StoreControlAction::Resume),
+            Err(StoreServiceError::InvalidState)
+        ));
+        service
+            .control_operation(&original_app.app_id, StoreControlAction::Cancel)
+            .unwrap();
+        assert!(!original_partial.exists());
+        assert!(matches!(
+            service.catalog_response().unwrap(),
+            StoreResponseData::Catalog { apps, .. }
+                if apps[0].state == StoreAppState::Available && apps[0].failure_reason.is_none()
         ));
     }
 

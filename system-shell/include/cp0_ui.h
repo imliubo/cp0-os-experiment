@@ -80,6 +80,9 @@ enum cp0_ui_event {
     CP0_UI_EVENT_DOCUMENT_CANCEL,
     CP0_UI_EVENT_STORE_REFRESH,
     CP0_UI_EVENT_STORE_INSTALL,
+    CP0_UI_EVENT_STORE_PAUSE,
+    CP0_UI_EVENT_STORE_RESUME,
+    CP0_UI_EVENT_STORE_CANCEL,
     CP0_UI_EVENT_STORE_SEARCH,
     CP0_UI_EVENT_STORE_DETAILS,
     CP0_UI_EVENT_STORE_SCREENSHOT,
@@ -112,9 +115,21 @@ enum cp0_ui_store_state {
     CP0_UI_STORE_UPDATE,
     CP0_UI_STORE_QUEUED,
     CP0_UI_STORE_DOWNLOADING,
+    CP0_UI_STORE_PAUSED,
     CP0_UI_STORE_INSTALLING,
     CP0_UI_STORE_INSTALLED,
+    CP0_UI_STORE_CANCELED,
     CP0_UI_STORE_FAILED,
+};
+
+enum cp0_ui_store_failure_reason {
+    CP0_UI_STORE_FAILURE_NONE,
+    CP0_UI_STORE_FAILURE_NETWORK,
+    CP0_UI_STORE_FAILURE_STORAGE,
+    CP0_UI_STORE_FAILURE_VERIFICATION,
+    CP0_UI_STORE_FAILURE_INSTALLER,
+    CP0_UI_STORE_FAILURE_CATALOG_CHANGED,
+    CP0_UI_STORE_FAILURE_INTERNAL,
 };
 
 enum cp0_ui_store_status {
@@ -200,6 +215,7 @@ struct cp0_ui_store_catalog_app {
     uint16_t permissions;
     uint8_t progress_percent;
     enum cp0_ui_store_state state;
+    enum cp0_ui_store_failure_reason failure_reason;
     const char *app_id;
     const char *name;
     const char *version;
@@ -214,6 +230,8 @@ struct cp0_ui_store_app {
     uint16_t installed_permissions;
     uint8_t progress_percent;
     enum cp0_ui_store_state state;
+    enum cp0_ui_store_failure_reason failure_reason;
+    bool update_available;
     char app_id[CP0_UI_APP_ID_MAX + 1];
     char name[CP0_UI_APP_NAME_MAX + 1];
     char version[CP0_UI_STORE_VERSION_MAX + 1];
@@ -245,6 +263,7 @@ struct cp0_ui {
     unsigned int store_recent_selected;
     unsigned int store_recent_count;
     unsigned int store_detail_page;
+    unsigned int store_operation_action_selected;
     unsigned int store_screenshot_index;
     unsigned int store_detail_text_offset;
     uint16_t store_search_offset;

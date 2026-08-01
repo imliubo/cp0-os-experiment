@@ -262,10 +262,26 @@ static enum cp0_ui_store_state store_ui_state(
 {
     static const enum cp0_ui_store_state direct_states[] = {
         CP0_UI_STORE_AVAILABLE,   CP0_UI_STORE_QUEUED,
-        CP0_UI_STORE_DOWNLOADING, CP0_UI_STORE_INSTALLING,
-        CP0_UI_STORE_INSTALLED,   CP0_UI_STORE_FAILED,
+        CP0_UI_STORE_DOWNLOADING, CP0_UI_STORE_PAUSED,
+        CP0_UI_STORE_INSTALLING,  CP0_UI_STORE_INSTALLED,
+        CP0_UI_STORE_CANCELED,    CP0_UI_STORE_FAILED,
     };
     return direct_states[app->state];
+}
+
+static enum cp0_ui_store_failure_reason store_ui_failure_reason(
+    const struct cp0_store_app_summary *app)
+{
+    static const enum cp0_ui_store_failure_reason direct_reasons[] = {
+        CP0_UI_STORE_FAILURE_NONE,
+        CP0_UI_STORE_FAILURE_NETWORK,
+        CP0_UI_STORE_FAILURE_STORAGE,
+        CP0_UI_STORE_FAILURE_VERIFICATION,
+        CP0_UI_STORE_FAILURE_INSTALLER,
+        CP0_UI_STORE_FAILURE_CATALOG_CHANGED,
+        CP0_UI_STORE_FAILURE_INTERNAL,
+    };
+    return direct_reasons[app->failure_reason];
 }
 
 static void poll_store_catalog(struct shell *shell)
@@ -293,6 +309,7 @@ static void poll_store_catalog(struct shell *shell)
             .permissions = catalog.apps[index].permissions,
             .progress_percent = catalog.apps[index].progress_percent,
             .state = store_ui_state(&catalog.apps[index]),
+            .failure_reason = store_ui_failure_reason(&catalog.apps[index]),
             .app_id = catalog.apps[index].app_id,
             .name = catalog.apps[index].name,
             .version = catalog.apps[index].version,
@@ -337,6 +354,7 @@ static void poll_store_search(struct shell *shell)
             .permissions = results.apps[index].permissions,
             .progress_percent = results.apps[index].progress_percent,
             .state = store_ui_state(&results.apps[index]),
+            .failure_reason = store_ui_failure_reason(&results.apps[index]),
             .app_id = results.apps[index].app_id,
             .name = results.apps[index].name,
             .version = results.apps[index].version,
@@ -842,6 +860,35 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                                            CP0_UI_STORE_FAILED, 0);
                 fprintf(stderr, "system-shell: store install failed for %s\n",
                         app_id);
+            }
+        }
+    } else if (event == CP0_UI_EVENT_STORE_PAUSE ||
+               event == CP0_UI_EVENT_STORE_RESUME ||
+               event == CP0_UI_EVENT_STORE_CANCEL) {
+        char app_id[CP0_STORE_APP_ID_BYTES];
+        const char *selected = cp0_ui_selected_store_app_id(&shell->ui);
+        enum cp0_store_control_action action =
+            event == CP0_UI_EVENT_STORE_PAUSE
+                ? CP0_STORE_CONTROL_PAUSE
+                : (event == CP0_UI_EVENT_STORE_RESUME
+                       ? CP0_STORE_CONTROL_RESUME
+                       : CP0_STORE_CONTROL_CANCEL);
+        if (selected != NULL &&
+            snprintf(app_id, sizeof(app_id), "%s", selected) > 0) {
+            int result = cp0_store_control(app_id, action);
+            if (result == CP0_STORE_RESULT_OK) {
+                if (action == CP0_STORE_CONTROL_RESUME)
+                    cp0_ui_set_store_app_state(&shell->ui, app_id,
+                                               CP0_UI_STORE_QUEUED, 0);
+                shell->store_poll_delay = 1;
+                fprintf(stderr,
+                        "system-shell: store control %u requested for %s\n",
+                        (unsigned int)action, app_id);
+            } else if (result != CP0_STORE_RESULT_BUSY) {
+                shell->store_poll_delay = 1;
+                fprintf(stderr,
+                        "system-shell: store control %u failed for %s\n",
+                        (unsigned int)action, app_id);
             }
         }
     } else if (event == CP0_UI_EVENT_STORE_SEARCH) {

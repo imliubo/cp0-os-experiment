@@ -130,6 +130,12 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     cp0_ui_set_store_icon(ui, "dev.cardputerzero.notify", "2.0.1",
                           icon_pixels, 48, 48);
     write_snapshot(directory, "store-detail", ui, frame);
+    struct cp0_ui_store_catalog_app failed_store_app = store_apps[1];
+    failed_store_app.state = CP0_UI_STORE_FAILED;
+    failed_store_app.failure_reason = CP0_UI_STORE_FAILURE_NETWORK;
+    cp0_ui_sync_store_catalog(ui, &failed_store_app, 1, false, false);
+    write_snapshot(directory, "store-failed", ui, frame);
+    cp0_ui_sync_store_catalog(ui, store_apps, 2, false, false);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     write_snapshot(directory, "store-description", ui, frame);
     assert(cp0_ui_handle_action(ui, CP0_UI_RIGHT) ==
@@ -509,12 +515,60 @@ int main(int argc, char **argv)
            CP0_UI_EVENT_STORE_INSTALL);
     cp0_ui_set_store_app_state(&ui, "dev.cardputerzero.beta",
                                CP0_UI_STORE_QUEUED, 0);
-    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_PAUSE);
+    struct cp0_ui_store_catalog_app authoritative_update = store_catalog[1];
+    authoritative_update.state = CP0_UI_STORE_UPDATE;
+    cp0_ui_sync_store_catalog(&ui, &authoritative_update, 1, false, false);
+    assert(cp0_ui_selected_store_app_state(&ui) == CP0_UI_STORE_UPDATE);
+    cp0_ui_set_store_app_state(&ui, "dev.cardputerzero.beta",
+                               CP0_UI_STORE_DOWNLOADING, 43);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_PAUSE);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_CANCEL);
+    cp0_ui_handle_action(&ui, CP0_UI_UP);
+    cp0_ui_set_store_app_state(&ui, "dev.cardputerzero.beta",
+                               CP0_UI_STORE_PAUSED, 43);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_RESUME);
 
     struct cp0_ui_store_catalog_app stale_update = store_catalog[1];
-    stale_update.state = CP0_UI_STORE_UPDATE;
+    stale_update.state = CP0_UI_STORE_PAUSED;
+    stale_update.progress_percent = 43;
+    cp0_ui_sync_store_catalog(&ui, &stale_update, 1, false, true);
+    assert(cp0_ui_selected_store_app_state(&ui) == CP0_UI_STORE_PAUSED);
+    assert(ui.store_apps[0].update_available);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_CANCEL);
+    cp0_ui_handle_action(&ui, CP0_UI_UP);
+    stale_update.state = CP0_UI_STORE_FAILED;
+    stale_update.progress_percent = 0;
+    stale_update.failure_reason = CP0_UI_STORE_FAILURE_NETWORK;
+    cp0_ui_sync_store_catalog(&ui, &stale_update, 1, false, true);
+    assert(ui.store_apps[0].state == CP0_UI_STORE_FAILED &&
+           ui.store_apps[0].failure_reason == CP0_UI_STORE_FAILURE_NETWORK &&
+           ui.store_apps[0].update_available);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_CANCEL);
+    cp0_ui_handle_action(&ui, CP0_UI_UP);
     cp0_ui_sync_store_catalog(&ui, &stale_update, 1, false, false);
-    assert(cp0_ui_selected_store_app_state(&ui) == CP0_UI_STORE_QUEUED);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_INSTALL);
+    ui.store_operation_action_selected = 1;
+    stale_update.state = CP0_UI_STORE_CANCELED;
+    stale_update.failure_reason = CP0_UI_STORE_FAILURE_NONE;
+    cp0_ui_sync_store_catalog(&ui, &stale_update, 1, false, false);
+    assert(ui.store_apps[0].state == CP0_UI_STORE_CANCELED &&
+           ui.store_apps[0].update_available &&
+           ui.store_operation_action_selected == 0);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_INSTALL);
     stale_update.version = "2.1.0";
     cp0_ui_sync_store_catalog(&ui, &stale_update, 1, false, false);
     assert(!ui.store_detail && ui.screen == CP0_UI_STORE);

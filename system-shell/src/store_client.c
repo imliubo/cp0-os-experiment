@@ -357,8 +357,8 @@ static bool valid_error_code(const char *document,
 {
     static const char *codes[] = {
         "invalid-request", "unauthorized", "unconfigured", "unavailable",
-        "not-found",       "busy",         "untrusted",    "resource-exhausted",
-        "internal",
+        "not-found",       "busy",         "invalid-state", "untrusted",
+        "resource-exhausted", "internal",
     };
     for (size_t index = 0; index < sizeof(codes) / sizeof(codes[0]); index++) {
         if (cp0_json_string_equals(document, token, codes[index]))
@@ -423,11 +423,30 @@ static int parse_envelope(const char *document, size_t length,
 static bool parse_state(const char *document, const struct cp0_json_token *token,
                         enum cp0_store_app_state *state)
 {
-    static const char *names[] = {"available", "queued", "downloading",
-                                  "installing", "installed", "failed"};
+    static const char *names[] = {
+        "available", "queued",    "downloading", "paused",
+        "installing", "installed", "canceled",    "failed",
+    };
     for (size_t index = 0; index < sizeof(names) / sizeof(names[0]); index++) {
         if (cp0_json_string_equals(document, token, names[index])) {
             *state = (enum cp0_store_app_state)index;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool parse_failure_reason(
+    const char *document, const struct cp0_json_token *token,
+    enum cp0_store_failure_reason *reason)
+{
+    static const char *names[] = {
+        "network", "storage", "verification", "installer",
+        "catalog-changed", "internal",
+    };
+    for (size_t index = 0; index < sizeof(names) / sizeof(names[0]); index++) {
+        if (cp0_json_string_equals(document, token, names[index])) {
+            *reason = (enum cp0_store_failure_reason)(index + 1U);
             return true;
         }
     }
@@ -469,11 +488,12 @@ static bool parse_app(const char *document,
     int state = cp0_json_object_get(document, tokens, token_count, item, "state");
     int progress = cp0_json_object_get(document, tokens, token_count, item,
                                        "progress_percent");
+    int failure = cp0_json_object_get(document, tokens, token_count, item,
+                                      "failure_reason");
     int permissions = cp0_json_object_get(document, tokens, token_count, item,
                                           "permissions");
     uint64_t parsed_progress;
-    if (tokens[item].type != CP0_JSON_OBJECT || tokens[item].children != 16 ||
-        package_bytes < 0 || state < 0 ||
+    if (tokens[item].type != CP0_JSON_OBJECT || package_bytes < 0 || state < 0 ||
         progress < 0 || permissions < 0 ||
         !copy_member(document, tokens, token_count, item, "app_id", app->app_id,
                      sizeof(app->app_id)) ||
@@ -495,13 +515,20 @@ static bool parse_app(const char *document,
         tokens[permissions].children > 8)
         return false;
     app->progress_percent = (uint8_t)parsed_progress;
+    app->failure_reason = CP0_STORE_FAILURE_NONE;
     if (((app->state == CP0_STORE_APP_AVAILABLE ||
           app->state == CP0_STORE_APP_QUEUED ||
+          app->state == CP0_STORE_APP_CANCELED ||
           app->state == CP0_STORE_APP_FAILED) &&
          app->progress_percent != 0) ||
         ((app->state == CP0_STORE_APP_INSTALLING ||
           app->state == CP0_STORE_APP_INSTALLED) &&
-         app->progress_percent != 100))
+         app->progress_percent != 100) ||
+        (app->state == CP0_STORE_APP_FAILED
+             ? (tokens[item].children != 18 || failure < 0 ||
+                !parse_failure_reason(document, &tokens[failure],
+                                      &app->failure_reason))
+             : (tokens[item].children != 16 || failure >= 0)))
         return false;
 
     char previous[32] = {0};
@@ -742,6 +769,41 @@ static int parse_accepted(const char *response, size_t response_length,
             !valid_version(version))
             return CP0_STORE_RESULT_ERROR;
     }
+    return CP0_STORE_RESULT_OK;
+}
+
+static const char *control_action_name(enum cp0_store_control_action action)
+{
+    static const char *names[] = {"pause", "resume", "cancel"};
+    return action <= CP0_STORE_CONTROL_CANCEL ? names[action] : NULL;
+}
+
+static int parse_control_accepted(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *expected_app_id, enum cp0_store_control_action expected_action)
+{
+    struct cp0_json_token tokens[64];
+    size_t token_count;
+    int data;
+    int result = parse_envelope(response, response_length, request_id, tokens,
+                                64, &token_count, &data);
+    const char *action_name = control_action_name(expected_action);
+    if (result != CP0_STORE_RESULT_OK || action_name == NULL)
+        return result == CP0_STORE_RESULT_OK ? CP0_STORE_RESULT_ERROR : result;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int action = cp0_json_object_get(response, tokens, token_count, data,
+                                     "action");
+    char app_id[CP0_STORE_APP_ID_BYTES];
+    char version[CP0_STORE_VERSION_BYTES];
+    if (tokens[data].children != 8 || kind < 0 || action < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind],
+                                "operation-accepted") ||
+        !cp0_json_string_equals(response, &tokens[action], action_name) ||
+        !copy_member(response, tokens, token_count, data, "app_id", app_id,
+                     sizeof(app_id)) || strcmp(app_id, expected_app_id) != 0 ||
+        !copy_member(response, tokens, token_count, data, "version", version,
+                     sizeof(version)) || !valid_version(version))
+        return CP0_STORE_RESULT_ERROR;
     return CP0_STORE_RESULT_OK;
 }
 
@@ -1126,6 +1188,14 @@ int cp0_store_test_parse_install_response(const char *response,
                           "install-accepted", app_id);
 }
 
+int cp0_store_test_parse_control_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *app_id, enum cp0_store_control_action action)
+{
+    return parse_control_accepted(response, response_length, request_id, app_id,
+                                  action);
+}
+
 int cp0_store_test_parse_search_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *query, uint16_t offset, uint8_t limit,
@@ -1267,6 +1337,30 @@ int cp0_store_install(const char *app_id)
         return CP0_STORE_RESULT_ERROR;
     return parse_accepted(response, response_length, request_id,
                           "install-accepted", app_id);
+}
+
+int cp0_store_control(const char *app_id,
+                      enum cp0_store_control_action action)
+{
+    char request[384];
+    char response[2048];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    const char *action_name = control_action_name(action);
+
+    if (!valid_app_id(app_id) || action_name == NULL)
+        return CP0_STORE_RESULT_ERROR;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"control\",\"app_id\":\"%s\",\"action\":\"%s\"}}\n",
+        (unsigned long long)request_id, app_id, action_name);
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 1000, NULL) != 0)
+        return CP0_STORE_RESULT_ERROR;
+    return parse_control_accepted(response, response_length, request_id, app_id,
+                                  action);
 }
 
 int cp0_store_get_details(const char *app_id, const char *expected_version,

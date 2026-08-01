@@ -106,6 +106,12 @@ fn main() -> ExitCode {
                 Err("store install application ID is invalid".into())
             }
         }
+        [store_command, command, app_id]
+            if store_command == "store"
+                && matches!(command.as_str(), "pause" | "resume" | "cancel") =>
+        {
+            parse_store_control(command, app_id).and_then(store_client::send)
+        }
         [command, input] if command == "install" => install_package(input),
         [command, input, flag, device] if command == "install" && flag == "--device" => {
             remote::install(input, device)
@@ -213,7 +219,7 @@ fn main() -> ExitCode {
             })
         }
         _ => Err(
-            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | store validate <developer-signed.capp> <store/listing.json> | store submit <developer-signed.capp> <store/listing.json> | store publish <submissions-dir> <reviews-dir> <output-dir> <base-url> <sequence> <published-unix> <expires-unix> <store-secret-key> | store list | store search <query> [offset limit] | store refresh | store install <app-id> | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | device status | device <developer|recovery> <on|off> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
+            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | store validate <developer-signed.capp> <store/listing.json> | store submit <developer-signed.capp> <store/listing.json> | store publish <submissions-dir> <reviews-dir> <output-dir> <base-url> <sequence> <published-unix> <expires-unix> <store-secret-key> | store list | store search <query> [offset limit] | store refresh | store install|pause|resume|cancel <app-id> | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | device status | device <developer|recovery> <on|off> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
                 .into(),
         ),
     };
@@ -225,6 +231,25 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn parse_store_control(
+    command: &str,
+    app_id: &str,
+) -> Result<cp0_store_protocol::StoreCommand, String> {
+    if !cp0_manifest::is_valid_app_id(app_id) {
+        return Err("store control application ID is invalid".into());
+    }
+    let action = match command {
+        "pause" => cp0_store_protocol::StoreControlAction::Pause,
+        "resume" => cp0_store_protocol::StoreControlAction::Resume,
+        "cancel" => cp0_store_protocol::StoreControlAction::Cancel,
+        _ => return Err("store control action is invalid".into()),
+    };
+    Ok(cp0_store_protocol::StoreCommand::Control {
+        app_id: app_id.into(),
+        action,
+    })
 }
 
 fn parse_store_search(
@@ -470,5 +495,24 @@ mod tests {
         assert!(parse_store_search("Notes", Some("65"), Some("1")).is_err());
         assert!(parse_store_search("Notes", Some("0"), Some("9")).is_err());
         assert!(parse_store_search("Notes", Some("0"), None).is_err());
+    }
+
+    #[test]
+    fn cli_store_control_parser_is_closed() {
+        for (name, action) in [
+            ("pause", cp0_store_protocol::StoreControlAction::Pause),
+            ("resume", cp0_store_protocol::StoreControlAction::Resume),
+            ("cancel", cp0_store_protocol::StoreControlAction::Cancel),
+        ] {
+            assert_eq!(
+                parse_store_control(name, "dev.cardputerzero.example"),
+                Ok(cp0_store_protocol::StoreCommand::Control {
+                    app_id: "dev.cardputerzero.example".into(),
+                    action,
+                })
+            );
+        }
+        assert!(parse_store_control("stop", "dev.cardputerzero.example").is_err());
+        assert!(parse_store_control("pause", "invalid").is_err());
     }
 }

@@ -135,6 +135,10 @@ pub enum StoreCommand {
     Install {
         app_id: String,
     },
+    Control {
+        app_id: String,
+        action: StoreControlAction,
+    },
     Details {
         app_id: String,
     },
@@ -142,6 +146,14 @@ pub enum StoreCommand {
         app_id: String,
         media: StoreMediaSelector,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StoreControlAction {
+    Pause,
+    Resume,
+    Cancel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,6 +208,11 @@ pub enum StoreResponseData {
         app_id: String,
         version: String,
     },
+    OperationAccepted {
+        app_id: String,
+        version: String,
+        action: StoreControlAction,
+    },
     AppDetails {
         app_id: String,
         version: String,
@@ -244,6 +261,8 @@ pub struct StoreAppSummary {
     pub permissions: Vec<Permission>,
     pub state: StoreAppState,
     pub progress_percent: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<StoreFailureReason>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -252,9 +271,22 @@ pub enum StoreAppState {
     Available,
     Queued,
     Downloading,
+    Paused,
     Installing,
     Installed,
+    Canceled,
     Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StoreFailureReason {
+    Network,
+    Storage,
+    Verification,
+    Installer,
+    CatalogChanged,
+    Internal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -266,6 +298,7 @@ pub enum StoreErrorCode {
     Unavailable,
     NotFound,
     Busy,
+    InvalidState,
     Untrusted,
     ResourceExhausted,
     Internal,
@@ -620,6 +653,7 @@ impl StoreRequest {
                 validate_search_page(*offset, *limit)?;
             }
             StoreCommand::Install { app_id }
+            | StoreCommand::Control { app_id, .. }
             | StoreCommand::Details { app_id }
             | StoreCommand::Media { app_id, .. } => {
                 if !cp0_manifest::is_valid_app_id(app_id) {
@@ -781,7 +815,10 @@ impl StoreResponseData {
                 Ok(())
             }
             Self::RefreshAccepted => Ok(()),
-            Self::InstallAccepted { app_id, version } => {
+            Self::InstallAccepted { app_id, version }
+            | Self::OperationAccepted {
+                app_id, version, ..
+            } => {
                 if !cp0_manifest::is_valid_app_id(app_id)
                     || !cp0_manifest::is_valid_app_version(version)
                 {
@@ -967,15 +1004,21 @@ impl StoreAppSummary {
             previous = Some(name);
         }
         let valid_progress = match self.state {
-            StoreAppState::Available | StoreAppState::Queued | StoreAppState::Failed => {
-                self.progress_percent == 0
-            }
-            StoreAppState::Downloading => self.progress_percent <= 100,
+            StoreAppState::Available
+            | StoreAppState::Queued
+            | StoreAppState::Canceled
+            | StoreAppState::Failed => self.progress_percent == 0,
+            StoreAppState::Downloading | StoreAppState::Paused => self.progress_percent <= 100,
             StoreAppState::Installing | StoreAppState::Installed => self.progress_percent == 100,
         };
         if !valid_progress {
             return Err(StoreProtocolError::Invalid(
                 "store response progress is inconsistent with application state".into(),
+            ));
+        }
+        if (self.state == StoreAppState::Failed) != self.failure_reason.is_some() {
+            return Err(StoreProtocolError::Invalid(
+                "store response failure reason is inconsistent with application state".into(),
             ));
         }
         Ok(())
@@ -1353,6 +1396,7 @@ mod tests {
             permissions: app.permissions.clone(),
             state: StoreAppState::Available,
             progress_percent: 0,
+            failure_reason: None,
         }
     }
 
@@ -1687,6 +1731,80 @@ mod tests {
             *width = 319;
         }
         assert!(invalid_media.validate().is_err());
+    }
+
+    #[test]
+    fn validates_bounded_download_controls_and_failure_reasons() {
+        let request = StoreRequest {
+            protocol_version: STORE_PROTOCOL_VERSION,
+            request_id: 44,
+            command: StoreCommand::Control {
+                app_id: "dev.cardputerzero.example".into(),
+                action: StoreControlAction::Pause,
+            },
+        };
+        let mut encoded = Vec::new();
+        write_request(&mut encoded, &request).unwrap();
+        assert_eq!(
+            read_request(&mut encoded.as_slice()).unwrap(),
+            Some(request)
+        );
+
+        let accepted = StoreResponse::success(
+            44,
+            StoreResponseData::OperationAccepted {
+                app_id: "dev.cardputerzero.example".into(),
+                version: "1.2.3".into(),
+                action: StoreControlAction::Pause,
+            },
+        );
+        write_response(&mut Vec::new(), &accepted).unwrap();
+
+        let mut failed = response_app();
+        failed.state = StoreAppState::Failed;
+        failed.failure_reason = Some(StoreFailureReason::Network);
+        let failed_response = StoreResponse::success(
+            45,
+            StoreResponseData::Catalog {
+                sequence: 1,
+                expires_unix_seconds: 1_900_000_000,
+                stale: false,
+                apps: vec![failed.clone()],
+            },
+        );
+        write_response(&mut Vec::new(), &failed_response).unwrap();
+
+        failed.state = StoreAppState::Paused;
+        failed.progress_percent = 42;
+        assert!(
+            StoreResponse::success(
+                46,
+                StoreResponseData::Catalog {
+                    sequence: 1,
+                    expires_unix_seconds: 1_900_000_000,
+                    stale: false,
+                    apps: vec![failed],
+                },
+            )
+            .validate()
+            .is_err()
+        );
+
+        let mut missing_reason = response_app();
+        missing_reason.state = StoreAppState::Failed;
+        assert!(
+            StoreResponse::success(
+                47,
+                StoreResponseData::Catalog {
+                    sequence: 1,
+                    expires_unix_seconds: 1_900_000_000,
+                    stale: false,
+                    apps: vec![missing_reason],
+                },
+            )
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]

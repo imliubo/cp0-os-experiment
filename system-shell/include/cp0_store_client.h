@@ -32,9 +32,27 @@ enum cp0_store_app_state {
     CP0_STORE_APP_AVAILABLE,
     CP0_STORE_APP_QUEUED,
     CP0_STORE_APP_DOWNLOADING,
+    CP0_STORE_APP_PAUSED,
     CP0_STORE_APP_INSTALLING,
     CP0_STORE_APP_INSTALLED,
+    CP0_STORE_APP_CANCELED,
     CP0_STORE_APP_FAILED,
+};
+
+enum cp0_store_failure_reason {
+    CP0_STORE_FAILURE_NONE,
+    CP0_STORE_FAILURE_NETWORK,
+    CP0_STORE_FAILURE_STORAGE,
+    CP0_STORE_FAILURE_VERIFICATION,
+    CP0_STORE_FAILURE_INSTALLER,
+    CP0_STORE_FAILURE_CATALOG_CHANGED,
+    CP0_STORE_FAILURE_INTERNAL,
+};
+
+enum cp0_store_control_action {
+    CP0_STORE_CONTROL_PAUSE,
+    CP0_STORE_CONTROL_RESUME,
+    CP0_STORE_CONTROL_CANCEL,
 };
 
 enum cp0_store_permission {
@@ -53,6 +71,7 @@ struct cp0_store_app_summary {
     uint16_t permissions;
     uint8_t progress_percent;
     enum cp0_store_app_state state;
+    enum cp0_store_failure_reason failure_reason;
     char app_id[CP0_STORE_APP_ID_BYTES];
     char name[CP0_STORE_APP_NAME_BYTES];
     char version[CP0_STORE_VERSION_BYTES];
@@ -125,6 +144,8 @@ int cp0_store_search(const char *query, uint16_t offset, uint8_t limit,
                      struct cp0_store_search_results *results);
 int cp0_store_refresh(void);
 int cp0_store_install(const char *app_id);
+int cp0_store_control(const char *app_id,
+                      enum cp0_store_control_action action);
 int cp0_store_get_details(const char *app_id, const char *expected_version,
                           struct cp0_store_app_details *details);
 int cp0_store_get_icon(const char *app_id, const char *expected_version,

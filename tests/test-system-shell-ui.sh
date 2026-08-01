@@ -50,7 +50,7 @@ mkdir -p "$snapshot_dir"
     -o "$work_dir/system-shell-system-info-test"
 "$work_dir/system-shell-system-info-test"
 
-snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm store-description.ppm store-detail.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
+snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm store-description.ppm store-detail.ppm store-failed.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
 if command -v sha256sum >/dev/null 2>&1; then
     actual=$(cd "$snapshot_dir" && sha256sum $snapshot_files)
 else
@@ -88,7 +88,8 @@ f10e4e270371f6eaab38e4125f37e40f1fb9a17c3b5ef5473425e7b057fd3be4  settings-sound
 fb1ac2961e301b90c29719745d313c17910f4c938a7a03992abb4fc1e225e3ef  settings-system.ppm
 cc4e5bbf3f6dee26b0b6514661481c9217abe354a1dfa3459eac8cc7c7b27340  settings.ppm
 9fa64ab85ba9544597115a8c28cb48dd5b002b0a974e8148d9e808390fa71af6  store-description.ppm
-908965f1f5630974c38e6776c406cbfd9b5af0b5fa4dfe0b286e5d6ee3846125  store-detail.ppm
+151b8f050097327326c4b0f6dcc244425dd2ed84cd0f478778932a417a9f502a  store-detail.ppm
+0d206108475fe5ed7b3e5bb59f500b3926f5c19c02359962e9aa145c3fdde3f1  store-failed.ppm
 f861273f2cff17f44827f8bc1a4a64f4e0bcd9e8d0a95645e3db98ab31f3fc3a  store-permissions.ppm
 591fdc97fcd426f64f2b4d398fb39689ce1b9dd4999a4b445fa5d41ee4948e70  store-release-notes.ppm
 0c97e5b6920fbf4e1e996e664fed17fc324f1070bfb3cc7376bf89d6ffd26f7b  store-screenshot.ppm
@@ -97,7 +98,7 @@ af89fb4cc3c6ef1271a16f426ca466bd61f356b3341f93d8986b4427091545e3  store-search-e
 68e125d3d5654ebc8c69820403b6d5bcc14862856eac0b69228920d63a213b0a  store-search-none.ppm
 47628325924e59aa26ab5bbd6f7277cba302b32f05de959d6150bf5c9dd460ac  store-search-recent.ppm
 db5707db2c655a8a5c890156eb604ee4792111f86bdb28c3ccb6012ed5bf93b6  store-search.ppm
-13d88acffe0adbf9e0332db078e5c1881592f1954ad6ebed83556b98392608fc  store-updates.ppm
+89385a4b8ed12dcfc07aa307bc37f14bdc35fa5e80b9213e6c68e9173a3ee607  store-updates.ppm
 c83723b50faed6fcc65f8e93a4994895691c582f8cc63301f2946d2b1e1a4684  store.ppm
 c8f03c8a917c9dfb0cecd57f32df1e6e11d913a75480e5ca11c2a35b04b0d62e  system-brightness.ppm
 34e659c664795fb8b2cef00fd6fd168c3fdf6e845421342b29cc41dc97b88558  system-help.ppm
