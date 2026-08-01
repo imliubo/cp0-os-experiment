@@ -44,6 +44,9 @@ int cp0_store_test_parse_search_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *query, uint16_t offset, uint8_t limit,
     struct cp0_store_search_results *results);
+int cp0_store_test_parse_browse_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    uint16_t offset, uint8_t limit, struct cp0_store_browse_results *results);
 int cp0_store_test_parse_details_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *app_id, const char *version,
@@ -83,6 +86,12 @@ int cp0_store_test_decode_png_descriptor(
     ",\"next_offset\":" NEXT ",\"sequence\":4,"                           \
     "\"expires_unix_seconds\":200,\"stale\":" STALE ",\"apps\":["
 #define SEARCH_END "]}}}"
+#define BROWSE_START(ID, OFFSET, LIMIT, TOTAL, NEXT, STALE)                    \
+    ENVELOPE_START(ID)                                                        \
+    "\"kind\":\"browse-results\",\"offset\":" OFFSET ",\"limit\":" LIMIT \
+    ",\"total\":" TOTAL ",\"next_offset\":" NEXT ",\"sequence\":4,"       \
+    "\"expires_unix_seconds\":200,\"stale\":" STALE ",\"apps\":["
+#define BROWSE_END "]}}}"
 
 static void send_descriptors(int socket_descriptor, const int *descriptors,
                              size_t descriptor_count)
@@ -596,6 +605,33 @@ int main(void)
     assert(cp0_store_test_parse_search_response(
                maximum_search_offset, strlen(maximum_search_offset), 240,
                "app", 1025, 8, &search) == CP0_STORE_RESULT_ERROR);
+
+    struct cp0_store_browse_results browse;
+    static const char valid_browse[] =
+        BROWSE_START("241", "8", "2", "11", "10", "false")
+        APP("alpha", "[]", "available", "0") ","
+        APP("beta", "[]", "installed", "100") BROWSE_END;
+    assert(cp0_store_test_parse_browse_response(
+               valid_browse, strlen(valid_browse), 241, 8, 2, &browse) ==
+           CP0_STORE_RESULT_OK);
+    assert(browse.offset == 8 && browse.count == 2 && browse.total == 11 &&
+           browse.has_next && browse.next_offset == 10 && !browse.stale);
+    static const char unsorted_browse[] =
+        BROWSE_START("242", "0", "2", "2", "null", "false")
+        APP("beta", "[]", "available", "0") ","
+        APP("alpha", "[]", "available", "0") BROWSE_END;
+    assert(cp0_store_test_parse_browse_response(
+               unsorted_browse, strlen(unsorted_browse), 242, 0, 2,
+               &browse) == CP0_STORE_RESULT_ERROR);
+    static const char categorized_browse[] =
+        ENVELOPE_START("243")
+        "\"kind\":\"browse-results\",\"category\":\"utilities\","
+        "\"offset\":0,\"limit\":1,\"total\":1,\"next_offset\":null,"
+        "\"sequence\":4,\"expires_unix_seconds\":200,\"stale\":false,"
+        "\"apps\":[" APP("alpha", "[]", "available", "0") "]}}}";
+    assert(cp0_store_test_parse_browse_response(
+               categorized_browse, strlen(categorized_browse), 243, 0, 1,
+               &browse) == CP0_STORE_RESULT_ERROR);
 
     struct cp0_store_app_details details;
     static const char valid_details[] =

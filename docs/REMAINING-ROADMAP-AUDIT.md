@@ -23,7 +23,7 @@
   邀请/移除、Portal 会话、Review 生产 SSO、生产对象存储/GC、动态
   恶意样本和生产 HSM/key ceremony 尚未实现；隔离 Scanner、文件 key Publisher/Catalog
   Builder 与完整前缀 transparency log 的 outbox/租约、签名、失败恢复和原子结果纵向切片已完成；
-- 设备端 Today/Apps/Search/Updates、分页搜索、Catalog v3 富媒体详情、下载/更新队列、
+- 设备端 Today/Apps/Search/Updates、Apps/Search 1024 项有界分页、Catalog v3 富媒体详情、下载/更新队列、
   中断恢复和默认关闭的自动更新均已实现；Catalog v4 只投影 approved Release 的 Today
   editorial，默认关闭且无设备身份的周聚合指标已完成设备与 PostgreSQL 纵向切片；
 - 内容治理 S8C 已完成非生产 PostgreSQL/HTTP 纵向切片：匿名入口只接受已发布精确版本和固定
@@ -33,6 +33,8 @@
 - 后端可从 approved Release 自动发布，`cp0ctl` OAuth 已接入；Portal 的账户、会话和团队管理
   仍未形成完整自助流程；
 - 当前 Store 安全底座可以复用，详细阶段见 `STORE-ROADMAP.md`。
+- S6E 的最后一个设备 UI 缺口已关闭：Store Apps 不再读取只覆盖前 64 项的 legacy `list`，
+  改为严格 `browse(all)` 8 项分页；Apps/Search 共享页缓存后 `cp0_ui` 为 60,624 bytes。
 
 ### 产品安全与发布工程
 
@@ -88,5 +90,5 @@
 | Phase 2 | 核心窗口/可信 UI/输入及扩展系统体验本地实现已完成 | 24 小时证据和最终真机部署 |
 | Phase 3 | Runtime、sandbox 和能力 broker 已实现 | 音频/GPIO/存储/相机/LoRa 的对应真机门禁 |
 | Phase 4 | SDK 1.0、CLI、模拟器和 DevKit 已实现 | 后续 Store submit CLI 属 Store 产品阶段 |
-| Phase 5 | 双签名、原子安装、Store 设备体验、OAuth、Team 角色管理、隔离扫描、独立双审、Review Console、Catalog v4/Today、自动更新、匿名周聚合和非生产内容治理纵向切片已实现 | Identity 登录/邀请/会话、Review 生产 SSO、生产 HSM、正式治理政策/执行、运营/灾备演练与六步真机证据 |
+| Phase 5 | 双签名、原子安装、Store 设备体验、1024 项 Apps/Search 分页、OAuth、Team 角色管理、隔离扫描、独立双审、Review Console、Catalog v4/Today、自动更新、匿名周聚合和非生产内容治理纵向切片已实现 | Identity 登录/邀请/会话、Review 生产 SSO、生产 HSM、正式治理政策/执行、生产运营演练与六步真机证据 |
 | Phase 6 | profile、验证器和安全工具已实现 | 性能/功耗、烧录介质、A/B 硬件和第三方评审 |

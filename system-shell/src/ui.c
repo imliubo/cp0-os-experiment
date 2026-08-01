@@ -667,7 +667,7 @@ static unsigned int store_section_count(const struct cp0_ui *ui)
         }
         return ui->store_count == 0 ? 0 : 1;
     case CP0_UI_STORE_APPS:
-        return ui->store_count;
+        return ui->store_browse_count;
     case CP0_UI_STORE_SEARCH:
         return ui->store_search_count;
     case CP0_UI_STORE_UPDATES:
@@ -690,8 +690,11 @@ static const struct cp0_ui_store_app *store_section_app(
         }
         return index == 0 ? &ui->store_today_featured : NULL;
     }
+    if (ui->store_section == CP0_UI_STORE_APPS)
+        return index < ui->store_browse_count ? &ui->store_page_apps[index]
+                                              : NULL;
     if (ui->store_section == CP0_UI_STORE_SEARCH)
-        return index < ui->store_search_count ? &ui->store_search_apps[index]
+        return index < ui->store_search_count ? &ui->store_page_apps[index]
                                               : NULL;
     if (ui->store_section == CP0_UI_STORE_UPDATES)
         return store_update_at(ui, index);
@@ -705,6 +708,8 @@ static unsigned int store_section_selected(const struct cp0_ui *ui)
         return ui->store_today_collection_open
                    ? ui->store_today_collection_selected
                    : ui->store_today_selected;
+    if (ui->store_section == CP0_UI_STORE_APPS)
+        return ui->store_browse_selected;
     return ui->store_section == CP0_UI_STORE_SEARCH
                ? ui->store_search_selected
                : ui->store_selected;
@@ -799,12 +804,15 @@ static void draw_store_update_command(struct canvas *canvas,
 
 static void draw_store_list(struct canvas *canvas, const struct cp0_ui *ui)
 {
-    if (ui->store_status != CP0_UI_STORE_READY) {
+    enum cp0_ui_store_status status =
+        ui->store_section == CP0_UI_STORE_APPS ? ui->store_browse_status
+                                              : ui->store_status;
+    if (status != CP0_UI_STORE_READY) {
         static const char *messages[] = {"LOADING CATALOG", "",
                                          "NOT CONFIGURED",
                                          "STORE UNAVAILABLE"};
-        draw_store_message(canvas, messages[ui->store_status],
-                           ui->store_status == CP0_UI_STORE_UNAVAILABLE
+        draw_store_message(canvas, messages[status],
+                           status == CP0_UI_STORE_UNAVAILABLE
                                ? COLOR_RED
                                : COLOR_YELLOW);
         return;
@@ -872,9 +880,20 @@ static void draw_store_list(struct canvas *canvas, const struct cp0_ui *ui)
     } else {
         draw_store_rows(canvas, ui, 44, 4);
     }
-    if (ui->store_catalog_stale)
+    if (ui->store_section == CP0_UI_STORE_APPS && ui->store_browse_count > 0) {
+        char page[24];
+        snprintf(page, sizeof(page), "%u-%u / %u",
+                 (unsigned int)ui->store_browse_offset + 1U,
+                 (unsigned int)ui->store_browse_offset +
+                     ui->store_browse_count,
+                 (unsigned int)ui->store_browse_total);
+        draw_text(canvas, 236, 159, page, 1, COLOR_MUTED);
+    }
+    if ((ui->store_section == CP0_UI_STORE_APPS && ui->store_browse_stale) ||
+        (ui->store_section != CP0_UI_STORE_APPS && ui->store_catalog_stale))
         draw_text(canvas, 8, 159, "STALE", 1, COLOR_YELLOW);
-    if (ui->store_list_truncated)
+    if (ui->store_list_truncated &&
+        ui->store_section != CP0_UI_STORE_APPS)
         draw_text(canvas, 284, 159, "32+", 1, COLOR_YELLOW);
 }
 
@@ -1960,6 +1979,7 @@ void cp0_ui_init(struct cp0_ui *ui)
     memset(ui, 0, sizeof(*ui));
     ui->screen = CP0_UI_HOME;
     ui->store_status = CP0_UI_STORE_LOADING;
+    ui->store_browse_status = CP0_UI_STORE_LOADING;
     ui->store_search_status = CP0_UI_STORE_LOADING;
     ui->battery_percent = -1;
     ui->temperature_millicelsius = -1;
@@ -2502,6 +2522,9 @@ void cp0_ui_set_store_status(struct cp0_ui *ui,
     if (status != CP0_UI_STORE_READY) {
         ui->store_detail = false;
         ui->store_update_all_selected = false;
+        ui->store_browse_status = status;
+        ui->store_browse_count = 0;
+        ui->store_browse_selected = 0;
     }
 }
 
@@ -2696,6 +2719,65 @@ void cp0_ui_set_store_search_status(struct cp0_ui *ui,
     }
 }
 
+void cp0_ui_set_store_browse_status(struct cp0_ui *ui,
+                                    enum cp0_ui_store_status status)
+{
+    if (ui == NULL || status > CP0_UI_STORE_UNAVAILABLE)
+        return;
+    ui->store_browse_status = status;
+    if (status != CP0_UI_STORE_READY) {
+        ui->store_browse_count = 0;
+        ui->store_browse_selected = 0;
+        ui->store_detail = false;
+    }
+}
+
+void cp0_ui_sync_store_browse(
+    struct cp0_ui *ui, uint16_t offset, uint16_t total, bool has_next,
+    uint16_t next_offset, const struct cp0_ui_store_catalog_app *apps,
+    size_t app_count, bool stale)
+{
+    char selected_id[CP0_UI_APP_ID_MAX + 1] = {0};
+    uint16_t expected_next = (uint16_t)(offset + app_count);
+
+    if (ui == NULL || (apps == NULL && app_count > 0) ||
+        app_count > CP0_UI_STORE_SEARCH_PAGE_MAX ||
+        total > CP0_UI_STORE_CATALOG_MAX ||
+        offset != ui->store_browse_offset || offset > total ||
+        app_count != (size_t)((total - offset) < CP0_UI_STORE_SEARCH_PAGE_MAX
+                                  ? (total - offset)
+                                  : CP0_UI_STORE_SEARCH_PAGE_MAX) ||
+        has_next != (expected_next < total) ||
+        (has_next && next_offset != expected_next))
+        return;
+    if (ui->store_browse_selected < ui->store_browse_count)
+        copy_optional_text(selected_id, sizeof(selected_id),
+                           ui->store_page_apps[ui->store_browse_selected]
+                               .app_id);
+    memset(ui->store_page_apps, 0, sizeof(ui->store_page_apps));
+    ui->store_browse_count = 0;
+    ui->store_search_count = 0;
+    for (size_t index = 0; index < app_count; index++) {
+        struct cp0_ui_store_app app;
+        if (!copy_store_app(&app, &apps[index]))
+            return;
+        ui->store_page_apps[ui->store_browse_count++] = app;
+    }
+    ui->store_browse_total = total;
+    ui->store_browse_has_next = has_next;
+    ui->store_browse_next_offset = has_next ? next_offset : 0;
+    ui->store_browse_status = CP0_UI_STORE_READY;
+    ui->store_browse_stale = stale;
+    ui->store_browse_selected = 0;
+    for (unsigned int index = 0; index < ui->store_browse_count; index++) {
+        if (strcmp(ui->store_page_apps[index].app_id, selected_id) == 0) {
+            ui->store_browse_selected = index;
+            break;
+        }
+    }
+    reconcile_store_detail_identity(ui);
+}
+
 void cp0_ui_sync_store_search(
     struct cp0_ui *ui, const char *query, uint16_t offset, uint16_t total,
     bool has_next, uint16_t next_offset,
@@ -2717,15 +2799,16 @@ void cp0_ui_sync_store_search(
         return;
     if (ui->store_search_selected < ui->store_search_count)
         copy_optional_text(selected_id, sizeof(selected_id),
-                           ui->store_search_apps[ui->store_search_selected]
+                           ui->store_page_apps[ui->store_search_selected]
                                .app_id);
-    memset(ui->store_search_apps, 0, sizeof(ui->store_search_apps));
+    memset(ui->store_page_apps, 0, sizeof(ui->store_page_apps));
+    ui->store_browse_count = 0;
     ui->store_search_count = 0;
     for (size_t index = 0; index < app_count; index++) {
         struct cp0_ui_store_app app;
         if (!copy_store_app(&app, &apps[index]))
             return;
-        ui->store_search_apps[ui->store_search_count++] = app;
+        ui->store_page_apps[ui->store_search_count++] = app;
     }
     ui->store_search_total = total;
     ui->store_search_has_next = has_next;
@@ -2734,7 +2817,7 @@ void cp0_ui_sync_store_search(
     ui->store_search_stale = stale;
     ui->store_search_selected = 0;
     for (unsigned int index = 0; index < ui->store_search_count; index++) {
-        if (strcmp(ui->store_search_apps[index].app_id, selected_id) == 0) {
+        if (strcmp(ui->store_page_apps[index].app_id, selected_id) == 0) {
             ui->store_search_selected = index;
             break;
         }
@@ -2761,12 +2844,15 @@ void cp0_ui_set_store_app_state(struct cp0_ui *ui, const char *app_id,
             state == CP0_UI_STORE_FAILED ? CP0_UI_STORE_FAILURE_INTERNAL
                                          : CP0_UI_STORE_FAILURE_NONE;
     }
-    for (unsigned int search = 0; search < ui->store_search_count; search++) {
-        if (strcmp(ui->store_search_apps[search].app_id, app_id) == 0) {
-            ui->store_search_apps[search].state = state;
-            ui->store_search_apps[search].operation_state = state;
-            ui->store_search_apps[search].progress_percent = progress_percent;
-            ui->store_search_apps[search].failure_reason =
+    unsigned int page_count = ui->store_section == CP0_UI_STORE_APPS
+                                  ? ui->store_browse_count
+                                  : ui->store_search_count;
+    for (unsigned int page = 0; page < page_count; page++) {
+        if (strcmp(ui->store_page_apps[page].app_id, app_id) == 0) {
+            ui->store_page_apps[page].state = state;
+            ui->store_page_apps[page].operation_state = state;
+            ui->store_page_apps[page].progress_percent = progress_percent;
+            ui->store_page_apps[page].failure_reason =
                 state == CP0_UI_STORE_FAILED ? CP0_UI_STORE_FAILURE_INTERNAL
                                              : CP0_UI_STORE_FAILURE_NONE;
         }
@@ -3085,6 +3171,11 @@ const char *cp0_ui_store_search_query(const struct cp0_ui *ui)
 uint16_t cp0_ui_store_search_offset(const struct cp0_ui *ui)
 {
     return ui == NULL ? 0 : ui->store_search_offset;
+}
+
+uint16_t cp0_ui_store_browse_offset(const struct cp0_ui *ui)
+{
+    return ui == NULL ? 0 : ui->store_browse_offset;
 }
 
 static void remember_store_query(struct cp0_ui *ui)
@@ -3681,7 +3772,9 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                        action == CP0_UI_ACCEPT) {
                 bool stale = ui->store_section == CP0_UI_STORE_SEARCH
                                  ? ui->store_search_stale
-                                 : ui->store_catalog_stale;
+                                 : (ui->store_section == CP0_UI_STORE_APPS
+                                        ? ui->store_browse_stale
+                                        : ui->store_catalog_stale);
                 if (ui->store_operation_action_selected == 1 &&
                     store_operation_has_cancel(state))
                     return CP0_UI_EVENT_STORE_CANCEL;
@@ -3705,9 +3798,15 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             ui->store_section--;
             ui->store_update_all_selected = false;
             ui->store_selected = 0;
+            ui->store_browse_selected = 0;
             ui->store_search_selected = 0;
             ui->store_search_input =
                 ui->store_section == CP0_UI_STORE_SEARCH;
+            if (ui->store_section == CP0_UI_STORE_APPS) {
+                ui->store_browse_count = 0;
+                ui->store_browse_status = CP0_UI_STORE_LOADING;
+                return CP0_UI_EVENT_STORE_BROWSE;
+            }
             return CP0_UI_EVENT_NONE;
         }
         if (action == CP0_UI_RIGHT && !ui->store_search_input &&
@@ -3715,12 +3814,18 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             ui->store_section < CP0_UI_STORE_UPDATES) {
             ui->store_section++;
             ui->store_selected = 0;
+            ui->store_browse_selected = 0;
             ui->store_search_selected = 0;
             ui->store_search_input =
                 ui->store_section == CP0_UI_STORE_SEARCH;
             ui->store_update_all_selected =
                 ui->store_section == CP0_UI_STORE_UPDATES &&
                 store_update_batch_count(ui) > 0;
+            if (ui->store_section == CP0_UI_STORE_APPS) {
+                ui->store_browse_count = 0;
+                ui->store_browse_status = CP0_UI_STORE_LOADING;
+                return CP0_UI_EVENT_STORE_BROWSE;
+            }
             return CP0_UI_EVENT_NONE;
         }
         if (ui->store_section == CP0_UI_STORE_SEARCH) {
@@ -3787,6 +3892,43 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             } else if (action == CP0_UI_ACCEPT &&
                        ui->store_search_count > 0) {
                 remember_store_query(ui);
+                begin_store_detail(ui);
+                return CP0_UI_EVENT_STORE_DETAILS;
+            }
+            return CP0_UI_EVENT_NONE;
+        }
+        if (ui->store_section == CP0_UI_STORE_APPS) {
+            if (ui->store_browse_status != CP0_UI_STORE_READY) {
+                if (action != CP0_UI_ACCEPT)
+                    return CP0_UI_EVENT_NONE;
+                return ui->store_browse_status == CP0_UI_STORE_UNCONFIGURED
+                           ? CP0_UI_EVENT_STORE_REFRESH
+                           : CP0_UI_EVENT_STORE_BROWSE;
+            }
+            if (action == CP0_UI_UP && ui->store_browse_selected > 0) {
+                ui->store_browse_selected--;
+            } else if (action == CP0_UI_UP && ui->store_browse_offset > 0) {
+                ui->store_browse_offset =
+                    ui->store_browse_offset > CP0_UI_STORE_SEARCH_PAGE_MAX
+                        ? (uint16_t)(ui->store_browse_offset -
+                                     CP0_UI_STORE_SEARCH_PAGE_MAX)
+                        : 0;
+                ui->store_browse_status = CP0_UI_STORE_LOADING;
+                ui->store_browse_count = 0;
+                return CP0_UI_EVENT_STORE_BROWSE;
+            } else if (action == CP0_UI_DOWN &&
+                       ui->store_browse_selected + 1 <
+                           ui->store_browse_count) {
+                ui->store_browse_selected++;
+            } else if (action == CP0_UI_DOWN &&
+                       ui->store_browse_has_next) {
+                ui->store_browse_offset = ui->store_browse_next_offset;
+                ui->store_browse_status = CP0_UI_STORE_LOADING;
+                ui->store_browse_count = 0;
+                ui->store_browse_selected = 0;
+                return CP0_UI_EVENT_STORE_BROWSE;
+            } else if (action == CP0_UI_ACCEPT &&
+                       ui->store_browse_count > 0) {
                 begin_store_detail(ui);
                 return CP0_UI_EVENT_STORE_DETAILS;
             }

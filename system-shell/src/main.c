@@ -384,6 +384,42 @@ static void poll_store_today(struct shell *shell, uint64_t expected_sequence)
     cp0_ui_sync_store_today(&shell->ui, &editorial);
 }
 
+static void poll_store_browse(struct shell *shell)
+{
+    struct cp0_store_browse_results results;
+    struct cp0_ui_store_catalog_app apps[CP0_STORE_BROWSE_MAX_APPS];
+    uint16_t offset = cp0_ui_store_browse_offset(&shell->ui);
+    int result = cp0_store_browse(offset, CP0_STORE_BROWSE_MAX_APPS, &results);
+
+    if (result == CP0_STORE_RESULT_UNCONFIGURED) {
+        cp0_ui_set_store_browse_status(&shell->ui,
+                                       CP0_UI_STORE_UNCONFIGURED);
+        return;
+    }
+    if (result != CP0_STORE_RESULT_OK) {
+        if (result != CP0_STORE_RESULT_BUSY)
+            cp0_ui_set_store_browse_status(&shell->ui,
+                                           CP0_UI_STORE_UNAVAILABLE);
+        return;
+    }
+    if (results.offset > results.total) {
+        shell->ui.store_browse_offset =
+            results.total == 0
+                ? 0
+                : (uint16_t)(((results.total - 1U) /
+                              CP0_STORE_BROWSE_MAX_APPS) *
+                             CP0_STORE_BROWSE_MAX_APPS);
+        cp0_ui_set_store_browse_status(&shell->ui, CP0_UI_STORE_LOADING);
+        return;
+    }
+    shell->store_catalog_sequence = results.sequence;
+    for (size_t index = 0; index < results.count; index++)
+        apps[index] = store_ui_catalog_app(shell, &results.apps[index]);
+    cp0_ui_sync_store_browse(
+        &shell->ui, results.offset, results.total, results.has_next,
+        results.next_offset, apps, results.count, results.stale);
+}
+
 static void poll_store_catalog(struct shell *shell)
 {
     struct cp0_store_catalog catalog;
@@ -394,11 +430,15 @@ static void poll_store_catalog(struct shell *shell)
     if (result == CP0_STORE_RESULT_UNCONFIGURED) {
         cp0_ui_sync_store_today(&shell->ui, NULL);
         cp0_ui_set_store_status(&shell->ui, CP0_UI_STORE_UNCONFIGURED);
+        cp0_ui_set_store_browse_status(&shell->ui,
+                                       CP0_UI_STORE_UNCONFIGURED);
         return;
     }
     if (result != CP0_STORE_RESULT_OK) {
         cp0_ui_sync_store_today(&shell->ui, NULL);
         cp0_ui_set_store_status(&shell->ui, CP0_UI_STORE_UNAVAILABLE);
+        cp0_ui_set_store_browse_status(&shell->ui,
+                                       CP0_UI_STORE_UNAVAILABLE);
         return;
     }
     shell->store_catalog_sequence = catalog.sequence;
@@ -407,6 +447,8 @@ static void poll_store_catalog(struct shell *shell)
     cp0_ui_sync_store_catalog(&shell->ui, apps, catalog.count,
                               catalog.truncated, catalog.stale);
     poll_store_today(shell, catalog.sequence);
+    if (shell->ui.store_section == CP0_UI_STORE_APPS)
+        poll_store_browse(shell);
 }
 
 static void poll_store_search(struct shell *shell)
@@ -798,9 +840,12 @@ static const struct cp0_ui_store_app *store_ui_app(
     for (unsigned int index = 0; index < ui->store_count; index++)
         if (strcmp(ui->store_apps[index].app_id, app_id) == 0)
             return &ui->store_apps[index];
-    for (unsigned int index = 0; index < ui->store_search_count; index++)
-        if (strcmp(ui->store_search_apps[index].app_id, app_id) == 0)
-            return &ui->store_search_apps[index];
+    unsigned int page_count = ui->store_section == CP0_UI_STORE_APPS
+                                  ? ui->store_browse_count
+                                  : ui->store_search_count;
+    for (unsigned int index = 0; index < page_count; index++)
+        if (strcmp(ui->store_page_apps[index].app_id, app_id) == 0)
+            return &ui->store_page_apps[index];
     return NULL;
 }
 
@@ -1104,6 +1149,8 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         }
     } else if (event == CP0_UI_EVENT_STORE_SEARCH) {
         poll_store_search(shell);
+    } else if (event == CP0_UI_EVENT_STORE_BROWSE) {
+        poll_store_browse(shell);
     } else if (event == CP0_UI_EVENT_DEVELOPER_ENABLE ||
                event == CP0_UI_EVENT_DEVELOPER_DISABLE ||
                event == CP0_UI_EVENT_RECOVERY_ENABLE ||

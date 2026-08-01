@@ -90,6 +90,7 @@ enum cp0_ui_event {
     CP0_UI_EVENT_STORE_PAUSE,
     CP0_UI_EVENT_STORE_RESUME,
     CP0_UI_EVENT_STORE_CANCEL,
+    CP0_UI_EVENT_STORE_BROWSE,
     CP0_UI_EVENT_STORE_SEARCH,
     CP0_UI_EVENT_STORE_DETAILS,
     CP0_UI_EVENT_STORE_SCREENSHOT,
@@ -305,6 +306,8 @@ struct cp0_ui {
     unsigned int store_selected;
     unsigned int store_count;
     unsigned int store_section;
+    unsigned int store_browse_selected;
+    unsigned int store_browse_count;
     unsigned int store_search_selected;
     unsigned int store_search_count;
     unsigned int store_recent_selected;
@@ -318,10 +321,14 @@ struct cp0_ui {
     unsigned int store_detail_text_offset;
     uint8_t store_activity_count;
     uint8_t store_activity_progress_percent;
+    uint16_t store_browse_offset;
+    uint16_t store_browse_total;
+    uint16_t store_browse_next_offset;
     uint16_t store_search_offset;
     uint16_t store_search_total;
     uint16_t store_search_next_offset;
     bool store_search_has_next;
+    bool store_browse_has_next;
     bool store_search_input;
     unsigned int task_action_selected;
     unsigned int settings_selected;
@@ -334,6 +341,7 @@ struct cp0_ui {
     bool app_list_truncated;
     bool store_list_truncated;
     bool store_catalog_stale;
+    bool store_browse_stale;
     bool store_search_stale;
     bool store_activity;
     bool store_catalog_observed;
@@ -345,6 +353,7 @@ struct cp0_ui {
     bool app_uninstall_confirm;
     bool settings_detail;
     enum cp0_ui_store_status store_status;
+    enum cp0_ui_store_status store_browse_status;
     enum cp0_ui_store_status store_search_status;
     enum cp0_ui_store_detail_status store_detail_status;
     unsigned int dialog_selected;
@@ -465,8 +474,7 @@ struct cp0_ui {
     const uint32_t *store_screenshot_pixels;
     struct cp0_ui_app apps[CP0_UI_MAX_APPS];
     struct cp0_ui_store_app store_apps[CP0_UI_MAX_APPS];
-    struct cp0_ui_store_app
-        store_search_apps[CP0_UI_STORE_SEARCH_PAGE_MAX];
+    struct cp0_ui_store_app store_page_apps[CP0_UI_STORE_SEARCH_PAGE_MAX];
     struct cp0_ui_store_app store_today_featured;
     struct cp0_ui_store_editorial_collection_state
         store_today_collections[CP0_UI_STORE_EDITORIAL_COLLECTION_MAX];
@@ -506,6 +514,12 @@ void cp0_ui_sync_store_catalog(
     size_t app_count, bool truncated, bool stale);
 void cp0_ui_sync_store_today(
     struct cp0_ui *ui, const struct cp0_ui_store_editorial *editorial);
+void cp0_ui_sync_store_browse(
+    struct cp0_ui *ui, uint16_t offset, uint16_t total, bool has_next,
+    uint16_t next_offset, const struct cp0_ui_store_catalog_app *apps,
+    size_t app_count, bool stale);
+void cp0_ui_set_store_browse_status(struct cp0_ui *ui,
+                                    enum cp0_ui_store_status status);
 void cp0_ui_sync_store_search(
     struct cp0_ui *ui, const char *query, uint16_t offset, uint16_t total,
     bool has_next, uint16_t next_offset,
@@ -517,6 +531,7 @@ enum cp0_ui_event cp0_ui_store_input_ascii(struct cp0_ui *ui, char character);
 enum cp0_ui_event cp0_ui_store_backspace(struct cp0_ui *ui);
 const char *cp0_ui_store_search_query(const struct cp0_ui *ui);
 uint16_t cp0_ui_store_search_offset(const struct cp0_ui *ui);
+uint16_t cp0_ui_store_browse_offset(const struct cp0_ui *ui);
 void cp0_ui_set_store_app_state(struct cp0_ui *ui, const char *app_id,
                                 enum cp0_ui_store_state state,
                                 uint8_t progress_percent);

@@ -124,6 +124,7 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     write_snapshot(directory, "store-today-collection", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_BACK);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    cp0_ui_sync_store_browse(ui, 0, 2, false, 0, store_apps, 2, false);
     cp0_ui_handle_action(ui, CP0_UI_DOWN);
     write_snapshot(directory, "store", ui, frame);
     assert(cp0_ui_handle_action(ui, CP0_UI_ACCEPT) ==
@@ -151,8 +152,10 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     failed_store_app.state = CP0_UI_STORE_FAILED;
     failed_store_app.failure_reason = CP0_UI_STORE_FAILURE_NETWORK;
     cp0_ui_sync_store_catalog(ui, &failed_store_app, 1, false, false);
+    cp0_ui_sync_store_browse(ui, 0, 1, false, 0, &failed_store_app, 1, false);
     write_snapshot(directory, "store-failed", ui, frame);
     cp0_ui_sync_store_catalog(ui, store_apps, 2, false, false);
+    cp0_ui_sync_store_browse(ui, 0, 2, false, 0, store_apps, 2, false);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     write_snapshot(directory, "store-description", ui, frame);
     assert(cp0_ui_handle_action(ui, CP0_UI_RIGHT) ==
@@ -584,8 +587,10 @@ int main(int argc, char **argv)
     cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
     assert(ui.screen == CP0_UI_STORE && !ui.store_detail);
     assert(ui.store_section == CP0_UI_STORE_TODAY);
-    assert(cp0_ui_handle_action(&ui, CP0_UI_RIGHT) == CP0_UI_EVENT_NONE);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_RIGHT) ==
+           CP0_UI_EVENT_STORE_BROWSE);
     assert(ui.store_section == CP0_UI_STORE_APPS);
+    cp0_ui_sync_store_browse(&ui, 0, 2, false, 0, store_catalog, 2, false);
     cp0_ui_handle_action(&ui, CP0_UI_DOWN);
     assert(strcmp(cp0_ui_selected_store_app_id(&ui),
                   "dev.cardputerzero.beta") == 0);
@@ -643,6 +648,8 @@ int main(int argc, char **argv)
     struct cp0_ui_store_catalog_app authoritative_update = store_catalog[1];
     authoritative_update.state = CP0_UI_STORE_UPDATE;
     cp0_ui_sync_store_catalog(&ui, &authoritative_update, 1, false, false);
+    cp0_ui_sync_store_browse(&ui, 0, 1, false, 0, &authoritative_update, 1,
+                             false);
     assert(cp0_ui_selected_store_app_state(&ui) == CP0_UI_STORE_UPDATE);
     cp0_ui_set_store_app_state(&ui, "dev.cardputerzero.beta",
                                CP0_UI_STORE_DOWNLOADING, 43);
@@ -661,6 +668,7 @@ int main(int argc, char **argv)
     stale_update.state = CP0_UI_STORE_PAUSED;
     stale_update.progress_percent = 43;
     cp0_ui_sync_store_catalog(&ui, &stale_update, 1, false, true);
+    cp0_ui_sync_store_browse(&ui, 0, 1, false, 0, &stale_update, 1, true);
     assert(cp0_ui_selected_store_app_state(&ui) == CP0_UI_STORE_PAUSED);
     assert(ui.store_apps[0].update_available);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
@@ -672,6 +680,7 @@ int main(int argc, char **argv)
     stale_update.progress_percent = 0;
     stale_update.failure_reason = CP0_UI_STORE_FAILURE_NETWORK;
     cp0_ui_sync_store_catalog(&ui, &stale_update, 1, false, true);
+    cp0_ui_sync_store_browse(&ui, 0, 1, false, 0, &stale_update, 1, true);
     assert(ui.store_apps[0].state == CP0_UI_STORE_FAILED &&
            ui.store_apps[0].failure_reason == CP0_UI_STORE_FAILURE_NETWORK &&
            ui.store_apps[0].update_available);
@@ -681,12 +690,14 @@ int main(int argc, char **argv)
            CP0_UI_EVENT_STORE_CANCEL);
     cp0_ui_handle_action(&ui, CP0_UI_UP);
     cp0_ui_sync_store_catalog(&ui, &stale_update, 1, false, false);
+    cp0_ui_sync_store_browse(&ui, 0, 1, false, 0, &stale_update, 1, false);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_STORE_INSTALL);
     ui.store_operation_action_selected = 1;
     stale_update.state = CP0_UI_STORE_CANCELED;
     stale_update.failure_reason = CP0_UI_STORE_FAILURE_NONE;
     cp0_ui_sync_store_catalog(&ui, &stale_update, 1, false, false);
+    cp0_ui_sync_store_browse(&ui, 0, 1, false, 0, &stale_update, 1, false);
     assert(ui.store_apps[0].state == CP0_UI_STORE_CANCELED &&
            ui.store_apps[0].update_available &&
            ui.store_operation_action_selected == 0);
@@ -694,6 +705,7 @@ int main(int argc, char **argv)
            CP0_UI_EVENT_STORE_INSTALL);
     stale_update.version = "2.1.0";
     cp0_ui_sync_store_catalog(&ui, &stale_update, 1, false, false);
+    cp0_ui_sync_store_browse(&ui, 0, 1, false, 0, &stale_update, 1, false);
     assert(!ui.store_detail && ui.screen == CP0_UI_STORE);
     cp0_ui_handle_action(&ui, CP0_UI_BACK);
     assert(ui.screen == CP0_UI_HOME);
@@ -738,6 +750,35 @@ int main(int argc, char **argv)
             .summary = "Local ranked search result",
         };
     }
+    struct cp0_ui browse_ui;
+    cp0_ui_init(&browse_ui);
+    cp0_ui_sync_store_catalog(&browse_ui, store_catalog, 2, false, false);
+    cp0_ui_handle_action(&browse_ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&browse_ui, CP0_UI_ACCEPT);
+    assert(cp0_ui_handle_action(&browse_ui, CP0_UI_RIGHT) ==
+           CP0_UI_EVENT_STORE_BROWSE);
+    cp0_ui_sync_store_browse(&browse_ui, 0, 9, true, 8, search_page, 8,
+                             true);
+    assert(browse_ui.store_browse_count == 8 &&
+           browse_ui.store_browse_has_next &&
+           browse_ui.store_browse_stale &&
+           cp0_ui_store_browse_offset(&browse_ui) == 0);
+    for (unsigned int index = 0; index < 7; index++)
+        cp0_ui_handle_action(&browse_ui, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&browse_ui, CP0_UI_DOWN) ==
+           CP0_UI_EVENT_STORE_BROWSE);
+    assert(cp0_ui_store_browse_offset(&browse_ui) == 8);
+    struct cp0_ui_store_catalog_app final_browse = search_page[0];
+    final_browse.app_id = "dev.cardputerzero.search8";
+    final_browse.name = "Search Result 8";
+    cp0_ui_sync_store_browse(&browse_ui, 8, 9, false, 0, &final_browse, 1,
+                             true);
+    assert(strcmp(cp0_ui_selected_store_app_id(&browse_ui),
+                  "dev.cardputerzero.search8") == 0);
+    assert(cp0_ui_handle_action(&browse_ui, CP0_UI_UP) ==
+           CP0_UI_EVENT_STORE_BROWSE);
+    assert(cp0_ui_store_browse_offset(&browse_ui) == 0);
+
     cp0_ui_sync_store_search(&search_ui, "app", 0, 9, true, 8,
                              search_page, 8, true);
     assert(search_ui.store_search_count == 8 &&

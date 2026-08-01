@@ -12,6 +12,7 @@
 #define CP0_STORE_SUMMARY_BYTES 385
 #define CP0_STORE_SEARCH_QUERY_BYTES 97
 #define CP0_STORE_SEARCH_MAX_APPS 8
+#define CP0_STORE_BROWSE_MAX_APPS 8
 #define CP0_STORE_INSTALL_BATCH_MAX 8
 #define CP0_STORE_DEVELOPER_BYTES 321
 #define CP0_STORE_URL_BYTES 2049
@@ -144,6 +145,19 @@ struct cp0_store_search_results {
     struct cp0_store_app_summary apps[CP0_STORE_SEARCH_MAX_APPS];
 };
 
+struct cp0_store_browse_results {
+    uint64_t sequence;
+    uint64_t expires_unix_seconds;
+    uint16_t offset;
+    uint16_t total;
+    uint16_t next_offset;
+    uint8_t limit;
+    size_t count;
+    bool has_next;
+    bool stale;
+    struct cp0_store_app_summary apps[CP0_STORE_BROWSE_MAX_APPS];
+};
+
 enum cp0_store_category {
     CP0_STORE_CATEGORY_DEVELOPER_TOOLS,
     CP0_STORE_CATEGORY_EDUCATION,
@@ -200,6 +214,8 @@ struct cp0_store_metrics_status {
 
 int cp0_store_list(struct cp0_store_catalog *catalog);
 int cp0_store_today(struct cp0_store_today *today);
+int cp0_store_browse(uint16_t offset, uint8_t limit,
+                     struct cp0_store_browse_results *results);
 int cp0_store_search(const char *query, uint16_t offset, uint8_t limit,
                      struct cp0_store_search_results *results);
 int cp0_store_refresh(void);

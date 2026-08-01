@@ -118,7 +118,9 @@ S8A 已新增 Catalog v4 editorial 层：Today 主推荐、1-2 个专题和每�
 导航形成完整纵向链路。引用失效时 Publisher 安全退回 v3，不发布过期推荐。
 S6E 已新增兼容的签名根索引、分类索引和有界 shard：Publisher 在 64 项或 48 KiB 任一上限先到
 时确定性切换，数据库和不可变 generation 原子记录全部对象；`cp0-stored` 完整验证后原子缓存，
-并通过 8 项有界 `browse`/`search` 分页访问最多 1024 项。
+并通过 8 项有界 `browse`/`search` 分页访问最多 1024 项。System Shell 的 Store Apps 页现使用
+`browse(all)`，在页首/页尾按需请求前后页并显示精确范围；Apps 和 Search 复用同一个 8 项页面
+缓存，`cp0_ui` 保持在 64 KiB 内。客户端会拒绝错误页长、offset/next、未排序或意外分类响应。
 
 - [x] 实现 App Registry、Submission、独立双审 Review 和 Release 服务主体。
   App Registry、Submission 上传/finalize/read/withdraw、Release 控制、OAuth 开发者 Device Flow、
@@ -161,6 +163,8 @@ S6E 已新增兼容的签名根索引、分类索引和有界 shard：Publisher 
   S6D 通过严格 details/media IPC 接入富详情；图片只以单个只读 `SCM_RIGHTS` 描述符传递，
   Shell 对应用/版本/类型/索引/尺寸/长度重新绑定并用 libpng 解码。五页详情覆盖图标、可滚动描述、
   320:170 单截图、升级权限差异和更新说明，UI 状态仍小于 64 KiB。
+- [x] System Shell Apps/Search 通过有界页面访问完整 1024 项 Catalog。
+  Apps 使用无分类 `browse`，Search 保持纯本地查询；两者切换时重新取页，不保留第二份应用数组。
 
 完成条件：CDN 修改、截断或替换任一资源都会在设备端被拒绝。
 
