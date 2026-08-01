@@ -32,6 +32,10 @@ const REVIEWER_REVOKED_TOKEN: &str = "reviewer-revoked-token-0000000000004";
 const RELEASE_MANAGER_TOKEN: &str = "release-manager-token-000000000000001";
 const RELEASE_NO_2FA_TOKEN: &str = "release-no2fa-token-00000000000000002";
 const REMOVED_MEMBER_TOKEN: &str = "removed-member-token-000000000000000001";
+const SUSPEND_TARGET_TOKEN: &str = "suspend-target-token-000000000000000001";
+const SUSPEND_BYPASS_TOKEN: &str = "suspend-bypass-token-000000000000000001";
+const RESTORED_MEMBER_TOKEN: &str = "restored-member-token-00000000000000001";
+const SUSPEND_ROLLBACK_TOKEN: &str = "suspend-rollback-token-0000000000000001";
 const STALE_MFA_TOKEN: &str = "stale-mfa-token-000000000000000000001";
 const EDITOR_TOKEN: &str = "editor-token-000000000000000000000001";
 const EDITOR_NO_2FA_TOKEN: &str = "editor-no2fa-token-000000000000000001";
@@ -93,6 +97,7 @@ async fn postgres_http_transaction_acceptance() {
     verify_oauth_device_flow(&application, &pool).await;
     verify_team_management(&application, &pool).await;
     verify_team_member_removal(&application, &pool).await;
+    verify_team_member_suspension(&application, &pool).await;
     verify_editorial_backend(&application, &pool).await;
     verify_metrics_backend(&application, &pool).await;
     verify_moderation_backend(&application, &pool).await;
@@ -3875,22 +3880,7 @@ async fn verify_team_member_removal(application: &Router, pool: &PgPool) {
             .await
             .unwrap();
     assert!(removed_token_revoked);
-    let now: i64 = sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "INSERT INTO access_tokens (token_sha256, member_id, scopes, expires_unix_seconds, \
-         revoked, created_unix_seconds, mfa_authenticated_unix_seconds) \
-         VALUES ($1, $2, ARRAY['store.teams.read'], $3, FALSE, $4, $4)",
-    )
-    .bind(sha256_hex(REMOVED_MEMBER_TOKEN.as_bytes()))
-    .bind(RELEASE_NO_2FA)
-    .bind(now + 3600)
-    .bind(now)
-    .execute(pool)
-    .await
-    .unwrap();
+    insert_team_read_token(pool, REMOVED_MEMBER_TOKEN, RELEASE_NO_2FA).await;
     let removed_identity = call(
         application.clone(),
         Method::GET,
@@ -4000,6 +3990,363 @@ async fn verify_team_member_removal(application: &Router, pool: &PgPool) {
             .await
             .unwrap();
     assert!(revoked_after_commit);
+}
+
+async fn insert_team_read_token(pool: &PgPool, token: &str, member_id: &str) {
+    let now: i64 = sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO access_tokens (token_sha256, member_id, scopes, expires_unix_seconds, \
+         revoked, created_unix_seconds, mfa_authenticated_unix_seconds) \
+         VALUES ($1, $2, ARRAY['store.teams.read'], $3, FALSE, $4, $4)",
+    )
+    .bind(sha256_hex(token.as_bytes()))
+    .bind(member_id)
+    .bind(now + 3600)
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn verify_team_member_suspension(application: &Router, pool: &PgPool) {
+    let team = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/teams/{TEAM_A}"),
+        Some(OWNER_A_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(team.status, StatusCode::OK);
+    assert_eq!(etag_version(&team), 5);
+    let team_body: Value = serde_json::from_slice(&team.body).unwrap();
+    assert!(
+        team_body["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|member| member["membership_state"] == "active")
+    );
+
+    let non_empty = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{VIEWER_MEMBER}:suspend"),
+        OWNER_A_TOKEN,
+        "team-suspend-body-001",
+        5,
+        Some(json!({})),
+    )
+    .await;
+    assert_problem(&non_empty, StatusCode::BAD_REQUEST, "invalid-request");
+    let invalid_restore = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{VIEWER_MEMBER}:restore"),
+        OWNER_A_TOKEN,
+        "team-restore-active-01",
+        5,
+        None,
+    )
+    .await;
+    assert_problem(&invalid_restore, StatusCode::CONFLICT, "invalid-transition");
+    let stale_mfa = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{VIEWER_MEMBER}:suspend"),
+        STALE_MFA_TOKEN,
+        "team-suspend-stale-01",
+        5,
+        None,
+    )
+    .await;
+    assert_problem(&stale_mfa, StatusCode::FORBIDDEN, "step-up-required");
+    let cross_team = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{VIEWER_MEMBER}:suspend"),
+        OWNER_B_TOKEN,
+        "team-suspend-cross-01",
+        5,
+        None,
+    )
+    .await;
+    assert_problem(&cross_team, StatusCode::NOT_FOUND, "not-found");
+    let stale_etag = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{VIEWER_MEMBER}:suspend"),
+        OWNER_A_TOKEN,
+        "team-suspend-etag-001",
+        4,
+        None,
+    )
+    .await;
+    assert_problem(
+        &stale_etag,
+        StatusCode::PRECONDITION_FAILED,
+        "precondition-failed",
+    );
+    let last_owner = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_B}/members/{OWNER_B}:suspend"),
+        OWNER_B_TOKEN,
+        "team-suspend-owner-01",
+        1,
+        None,
+    )
+    .await;
+    assert_problem(&last_owner, StatusCode::CONFLICT, "conflict");
+
+    insert_team_read_token(pool, SUSPEND_TARGET_TOKEN, VIEWER_MEMBER).await;
+    let counts_before = (
+        count(pool, "audit_events").await,
+        count(pool, "outbox_events").await,
+        count(pool, "idempotency_records").await,
+    );
+    let suspended = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{VIEWER_MEMBER}:suspend"),
+        OWNER_A_TOKEN,
+        "team-suspend-commit-1",
+        5,
+        None,
+    )
+    .await;
+    assert_eq!(suspended.status, StatusCode::OK);
+    assert_eq!(etag_version(&suspended), 6);
+    let suspended_body: Value = serde_json::from_slice(&suspended.body).unwrap();
+    let suspended_member = suspended_body["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|member| member["member_id"] == VIEWER_MEMBER)
+        .unwrap();
+    assert_eq!(suspended_member["membership_state"], "suspended");
+    assert_eq!(suspended_member["resource_version"], 5);
+    let replay = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{VIEWER_MEMBER}:suspend"),
+        OWNER_A_TOKEN,
+        "team-suspend-commit-1",
+        5,
+        None,
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::OK);
+    assert_eq!(replay.body, suspended.body);
+    assert_eq!(etag_version(&replay), 6);
+    assert_eq!(count(pool, "audit_events").await, counts_before.0 + 1);
+    assert_eq!(count(pool, "outbox_events").await, counts_before.1 + 1);
+    assert_eq!(
+        count(pool, "idempotency_records").await,
+        counts_before.2 + 1
+    );
+    let target_revoked: bool =
+        sqlx::query_scalar("SELECT revoked FROM access_tokens WHERE token_sha256 = $1")
+            .bind(sha256_hex(SUSPEND_TARGET_TOKEN.as_bytes()))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(target_revoked);
+
+    insert_team_read_token(pool, SUSPEND_BYPASS_TOKEN, VIEWER_MEMBER).await;
+    let suspended_identity = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/teams/{TEAM_A}"),
+        Some(SUSPEND_BYPASS_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(
+        &suspended_identity,
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+    );
+    let suspended_role_change = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{VIEWER_MEMBER}:set-role"),
+        OWNER_A_TOKEN,
+        "team-suspend-role-001",
+        6,
+        Some(json!({"role": "viewer"})),
+    )
+    .await;
+    assert_problem(&suspended_role_change, StatusCode::NOT_FOUND, "not-found");
+
+    let restored = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{VIEWER_MEMBER}:restore"),
+        OWNER_A_TOKEN,
+        "team-restore-commit-01",
+        6,
+        None,
+    )
+    .await;
+    assert_eq!(restored.status, StatusCode::OK);
+    assert_eq!(etag_version(&restored), 7);
+    let restored_body: Value = serde_json::from_slice(&restored.body).unwrap();
+    let restored_member = restored_body["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|member| member["member_id"] == VIEWER_MEMBER)
+        .unwrap();
+    assert_eq!(restored_member["membership_state"], "active");
+    assert_eq!(restored_member["resource_version"], 6);
+    let restore_replay = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{VIEWER_MEMBER}:restore"),
+        OWNER_A_TOKEN,
+        "team-restore-commit-01",
+        6,
+        None,
+    )
+    .await;
+    assert_eq!(restore_replay.status, StatusCode::OK);
+    assert_eq!(restore_replay.body, restored.body);
+    let bypass_revoked: bool =
+        sqlx::query_scalar("SELECT revoked FROM access_tokens WHERE token_sha256 = $1")
+            .bind(sha256_hex(SUSPEND_BYPASS_TOKEN.as_bytes()))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(bypass_revoked);
+    insert_team_read_token(pool, RESTORED_MEMBER_TOKEN, VIEWER_MEMBER).await;
+    let restored_identity = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/teams/{TEAM_A}"),
+        Some(RESTORED_MEMBER_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(restored_identity.status, StatusCode::OK);
+    assert_eq!(etag_version(&restored_identity), 7);
+
+    insert_team_read_token(pool, SUSPEND_ROLLBACK_TOKEN, RELEASE_MANAGER).await;
+    let target_version_before: i64 =
+        sqlx::query_scalar("SELECT resource_version FROM team_members WHERE member_id = $1")
+            .bind(RELEASE_MANAGER)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    pool.execute(
+        "CREATE FUNCTION test_reject_team_suspend_audit() RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN IF NEW.action = 'team.member-suspended' AND \
+         NEW.object_id = 'team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' THEN \
+         RAISE EXCEPTION 'injected team suspension audit failure'; END IF; RETURN NEW; END; $$",
+    )
+    .await
+    .unwrap();
+    pool.execute(
+        "CREATE TRIGGER test_reject_team_suspend_audit_insert BEFORE INSERT ON audit_events \
+         FOR EACH ROW EXECUTE FUNCTION test_reject_team_suspend_audit()",
+    )
+    .await
+    .unwrap();
+    let rolled_back = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{RELEASE_MANAGER}:suspend"),
+        OWNER_A_TOKEN,
+        "team-suspend-rollback1",
+        7,
+        None,
+    )
+    .await;
+    assert_problem(
+        &rolled_back,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "service-unavailable",
+    );
+    let rollback_team_version: i64 =
+        sqlx::query_scalar("SELECT resource_version FROM teams WHERE team_id = $1")
+            .bind(TEAM_A)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let rollback_target = sqlx::query(
+        "SELECT membership_state, resource_version FROM team_members WHERE member_id = $1",
+    )
+    .bind(RELEASE_MANAGER)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let rollback_token_revoked: bool =
+        sqlx::query_scalar("SELECT revoked FROM access_tokens WHERE token_sha256 = $1")
+            .bind(sha256_hex(SUSPEND_ROLLBACK_TOKEN.as_bytes()))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(rollback_team_version, 7);
+    assert_eq!(
+        rollback_target.get::<String, _>("membership_state"),
+        "active"
+    );
+    assert_eq!(
+        rollback_target.get::<i64, _>("resource_version"),
+        target_version_before
+    );
+    assert!(!rollback_token_revoked);
+    pool.execute("DROP TRIGGER test_reject_team_suspend_audit_insert ON audit_events")
+        .await
+        .unwrap();
+    pool.execute("DROP FUNCTION test_reject_team_suspend_audit()")
+        .await
+        .unwrap();
+    let retried = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{RELEASE_MANAGER}:suspend"),
+        OWNER_A_TOKEN,
+        "team-suspend-rollback1",
+        7,
+        None,
+    )
+    .await;
+    assert_eq!(retried.status, StatusCode::OK);
+    assert_eq!(etag_version(&retried), 8);
+    let revoked_after_commit: bool =
+        sqlx::query_scalar("SELECT revoked FROM access_tokens WHERE token_sha256 = $1")
+            .bind(sha256_hex(SUSPEND_ROLLBACK_TOKEN.as_bytes()))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(revoked_after_commit);
+    let removed_after_retry = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{RELEASE_MANAGER}:remove"),
+        OWNER_A_TOKEN,
+        "team-remove-suspend-01",
+        8,
+        None,
+    )
+    .await;
+    assert_eq!(removed_after_retry.status, StatusCode::OK);
+    assert_eq!(etag_version(&removed_after_retry), 9);
+    let removed_body: Value = serde_json::from_slice(&removed_after_retry.body).unwrap();
+    assert!(
+        removed_body["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|member| member["member_id"] != RELEASE_MANAGER)
+    );
 }
 
 async fn verify_editorial_backend(application: &Router, pool: &PgPool) {
@@ -4855,6 +5202,27 @@ async fn verify_database_immutability(pool: &PgPool) {
              WHERE member_id = $1",
         )
         .bind(RELEASE_NO_2FA)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE team_members SET membership_state = 'suspended', \
+             removed_unix_seconds = NULL, resource_version = resource_version + 1 \
+             WHERE member_id = $1",
+        )
+        .bind(RELEASE_NO_2FA)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE team_members SET membership_state = 'suspended', role = 'viewer', \
+             resource_version = resource_version + 1 WHERE member_id = $1",
+        )
+        .bind(VIEWER_MEMBER)
         .execute(pool)
         .await,
         "55000",

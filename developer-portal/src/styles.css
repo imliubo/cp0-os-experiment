@@ -215,6 +215,9 @@ textarea { resize: vertical; line-height: 1.45; }
 .release-actions > div:first-child strong { font-size: 12px; }.release-actions > div:first-child p { margin: 4px 0 0; color: var(--muted); font-size: 9px; }.release-actions > div:last-child { display: flex; gap: 8px; }
 
 .verified, .not-verified { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 700; }.verified { color: var(--brand); }.not-verified { color: var(--warning); }
+.member-heading { display: flex; align-items: center; gap: 7px; }
+.member-heading .status { padding: 2px 5px; font-size: 7px; }
+.team-actions { width: 76px; display: grid; grid-template-columns: 34px 34px; gap: 8px; }
 .table-select { min-width: 130px; padding: 6px 8px; font-size: 11px; }
 .key-list { display: flex; flex-direction: column; }
 .key-row { min-height: 73px; display: grid; grid-template-columns: auto minmax(0,1fr) auto auto; align-items: center; gap: 12px; padding: 11px 18px; border-bottom: 1px solid var(--line); }

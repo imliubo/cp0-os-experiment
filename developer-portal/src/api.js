@@ -128,6 +128,22 @@ export class StoreApi {
     );
   }
 
+  suspendTeamMember(teamId, memberId, etag) {
+    if (!etag) throw new Error("Team member suspension requires an ETag");
+    return this.request(
+      `/v1/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}:suspend`,
+      { method: "POST", idempotent: true, etag },
+    );
+  }
+
+  restoreTeamMember(teamId, memberId, etag) {
+    if (!etag) throw new Error("Team member restoration requires an ETag");
+    return this.request(
+      `/v1/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}:restore`,
+      { method: "POST", idempotent: true, etag },
+    );
+  }
+
   getApp(appId) {
     return this.request(`/v1/apps/${encodeURIComponent(appId)}`);
   }

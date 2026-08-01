@@ -37,6 +37,8 @@ test("requires ETags for existing-resource mutations", () => {
   const api = new StoreApi({ tokenProvider: () => token, fetchImpl: async () => new Response() });
   assert.throws(() => api.setTeamMemberRole("team_0123456789abcdef0123456789abcdef", "member_0123456789abcdef0123456789abcdef", "developer", ""), /ETag/);
   assert.throws(() => api.removeTeamMember("team_0123456789abcdef0123456789abcdef", "member_0123456789abcdef0123456789abcdef", ""), /ETag/);
+  assert.throws(() => api.suspendTeamMember("team_0123456789abcdef0123456789abcdef", "member_0123456789abcdef0123456789abcdef", ""), /ETag/);
+  assert.throws(() => api.restoreTeamMember("team_0123456789abcdef0123456789abcdef", "member_0123456789abcdef0123456789abcdef", ""), /ETag/);
   assert.throws(() => api.withdrawSubmission("sub_0123456789abcdef0123456789abcdef", ""), /ETag/);
   assert.throws(() => api.mutateRelease("rel_0123456789abcdef0123456789abcdef", "pause", ""), /ETag/);
 });
@@ -90,6 +92,38 @@ test("sends member removal with no request body", async () => {
   assert.match(observed.options.headers["Idempotency-Key"], /^portal-/);
   assert.equal(observed.options.headers["Content-Type"], undefined);
   assert.equal(observed.options.body, undefined);
+});
+
+test("sends suspension and restoration as empty-body mutations", async () => {
+  const observed = [];
+  const api = new StoreApi({
+    tokenProvider: () => token,
+    fetchImpl: async (url, options) => {
+      observed.push({ url, options });
+      return new Response(JSON.stringify({ team_id: "team_0123456789abcdef0123456789abcdef", members: [] }), {
+        status: 200,
+        headers: { etag: '"9"', "content-type": "application/json" },
+      });
+    },
+  });
+  await api.suspendTeamMember(
+    "team_0123456789abcdef0123456789abcdef",
+    "member_0123456789abcdef0123456789abcdef",
+    '"7"',
+  );
+  await api.restoreTeamMember(
+    "team_0123456789abcdef0123456789abcdef",
+    "member_0123456789abcdef0123456789abcdef",
+    '"8"',
+  );
+  assert.match(observed[0].url, /:suspend$/);
+  assert.match(observed[1].url, /:restore$/);
+  for (const request of observed) {
+    assert.equal(request.options.method, "POST");
+    assert.match(request.options.headers["Idempotency-Key"], /^portal-/);
+    assert.equal(request.options.headers["Content-Type"], undefined);
+    assert.equal(request.options.body, undefined);
+  }
 });
 
 test("rejects oversized and structured error responses", async () => {

@@ -133,6 +133,48 @@
         }
       }
     },
+    "/v1/teams/{team_id}/members/{member_id}:suspend": {
+      "post": {
+        "operationId": "suspendTeamMember",
+        "parameters": [
+          { "$ref": "#/components/parameters/TeamId" },
+          { "$ref": "#/components/parameters/MemberId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Member suspended and all existing member tokens revoked",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Team" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/teams/{team_id}/members/{member_id}:restore": {
+      "post": {
+        "operationId": "restoreTeamMember",
+        "parameters": [
+          { "$ref": "#/components/parameters/TeamId" },
+          { "$ref": "#/components/parameters/MemberId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Suspended member restored without issuing credentials",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Team" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/v1/apps": {
       "post": {
         "operationId": "createApp",
@@ -867,6 +909,7 @@
       "TeamId": { "type": "string", "pattern": "^team_[0-9a-f]{32}$" },
       "MemberId": { "type": "string", "pattern": "^member_[0-9a-f]{32}$" },
       "TeamRole": { "enum": ["owner", "developer", "release-manager", "viewer"] },
+      "TeamMembershipState": { "enum": ["active", "suspended"] },
       "SubmissionId": { "type": "string", "pattern": "^sub_[0-9a-f]{32}$" },
       "ReleaseId": { "type": "string", "pattern": "^rel_[0-9a-f]{32}$" },
       "ReportId": { "type": "string", "pattern": "^report_[0-9a-f]{32}$" },
@@ -978,11 +1021,12 @@
       "TeamMember": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["member_id", "email", "role", "two_factor_enabled", "resource_version"],
+        "required": ["member_id", "email", "role", "membership_state", "two_factor_enabled", "resource_version"],
         "properties": {
           "member_id": { "$ref": "#/components/schemas/MemberId" },
           "email": { "type": "string", "format": "email", "minLength": 3, "maxLength": 254 },
           "role": { "$ref": "#/components/schemas/TeamRole" },
+          "membership_state": { "$ref": "#/components/schemas/TeamMembershipState" },
           "two_factor_enabled": { "type": "boolean" },
           "resource_version": { "type": "integer", "minimum": 1 }
         }

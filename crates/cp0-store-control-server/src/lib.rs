@@ -884,8 +884,8 @@ impl StoreControlService {
             return Err(ApiError::precondition_failed().into());
         }
         let target = sqlx::query(
-            "SELECT role, resource_version FROM team_members \
-             WHERE member_id = $1 AND team_id = $2 AND membership_state = 'active' FOR UPDATE",
+            "SELECT role, membership_state, resource_version FROM team_members \
+             WHERE member_id = $1 AND team_id = $2 AND membership_state <> 'removed' FOR UPDATE",
         )
         .bind(member_id)
         .bind(team_id)
@@ -894,7 +894,8 @@ impl StoreControlService {
         .map_err(TxError::Sql)?
         .ok_or_else(ApiError::not_found)?;
         let before_role: String = target.get("role");
-        if before_role == "owner" {
+        let before_state: String = target.get("membership_state");
+        if before_role == "owner" && before_state == "active" {
             let owner_count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM team_members \
                  WHERE team_id = $1 AND role = 'owner' AND membership_state = 'active'",
@@ -913,11 +914,14 @@ impl StoreControlService {
             .ok_or_else(ApiError::internal)?;
         let changed = sqlx::query(
             "UPDATE team_members SET membership_state = 'removed', removed_unix_seconds = $1, \
-             resource_version = $2 WHERE member_id = $3 AND membership_state = 'active'",
+             resource_version = $2 WHERE member_id = $3 AND team_id = $4 \
+             AND membership_state = $5",
         )
         .bind(now)
         .bind(i64::try_from(member_version).map_err(|_| ApiError::internal())?)
         .bind(member_id)
+        .bind(team_id)
+        .bind(&before_state)
         .execute(&mut *transaction)
         .await
         .map_err(TxError::Sql)?
@@ -959,7 +963,7 @@ impl StoreControlService {
                 topic: "team.member-removed",
                 object_kind: "team",
                 object_id: team_id,
-                before_state: Some("active"),
+                before_state: Some(&before_state),
                 after_state: Some("removed"),
                 resource_version: team_version,
                 request_id,
@@ -971,6 +975,196 @@ impl StoreControlService {
                     "before_role": before_role,
                     "member_resource_version": member_version,
                     "removed_unix_seconds": now
+                }),
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)?;
+        Ok(team)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn set_team_member_state(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+        request_id: &str,
+        team_id: &str,
+        member_id: &str,
+        expected_version: u64,
+        action: TeamMemberStateAction,
+    ) -> Result<TeamResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let key_sha256 = sha256_hex(idempotency_key.as_bytes());
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self
+                .set_team_member_state_once(
+                    &token_sha256,
+                    &key_sha256,
+                    request_id,
+                    team_id,
+                    member_id,
+                    expected_version,
+                    action,
+                )
+                .await
+            {
+                Err(TxError::Sql(error)) if is_retryable_transaction_error(&error) => {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(error) => return Err(ApiError::from_transaction(error)),
+                Ok(team) => return Ok(team),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn set_team_member_state_once(
+        &self,
+        token_sha256: &str,
+        key_sha256: &str,
+        request_id: &str,
+        team_id: &str,
+        member_id: &str,
+        expected_version: u64,
+        action: TeamMemberStateAction,
+    ) -> Result<TeamResponse, TxError> {
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let identity = authenticate(&mut transaction, token_sha256).await?;
+        let now = database_now(&mut transaction).await?;
+        require_team_write(&identity, now)?;
+        let expected_version_text = expected_version.to_string();
+        let request_sha256 = mutation_request_sha256(
+            action.request_domain(),
+            &[team_id, member_id, &expected_version_text],
+        );
+        match reserve_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            &request_sha256,
+            now,
+        )
+        .await?
+        {
+            IdempotencyReservation::Fresh => {}
+            IdempotencyReservation::Replay { status, body }
+                if status == StatusCode::OK.as_u16() as i16 =>
+            {
+                let team = serde_json::from_value(body).map_err(|_| ApiError::internal())?;
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(team);
+            }
+            IdempotencyReservation::Replay { .. } => {
+                return Err(ApiError::internal().into());
+            }
+        }
+        if identity.team_id != team_id {
+            return Err(ApiError::not_found().into());
+        }
+        let current_team = load_team(&mut transaction, team_id, true).await?;
+        if current_team.resource_version != expected_version {
+            return Err(ApiError::precondition_failed().into());
+        }
+        let target = sqlx::query(
+            "SELECT role, membership_state, resource_version FROM team_members \
+             WHERE member_id = $1 AND team_id = $2 AND membership_state <> 'removed' FOR UPDATE",
+        )
+        .bind(member_id)
+        .bind(team_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .ok_or_else(ApiError::not_found)?;
+        let role: String = target.get("role");
+        let before_state: String = target.get("membership_state");
+        if before_state != action.before_state() {
+            return Err(ApiError::invalid_transition().into());
+        }
+        if action == TeamMemberStateAction::Suspend && role == "owner" {
+            let owner_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM team_members \
+                 WHERE team_id = $1 AND role = 'owner' AND membership_state = 'active'",
+            )
+            .bind(team_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(TxError::Sql)?;
+            if owner_count <= 1 {
+                return Err(ApiError::conflict().into());
+            }
+        }
+        let member_version = u64::try_from(target.get::<i64, _>("resource_version"))
+            .map_err(|_| ApiError::internal())?
+            .checked_add(1)
+            .ok_or_else(ApiError::internal)?;
+        let changed = sqlx::query(
+            "UPDATE team_members SET membership_state = $1, resource_version = $2 \
+             WHERE member_id = $3 AND team_id = $4 AND membership_state = $5",
+        )
+        .bind(action.after_state())
+        .bind(i64::try_from(member_version).map_err(|_| ApiError::internal())?)
+        .bind(member_id)
+        .bind(team_id)
+        .bind(action.before_state())
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .rows_affected();
+        if changed != 1 {
+            return Err(ApiError::invalid_transition().into());
+        }
+        let team_version = expected_version
+            .checked_add(1)
+            .ok_or_else(ApiError::internal)?;
+        sqlx::query("UPDATE teams SET resource_version = $1 WHERE team_id = $2")
+            .bind(i64::try_from(team_version).map_err(|_| ApiError::internal())?)
+            .bind(team_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(TxError::Sql)?;
+        sqlx::query("UPDATE access_tokens SET revoked = TRUE WHERE member_id = $1 AND NOT revoked")
+            .bind(member_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(TxError::Sql)?;
+
+        let team = load_team(&mut transaction, team_id, false).await?;
+        let response_body = serde_json::to_value(&team).map_err(|_| ApiError::internal())?;
+        complete_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            StatusCode::OK,
+            &response_body,
+        )
+        .await?;
+        append_mutation(
+            &mut transaction,
+            MutationEvent {
+                now,
+                actor_id: &identity.member_id,
+                action: action.event_name(),
+                topic: action.event_name(),
+                object_kind: "team",
+                object_id: team_id,
+                before_state: Some(action.before_state()),
+                after_state: Some(action.after_state()),
+                resource_version: team_version,
+                request_id,
+                request_sha256: &request_sha256,
+                key_sha256,
+                payload: json!({
+                    "team_id": team_id,
+                    "member_id": member_id,
+                    "role": role,
+                    "before_state": action.before_state(),
+                    "after_state": action.after_state(),
+                    "member_resource_version": member_version
                 }),
             },
         )
@@ -3396,12 +3590,49 @@ struct SetTeamMemberRoleRequest {
     role: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TeamMemberStateAction {
+    Suspend,
+    Restore,
+}
+
+impl TeamMemberStateAction {
+    const fn before_state(self) -> &'static str {
+        match self {
+            Self::Suspend => "active",
+            Self::Restore => "suspended",
+        }
+    }
+
+    const fn after_state(self) -> &'static str {
+        match self {
+            Self::Suspend => "suspended",
+            Self::Restore => "active",
+        }
+    }
+
+    const fn request_domain(self) -> &'static str {
+        match self {
+            Self::Suspend => "team.member-suspend.v1",
+            Self::Restore => "team.member-restore.v1",
+        }
+    }
+
+    const fn event_name(self) -> &'static str {
+        match self {
+            Self::Suspend => "team.member-suspended",
+            Self::Restore => "team.member-restored",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TeamMemberResponse {
     member_id: String,
     email: String,
     role: String,
+    membership_state: String,
     two_factor_enabled: bool,
     resource_version: u64,
 }
@@ -4537,8 +4768,8 @@ async fn load_team(
         .map_err(TxError::Sql)?
         .ok_or_else(ApiError::not_found)?;
     let rows = sqlx::query(
-        "SELECT member_id, email, role, two_factor_enabled, resource_version \
-         FROM team_members WHERE team_id = $1 AND membership_state = 'active' \
+        "SELECT member_id, email, role, membership_state, two_factor_enabled, resource_version \
+         FROM team_members WHERE team_id = $1 AND membership_state <> 'removed' \
          ORDER BY member_id LIMIT 101",
     )
     .bind(team_id)
@@ -4555,6 +4786,7 @@ async fn load_team(
                 member_id: row.get("member_id"),
                 email: row.get("email"),
                 role: row.get("role"),
+                membership_state: row.get("membership_state"),
                 two_factor_enabled: row.get("two_factor_enabled"),
                 resource_version: row_version(&row)?,
             })
@@ -5309,6 +5541,32 @@ async fn mutate_team_member(
                     &team_id,
                     member_id,
                     expected_version,
+                )
+                .await
+        }
+        "suspend" if body.is_empty() => {
+            service
+                .set_team_member_state(
+                    &token,
+                    &idempotency_key,
+                    &request_id,
+                    &team_id,
+                    member_id,
+                    expected_version,
+                    TeamMemberStateAction::Suspend,
+                )
+                .await
+        }
+        "restore" if body.is_empty() => {
+            service
+                .set_team_member_state(
+                    &token,
+                    &idempotency_key,
+                    &request_id,
+                    &team_id,
+                    member_id,
+                    expected_version,
+                    TeamMemberStateAction::Restore,
                 )
                 .await
         }

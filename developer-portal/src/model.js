@@ -123,9 +123,9 @@ export function createDemoState() {
       name: "M5 Labs",
       role: "Owner",
       members: [
-        { id: "member_01", name: "Liubo", email: "liubo@example.dev", role: "Owner", twoFactor: true },
-        { id: "member_02", name: "Chen Yu", email: "chen@example.dev", role: "Developer", twoFactor: true },
-        { id: "member_03", name: "Mira Xu", email: "mira@example.dev", role: "Release Manager", twoFactor: false },
+        { id: "member_01", name: "Liubo", email: "liubo@example.dev", role: "Owner", state: "active", twoFactor: true },
+        { id: "member_02", name: "Chen Yu", email: "chen@example.dev", role: "Developer", state: "active", twoFactor: true },
+        { id: "member_03", name: "Mira Xu", email: "mira@example.dev", role: "Release Manager", state: "active", twoFactor: false },
       ],
       developerKeys: [
         {

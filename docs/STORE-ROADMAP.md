@@ -91,10 +91,10 @@ Teams 后续工作。
 S5J 已补齐 Submission 撤回：owner/developer、实时 2FA/scope、强 ETag、精确幂等、合法状态图，
 以及扫描任务、未消费扫描事件和活动审核分配的原子取消均通过 PostgreSQL 17 验收；历史对象、
 扫描结果、审核消息和审计事件保持不可变。
-S5K 已冻结外部 OIDC + Portal BFF 身份边界，并接通 Team 读取、Owner 角色修改和不可逆成员移除：
-五分钟 MFA step-up、Team ETag、active last-owner、成员 token 即时撤销、终态身份保留、版本单调、
-幂等和 audit/outbox 回滚均通过 PostgreSQL 17 验收。账户链接、邀请、成员暂停、Portal session
-endpoint 和 reviewer SSO 仍待实现。
+S5K 已冻结外部 OIDC + Portal BFF 身份边界，并接通 Team 读取、Owner 角色修改、成员暂停/恢复和
+不可逆成员移除：五分钟 MFA step-up、Team ETag、active last-owner、成员 token 即时撤销、暂停期
+token 不复活、终态身份保留、版本单调、幂等和 audit/outbox 回滚均通过 PostgreSQL 17 验收。
+账户链接、邀请、Portal session endpoint 和 reviewer SSO 仍待实现。
 S5L 已将所有 Submission 升级为独立双审：主审批准进入 pending-secondary-review，原主审不可领取
 二审，只有不同审核员的 secondary approval 才进入 approved；decision 强绑定 assignment，Release
 数据库触发器重新验证两位审核员和两次批准。并发领取、精确回放、故障回滚和直接 SQL 绕过均通过
@@ -126,7 +126,7 @@ S6E 已新增兼容的签名根索引、分类索引和有界 shard：Publisher 
 - [x] 实现 App Registry、Submission、独立双审 Review 和 Release 服务主体。
   App Registry、Submission 上传/finalize/read/withdraw、Release 控制、OAuth 开发者 Device Flow、
   Team 读取/角色管理和受约束 Publisher outbox 均已有 PostgreSQL/HTTP 验收。
-- [ ] 完成 Identity 自助闭环：成员移除已完成；账户链接、邀请/暂停、Portal 会话和生产身份提供方接入仍待实现。
+- [ ] 完成 Identity 自助闭环：成员暂停/恢复/移除已完成；账户链接、邀请、Portal 会话和生产身份提供方接入仍待实现。
 - [x] 实现隔离 Scan Worker：包格式、WASM、权限、资源和恶意样本检查。
   当前为无 IP 网络、只读对象根的确定性结构/能力扫描；动态规则、信誉源和运营隔离环境待生产化。
 - [x] 实现 Review Console、结构化问题、回复、二审、双人审批和风险分级。

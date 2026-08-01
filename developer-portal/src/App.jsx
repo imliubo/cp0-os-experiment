@@ -62,7 +62,7 @@ const PAGE_TITLES = {
 function Status({ value }) {
   const tone = ["approved", "published", "active", "ready"].includes(value)
     ? "success"
-    : ["needs-changes", "paused", "scheduled"].includes(value)
+    : ["needs-changes", "paused", "scheduled", "suspended"].includes(value)
       ? "warning"
       : ["rejected", "removed", "publish-failed"].includes(value)
         ? "danger"
@@ -364,7 +364,7 @@ function Team({ data, setData, toast }) {
   const [keyName, setKeyName] = useState("");
   const [publicKey, setPublicKey] = useState("");
   const [memberToRemove, setMemberToRemove] = useState(null);
-  const ownerCount = data.team.members.filter((member) => member.role === "Owner").length;
+  const ownerCount = data.team.members.filter((member) => member.role === "Owner" && member.state === "active").length;
   useEffect(() => {
     if (!keyDialog && !memberToRemove) return undefined;
     const closeOnEscape = (event) => {
@@ -395,6 +395,18 @@ function Team({ data, setData, toast }) {
     setMemberToRemove(null);
     toast(`${removedName} was removed and all active sessions were revoked.`);
   };
+  const setMemberState = (member, state) => {
+    setData((current) => ({
+      ...current,
+      team: {
+        ...current.team,
+        members: current.team.members.map((item) => item.id === member.id ? { ...item, state } : item),
+      },
+    }));
+    toast(state === "suspended"
+      ? `${member.name} was suspended and all active sessions were revoked.`
+      : `${member.name} was restored and must sign in again.`);
+  };
   return (
     <div className="page-stack">
       <section className="panel">
@@ -402,12 +414,16 @@ function Team({ data, setData, toast }) {
         <div className="table-wrap"><table className="team-table">
           <thead><tr><th>Member</th><th>Role</th><th>Two-factor authentication</th><th><span className="visually-hidden">Actions</span></th></tr></thead>
           <tbody>{data.team.members.map((member) => {
-            const finalOwner = member.role === "Owner" && ownerCount === 1;
+            const suspended = member.state === "suspended";
+            const finalOwner = member.role === "Owner" && member.state === "active" && ownerCount === 1;
             return <tr key={member.id}>
-              <td><strong>{member.name}</strong><small>{member.email}</small></td>
-              <td><select className="table-select" aria-label={`${member.name} role`} value={member.role} disabled={member.role === "Owner"} onChange={(event) => setData((current) => ({ ...current, team: { ...current.team, members: current.team.members.map((item) => item.id === member.id ? { ...item, role: event.target.value } : item) } }))}><option>Owner</option><option>Developer</option><option>Release Manager</option><option>Viewer</option></select></td>
+              <td><div className="member-heading"><strong>{member.name}</strong><Status value={member.state} /></div><small>{member.email}</small></td>
+              <td><select className="table-select" aria-label={`${member.name} role`} value={member.role} disabled={member.role === "Owner" || suspended} onChange={(event) => setData((current) => ({ ...current, team: { ...current.team, members: current.team.members.map((item) => item.id === member.id ? { ...item, role: event.target.value } : item) } }))}><option>Owner</option><option>Developer</option><option>Release Manager</option><option>Viewer</option></select></td>
               <td>{member.twoFactor ? <span className="verified"><ShieldCheck /> Enabled</span> : <span className="not-verified"><CircleAlert /> Required before release access</span>}</td>
-              <td><IconButton className="danger-icon" label={finalOwner ? "The final Owner cannot be removed" : `Remove ${member.name}`} disabled={finalOwner} onClick={() => setMemberToRemove(member)}><Trash2 /></IconButton></td>
+              <td><div className="team-actions">{suspended
+                ? <IconButton label={`Restore ${member.name}`} onClick={() => setMemberState(member, "active")}><Play /></IconButton>
+                : <IconButton label={finalOwner ? "The final Owner cannot be suspended" : `Suspend ${member.name}`} disabled={finalOwner} onClick={() => setMemberState(member, "suspended")}><Pause /></IconButton>}
+              <IconButton className="danger-icon" label={finalOwner ? "The final Owner cannot be removed" : `Remove ${member.name}`} disabled={finalOwner} onClick={() => setMemberToRemove(member)}><Trash2 /></IconButton></div></td>
             </tr>;
           })}</tbody>
         </table></div>
