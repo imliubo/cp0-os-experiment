@@ -98,6 +98,9 @@ S5L 已将所有 Submission 升级为独立双审：主审批准进入 pending-s
 二审，只有不同审核员的 secondary approval 才进入 approved；decision 强绑定 assignment，Release
 数据库触发器重新验证两位审核员和两次批准。并发领取、精确回放、故障回滚和直接 SQL 绕过均通过
 PostgreSQL 17 验收。风险分级和 Review Console 前端仍待实现。
+S5M 已新增独立 Review Console：primary/secondary/我的活动 assignment 有界队列、搜索、扫描结果、
+提交截图、hash、权限/import、消息、审计、领取和结构化决定均可操作；严格客户端绑定 ETag/幂等且
+不发送浏览器 cookie。真实 workforce SSO/BFF 和风险分级仍待实现。
 
 - [ ] 实现 Identity/Teams、App Registry、Submission 和 Release 服务。
   当前 App Registry、Submission 上传/finalize/read/withdraw、独立双审 Review 和 Release 控制
@@ -106,7 +109,7 @@ PostgreSQL 17 验收。风险分级和 Review Console 前端仍待实现。
 - [x] 实现隔离 Scan Worker：包格式、WASM、权限、资源和恶意样本检查。
   当前为无 IP 网络、只读对象根的确定性结构/能力扫描；动态规则、信誉源和运营隔离环境待生产化。
 - [ ] 实现 Review Console、结构化问题、回复、二审和双人审批。
-  当前结构化问题、回复、独立二审和双人审批事务流程已完成；风险分级和 Console UI 待实现。
+  当前结构化问题、回复、独立二审、双人审批和 Console UI 已完成；风险分级和生产 SSO 待实现。
 - [x] 实现不可变发布 generation、事务 outbox、append-only audit 和 transparency log。
   当前 transparency v1 覆盖完整 Catalog snapshot 历史；生产对象存储、compact proof 和
   witness/gossip 属于后续基础设施。

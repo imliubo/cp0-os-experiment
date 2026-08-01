@@ -1744,12 +1744,22 @@ impl StoreControlService {
         let rows = sqlx::query(
             "SELECT submission_id, app_id, version, revision, state, package_sha256, \
              package_bytes, listing_sha256, listing_bytes, assets, resource_version, \
-             created_unix_seconds FROM submissions \
+             created_unix_seconds, current_assignment.assignment_kind AS current_assignment_kind, \
+             CASE WHEN state = 'ready-for-review' THEN 'primary' \
+                  WHEN state = 'pending-secondary-review' THEN 'secondary' \
+                  ELSE current_assignment.assignment_kind END AS review_stage \
+             FROM submissions \
+             LEFT JOIN LATERAL ( \
+               SELECT assignment_kind FROM review_assignments assignment \
+               WHERE assignment.submission_id = submissions.submission_id \
+                 AND assignment.reviewer_id = $1 AND assignment.state = 'active' \
+             ) current_assignment ON TRUE \
              WHERE (state = 'ready-for-review' OR \
                (state = 'pending-secondary-review' AND NOT EXISTS ( \
                  SELECT 1 FROM review_assignments assignment \
                  WHERE assignment.submission_id = submissions.submission_id \
-                   AND assignment.reviewer_id = $1))) AND \
+                   AND assignment.reviewer_id = $1)) OR \
+               (state = 'in-review' AND current_assignment.assignment_kind IS NOT NULL)) AND \
                (created_unix_seconds, submission_id) > ($2, $3) \
              ORDER BY created_unix_seconds, submission_id LIMIT $4",
         )
@@ -1769,13 +1779,24 @@ impl StoreControlService {
         let mut items = rows
             .iter()
             .take(limit)
-            .map(stored_submission_from_row)
-            .map(|result| result.map(|stored| stored.response))
+            .map(|row| {
+                let assigned_to_caller = row
+                    .get::<Option<String>, _>("current_assignment_kind")
+                    .is_some();
+                Ok(ReviewQueueItemResponse {
+                    submission: stored_submission_from_row(row)?.response,
+                    review_stage: row.get("review_stage"),
+                    assigned_to_caller,
+                })
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let next_cursor = if has_more {
-            items
-                .last()
-                .map(|item| encode_review_cursor(item.created_unix_seconds, &item.submission_id))
+            items.last().map(|item| {
+                encode_review_cursor(
+                    item.submission.created_unix_seconds,
+                    &item.submission.submission_id,
+                )
+            })
         } else {
             None
         };
@@ -2925,8 +2946,16 @@ struct ReviewMessageResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct ReviewQueueResponse {
-    items: Vec<SubmissionResponse>,
+    items: Vec<ReviewQueueItemResponse>,
     next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewQueueItemResponse {
+    submission: SubmissionResponse,
+    review_stage: String,
+    assigned_to_caller: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

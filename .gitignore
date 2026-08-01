@@ -8,3 +8,4 @@
 *.swo
 **/node_modules/
 developer-portal/dist/
+review-console/dist/

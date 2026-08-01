@@ -767,8 +767,16 @@ async fn verify_review_backend(application: &Router, pool: &PgPool) {
     assert_eq!(first_page.status, StatusCode::OK);
     let first_page: Value = serde_json::from_slice(&first_page.body).unwrap();
     assert_eq!(first_page["items"].as_array().unwrap().len(), 2);
-    assert_eq!(first_page["items"][0]["submission_id"], SUBMISSION_A);
-    assert_eq!(first_page["items"][1]["submission_id"], SUBMISSION_B);
+    assert_eq!(
+        first_page["items"][0]["submission"]["submission_id"],
+        SUBMISSION_A
+    );
+    assert_eq!(first_page["items"][0]["review_stage"], "primary");
+    assert_eq!(first_page["items"][0]["assigned_to_caller"], false);
+    assert_eq!(
+        first_page["items"][1]["submission"]["submission_id"],
+        SUBMISSION_B
+    );
     let cursor = first_page["next_cursor"].as_str().unwrap();
     let second_page = call(
         application.clone(),
@@ -782,7 +790,10 @@ async fn verify_review_backend(application: &Router, pool: &PgPool) {
     assert_eq!(second_page.status, StatusCode::OK);
     let second_page: Value = serde_json::from_slice(&second_page.body).unwrap();
     assert_eq!(second_page["items"].as_array().unwrap().len(), 1);
-    assert_eq!(second_page["items"][0]["submission_id"], SUBMISSION_C);
+    assert_eq!(
+        second_page["items"][0]["submission"]["submission_id"],
+        SUBMISSION_C
+    );
     assert!(second_page["next_cursor"].is_null());
 
     let missing_etag = call(
@@ -840,6 +851,24 @@ async fn verify_review_backend(application: &Router, pool: &PgPool) {
     .await;
     assert_eq!(replay.status, StatusCode::OK);
     assert_eq!(replay.body, begun.body);
+    let assigned_queue = call(
+        application.clone(),
+        Method::GET,
+        "/v1/review/submissions",
+        Some(REVIEWER_A_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    let assigned_queue: Value = serde_json::from_slice(&assigned_queue.body).unwrap();
+    let assigned_item = assigned_queue["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["submission"]["submission_id"] == SUBMISSION_A)
+        .unwrap();
+    assert_eq!(assigned_item["review_stage"], "primary");
+    assert_eq!(assigned_item["assigned_to_caller"], true);
 
     let concurrent_begin_uri = format!("/v1/review/submissions/{SUBMISSION_B}:begin");
     let claim_a = call_with_etag(
@@ -992,7 +1021,11 @@ async fn verify_review_backend(application: &Router, pool: &PgPool) {
             .as_array()
             .unwrap()
             .iter()
-            .any(|submission| submission["submission_id"] == SUBMISSION_B)
+            .any(|item| {
+                item["submission"]["submission_id"] == SUBMISSION_B
+                    && item["review_stage"] == "secondary"
+                    && item["assigned_to_caller"] == false
+            })
     );
     let secondary_begun = call_with_etag(
         application.clone(),

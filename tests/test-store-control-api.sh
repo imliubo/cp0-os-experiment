@@ -23,6 +23,7 @@ jq -e '
   .paths["/v1/review/submissions"].get.operationId == "listReviewQueue" and
   .paths["/v1/review/submissions/{submission_id}:begin"].post.operationId == "beginReview" and
   .paths["/v1/review/submissions/{submission_id}/decisions"].post.operationId == "decideReview" and
+  .paths["/v1/review/submissions"].get.responses["200"].content["application/json"].schema.properties.items.items["$ref"] == "#/components/schemas/ReviewQueueItem" and
   .paths["/v1/releases"].post.operationId == "createRelease" and
   .paths["/v1/releases/{release_id}"].get.operationId == "getRelease" and
   .paths["/v1/releases/{release_id}:schedule"].post.operationId == "scheduleRelease" and
@@ -41,7 +42,7 @@ jq -e '
     .components.schemas[
       "Problem", "DeviceCodeRequest", "DeviceCodeResponse",
       "DeviceAuthorizationDecisionRequest", "DeviceTokenRequest", "DeviceTokenResponse",
-      "SetTeamMemberRoleRequest", "TeamMember", "Team",
+      "SetTeamMemberRoleRequest", "TeamMember", "Team", "ReviewQueueItem",
       "CreateAppRequest", "App", "AssetDescriptor",
       "CreateSubmissionRequest", "FinalizeSubmissionRequest", "Submission",
       "ReviewMessageRequest", "ReviewMessage", "ReviewDecisionRequest",

@@ -1,4 +1,4 @@
-.PHONY: check test fmt fuzz-check fuzz-smoke portal-check store-control-db-check compositor app-runtime appd example-app malicious-apps devkit image verify-image
+.PHONY: check test fmt fuzz-check fuzz-smoke portal-check review-console-check store-control-db-check compositor app-runtime appd example-app malicious-apps devkit image verify-image
 
 check: fmt
 	jq empty schemas/app-manifest-v1.schema.json schemas/os-release-v1.schema.json \
@@ -67,6 +67,9 @@ fuzz-smoke:
 
 portal-check:
 	npm --prefix developer-portal run check
+
+review-console-check:
+	npm --prefix review-console run check
 
 store-control-db-check:
 	@test -n "$$CP0_STORE_TEST_DATABASE_URL" || \

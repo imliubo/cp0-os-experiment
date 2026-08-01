@@ -8,10 +8,11 @@ device.
 ## API slice
 
 - `GET /v1/review/submissions?cursor=&limit=` lists claimable
-  `ready-for-review` and `pending-secondary-review` Submissions using a stable,
-  bounded cursor. A primary reviewer never sees their own Submission as a
-  secondary-review candidate. The default page size is 25 and the hard limit is
-  50.
+  `ready-for-review` and `pending-secondary-review` Submissions plus the caller's
+  active assignment using a stable, bounded cursor. Each `ReviewQueueItem`
+  carries `review_stage` and `assigned_to_caller`; a primary reviewer never sees
+  their own Submission as a secondary-review candidate. The default page size is
+  25 and the hard limit is 50.
 - `POST /v1/review/submissions/{submission_id}:begin` atomically claims a
   Submission and changes it to `in-review`.
 - `POST /v1/review/submissions/{submission_id}/decisions` appends one structured
@@ -62,9 +63,15 @@ transitions, and two distinct approvals before final `approved`.
 Release creation independently joins the primary and secondary assignments and
 their approval decisions; directly writing an `approved` Submission cannot
 bypass this gate. Non-approval decisions require at least one unique structured
-reason code and a bounded actionable note. Risk classification and the Review
-Console frontend remain later work; S5L applies the stronger two-review baseline
-to every Submission.
+reason code and a bounded actionable note. Risk classification remains later
+work; S5L applies the stronger two-review baseline to every Submission.
+
+S5M adds the standalone React/Vite Review Console with queue stage/search
+filters, submitted-screen inspection, exact hashes, scan findings, permissions,
+imports, messages, audit history, claim controls and structured decisions. Its
+strict API client omits browser credentials and binds claims/decisions to ETags
+and idempotency keys. Production workforce SSO/BFF remains an external identity
+boundary.
 
 ## Verification
 

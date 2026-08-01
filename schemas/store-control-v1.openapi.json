@@ -322,7 +322,7 @@
                     "items": {
                       "type": "array",
                       "maxItems": 50,
-                      "items": { "$ref": "#/components/schemas/Submission" }
+                      "items": { "$ref": "#/components/schemas/ReviewQueueItem" }
                     },
                     "next_cursor": { "type": ["string", "null"], "maxLength": 256 }
                   }
@@ -893,6 +893,16 @@
             "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" }
           },
           "note": { "type": "string", "maxLength": 2000 }
+        }
+      },
+      "ReviewQueueItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["submission", "review_stage", "assigned_to_caller"],
+        "properties": {
+          "submission": { "$ref": "#/components/schemas/Submission" },
+          "review_stage": { "enum": ["primary", "secondary"] },
+          "assigned_to_caller": { "type": "boolean" }
         }
       },
       "CreateReleaseRequest": {
