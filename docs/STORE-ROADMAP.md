@@ -246,6 +246,12 @@ S8E 已完成工程环境韧性演练：1024 项/16 shard 容量、CDN Range/离
 故障均有可重复证据。生产多区域演练与 HSM ceremony 仍分别受基础设施和 S5 HSM 门禁约束。
 具体契约见 `STORE-RESILIENCE-DRILL-V1.md`。
 
+S8F 已新增独立 Store Operations React/Vite MVP：Today 有界编辑、320x170 设备预览、published
+Release 候选、SLA moderation 队列和结构化处置均可操作；严格客户端只访问现有 editorial/
+moderation v1 API，使用短期 operator bearer token、`credentials: omit`、强 ETag、随机幂等键和
+64 KiB 响应上限。生产 workforce SSO/BFF、真实 published-Release discovery、双人处置和正式
+政策执行仍保持关闭。
+
 - [x] Today/专题运营工具只能引用 approved Release。
 - [x] 建立最小化、可选、去标识化的安装、启动和崩溃聚合指标。
 - [x] 搜索词默认不上传；任何实验功能需要单独同意和保留期限。

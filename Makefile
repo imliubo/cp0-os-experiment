@@ -1,4 +1,4 @@
-.PHONY: check test fmt fuzz-check fuzz-smoke portal-check review-console-check store-control-db-check compositor compositor-builder app-runtime appd example-app malicious-apps devkit image verify-image
+.PHONY: check test fmt fuzz-check fuzz-smoke portal-check review-console-check store-operations-check store-control-db-check compositor compositor-builder app-runtime appd example-app malicious-apps devkit image verify-image
 
 COMPOSITOR_BUILDER_IMAGE := cp0-phase2b-builder:weston-14
 
@@ -78,6 +78,9 @@ portal-check:
 
 review-console-check:
 	npm --prefix review-console run check
+
+store-operations-check:
+	npm --prefix store-operations run check
 
 store-control-db-check:
 	@test -n "$$CP0_STORE_TEST_DATABASE_URL" || \
