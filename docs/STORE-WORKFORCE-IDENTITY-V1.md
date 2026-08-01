@@ -44,8 +44,10 @@ The token endpoints require the audience-specific session cookie, `X-CSRF-Token`
 Operations issues exactly one of `store.editorial` or `store.moderation`, subject to the current
 operator role.
 
-A control token is random, stored only as SHA-256, bound to one session and valid for no more than five minutes.
-Its expiry cannot exceed the session idle deadline or absolute deadline. Every Store
+A control token is opaque and purpose-key-derived from its session, audience, scope and idempotency
+key, so an exact replay reconstructs the same bearer without storing it. Only its SHA-256 digest is
+stored. It is bound to one session and valid for no more than five minutes. Its expiry cannot exceed
+the session idle deadline or absolute deadline. Every Store
 authentication query rechecks all of the following rather than trusting issuance alone:
 
 - token digest, expiry and revocation state;
@@ -78,8 +80,8 @@ triggers enforce each transition in the same transaction as its parent revocatio
   requests before parsing a body.
 - Authentication and callback responses are bounded, use `no-store`, and never reflect provider
   errors, claims, tokens or secrets.
-- The subject-HMAC key and PKCE encryption key are versioned secrets outside PostgreSQL. Rotation
-  needs an overlap procedure and independent audit evidence.
+- Subject-HMAC, PKCE encryption, CSRF, nonce and control-token keys are distinct versioned secrets
+  outside PostgreSQL. Rotation needs an overlap procedure and independent audit evidence.
 - Login, callback, token issuance, logout, link revocation and principal suspension emit bounded
   audit events without cookie, CSRF, OIDC or bearer secrets.
 - Provider metadata, signing keys, issuer allowlists, MFA policy, clock skew and emergency disable
@@ -87,12 +89,17 @@ triggers enforce each transition in the same transaction as its parent revocatio
 
 ## Delivered evidence and remaining gates
 
-Migration `0027_workforce_identity_foundation.sql` implements separate links, sessions, OIDC
-transactions, session-bound tokens and synchronous revocation. PostgreSQL acceptance covers valid
-Review and Operations authentication, audience mismatch, token lifetime, all three revocation paths,
-terminal immutability and HTTP rejection after revocation. The OpenAPI contract is
-`schemas/store-workforce-identity-v1.openapi.json`.
+Migrations `0027_workforce_identity_foundation.sql` and
+`0028_workforce_bff_operations.sql` implement separate links, sessions, OIDC transactions,
+session-bound tokens, idempotent issuance/logout records and synchronous revocation.
+`cp0-store-workforce-server` implements the production-shaped BFF routes and strict dual-origin
+configuration. PostgreSQL acceptance covers valid Review and Operations authentication, audience
+mismatch, token lifetime/replay, Control API use, scope authorization, all three revocation paths,
+terminal immutability, secret-free audit evidence and HTTP rejection after revocation. Review Console
+and Store Operations include strict in-memory session/token adapters. The OpenAPI contract is
+`schemas/store-workforce-identity-v1.openapi.json`; deployment details are in
+`STORE-WORKFORCE-SERVER.md`.
 
-The production BFF endpoints, IdP metadata/JWKS integration, secret storage, workforce account
-provisioning, console adapter changes and a live access-revocation exercise remain deployment gates.
-No local fixture or self-issued identity is production SSO evidence.
+Production IdP/JWKS configuration, managed secret storage, workforce account provisioning and a live
+access-revocation exercise remain deployment gates. No fake provider or local acceptance database is
+production SSO evidence.

@@ -1,0 +1,26 @@
+[package]
+name = "cp0-store-workforce-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+chacha20poly1305.workspace = true
+cp0-store-portal-server = { path = "../cp0-store-portal-server" }
+getrandom.workspace = true
+hmac.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+cp0-store-control-server = { path = "../cp0-store-control-server" }
+tower = { workspace = true, features = ["util"] }

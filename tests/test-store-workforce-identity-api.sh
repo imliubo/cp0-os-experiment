@@ -10,6 +10,10 @@ jq -e '
   .info.version == "1.0.0" and
   .components.securitySchemes.reviewSession.name == "__Host-cp0_review" and
   .components.securitySchemes.operationsSession.name == "__Host-cp0_operations" and
+  (all(.paths | to_entries[] | select(.key | startswith("/review/"));
+    .value.servers == [{"url": "https://review.cardputerzero.dev"}])) and
+  (all(.paths | to_entries[] | select(.key | startswith("/operations/"));
+    .value.servers == [{"url": "https://operations.cardputerzero.dev"}])) and
   .paths["/review/auth/login"].get.security == [] and
   .paths["/review/auth/callback"].get.security == [] and
   .paths["/operations/auth/login"].get.security == [] and
@@ -22,6 +26,10 @@ jq -e '
   .paths["/operations/v1/session:logout"].post.operationId == "logoutOperationsSession" and
   .components.schemas.ReviewSession.properties.audience.const == "review" and
   .components.schemas.OperationsSession.properties.audience.const == "operations" and
+  (.components.schemas.ReviewSession.required | index("csrf_token") != null) and
+  (.components.schemas.OperationsSession.required | index("csrf_token") != null) and
+  .components.schemas.ReviewSession.properties.csrf_token.pattern == "^[A-Za-z0-9_-]{43}$" and
+  .components.schemas.OperationsSession.properties.csrf_token.pattern == "^[A-Za-z0-9_-]{43}$" and
   .components.schemas.ReviewControlToken.properties.expires_in.maximum == 300 and
   .components.schemas.OperationsControlToken.properties.expires_in.maximum == 300 and
   .components.schemas.ReviewControlToken.properties.scope.const == "store.review" and

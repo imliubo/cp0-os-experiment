@@ -12,7 +12,7 @@ function jsonResponse(body, { status = 200, headers = {} } = {}) {
 
 test("client rejects unsafe origins and missing authorization", async () => {
   assert.throws(() => new OperationsApi({ origin: "http://operations.example" }), /bare HTTPS/);
-  const api = new OperationsApi({ fetchImpl: async () => jsonResponse({}) });
+  const api = new OperationsApi({ tokenProvider: async () => undefined, fetchImpl: async () => jsonResponse({}) });
   await assert.rejects(() => api.getToday(), /authorization/);
 });
 

@@ -1824,7 +1824,9 @@ async fn set_trigger(pool: &PgPool, table: &str, trigger: &str, enabled: bool) {
 
 async fn reset_database(pool: &PgPool) {
     sqlx::query(
-        "TRUNCATE store_operator_access_tokens, store_operators, \
+        "TRUNCATE workforce_control_token_issuances, workforce_logout_records, \
+         workforce_oidc_transactions, workforce_sessions, workforce_identity_links, \
+         store_operator_access_tokens, store_operators, \
          store_editorial_revisions, store_editorial_layouts, teams, reviewers, audit_events, \
          outbox_events, idempotency_records, catalog_sequence \
          RESTART IDENTITY CASCADE",

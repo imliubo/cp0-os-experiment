@@ -1,4 +1,5 @@
 import { RELEASE_ID, validateDecision, validateEditorial } from "./model.js";
+import { OperationsWorkforceSessionClient } from "./workforce-session.js";
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const APP_ID = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*){2,}$/;
@@ -112,18 +113,19 @@ function validateEditorialReleases(value) {
 }
 
 export class OperationsApi {
-  constructor({ origin = "https://operations.cardputerzero.dev", tokenProvider, fetchImpl = fetch }) {
+  constructor({ origin = "https://operations.cardputerzero.dev", workforceOrigin = origin, sessionClient, tokenProvider, fetchImpl = fetch } = {}) {
     this.origin = strictOrigin(origin);
-    this.tokenProvider = tokenProvider;
+    this.sessionClient = sessionClient ?? new OperationsWorkforceSessionClient({ origin: workforceOrigin, fetchImpl });
+    this.tokenProvider = tokenProvider ?? ((scope) => this.sessionClient.controlToken(scope));
     this.fetchImpl = fetchImpl;
   }
 
-  async request(path, { method = "GET", body, etag, query } = {}) {
+  async request(path, { method = "GET", body, etag, query, scope = "store.editorial" } = {}) {
     if (!path.startsWith("/v1/") || path.includes("?") || path.includes("#")) throw new Error("Operations API path is outside v1");
     const target = new URL(path, this.origin);
     if (target.origin !== this.origin || target.pathname !== path) throw new Error("Operations API path is outside v1");
     if (query) target.search = query.toString();
-    const token = await this.tokenProvider?.();
+    const token = await this.tokenProvider?.(scope);
     if (!token || token.length < 32 || /[\r\n]/.test(token)) throw new Error("Operator authorization is unavailable");
     const headers = { Accept: "application/json", Authorization: `Bearer ${token}` };
     if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -169,14 +171,14 @@ export class OperationsApi {
     if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("Moderation queue limit is outside 1-50");
     const query = new URLSearchParams({ limit: String(limit) });
     if (cursor) query.set("cursor", cursor);
-    return this.request("/v1/moderation/reports", { query }).then((response) => ({ ...response, data: validateQueue(response.data) }));
+    return this.request("/v1/moderation/reports", { query, scope: "store.moderation" }).then((response) => ({ ...response, data: validateQueue(response.data) }));
   }
 
   decideReport(reportId, etag, request) {
     if (!/^report_[0-9a-f]{32}$/.test(reportId)) throw new Error("Report ID is invalid");
     if (!validEtag(etag)) throw new Error("Moderation decision requires a strong ETag");
     if (Object.keys(validateDecision(request)).length) throw new Error("Moderation decision is invalid");
-    return this.request(`/v1/moderation/reports/${encodeURIComponent(reportId)}:decide`, { method: "POST", etag, body: request });
+    return this.request(`/v1/moderation/reports/${encodeURIComponent(reportId)}:decide`, { method: "POST", etag, body: request, scope: "store.moderation" });
   }
 }
 

@@ -6462,7 +6462,8 @@ async fn reset_database(pool: &PgPool) {
         .await
         .unwrap();
     pool.execute(
-        "TRUNCATE workforce_oidc_transactions, workforce_sessions, workforce_identity_links, \
+        "TRUNCATE workforce_control_token_issuances, workforce_logout_records, \
+         workforce_oidc_transactions, workforce_sessions, workforce_identity_links, \
          oidc_login_transactions, portal_sessions, team_invitations, \
          external_identity_links, portal_accounts, \
          store_moderation_appeal_revisions, store_moderation_appeals, \

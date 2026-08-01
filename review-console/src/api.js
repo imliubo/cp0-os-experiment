@@ -1,4 +1,5 @@
 import { validateDecision } from "./model.js";
+import { ReviewWorkforceSessionClient } from "./workforce-session.js";
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const RISK_TIERS = new Set(["standard", "elevated", "high"]);
@@ -75,9 +76,10 @@ function validateQueuePage(value) {
 }
 
 export class ReviewApi {
-  constructor({ origin = "https://review.cardputerzero.dev", tokenProvider, fetchImpl = fetch }) {
+  constructor({ origin = "https://review.cardputerzero.dev", workforceOrigin = origin, sessionClient, tokenProvider, fetchImpl = fetch } = {}) {
     this.origin = strictOrigin(origin);
-    this.tokenProvider = tokenProvider;
+    this.sessionClient = sessionClient ?? new ReviewWorkforceSessionClient({ origin: workforceOrigin, fetchImpl });
+    this.tokenProvider = tokenProvider ?? (() => this.sessionClient.controlToken());
     this.fetchImpl = fetchImpl;
   }
 

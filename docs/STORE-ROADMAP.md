@@ -107,10 +107,11 @@ S5L 已将所有 Submission 升级为独立双审：主审批准进入 pending-s
 PostgreSQL 17 验收。风险分级和 Review Console 前端仍待实现。
 S5M 已新增独立 Review Console：primary/secondary/我的活动 assignment 有界队列、搜索、扫描结果、
 提交截图、hash、权限/import、消息、审计、领取和结构化决定均可操作；严格客户端绑定 ETag/幂等且
-不发送浏览器 cookie。真实 workforce SSO/BFF 和风险分级仍待实现。
+不向 Store Control API 发送浏览器 cookie。S8I 已接入 workforce BFF 会话适配；真实 IdP 部署仍待实现。
 S5N 已新增版本化审核风险策略：隔离 Scanner 根据真实 SDK 权限确定 standard/elevated/high，
 append-only assessment 绑定 scan/report SHA-256，PostgreSQL 触发器重算并拒绝伪造、乱序、修改和
-删除；Review Queue/OpenAPI/Console 使用同一结果。生产 workforce SSO/BFF 仍待实现。
+删除；Review Queue/OpenAPI/Console 使用同一结果。S8I 已完成 production-shaped workforce BFF 与
+前端适配；生产 IdP/JWKS 和密钥托管仍待实现。
 S6A 已新增向后兼容的 Discovery Catalog v2：生产 Publisher 从审核绑定的 Listing 和 App 所属
 Team 的权威显示名生成
 developer、subtitle、category、keywords、age/privacy 元数据，v1/v2 严格分流；`cp0-stored`
@@ -141,7 +142,9 @@ S6E 已新增兼容的签名根索引、分类索引和有界 shard：Publisher 
 - [x] 实现隔离 Scan Worker：包格式、WASM、权限、资源和恶意样本检查。
   当前为无 IP 网络、只读对象根的确定性结构/能力扫描；动态规则、信誉源和运营隔离环境待生产化。
 - [x] 实现 Review Console、结构化问题、回复、二审、双人审批和风险分级。
-- [ ] 接入 Review Console 生产 workforce SSO/BFF，并完成访问撤销演练。
+- [ ] 完成 Review Console 生产 workforce SSO 部署和访问撤销演练。
+  S8I 已完成双 Origin BFF、严格前端会话适配和本地 PostgreSQL/HTTP 撤销验收；真实 IdP/JWKS、
+  托管密钥、生产域名部署和现场撤销证据仍未完成。
 - [x] 实现不可变发布 generation、事务 outbox、append-only audit 和 transparency log。
   当前 transparency v1 覆盖完整 Catalog snapshot 历史；生产对象存储、compact proof 和
   witness/gossip 属于后续基础设施。
@@ -251,14 +254,18 @@ Release 候选、SLA moderation 队列和结构化处置均可操作；严格客
 moderation v1 API，使用短期 operator bearer token、`credentials: omit`、强 ETag、随机幂等键和
 64 KiB 响应上限。S8G 已补齐真实 published-Release discovery：控制面只列出 approved、当前
 published、具有匹配不可变 artifact 且为每个 App 最新投影的 Release，使用 50 项上限的严格
-keyset cursor；前端同时修正为后端规范的 `rel_` ID 并严格验证响应。生产 workforce SSO/BFF、
-fixture 替换、双人处置和正式政策执行仍保持关闭。
+keyset cursor；前端同时修正为后端规范的 `rel_` ID 并严格验证响应。fixture 替换、双人处置和
+正式政策执行仍保持关闭。
 
 S8H 已冻结 Review Console/Store Operations 共用但 audience 严格分离的 workforce identity v1：
 独立 `__Host-` cookie、OIDC state/nonce/PKCE 事务、15 分钟 idle/8 小时 absolute 会话、最长五分钟
 session-bound 控制 token，以及 session、身份链接或 principal 撤销向 token 的同步级联均由
-PostgreSQL 状态机和真实 HTTP 验收覆盖。生产 BFF、IdP/JWKS、密钥托管、前端适配和现场撤销演练
-仍是外部门禁。具体契约见 `STORE-WORKFORCE-IDENTITY-V1.md`。
+PostgreSQL 状态机和真实 HTTP 验收覆盖。S8I 新增独立 `cp0-store-workforce-server`：双 Origin/回调
+配置、严格 OIDC + MFA 登录、预配置身份链接、幂等短 token/注销和无秘密 audit 均通过全新
+PostgreSQL 17 数据库验收；Review/Operations 前端仅对 BFF 使用 cookie，Control API 仍为
+`credentials: omit`，Bearer 只在内存按 audience/scope 缓存。生产 IdP/JWKS、密钥托管、域名部署
+和现场撤销演练仍是外部门禁。具体契约见 `STORE-WORKFORCE-IDENTITY-V1.md` 和
+`STORE-WORKFORCE-SERVER.md`。
 
 - [x] Today/专题运营工具只能引用 approved Release。
 - [x] 建立最小化、可选、去标识化的安装、启动和崩溃聚合指标。

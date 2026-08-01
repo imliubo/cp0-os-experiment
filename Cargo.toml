@@ -30,6 +30,7 @@ members = [
     "crates/cp0-store-scan",
     "crates/cp0-store-scan-worker",
     "crates/cp0-store-transparency",
+    "crates/cp0-store-workforce-server",
     "crates/cp0-stored",
     "crates/cp0ctl",
     "sdk/rust",

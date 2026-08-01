@@ -11,6 +11,7 @@
   ],
   "paths": {
     "/review/auth/login": {
+      "servers": [{ "url": "https://review.cardputerzero.dev" }],
       "get": {
         "operationId": "beginReviewLogin",
         "security": [],
@@ -22,6 +23,7 @@
       }
     },
     "/review/auth/callback": {
+      "servers": [{ "url": "https://review.cardputerzero.dev" }],
       "get": {
         "operationId": "completeReviewLogin",
         "security": [],
@@ -39,6 +41,7 @@
       }
     },
     "/review/v1/session": {
+      "servers": [{ "url": "https://review.cardputerzero.dev" }],
       "get": {
         "operationId": "getReviewSession",
         "security": [{ "reviewSession": [] }],
@@ -55,6 +58,7 @@
       }
     },
     "/review/v1/token": {
+      "servers": [{ "url": "https://review.cardputerzero.dev" }],
       "post": {
         "operationId": "issueReviewControlToken",
         "security": [{ "reviewSession": [] }],
@@ -75,6 +79,7 @@
       }
     },
     "/review/v1/session:logout": {
+      "servers": [{ "url": "https://review.cardputerzero.dev" }],
       "post": {
         "operationId": "logoutReviewSession",
         "security": [{ "reviewSession": [] }],
@@ -92,6 +97,7 @@
       }
     },
     "/operations/auth/login": {
+      "servers": [{ "url": "https://operations.cardputerzero.dev" }],
       "get": {
         "operationId": "beginOperationsLogin",
         "security": [],
@@ -103,6 +109,7 @@
       }
     },
     "/operations/auth/callback": {
+      "servers": [{ "url": "https://operations.cardputerzero.dev" }],
       "get": {
         "operationId": "completeOperationsLogin",
         "security": [],
@@ -120,6 +127,7 @@
       }
     },
     "/operations/v1/session": {
+      "servers": [{ "url": "https://operations.cardputerzero.dev" }],
       "get": {
         "operationId": "getOperationsSession",
         "security": [{ "operationsSession": [] }],
@@ -136,6 +144,7 @@
       }
     },
     "/operations/v1/token": {
+      "servers": [{ "url": "https://operations.cardputerzero.dev" }],
       "post": {
         "operationId": "issueOperationsControlToken",
         "security": [{ "operationsSession": [] }],
@@ -162,6 +171,7 @@
       }
     },
     "/operations/v1/session:logout": {
+      "servers": [{ "url": "https://operations.cardputerzero.dev" }],
       "post": {
         "operationId": "logoutOperationsSession",
         "security": [{ "operationsSession": [] }],
@@ -209,13 +219,13 @@
         "name": "state",
         "in": "query",
         "required": true,
-        "schema": { "type": "string", "minLength": 32, "maxLength": 256 }
+        "schema": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" }
       },
       "CsrfToken": {
         "name": "X-CSRF-Token",
         "in": "header",
         "required": true,
-        "schema": { "type": "string", "minLength": 32, "maxLength": 256 }
+        "schema": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" }
       },
       "IdempotencyKey": {
         "name": "Idempotency-Key",
@@ -250,11 +260,12 @@
       "ReviewSession": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["principal_id", "role", "audience", "idle_expires_unix_seconds", "absolute_expires_unix_seconds", "mfa_authenticated_unix_seconds", "resource_version"],
+        "required": ["principal_id", "role", "audience", "csrf_token", "idle_expires_unix_seconds", "absolute_expires_unix_seconds", "mfa_authenticated_unix_seconds", "resource_version"],
         "properties": {
           "principal_id": { "type": "string", "pattern": "^reviewer_[0-9a-f]{32}$" },
           "role": { "type": "string", "enum": ["reviewer", "senior-reviewer", "admin"] },
           "audience": { "type": "string", "const": "review" },
+          "csrf_token": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
           "idle_expires_unix_seconds": { "type": "integer", "format": "int64", "minimum": 1 },
           "absolute_expires_unix_seconds": { "type": "integer", "format": "int64", "minimum": 1 },
           "mfa_authenticated_unix_seconds": { "type": "integer", "format": "int64", "minimum": 1 },
@@ -264,7 +275,7 @@
       "OperationsSession": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["principal_id", "role", "audience", "allowed_scopes", "idle_expires_unix_seconds", "absolute_expires_unix_seconds", "mfa_authenticated_unix_seconds", "resource_version"],
+        "required": ["principal_id", "role", "audience", "allowed_scopes", "csrf_token", "idle_expires_unix_seconds", "absolute_expires_unix_seconds", "mfa_authenticated_unix_seconds", "resource_version"],
         "properties": {
           "principal_id": { "type": "string", "pattern": "^operator_[0-9a-f]{32}$" },
           "role": { "type": "string", "enum": ["editor", "admin"] },
@@ -276,6 +287,7 @@
             "uniqueItems": true,
             "items": { "type": "string", "enum": ["store.editorial", "store.moderation"] }
           },
+          "csrf_token": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
           "idle_expires_unix_seconds": { "type": "integer", "format": "int64", "minimum": 1 },
           "absolute_expires_unix_seconds": { "type": "integer", "format": "int64", "minimum": 1 },
           "mfa_authenticated_unix_seconds": { "type": "integer", "format": "int64", "minimum": 1 },
