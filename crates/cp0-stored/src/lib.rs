@@ -1,20 +1,22 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::CString;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::os::fd::AsFd;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cp0_appd::{
-    APPD_PROTOCOL_VERSION, AppdCommand, AppdRequest, ResponseData, ResponseOutcome,
+    APPD_PROTOCOL_VERSION, AppdCommand, AppdRequest, DevicePolicy, ResponseData, ResponseOutcome,
     read_response as read_appd_response, write_request as write_appd_request,
 };
 use cp0_networkd::PublicResolver;
@@ -22,9 +24,9 @@ use cp0_store_metadata::validate_png_structure;
 use cp0_store_protocol::{
     CatalogApp, CatalogImageResource, CatalogObjectResource, MAX_INSTALL_BATCH_APPS, SignedCatalog,
     StoreAppDetails, StoreAppState, StoreAppSummary, StoreCommand, StoreControlAction,
-    StoreErrorCode, StoreFailureReason, StoreInstallAccepted, StoreMediaMetadata,
-    StoreMediaSelector, StoreRequest, StoreResponse, StoreResponseData, decode_app_details,
-    decode_signed_catalog, is_lower_hex, is_valid_https_url, read_request,
+    StoreErrorCode, StoreFailureReason, StoreInstallAccepted, StoreInstallPreflight,
+    StoreMediaMetadata, StoreMediaSelector, StoreRequest, StoreResponse, StoreResponseData,
+    decode_app_details, decode_signed_catalog, is_lower_hex, is_valid_https_url, read_request,
     response_requires_descriptor, send_response_with_fd, verify_catalog, write_response,
 };
 use sha2::{Digest, Sha256};
@@ -37,17 +39,22 @@ pub const DEFAULT_CACHE_ROOT: &str = "/var/lib/cardputerzero/store";
 pub const DEFAULT_TRUST_ROOT: &str = "/etc/cardputerzero/trust/store";
 pub const DEFAULT_APPD_INBOX: &str = "/run/cardputerzero-appd/store";
 pub const DEFAULT_APPD_SOCKET: &str = "/run/cardputerzero-appd/control.sock";
+pub const DEFAULT_DEVICE_POLICY: &str = "/etc/cardputerzero/device-policy.json";
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
 const APPD_TIMEOUT: Duration = Duration::from_secs(60);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(45);
 const MAX_REDIRECTS: u32 = 2;
 const CLOCK_SKEW_SECONDS: u64 = 5 * 60;
+const INSTALL_AUTHORIZATION_TTL: Duration = Duration::from_secs(60);
+const INSTALL_DATA_RESERVE_BYTES: u64 = 16 * 1024 * 1024;
+const INSTALL_INBOX_RESERVE_BYTES: u64 = 8 * 1024 * 1024;
 pub const ICON_CACHE_BUDGET_BYTES: u64 = 4 * 1024 * 1024;
 pub const DETAILS_CACHE_BUDGET_BYTES: u64 = 1024 * 1024;
 pub const SCREENSHOT_CACHE_BUDGET_BYTES: u64 = 8 * 1024 * 1024;
 
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static AUTHORIZATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreConfig {
@@ -61,6 +68,7 @@ pub struct StorePaths {
     pub trust_root: PathBuf,
     pub appd_inbox: PathBuf,
     pub appd_socket: PathBuf,
+    pub device_policy: PathBuf,
     pub enforce_root_trust: bool,
 }
 
@@ -73,6 +81,7 @@ impl Default for StorePaths {
             trust_root: PathBuf::from(DEFAULT_TRUST_ROOT),
             appd_inbox: PathBuf::from(DEFAULT_APPD_INBOX),
             appd_socket: PathBuf::from(DEFAULT_APPD_SOCKET),
+            device_policy: PathBuf::from(DEFAULT_DEVICE_POLICY),
             enforce_root_trust: true,
         }
     }
@@ -88,6 +97,9 @@ pub enum StoreServiceError {
     NotFound,
     Busy,
     InvalidState,
+    PolicyRestricted,
+    InsufficientStorage,
+    CatalogChanged,
 }
 
 impl fmt::Display for StoreServiceError {
@@ -102,6 +114,15 @@ impl fmt::Display for StoreServiceError {
             Self::Busy => formatter.write_str("store is already processing an operation"),
             Self::InvalidState => {
                 formatter.write_str("store operation is not valid in the current state")
+            }
+            Self::PolicyRestricted => {
+                formatter.write_str("store installation is blocked by device policy")
+            }
+            Self::InsufficientStorage => {
+                formatter.write_str("store installation does not have enough storage")
+            }
+            Self::CatalogChanged => {
+                formatter.write_str("store catalog changed after installation preflight")
             }
         }
     }
@@ -154,6 +175,19 @@ pub trait StoreNetwork: fmt::Debug + Send + Sync + 'static {
 
 pub trait AppInstaller: fmt::Debug + Send + Sync + 'static {
     fn install(&self, app: &CatalogApp, staged_path: &Path) -> Result<(), StoreServiceError>;
+}
+
+trait StoreSpaceProbe: fmt::Debug + Send + Sync + 'static {
+    fn available_bytes(&self, path: &Path) -> Result<u64, StoreServiceError>;
+}
+
+#[derive(Debug)]
+struct SystemStoreSpaceProbe;
+
+impl StoreSpaceProbe for SystemStoreSpaceProbe {
+    fn available_bytes(&self, path: &Path) -> Result<u64, StoreServiceError> {
+        filesystem_available_bytes(path)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -443,7 +477,32 @@ struct InstallFailure {
 struct MutableState {
     catalog: Option<SignedCatalog>,
     operations: BTreeMap<String, OperationState>,
+    install_authorization: Option<InstallAuthorization>,
     active_job: bool,
+}
+
+#[derive(Debug, Clone)]
+struct InstallAuthorization {
+    id: u64,
+    catalog_sequence: u64,
+    issued_at: Instant,
+    apps: Vec<CatalogApp>,
+}
+
+#[derive(Debug)]
+struct InstallPreflightResult {
+    authorization_id: u64,
+    catalog_sequence: u64,
+    required_bytes: u64,
+    available_bytes: u64,
+    apps: Vec<StoreInstallPreflight>,
+}
+
+#[derive(Debug)]
+struct InstallCapacity {
+    required_bytes: u64,
+    available_bytes: u64,
+    apps: Vec<StoreInstallPreflight>,
 }
 
 #[derive(Clone, Copy)]
@@ -484,6 +543,7 @@ pub struct StoreService {
     config: StoreConfig,
     network: Arc<dyn StoreNetwork>,
     installer: Arc<dyn AppInstaller>,
+    space: Arc<dyn StoreSpaceProbe>,
     trusted_uids: BTreeSet<u32>,
     state: Mutex<MutableState>,
 }
@@ -545,6 +605,24 @@ impl StoreService {
         installer: Arc<dyn AppInstaller>,
         trusted_uids: impl IntoIterator<Item = u32>,
     ) -> Result<Arc<Self>, StoreServiceError> {
+        Self::new_with_space_probe(
+            paths,
+            config,
+            network,
+            installer,
+            trusted_uids,
+            Arc::new(SystemStoreSpaceProbe),
+        )
+    }
+
+    fn new_with_space_probe(
+        paths: StorePaths,
+        config: StoreConfig,
+        network: Arc<dyn StoreNetwork>,
+        installer: Arc<dyn AppInstaller>,
+        trusted_uids: impl IntoIterator<Item = u32>,
+        space: Arc<dyn StoreSpaceProbe>,
+    ) -> Result<Arc<Self>, StoreServiceError> {
         fs::create_dir_all(paths.cache_root.join("packages"))?;
         prepare_media_directories(&paths)?;
         let catalog = match fs::read(&paths.catalog_cache) {
@@ -557,6 +635,7 @@ impl StoreService {
             config,
             network,
             installer,
+            space,
             trusted_uids: trusted_uids.into_iter().collect(),
             state: Mutex::new(MutableState {
                 catalog,
@@ -651,11 +730,29 @@ impl StoreService {
             StoreCommand::Refresh => self
                 .start_refresh()
                 .map(|()| StoreResponseData::RefreshAccepted),
-            StoreCommand::Install { app_id } => self
-                .start_install(&app_id)
+            StoreCommand::PreflightInstall {
+                app_ids,
+                catalog_sequence,
+            } => self
+                .preflight_install(&app_ids, catalog_sequence)
+                .map(|preflight| StoreResponseData::InstallPreflight {
+                    authorization_id: preflight.authorization_id,
+                    catalog_sequence: preflight.catalog_sequence,
+                    required_bytes: preflight.required_bytes,
+                    available_bytes: preflight.available_bytes,
+                    apps: preflight.apps,
+                }),
+            StoreCommand::Install {
+                app_id,
+                authorization_id,
+            } => self
+                .start_authorized_install(&app_id, authorization_id)
                 .map(|version| StoreResponseData::InstallAccepted { app_id, version }),
-            StoreCommand::InstallBatch { app_ids } => self
-                .start_install_batch(&app_ids)
+            StoreCommand::InstallBatch {
+                app_ids,
+                authorization_id,
+            } => self
+                .start_authorized_install_batch(&app_ids, authorization_id)
                 .map(|apps| StoreResponseData::InstallBatchAccepted { apps }),
             StoreCommand::Control { app_id, action } => self
                 .control_operation(&app_id, action)
@@ -871,9 +968,154 @@ impl StoreService {
         Ok(())
     }
 
+    #[cfg(test)]
+    fn current_catalog_sequence(&self) -> Result<u64, StoreServiceError> {
+        self.state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?
+            .catalog
+            .as_ref()
+            .map(|catalog| catalog.catalog.sequence)
+            .ok_or(StoreServiceError::Unconfigured)
+    }
+
+    fn validate_install_preconditions(
+        &self,
+        apps: &[CatalogApp],
+    ) -> Result<InstallCapacity, StoreServiceError> {
+        let policy =
+            DevicePolicy::load_secure(&self.paths.device_policy, self.paths.enforce_root_trust)
+                .map_err(|_| StoreServiceError::Unavailable("device policy is unavailable"))?;
+        if apps
+            .iter()
+            .any(|app| !policy.store_install_allowed || !policy.allows_app(&app.app_id))
+        {
+            return Err(StoreServiceError::PolicyRestricted);
+        }
+        let packages = self.paths.cache_root.join("packages");
+        let mut required_bytes = INSTALL_DATA_RESERVE_BYTES;
+        let mut largest_package = 0_u64;
+        let mut preflight_apps = Vec::with_capacity(apps.len());
+        for app in apps {
+            let partial = packages.join(format!("{}.part", app.package_sha256));
+            let retained = safe_partial_length(&partial, app.package_bytes)?;
+            let missing_download = app.package_bytes.saturating_sub(retained);
+            required_bytes = required_bytes
+                .checked_add(app.package_bytes)
+                .and_then(|value| value.checked_add(missing_download))
+                .ok_or_else(|| {
+                    StoreServiceError::Invalid("install storage requirement overflow".into())
+                })?;
+            largest_package = largest_package.max(app.package_bytes);
+            preflight_apps.push(StoreInstallPreflight {
+                app_id: app.app_id.clone(),
+                version: app.version.clone(),
+                permissions: app.permissions.clone(),
+                policy_denied_permissions: app
+                    .permissions
+                    .iter()
+                    .copied()
+                    .filter(|permission| policy.denies_permission(*permission))
+                    .collect(),
+            });
+        }
+        let available_bytes = self.space.available_bytes(&self.paths.cache_root)?;
+        if available_bytes < required_bytes {
+            return Err(StoreServiceError::InsufficientStorage);
+        }
+        let inbox_required = largest_package
+            .checked_add(INSTALL_INBOX_RESERVE_BYTES)
+            .ok_or_else(|| {
+                StoreServiceError::Invalid("install inbox requirement overflow".into())
+            })?;
+        if self.space.available_bytes(&self.paths.appd_inbox)? < inbox_required {
+            return Err(StoreServiceError::InsufficientStorage);
+        }
+        Ok(InstallCapacity {
+            required_bytes,
+            available_bytes,
+            apps: preflight_apps,
+        })
+    }
+
+    fn preflight_install(
+        &self,
+        app_ids: &[String],
+        catalog_sequence: u64,
+    ) -> Result<InstallPreflightResult, StoreServiceError> {
+        validate_install_ids(app_ids)?;
+        let apps = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+            if state.active_job {
+                return Err(StoreServiceError::Busy);
+            }
+            let catalog = state
+                .catalog
+                .as_ref()
+                .ok_or(StoreServiceError::Unconfigured)?;
+            if catalog.catalog.sequence != catalog_sequence {
+                return Err(StoreServiceError::CatalogChanged);
+            }
+            if unix_time() >= catalog.catalog.expires_unix_seconds {
+                return Err(StoreServiceError::Untrusted(
+                    "catalog has expired; refresh before installing".into(),
+                ));
+            }
+            collect_install_apps(&state, app_ids)?
+        };
+        let capacity = self.validate_install_preconditions(&apps)?;
+        let authorization_id = AUTHORIZATION_SEQUENCE
+            .fetch_add(1, Ordering::Relaxed)
+            .max(1);
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+        if state.active_job {
+            return Err(StoreServiceError::Busy);
+        }
+        let catalog = state
+            .catalog
+            .as_ref()
+            .ok_or(StoreServiceError::Unconfigured)?;
+        if catalog.catalog.sequence != catalog_sequence
+            || !catalog_contains_exact_apps(catalog, &apps)
+        {
+            return Err(StoreServiceError::CatalogChanged);
+        }
+        state.install_authorization = Some(InstallAuthorization {
+            id: authorization_id,
+            catalog_sequence,
+            issued_at: Instant::now(),
+            apps: apps.clone(),
+        });
+        Ok(InstallPreflightResult {
+            authorization_id,
+            catalog_sequence,
+            required_bytes: capacity.required_bytes,
+            available_bytes: capacity.available_bytes,
+            apps: capacity.apps,
+        })
+    }
+
+    #[cfg(test)]
     fn start_install(self: &Arc<Self>, app_id: &str) -> Result<String, StoreServiceError> {
         let app_ids = [app_id.to_owned()];
-        let accepted = self.start_install_batch(&app_ids)?;
+        let sequence = self.current_catalog_sequence()?;
+        let preflight = self.preflight_install(&app_ids, sequence)?;
+        self.start_authorized_install(app_id, preflight.authorization_id)
+    }
+
+    fn start_authorized_install(
+        self: &Arc<Self>,
+        app_id: &str,
+        authorization_id: u64,
+    ) -> Result<String, StoreServiceError> {
+        let app_ids = [app_id.to_owned()];
+        let accepted = self.start_authorized_install_batch(&app_ids, authorization_id)?;
         Ok(accepted
             .into_iter()
             .next()
@@ -881,20 +1123,22 @@ impl StoreService {
             .version)
     }
 
+    #[cfg(test)]
     fn start_install_batch(
         self: &Arc<Self>,
         app_ids: &[String],
     ) -> Result<Vec<StoreInstallAccepted>, StoreServiceError> {
-        if app_ids.is_empty()
-            || app_ids.len() > MAX_INSTALL_BATCH_APPS
-            || app_ids
-                .windows(2)
-                .any(|pair| pair[0].as_str() >= pair[1].as_str())
-        {
-            return Err(StoreServiceError::Invalid(
-                "install batch IDs are invalid, duplicated or unsorted".into(),
-            ));
-        }
+        let sequence = self.current_catalog_sequence()?;
+        let preflight = self.preflight_install(app_ids, sequence)?;
+        self.start_authorized_install_batch(app_ids, preflight.authorization_id)
+    }
+
+    fn start_authorized_install_batch(
+        self: &Arc<Self>,
+        app_ids: &[String],
+        authorization_id: u64,
+    ) -> Result<Vec<StoreInstallAccepted>, StoreServiceError> {
+        validate_install_ids(app_ids)?;
         let apps = {
             let mut state = self
                 .state
@@ -902,6 +1146,21 @@ impl StoreService {
                 .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
             if state.active_job {
                 return Err(StoreServiceError::Busy);
+            }
+            let authorization = state
+                .install_authorization
+                .take()
+                .ok_or(StoreServiceError::InvalidState)?;
+            if authorization.id != authorization_id
+                || authorization.issued_at.elapsed() > INSTALL_AUTHORIZATION_TTL
+                || authorization.apps.len() != app_ids.len()
+                || authorization
+                    .apps
+                    .iter()
+                    .zip(app_ids)
+                    .any(|(app, requested)| app.app_id != *requested)
+            {
+                return Err(StoreServiceError::InvalidState);
             }
             let catalog = state
                 .catalog
@@ -913,29 +1172,23 @@ impl StoreService {
                     "catalog has expired; refresh before installing".into(),
                 ));
             }
-            let mut apps = Vec::with_capacity(app_ids.len());
-            for app_id in app_ids {
-                let app = catalog
-                    .catalog
-                    .apps
-                    .iter()
-                    .find(|app| app.app_id == *app_id)
-                    .cloned()
-                    .ok_or(StoreServiceError::NotFound)?;
-                if state.operations.get(app_id).is_some_and(|operation| {
-                    matches!(
-                        operation.state,
-                        StoreAppState::Queued
-                            | StoreAppState::Downloading
-                            | StoreAppState::Paused
-                            | StoreAppState::Installing
-                    )
-                }) {
-                    return Err(StoreServiceError::InvalidState);
-                }
-                apps.push(app);
+            if catalog.catalog.sequence != authorization.catalog_sequence
+                || !catalog_contains_exact_apps(catalog, &authorization.apps)
+            {
+                return Err(StoreServiceError::CatalogChanged);
             }
             state.active_job = true;
+            authorization.apps
+        };
+        if let Err(error) = self.validate_install_preconditions(&apps) {
+            self.release_job();
+            return Err(error);
+        }
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
             for app in &apps {
                 state.operations.insert(
                     app.app_id.clone(),
@@ -949,8 +1202,7 @@ impl StoreService {
                     },
                 );
             }
-            apps
-        };
+        }
         let accepted = apps
             .iter()
             .map(|app| StoreInstallAccepted {
@@ -998,6 +1250,17 @@ impl StoreService {
                 return Err(StoreServiceError::InvalidState);
             }
             state.active_job = true;
+            app
+        };
+        if let Err(error) = self.validate_install_preconditions(std::slice::from_ref(&app)) {
+            self.release_job();
+            return Err(error);
+        }
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
             state.operations.insert(
                 app.app_id.clone(),
                 OperationState {
@@ -1009,8 +1272,7 @@ impl StoreService {
                     control: DownloadControl::Continue,
                 },
             );
-            app
-        };
+        }
         let version = app.version.clone();
         self.spawn_install_worker(vec![app])?;
         Ok(version)
@@ -1469,6 +1731,64 @@ impl StoreService {
     }
 }
 
+fn validate_install_ids(app_ids: &[String]) -> Result<(), StoreServiceError> {
+    if app_ids.is_empty()
+        || app_ids.len() > MAX_INSTALL_BATCH_APPS
+        || app_ids
+            .windows(2)
+            .any(|pair| pair[0].as_str() >= pair[1].as_str())
+    {
+        return Err(StoreServiceError::Invalid(
+            "install batch IDs are invalid, duplicated or unsorted".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn collect_install_apps(
+    state: &MutableState,
+    app_ids: &[String],
+) -> Result<Vec<CatalogApp>, StoreServiceError> {
+    let catalog = state
+        .catalog
+        .as_ref()
+        .ok_or(StoreServiceError::Unconfigured)?;
+    let mut apps = Vec::with_capacity(app_ids.len());
+    for app_id in app_ids {
+        let app = catalog
+            .catalog
+            .apps
+            .iter()
+            .find(|app| app.app_id == *app_id)
+            .cloned()
+            .ok_or(StoreServiceError::NotFound)?;
+        if state.operations.get(app_id).is_some_and(|operation| {
+            matches!(
+                operation.state,
+                StoreAppState::Queued
+                    | StoreAppState::Downloading
+                    | StoreAppState::Paused
+                    | StoreAppState::Installing
+            )
+        }) {
+            return Err(StoreServiceError::InvalidState);
+        }
+        apps.push(app);
+    }
+    Ok(apps)
+}
+
+fn catalog_contains_exact_apps(catalog: &SignedCatalog, apps: &[CatalogApp]) -> bool {
+    apps.iter().all(|expected| {
+        catalog
+            .catalog
+            .apps
+            .iter()
+            .find(|app| app.app_id == expected.app_id)
+            == Some(expected)
+    })
+}
+
 fn store_app_summary(app: &CatalogApp, operation: Option<&OperationState>) -> StoreAppSummary {
     let operation = operation.filter(|operation| {
         (operation.version == app.version && operation.package_sha256 == app.package_sha256)
@@ -1502,7 +1822,11 @@ fn download_failure_reason(error: &StoreServiceError) -> StoreFailureReason {
         StoreServiceError::Unconfigured | StoreServiceError::NotFound => {
             StoreFailureReason::CatalogChanged
         }
-        StoreServiceError::Busy | StoreServiceError::InvalidState => StoreFailureReason::Internal,
+        StoreServiceError::InsufficientStorage => StoreFailureReason::Storage,
+        StoreServiceError::CatalogChanged => StoreFailureReason::CatalogChanged,
+        StoreServiceError::Busy
+        | StoreServiceError::InvalidState
+        | StoreServiceError::PolicyRestricted => StoreFailureReason::Internal,
     }
 }
 
@@ -1512,6 +1836,37 @@ fn remove_partial_package(path: &Path) -> Result<(), StoreServiceError> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(StoreServiceError::Io(error)),
     }
+}
+
+fn safe_partial_length(path: &Path, expected_bytes: u64) -> Result<u64, StoreServiceError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(StoreServiceError::Io(error)),
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.mode() & 0o077 != 0
+        || metadata.len() > expected_bytes
+    {
+        return Err(StoreServiceError::Invalid(
+            "partial package metadata is invalid during preflight".into(),
+        ));
+    }
+    Ok(metadata.len())
+}
+
+fn filesystem_available_bytes(path: &Path) -> Result<u64, StoreServiceError> {
+    let encoded = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| StoreServiceError::Invalid("storage preflight path contains NUL".into()))?;
+    let mut status = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `encoded` is NUL terminated and `status` points to writable storage.
+    if unsafe { libc::statvfs(encoded.as_ptr(), status.as_mut_ptr()) } != 0 {
+        return Err(StoreServiceError::Io(io::Error::last_os_error()));
+    }
+    // SAFETY: a successful statvfs call initialized the complete structure.
+    let status = unsafe { status.assume_init() };
+    Ok((status.f_bavail as u64).saturating_mul(status.f_frsize as u64))
 }
 
 fn search_rank(app: &CatalogApp, normalized_query: &str) -> Option<u8> {
@@ -2193,6 +2548,18 @@ fn service_error_response(request_id: u64, error: &StoreServiceError) -> StoreRe
             StoreErrorCode::InvalidState,
             "store operation is not valid in the current state",
         ),
+        StoreServiceError::PolicyRestricted => (
+            StoreErrorCode::PolicyRestricted,
+            "store installation is blocked by device policy",
+        ),
+        StoreServiceError::InsufficientStorage => (
+            StoreErrorCode::InsufficientStorage,
+            "store installation does not have enough storage",
+        ),
+        StoreServiceError::CatalogChanged => (
+            StoreErrorCode::CatalogChanged,
+            "store catalog changed after installation preflight",
+        ),
         StoreServiceError::Untrusted(_) => {
             (StoreErrorCode::Untrusted, "store trust verification failed")
         }
@@ -2272,6 +2639,15 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::sync::Barrier;
     use std::sync::atomic::AtomicBool;
+
+    #[derive(Debug)]
+    struct MockSpaceProbe(u64);
+
+    impl StoreSpaceProbe for MockSpaceProbe {
+        fn available_bytes(&self, _path: &Path) -> Result<u64, StoreServiceError> {
+            Ok(self.0)
+        }
+    }
 
     #[derive(Debug)]
     struct MockNetwork {
@@ -2677,6 +3053,7 @@ mod tests {
             let cache_root = root.join("cache");
             let trust_root = root.join("trust");
             let inbox = root.join("inbox");
+            let device_policy = root.join("device-policy.json");
             for directory in [&cache_root, &trust_root, &inbox] {
                 fs::create_dir_all(directory).unwrap();
             }
@@ -2684,6 +3061,11 @@ mod tests {
             let public = cp0_package::public_key(&secret);
             let key_id = cp0_store_protocol::lower_hex(&cp0_package::key_id(&public));
             fs::write(trust_root.join(format!("{key_id}.pub")), public).unwrap();
+            fs::write(
+                &device_policy,
+                br#"{"schema_version":1,"authority":"personal","developer_mode_allowed":true,"recovery_mode_allowed":true,"store_install_allowed":true,"app_launch_policy":"allow-all","allowed_apps":[],"denied_permissions":[]}"#,
+            )
+            .unwrap();
             Self {
                 paths: StorePaths {
                     catalog_cache: cache_root.join("catalog.json"),
@@ -2691,6 +3073,7 @@ mod tests {
                     trust_root,
                     appd_inbox: inbox,
                     appd_socket: root.join("appd.sock"),
+                    device_policy,
                     enforce_root_trust: false,
                 },
                 root,
@@ -3466,11 +3849,10 @@ mod tests {
         let packages = storage_fixture.paths.cache_root.join("packages");
         fs::remove_dir(&packages).unwrap();
         fs::write(&packages, b"not a directory").unwrap();
-        storage_service.start_install(&storage_app.app_id).unwrap();
-        assert_eq!(
-            wait_for_store_state(&storage_service, StoreAppState::Failed).failure_reason,
-            Some(StoreFailureReason::Storage)
-        );
+        assert!(matches!(
+            storage_service.start_install(&storage_app.app_id),
+            Err(StoreServiceError::Io(_))
+        ));
 
         let verification_fixture = Fixture::new("failure-verification");
         let verification_catalog = verification_fixture.signed_catalog(1);
@@ -3761,6 +4143,102 @@ mod tests {
                     if apps[0].app_id == "dev.cardputerzero.signal"
             ));
         }
+    }
+
+    #[test]
+    fn preflight_binds_policy_permissions_capacity_catalog_and_authorization() {
+        let fixture = Fixture::new("install-preflight");
+        let mut app = fixture.catalog_app(
+            "dev.cardputerzero.storetest",
+            "Store Test",
+            "Tests exact install preflight binding",
+        );
+        app.permissions = vec![
+            cp0_manifest::Permission::CameraCapture,
+            cp0_manifest::Permission::NetworkClient,
+        ];
+        let catalog = fixture.signed_catalog_with_apps(7, unix_time() + 3600, vec![app]);
+        fs::write(&fixture.paths.catalog_cache, catalog).unwrap();
+        fs::write(
+            &fixture.paths.device_policy,
+            br#"{"schema_version":1,"authority":"personal","developer_mode_allowed":true,"recovery_mode_allowed":true,"store_install_allowed":true,"app_launch_policy":"allow-all","allowed_apps":[],"denied_permissions":["camera.capture"]}"#,
+        )
+        .unwrap();
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+        let app_ids = vec!["dev.cardputerzero.storetest".into()];
+        assert!(matches!(
+            service.preflight_install(&app_ids, 6),
+            Err(StoreServiceError::CatalogChanged)
+        ));
+        let preflight = service.preflight_install(&app_ids, 7).unwrap();
+        assert!(preflight.required_bytes >= INSTALL_DATA_RESERVE_BYTES);
+        assert!(preflight.available_bytes >= preflight.required_bytes);
+        assert_eq!(
+            preflight.apps[0].permissions,
+            vec![
+                cp0_manifest::Permission::CameraCapture,
+                cp0_manifest::Permission::NetworkClient,
+            ]
+        );
+        assert_eq!(
+            preflight.apps[0].policy_denied_permissions,
+            vec![cp0_manifest::Permission::CameraCapture]
+        );
+        assert!(matches!(
+            service.start_authorized_install(&app_ids[0], preflight.authorization_id + 1),
+            Err(StoreServiceError::InvalidState)
+        ));
+        let preflight = service.preflight_install(&app_ids, 7).unwrap();
+        service
+            .start_authorized_install(&app_ids[0], preflight.authorization_id)
+            .unwrap();
+        wait_for_store_state(&service, StoreAppState::Installed);
+        assert!(matches!(
+            service.start_authorized_install(&app_ids[0], preflight.authorization_id),
+            Err(StoreServiceError::InvalidState)
+        ));
+
+        fs::write(
+            &fixture.paths.device_policy,
+            br#"{"schema_version":1,"authority":"personal","developer_mode_allowed":true,"recovery_mode_allowed":true,"store_install_allowed":false,"app_launch_policy":"allow-all","allowed_apps":[],"denied_permissions":["camera.capture"]}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            service.preflight_install(&app_ids, 7),
+            Err(StoreServiceError::PolicyRestricted)
+        ));
+
+        fs::write(
+            &fixture.paths.device_policy,
+            br#"{"schema_version":1,"authority":"personal","developer_mode_allowed":true,"recovery_mode_allowed":true,"store_install_allowed":true,"app_launch_policy":"allow-all","allowed_apps":[],"denied_permissions":["camera.capture"]}"#,
+        )
+        .unwrap();
+        let low_space = StoreService::new_with_space_probe(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+            Arc::new(MockSpaceProbe(1)),
+        )
+        .unwrap();
+        assert!(matches!(
+            low_space.preflight_install(&app_ids, 7),
+            Err(StoreServiceError::InsufficientStorage)
+        ));
     }
 
     #[test]

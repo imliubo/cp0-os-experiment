@@ -523,6 +523,7 @@ name = "cp0-stored"
 version = "0.1.0"
 dependencies = [
  "cp0-appd",
+ "cp0-manifest",
  "cp0-networkd",
  "cp0-package",
  "cp0-store-metadata",

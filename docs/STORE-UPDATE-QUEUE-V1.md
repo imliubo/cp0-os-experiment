@@ -12,12 +12,18 @@ Protocol version 1 adds the strict command:
 ```json
 {
   "name": "install-batch",
+  "authorization_id": 91,
   "app_ids": [
     "dev.cardputerzero.alpha",
     "dev.cardputerzero.beta"
   ]
 }
 ```
+
+S7D requires this command to follow a successful `preflight-install` for the
+same Catalog sequence and exact ID list. The authorization is single-use and
+also binds versions, package digests, sizes, permissions, policy, and capacity;
+see `STORE-INSTALL-PREFLIGHT-V1.md`.
 
 `app_ids` contains 1 through 8 valid application IDs in ascending byte order.
 Empty, oversized, duplicated, unsorted, invalid, or unknown IDs reject the
@@ -91,6 +97,7 @@ CLI:
 
 ```sh
 sudo cp0ctl store install-batch \
+  --approve-permissions \
   dev.cardputerzero.alpha \
   dev.cardputerzero.beta
 ```

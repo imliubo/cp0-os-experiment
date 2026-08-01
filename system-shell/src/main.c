@@ -73,6 +73,8 @@ struct shell {
     unsigned int store_poll_delay;
     unsigned int notification_ticks;
     uint64_t store_notification_serial;
+    uint64_t store_catalog_sequence;
+    struct cp0_store_install_preflight store_preflight;
     struct cp0_app_list installed_apps;
     uint32_t store_icon_pixels[CP0_STORE_ICON_MAX_PIXELS];
     uint32_t store_screenshot_pixels[CP0_STORE_SCREENSHOT_PIXELS];
@@ -303,6 +305,7 @@ static void poll_store_catalog(struct shell *shell)
         cp0_ui_set_store_status(&shell->ui, CP0_UI_STORE_UNAVAILABLE);
         return;
     }
+    shell->store_catalog_sequence = catalog.sequence;
     for (size_t index = 0; index < catalog.count; index++) {
         const struct cp0_app_summary *installed =
             installed_app(shell, catalog.apps[index].app_id);
@@ -478,7 +481,8 @@ static void show_store_completion_notification(struct shell *shell)
 
     if (shell->ui.permission_prompt || shell->ui.document_prompt ||
         shell->ui.power_dialog || shell->ui.settings_confirm ||
-        shell->ui.notification_banner || shell->ui.system_action_overlay)
+        shell->ui.store_install_prompt || shell->ui.notification_banner ||
+        shell->ui.system_action_overlay)
         return;
     if (!cp0_ui_take_store_completion(&shell->ui, &completion))
         return;
@@ -723,6 +727,109 @@ static void shell_redraw(struct shell *shell)
     shell->redraw_pending = false;
 }
 
+static const struct cp0_ui_store_app *store_ui_app(
+    const struct cp0_ui *ui, const char *app_id)
+{
+    for (unsigned int index = 0; index < ui->store_count; index++)
+        if (strcmp(ui->store_apps[index].app_id, app_id) == 0)
+            return &ui->store_apps[index];
+    for (unsigned int index = 0; index < ui->store_search_count; index++)
+        if (strcmp(ui->store_search_apps[index].app_id, app_id) == 0)
+            return &ui->store_search_apps[index];
+    return NULL;
+}
+
+static uint8_t permission_count(uint16_t permissions)
+{
+    uint8_t count = 0;
+    for (unsigned int bit = 0; bit < 8; bit++)
+        count += (permissions & (1U << bit)) != 0;
+    return count;
+}
+
+static void show_store_preflight_error(struct shell *shell, int result)
+{
+    enum cp0_ui_store_preflight_error error = CP0_UI_STORE_PREFLIGHT_UNAVAILABLE;
+    if (result == CP0_STORE_RESULT_POLICY_RESTRICTED)
+        error = CP0_UI_STORE_PREFLIGHT_POLICY;
+    else if (result == CP0_STORE_RESULT_INSUFFICIENT_STORAGE)
+        error = CP0_UI_STORE_PREFLIGHT_STORAGE;
+    else if (result == CP0_STORE_RESULT_CATALOG_CHANGED)
+        error = CP0_UI_STORE_PREFLIGHT_CATALOG;
+    cp0_ui_show_store_preflight_error(&shell->ui, error);
+}
+
+static int submit_store_preflight(struct shell *shell)
+{
+    const struct cp0_store_install_preflight *preflight =
+        &shell->store_preflight;
+    const char *app_ids[CP0_STORE_INSTALL_BATCH_MAX];
+    if (preflight->count == 0 ||
+        preflight->count > CP0_STORE_INSTALL_BATCH_MAX ||
+        preflight->authorization_id == 0)
+        return CP0_STORE_RESULT_ERROR;
+    for (size_t index = 0; index < preflight->count; index++)
+        app_ids[index] = preflight->apps[index].app_id;
+    int result = preflight->count == 1
+                     ? cp0_store_install(app_ids[0],
+                                         preflight->authorization_id)
+                     : cp0_store_install_batch(app_ids, preflight->count,
+                                               preflight->authorization_id);
+    if (result == CP0_STORE_RESULT_OK) {
+        for (size_t index = 0; index < preflight->count; index++)
+            cp0_ui_set_store_app_state(&shell->ui, app_ids[index],
+                                       CP0_UI_STORE_QUEUED, 0);
+        shell->store_poll_delay = 1;
+        fprintf(stderr, "system-shell: authorized Store install for %zu apps\n",
+                preflight->count);
+    } else if (result != CP0_STORE_RESULT_BUSY) {
+        show_store_preflight_error(shell, result);
+        fprintf(stderr,
+                "system-shell: authorized Store install failed for %zu apps\n",
+                preflight->count);
+    }
+    if (result != CP0_STORE_RESULT_BUSY)
+        memset(&shell->store_preflight, 0, sizeof(shell->store_preflight));
+    return result;
+}
+
+static void begin_store_preflight(struct shell *shell,
+                                  const char *const app_ids[],
+                                  size_t app_count)
+{
+    struct cp0_store_install_preflight preflight;
+    uint16_t new_permissions = 0;
+    uint16_t denied_permissions = 0;
+    int result = cp0_store_preflight_install(
+        shell->store_catalog_sequence, app_ids, app_count, &preflight);
+    if (result != CP0_STORE_RESULT_OK) {
+        show_store_preflight_error(shell, result);
+        return;
+    }
+    for (size_t index = 0; index < preflight.count; index++) {
+        const struct cp0_ui_store_app *app =
+            store_ui_app(&shell->ui, preflight.apps[index].app_id);
+        if (app == NULL || strcmp(app->version, preflight.apps[index].version) != 0 ||
+            app->permissions != preflight.apps[index].permissions) {
+            cp0_ui_show_store_preflight_error(&shell->ui,
+                                              CP0_UI_STORE_PREFLIGHT_CATALOG);
+            return;
+        }
+        new_permissions |=
+            preflight.apps[index].permissions & ~app->installed_permissions;
+        denied_permissions |= preflight.apps[index].policy_denied_permissions;
+    }
+    shell->store_preflight = preflight;
+    if (new_permissions == 0 && denied_permissions == 0) {
+        (void)submit_store_preflight(shell);
+        return;
+    }
+    cp0_ui_show_store_install_prompt(
+        &shell->ui, (uint8_t)preflight.count,
+        permission_count(new_permissions), permission_count(denied_permissions),
+        preflight.required_bytes, preflight.available_bytes);
+}
+
 static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
 {
     enum cp0_ui_screen previous_screen = shell->ui.screen;
@@ -886,50 +993,17 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         const char *selected = cp0_ui_selected_store_app_id(&shell->ui);
         if (selected != NULL &&
             snprintf(app_id, sizeof(app_id), "%s", selected) > 0) {
-            int result = cp0_store_install(app_id);
-            if (result == CP0_STORE_RESULT_OK) {
-                cp0_ui_set_store_app_state(&shell->ui, app_id,
-                                           CP0_UI_STORE_QUEUED, 0);
-                shell->store_poll_delay = 1;
-                fprintf(stderr,
-                        "system-shell: store install requested for %s\n",
-                        app_id);
-            } else if (result == CP0_STORE_RESULT_UNCONFIGURED) {
-                cp0_ui_set_store_status(&shell->ui,
-                                        CP0_UI_STORE_UNCONFIGURED);
-            } else if (result != CP0_STORE_RESULT_BUSY) {
-                cp0_ui_set_store_app_state(&shell->ui, app_id,
-                                           CP0_UI_STORE_FAILED, 0);
-                fprintf(stderr, "system-shell: store install failed for %s\n",
-                        app_id);
-            }
+            const char *app_ids[] = {app_id};
+            begin_store_preflight(shell, app_ids, 1);
         }
     } else if (event == CP0_UI_EVENT_STORE_UPDATE_ALL) {
         const char *app_ids[CP0_STORE_INSTALL_BATCH_MAX];
         size_t app_count = cp0_ui_collect_store_update_batch(
             &shell->ui, app_ids, CP0_STORE_INSTALL_BATCH_MAX);
-        if (app_count > 0) {
-            int result = cp0_store_install_batch(app_ids, app_count);
-            if (result == CP0_STORE_RESULT_OK) {
-                for (size_t index = 0; index < app_count; index++)
-                    cp0_ui_set_store_app_state(
-                        &shell->ui, app_ids[index], CP0_UI_STORE_QUEUED, 0);
-                shell->store_poll_delay = 1;
-                fprintf(stderr,
-                        "system-shell: store update batch requested for %zu apps\n",
-                        app_count);
-            } else if (result == CP0_STORE_RESULT_UNCONFIGURED) {
-                cp0_ui_set_store_status(&shell->ui,
-                                        CP0_UI_STORE_UNCONFIGURED);
-            } else if (result != CP0_STORE_RESULT_BUSY) {
-                for (size_t index = 0; index < app_count; index++)
-                    cp0_ui_set_store_app_state(
-                        &shell->ui, app_ids[index], CP0_UI_STORE_FAILED, 0);
-                fprintf(stderr,
-                        "system-shell: store update batch failed for %zu apps\n",
-                        app_count);
-            }
-        }
+        if (app_count > 0)
+            begin_store_preflight(shell, app_ids, app_count);
+    } else if (event == CP0_UI_EVENT_STORE_INSTALL_CONFIRM) {
+        (void)submit_store_preflight(shell);
     } else if (event == CP0_UI_EVENT_STORE_PAUSE ||
                event == CP0_UI_EVENT_STORE_RESUME ||
                event == CP0_UI_EVENT_STORE_CANCEL) {
@@ -954,6 +1028,10 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                         (unsigned int)action, app_id);
             } else if (result != CP0_STORE_RESULT_BUSY) {
                 shell->store_poll_delay = 1;
+                if (result == CP0_STORE_RESULT_POLICY_RESTRICTED ||
+                    result == CP0_STORE_RESULT_INSUFFICIENT_STORAGE ||
+                    result == CP0_STORE_RESULT_CATALOG_CHANGED)
+                    show_store_preflight_error(shell, result);
                 fprintf(stderr,
                         "system-shell: store control %u failed for %s\n",
                         (unsigned int)action, app_id);

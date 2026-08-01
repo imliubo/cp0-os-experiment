@@ -358,7 +358,8 @@ static bool valid_error_code(const char *document,
     static const char *codes[] = {
         "invalid-request", "unauthorized", "unconfigured", "unavailable",
         "not-found",       "busy",         "invalid-state", "untrusted",
-        "resource-exhausted", "internal",
+        "resource-exhausted", "policy-restricted", "insufficient-storage",
+        "catalog-changed", "internal",
     };
     for (size_t index = 0; index < sizeof(codes) / sizeof(codes[0]); index++) {
         if (cp0_json_string_equals(document, token, codes[index]))
@@ -409,6 +410,15 @@ static int parse_envelope(const char *document, size_t length,
             return CP0_STORE_RESULT_UNCONFIGURED;
         if (cp0_json_string_equals(document, &tokens[code], "busy"))
             return CP0_STORE_RESULT_BUSY;
+        if (cp0_json_string_equals(document, &tokens[code],
+                                   "policy-restricted"))
+            return CP0_STORE_RESULT_POLICY_RESTRICTED;
+        if (cp0_json_string_equals(document, &tokens[code],
+                                   "insufficient-storage"))
+            return CP0_STORE_RESULT_INSUFFICIENT_STORAGE;
+        if (cp0_json_string_equals(document, &tokens[code],
+                                   "catalog-changed"))
+            return CP0_STORE_RESULT_CATALOG_CHANGED;
         return CP0_STORE_RESULT_ERROR;
     }
     *data = cp0_json_object_get(document, tokens, (size_t)count, outcome, "data");
@@ -479,6 +489,33 @@ static bool permission_bit(const char *document,
     return false;
 }
 
+static bool parse_permissions(const char *document,
+                              const struct cp0_json_token *tokens,
+                              size_t token_count, int array,
+                              uint16_t *permissions)
+{
+    char previous[32] = {0};
+    if (array < 0 || tokens[array].type != CP0_JSON_ARRAY ||
+        tokens[array].children > 8)
+        return false;
+    *permissions = 0;
+    for (unsigned int index = 0; index < tokens[array].children; index++) {
+        int permission = cp0_json_array_get(tokens, token_count, array, index);
+        char name[32];
+        uint16_t bit;
+        if (permission < 0 ||
+            !cp0_json_copy_string(document, &tokens[permission], name,
+                                  sizeof(name)) ||
+            !permission_bit(document, &tokens[permission], &bit) ||
+            (index > 0 && strcmp(previous, name) >= 0) ||
+            (*permissions & bit) != 0)
+            return false;
+        memcpy(previous, name, strlen(name) + 1U);
+        *permissions |= bit;
+    }
+    return true;
+}
+
 static bool parse_app(const char *document,
                       const struct cp0_json_token *tokens, size_t token_count,
                       int item, struct cp0_store_app_summary *app)
@@ -511,8 +548,9 @@ static bool parse_app(const char *document,
         app->package_bytes == 0 || app->package_bytes > CP0_STORE_MAX_PACKAGE_BYTES ||
         !parse_state(document, &tokens[state], &app->state) ||
         !cp0_json_get_u64(document, &tokens[progress], &parsed_progress) ||
-        parsed_progress > 100 || tokens[permissions].type != CP0_JSON_ARRAY ||
-        tokens[permissions].children > 8)
+        parsed_progress > 100 ||
+        !parse_permissions(document, tokens, token_count, permissions,
+                           &app->permissions))
         return false;
     app->progress_percent = (uint8_t)parsed_progress;
     app->failure_reason = CP0_STORE_FAILURE_NONE;
@@ -531,22 +569,6 @@ static bool parse_app(const char *document,
              : (tokens[item].children != 16 || failure >= 0)))
         return false;
 
-    char previous[32] = {0};
-    app->permissions = 0;
-    for (unsigned int index = 0; index < tokens[permissions].children; index++) {
-        int permission = cp0_json_array_get(tokens, token_count, permissions, index);
-        char name[32];
-        uint16_t bit;
-        if (permission < 0 ||
-            !cp0_json_copy_string(document, &tokens[permission], name,
-                                  sizeof(name)) ||
-            !permission_bit(document, &tokens[permission], &bit) ||
-            (index > 0 && strcmp(previous, name) >= 0) ||
-            (app->permissions & bit) != 0)
-            return false;
-        memcpy(previous, name, strlen(name) + 1U);
-        app->permissions |= bit;
-    }
     return true;
 }
 
@@ -783,6 +805,85 @@ static bool valid_install_batch(const char *const app_ids[], size_t app_count)
             return false;
     }
     return true;
+}
+
+static int parse_install_preflight(
+    const char *response, size_t response_length, uint64_t request_id,
+    uint64_t expected_sequence, const char *const expected_app_ids[],
+    size_t expected_app_count, struct cp0_store_install_preflight *preflight)
+{
+    struct cp0_json_token tokens[256];
+    size_t token_count;
+    int data;
+    uint64_t authorization_id;
+    uint64_t catalog_sequence;
+    uint64_t required_bytes;
+    uint64_t available_bytes;
+
+    if (preflight == NULL || expected_sequence == 0 ||
+        !valid_install_batch(expected_app_ids, expected_app_count))
+        return CP0_STORE_RESULT_ERROR;
+    int result = parse_envelope(response, response_length, request_id, tokens,
+                                256, &token_count, &data);
+    if (result != CP0_STORE_RESULT_OK)
+        return result;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int authorization = cp0_json_object_get(
+        response, tokens, token_count, data, "authorization_id");
+    int sequence = cp0_json_object_get(response, tokens, token_count, data,
+                                       "catalog_sequence");
+    int required = cp0_json_object_get(response, tokens, token_count, data,
+                                       "required_bytes");
+    int available = cp0_json_object_get(response, tokens, token_count, data,
+                                        "available_bytes");
+    int apps = cp0_json_object_get(response, tokens, token_count, data, "apps");
+    if (tokens[data].children != 12 || kind < 0 || authorization < 0 ||
+        sequence < 0 || required < 0 || available < 0 || apps < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind],
+                                "install-preflight") ||
+        !cp0_json_get_u64(response, &tokens[authorization],
+                          &authorization_id) ||
+        !cp0_json_get_u64(response, &tokens[sequence], &catalog_sequence) ||
+        !cp0_json_get_u64(response, &tokens[required], &required_bytes) ||
+        !cp0_json_get_u64(response, &tokens[available], &available_bytes) ||
+        authorization_id == 0 || catalog_sequence != expected_sequence ||
+        required_bytes == 0 || available_bytes < required_bytes ||
+        tokens[apps].type != CP0_JSON_ARRAY ||
+        tokens[apps].children != expected_app_count)
+        return CP0_STORE_RESULT_ERROR;
+    memset(preflight, 0, sizeof(*preflight));
+    preflight->authorization_id = authorization_id;
+    preflight->catalog_sequence = catalog_sequence;
+    preflight->required_bytes = required_bytes;
+    preflight->available_bytes = available_bytes;
+    preflight->count = expected_app_count;
+    for (size_t index = 0; index < expected_app_count; index++) {
+        int item = cp0_json_array_get(tokens, token_count, apps,
+                                      (unsigned int)index);
+        int permissions;
+        int denied;
+        struct cp0_store_install_preflight_app *app = &preflight->apps[index];
+        if (item < 0 || tokens[item].type != CP0_JSON_OBJECT ||
+            tokens[item].children != 8 ||
+            !copy_member(response, tokens, token_count, item, "app_id",
+                         app->app_id, sizeof(app->app_id)) ||
+            strcmp(app->app_id, expected_app_ids[index]) != 0 ||
+            !copy_member(response, tokens, token_count, item, "version",
+                         app->version, sizeof(app->version)) ||
+            !valid_version(app->version))
+            return CP0_STORE_RESULT_ERROR;
+        permissions = cp0_json_object_get(response, tokens, token_count, item,
+                                          "permissions");
+        denied = cp0_json_object_get(response, tokens, token_count, item,
+                                     "policy_denied_permissions");
+        if (!parse_permissions(response, tokens, token_count, permissions,
+                               &app->permissions) ||
+            !parse_permissions(response, tokens, token_count, denied,
+                               &app->policy_denied_permissions) ||
+            (app->policy_denied_permissions & ~app->permissions) != 0)
+            return CP0_STORE_RESULT_ERROR;
+    }
+    return CP0_STORE_RESULT_OK;
 }
 
 static int parse_install_batch_accepted(
@@ -1241,6 +1342,16 @@ int cp0_store_test_parse_install_response(const char *response,
                           "install-accepted", app_id);
 }
 
+int cp0_store_test_parse_install_preflight_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    uint64_t catalog_sequence, const char *const app_ids[], size_t app_count,
+    struct cp0_store_install_preflight *preflight)
+{
+    return parse_install_preflight(response, response_length, request_id,
+                                   catalog_sequence, app_ids, app_count,
+                                   preflight);
+}
+
 int cp0_store_test_parse_install_batch_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *const app_ids[], size_t app_count)
@@ -1378,20 +1489,66 @@ int cp0_store_refresh(void)
                           "refresh-accepted", NULL);
 }
 
-int cp0_store_install(const char *app_id)
+int cp0_store_preflight_install(
+    uint64_t catalog_sequence, const char *const app_ids[], size_t app_count,
+    struct cp0_store_install_preflight *preflight)
+{
+    char request[2048];
+    char response[8192];
+    size_t request_offset;
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+
+    if (catalog_sequence == 0 || preflight == NULL ||
+        !valid_install_batch(app_ids, app_count))
+        return CP0_STORE_RESULT_ERROR;
+    int written = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"preflight-install\",\"app_ids\":[",
+        (unsigned long long)request_id);
+    if (written <= 0 || (size_t)written >= sizeof(request))
+        return CP0_STORE_RESULT_ERROR;
+    request_offset = (size_t)written;
+    for (size_t index = 0; index < app_count; index++) {
+        written = snprintf(request + request_offset,
+                           sizeof(request) - request_offset, "%s\"%s\"",
+                           index == 0 ? "" : ",", app_ids[index]);
+        if (written <= 0 || (size_t)written >= sizeof(request) - request_offset)
+            return CP0_STORE_RESULT_ERROR;
+        request_offset += (size_t)written;
+    }
+    written = snprintf(request + request_offset,
+                       sizeof(request) - request_offset,
+                       "],\"catalog_sequence\":%llu}}\n",
+                       (unsigned long long)catalog_sequence);
+    if (written <= 0 || (size_t)written >= sizeof(request) - request_offset)
+        return CP0_STORE_RESULT_ERROR;
+    request_offset += (size_t)written;
+    if (exchange(request, request_offset, response, sizeof(response),
+                 &response_length, 1000, NULL) != 0)
+        return CP0_STORE_RESULT_ERROR;
+    return parse_install_preflight(response, response_length, request_id,
+                                   catalog_sequence, app_ids, app_count,
+                                   preflight);
+}
+
+int cp0_store_install(const char *app_id, uint64_t authorization_id)
 {
     char request[384];
     char response[1024];
     size_t response_length;
     uint64_t request_id = next_request_id++;
 
-    if (!valid_app_id(app_id))
+    if (!valid_app_id(app_id) || authorization_id == 0)
         return CP0_STORE_RESULT_ERROR;
     int request_length = snprintf(
         request, sizeof(request),
         "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
-        "\"name\":\"install\",\"app_id\":\"%s\"}}\n",
-        (unsigned long long)request_id, app_id);
+        "\"name\":\"install\",\"app_id\":\"%s\","
+        "\"authorization_id\":%llu}}\n",
+        (unsigned long long)request_id, app_id,
+        (unsigned long long)authorization_id);
     if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
         exchange(request, (size_t)request_length, response, sizeof(response),
                  &response_length, 1000, NULL) != 0)
@@ -1400,7 +1557,8 @@ int cp0_store_install(const char *app_id)
                           "install-accepted", app_id);
 }
 
-int cp0_store_install_batch(const char *const app_ids[], size_t app_count)
+int cp0_store_install_batch(const char *const app_ids[], size_t app_count,
+                            uint64_t authorization_id)
 {
     char request[2048];
     char response[4096];
@@ -1408,7 +1566,7 @@ int cp0_store_install_batch(const char *const app_ids[], size_t app_count)
     size_t response_length;
     uint64_t request_id = next_request_id++;
 
-    if (!valid_install_batch(app_ids, app_count))
+    if (!valid_install_batch(app_ids, app_count) || authorization_id == 0)
         return CP0_STORE_RESULT_ERROR;
     int written = snprintf(
         request, sizeof(request),
@@ -1427,7 +1585,9 @@ int cp0_store_install_batch(const char *const app_ids[], size_t app_count)
         request_offset += (size_t)written;
     }
     written = snprintf(request + request_offset,
-                       sizeof(request) - request_offset, "]}}\n");
+                       sizeof(request) - request_offset,
+                       "],\"authorization_id\":%llu}}\n",
+                       (unsigned long long)authorization_id);
     if (written <= 0 || (size_t)written >= sizeof(request) - request_offset)
         return CP0_STORE_RESULT_ERROR;
     request_offset += (size_t)written;

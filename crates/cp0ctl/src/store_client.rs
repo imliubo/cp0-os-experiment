@@ -26,6 +26,92 @@ pub fn send(command: StoreCommand) -> Result<(), String> {
     Ok(())
 }
 
+pub fn install(app_ids: Vec<String>) -> Result<(), String> {
+    let socket = env::var_os("CP0_STORE_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(STORE_SOCKET));
+    let catalog = exchange(&socket, StoreCommand::List, TIMEOUT)?;
+    let (sequence, expected_apps) = match catalog.outcome {
+        StoreOutcome::Ok {
+            data: StoreResponseData::Catalog { sequence, apps, .. },
+        } => {
+            let expected = app_ids
+                .iter()
+                .map(|app_id| {
+                    apps.iter()
+                        .find(|app| &app.app_id == app_id)
+                        .map(|app| {
+                            (
+                                app.app_id.clone(),
+                                app.version.clone(),
+                                app.permissions.clone(),
+                            )
+                        })
+                        .ok_or_else(|| format!("Store application {app_id} was not found"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            (sequence, expected)
+        }
+        _ => return Err("Store list response did not contain a catalog".into()),
+    };
+    let preflight = exchange(
+        &socket,
+        StoreCommand::PreflightInstall {
+            app_ids: app_ids.clone(),
+            catalog_sequence: sequence,
+        },
+        TIMEOUT,
+    )?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&preflight)
+            .map_err(|error| format!("cannot encode Store preflight: {error}"))?
+    );
+    let authorization_id = match preflight.outcome {
+        StoreOutcome::Ok {
+            data:
+                StoreResponseData::InstallPreflight {
+                    authorization_id,
+                    apps,
+                    ..
+                },
+        } if apps.len() == expected_apps.len()
+            && apps.iter().zip(&expected_apps).all(
+                |(preflight, (app_id, version, permissions))| {
+                    &preflight.app_id == app_id
+                        && &preflight.version == version
+                        && &preflight.permissions == permissions
+                },
+            ) =>
+        {
+            authorization_id
+        }
+        _ => return Err("Store response did not contain an install preflight".into()),
+    };
+    let command = if app_ids.len() == 1 {
+        StoreCommand::Install {
+            app_id: app_ids[0].clone(),
+            authorization_id,
+        }
+    } else {
+        StoreCommand::InstallBatch {
+            app_ids,
+            authorization_id,
+        }
+    };
+    send_with_socket(&socket, command)
+}
+
+fn send_with_socket(socket: &Path, command: StoreCommand) -> Result<(), String> {
+    let response = exchange(socket, command, TIMEOUT)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&response)
+            .map_err(|error| format!("cannot encode Store response: {error}"))?
+    );
+    Ok(())
+}
+
 fn exchange(
     socket: &Path,
     command: StoreCommand,
@@ -90,9 +176,29 @@ fn response_matches(command: &StoreCommand, data: &StoreResponseData) -> bool {
             },
         ) => requested_query == query && requested_offset == offset && requested_limit == limit,
         (
-            StoreCommand::Install { app_id: requested },
+            StoreCommand::Install {
+                app_id: requested, ..
+            },
             StoreResponseData::InstallAccepted { app_id, .. },
         ) => requested == app_id,
+        (
+            StoreCommand::PreflightInstall {
+                app_ids,
+                catalog_sequence,
+            },
+            StoreResponseData::InstallPreflight {
+                apps,
+                catalog_sequence: response_sequence,
+                ..
+            },
+        ) => {
+            catalog_sequence == response_sequence
+                && app_ids.len() == apps.len()
+                && app_ids
+                    .iter()
+                    .zip(apps)
+                    .all(|(requested, accepted)| requested == &accepted.app_id)
+        }
         (
             StoreCommand::Control {
                 app_id: requested_app,
@@ -101,7 +207,7 @@ fn response_matches(command: &StoreCommand, data: &StoreResponseData) -> bool {
             StoreResponseData::OperationAccepted { app_id, action, .. },
         ) => requested_app == app_id && requested_action == action,
         (
-            StoreCommand::InstallBatch { app_ids },
+            StoreCommand::InstallBatch { app_ids, .. },
             StoreResponseData::InstallBatchAccepted { apps },
         ) => {
             app_ids.len() == apps.len()
@@ -167,6 +273,7 @@ mod tests {
         let (stream, worker) = serve_once(
             StoreCommand::Install {
                 app_id: requested.clone(),
+                authorization_id: 7,
             },
             StoreResponse::success(
                 REQUEST_ID,
@@ -177,7 +284,15 @@ mod tests {
             ),
         );
         assert!(
-            exchange_stream(stream, StoreCommand::Install { app_id: requested }, TIMEOUT).is_err()
+            exchange_stream(
+                stream,
+                StoreCommand::Install {
+                    app_id: requested,
+                    authorization_id: 7,
+                },
+                TIMEOUT,
+            )
+            .is_err()
         );
         worker.join().unwrap();
 
@@ -186,6 +301,7 @@ mod tests {
                 "dev.cardputerzero.alpha".into(),
                 "dev.cardputerzero.beta".into(),
             ],
+            authorization_id: 8,
         };
         let (stream, worker) = serve_once(
             requested.clone(),

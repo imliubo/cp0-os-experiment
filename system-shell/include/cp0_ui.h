@@ -88,6 +88,7 @@ enum cp0_ui_event {
     CP0_UI_EVENT_STORE_SEARCH,
     CP0_UI_EVENT_STORE_DETAILS,
     CP0_UI_EVENT_STORE_SCREENSHOT,
+    CP0_UI_EVENT_STORE_INSTALL_CONFIRM,
     CP0_UI_EVENT_DEVELOPER_ENABLE,
     CP0_UI_EVENT_DEVELOPER_DISABLE,
     CP0_UI_EVENT_RECOVERY_ENABLE,
@@ -152,6 +153,14 @@ enum cp0_ui_store_detail_status {
     CP0_UI_STORE_DETAIL_LOADING,
     CP0_UI_STORE_DETAIL_READY,
     CP0_UI_STORE_DETAIL_UNAVAILABLE,
+};
+
+enum cp0_ui_store_preflight_error {
+    CP0_UI_STORE_PREFLIGHT_NONE,
+    CP0_UI_STORE_PREFLIGHT_POLICY,
+    CP0_UI_STORE_PREFLIGHT_STORAGE,
+    CP0_UI_STORE_PREFLIGHT_CATALOG,
+    CP0_UI_STORE_PREFLIGHT_UNAVAILABLE,
 };
 
 struct cp0_ui_catalog_app {
@@ -309,6 +318,13 @@ struct cp0_ui {
     bool settings_available;
     bool settings_confirm;
     bool settings_confirm_recovery;
+    bool store_install_prompt;
+    enum cp0_ui_store_preflight_error store_preflight_error;
+    uint8_t store_preflight_app_count;
+    uint8_t store_preflight_new_permissions;
+    uint8_t store_preflight_denied_permissions;
+    uint64_t store_preflight_required_bytes;
+    uint64_t store_preflight_available_bytes;
     bool wifi_enabled;
     bool airplane_mode;
     bool muted;
@@ -450,6 +466,12 @@ size_t cp0_ui_collect_store_update_batch(const struct cp0_ui *ui,
                                          size_t app_capacity);
 bool cp0_ui_take_store_completion(
     struct cp0_ui *ui, struct cp0_ui_store_completion *completion);
+void cp0_ui_show_store_install_prompt(
+    struct cp0_ui *ui, uint8_t app_count, uint8_t new_permissions,
+    uint8_t denied_permissions, uint64_t required_bytes,
+    uint64_t available_bytes);
+void cp0_ui_show_store_preflight_error(
+    struct cp0_ui *ui, enum cp0_ui_store_preflight_error error);
 const char *cp0_ui_selected_store_app_id(const struct cp0_ui *ui);
 enum cp0_ui_store_state cp0_ui_selected_store_app_state(
     const struct cp0_ui *ui);

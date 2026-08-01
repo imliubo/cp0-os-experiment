@@ -21,6 +21,10 @@ int cp0_store_test_parse_install_response(const char *response,
                                           size_t response_length,
                                           uint64_t request_id,
                                           const char *app_id);
+int cp0_store_test_parse_install_preflight_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    uint64_t catalog_sequence, const char *const app_ids[], size_t app_count,
+    struct cp0_store_install_preflight *preflight);
 int cp0_store_test_parse_install_batch_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *const app_ids[], size_t app_count);
@@ -210,9 +214,27 @@ int main(void)
         "{\"protocol_version\":1,\"request_id\":18,\"outcome\":{"
         "\"status\":\"error\",\"code\":\"busy\","
         "\"message\":\"Another operation is active\"}}";
+    static const char policy_restricted[] =
+        "{\"protocol_version\":1,\"request_id\":44,\"outcome\":{"
+        "\"status\":\"error\",\"code\":\"policy-restricted\","
+        "\"message\":\"Install is blocked by policy\"}}";
+    static const char insufficient_storage[] =
+        "{\"protocol_version\":1,\"request_id\":45,\"outcome\":{"
+        "\"status\":\"error\",\"code\":\"insufficient-storage\","
+        "\"message\":\"Not enough storage\"}}";
+    static const char catalog_changed[] =
+        "{\"protocol_version\":1,\"request_id\":46,\"outcome\":{"
+        "\"status\":\"error\",\"code\":\"catalog-changed\","
+        "\"message\":\"Catalog identity changed\"}}";
     assert(parse_catalog(unconfigured, 17, &catalog) ==
            CP0_STORE_RESULT_UNCONFIGURED);
     assert(parse_catalog(busy, 18, &catalog) == CP0_STORE_RESULT_BUSY);
+    assert(parse_catalog(policy_restricted, 44, &catalog) ==
+           CP0_STORE_RESULT_POLICY_RESTRICTED);
+    assert(parse_catalog(insufficient_storage, 45, &catalog) ==
+           CP0_STORE_RESULT_INSUFFICIENT_STORAGE);
+    assert(parse_catalog(catalog_changed, 46, &catalog) ==
+           CP0_STORE_RESULT_CATALOG_CHANGED);
 
     static const char refresh[] =
         ENVELOPE_START("19") "\"kind\":\"refresh-accepted\"}}}";
@@ -233,6 +255,44 @@ int main(void)
         "dev.cardputerzero.alpha",
         "dev.cardputerzero.beta",
     };
+    struct cp0_store_install_preflight preflight;
+    static const char install_preflight[] =
+        ENVELOPE_START("42")
+        "\"kind\":\"install-preflight\",\"authorization_id\":9,"
+        "\"catalog_sequence\":4,\"required_bytes\":4096,"
+        "\"available_bytes\":8192,\"apps\":[{"
+        "\"app_id\":\"dev.cardputerzero.alpha\",\"version\":\"1.2.3\","
+        "\"permissions\":[\"camera.capture\",\"network.client\"],"
+        "\"policy_denied_permissions\":[\"camera.capture\"]},{"
+        "\"app_id\":\"dev.cardputerzero.beta\",\"version\":\"2.0.0\","
+        "\"permissions\":[],\"policy_denied_permissions\":[]}]}}}";
+    assert(cp0_store_test_parse_install_preflight_response(
+               install_preflight, strlen(install_preflight), 42, 4, batch_ids,
+               2, &preflight) == CP0_STORE_RESULT_OK);
+    assert(preflight.authorization_id == 9 && preflight.catalog_sequence == 4 &&
+           preflight.required_bytes == 4096 &&
+           preflight.available_bytes == 8192 && preflight.count == 2 &&
+           preflight.apps[0].permissions ==
+               (CP0_STORE_PERMISSION_CAMERA_CAPTURE |
+                CP0_STORE_PERMISSION_NETWORK_CLIENT) &&
+           preflight.apps[0].policy_denied_permissions ==
+               CP0_STORE_PERMISSION_CAMERA_CAPTURE);
+    assert(cp0_store_test_parse_install_preflight_response(
+               install_preflight, strlen(install_preflight), 42, 5, batch_ids,
+               2, &preflight) == CP0_STORE_RESULT_ERROR);
+    static const char invalid_preflight_denied[] =
+        ENVELOPE_START("43")
+        "\"kind\":\"install-preflight\",\"authorization_id\":9,"
+        "\"catalog_sequence\":4,\"required_bytes\":4096,"
+        "\"available_bytes\":8192,\"apps\":[{"
+        "\"app_id\":\"dev.cardputerzero.alpha\",\"version\":\"1.2.3\","
+        "\"permissions\":[],"
+        "\"policy_denied_permissions\":[\"camera.capture\"]},{"
+        "\"app_id\":\"dev.cardputerzero.beta\",\"version\":\"2.0.0\","
+        "\"permissions\":[],\"policy_denied_permissions\":[]}]}}}";
+    assert(cp0_store_test_parse_install_preflight_response(
+               invalid_preflight_denied, strlen(invalid_preflight_denied), 43,
+               4, batch_ids, 2, &preflight) == CP0_STORE_RESULT_ERROR);
     static const char install_batch[] =
         ENVELOPE_START("35")
         "\"kind\":\"install-batch-accepted\",\"apps\":[{"

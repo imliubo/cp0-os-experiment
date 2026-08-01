@@ -1512,6 +1512,67 @@ static void draw_settings_confirm(struct canvas *canvas,
     }
 }
 
+static void draw_store_install_prompt(struct canvas *canvas,
+                                      const struct cp0_ui *ui)
+{
+    static const char *labels[] = {"INSTALL", "CANCEL"};
+    char heading[32];
+    char permissions[32];
+    char storage[48];
+    char required[16];
+    char available[16];
+    fill_rect(canvas, 0, 21, CP0_UI_WIDTH, CP0_UI_HEIGHT - 21, 0x00090b0cu);
+    fill_rect(canvas, 20, 29, 280, 126, COLOR_SURFACE);
+    stroke_rect(canvas, 20, 29, 280, 126, 2,
+                ui->store_preflight_error == CP0_UI_STORE_PREFLIGHT_NONE
+                    ? COLOR_YELLOW
+                    : COLOR_RED);
+    if (ui->store_preflight_error != CP0_UI_STORE_PREFLIGHT_NONE) {
+        static const char *errors[] = {
+            "", "BLOCKED BY DEVICE POLICY", "NOT ENOUGH STORAGE",
+            "CATALOG CHANGED - RETRY", "STORE PREFLIGHT UNAVAILABLE",
+        };
+        draw_text(canvas, 38, 45, "INSTALL BLOCKED", 1, COLOR_RED);
+        draw_text(canvas, 38, 68, errors[ui->store_preflight_error], 1,
+                  COLOR_TEXT);
+        fill_rect(canvas, 104, 112, 112, 25, COLOR_SELECTED);
+        stroke_rect(canvas, 104, 112, 112, 25, 2, COLOR_GREEN);
+        draw_text(canvas, 143, 121, "CLOSE", 1, COLOR_TEXT);
+        return;
+    }
+    snprintf(heading, sizeof(heading), "INSTALL %u APP%s?",
+             ui->store_preflight_app_count,
+             ui->store_preflight_app_count == 1 ? "" : "S");
+    snprintf(permissions, sizeof(permissions), "%u NEW PERMISSIONS",
+             ui->store_preflight_new_permissions);
+    format_bytes(required, ui->store_preflight_required_bytes);
+    format_bytes(available, ui->store_preflight_available_bytes);
+    snprintf(storage, sizeof(storage), "NEED %s / FREE %s", required,
+             available);
+    draw_text(canvas, 38, 42, heading, 1, COLOR_TEXT);
+    draw_text(canvas, 38, 61, permissions, 1,
+              ui->store_preflight_new_permissions > 0 ? COLOR_YELLOW
+                                                      : COLOR_GREEN);
+    draw_text(canvas, 38, 77, storage, 1, COLOR_MUTED);
+    if (ui->store_preflight_denied_permissions > 0) {
+        char denied[32];
+        snprintf(denied, sizeof(denied), "POLICY BLOCKS %u REQUESTS",
+                 ui->store_preflight_denied_permissions);
+        draw_text(canvas, 38, 92, denied, 1, COLOR_RED);
+    }
+    for (unsigned int index = 0; index < 2; index++) {
+        int x = 38 + (int)index * 124;
+        bool selected = ui->dialog_selected == index;
+        fill_rect(canvas, x, 116, 112, 24,
+                  selected ? COLOR_SELECTED : COLOR_BAR);
+        stroke_rect(canvas, x, 116, 112, 24, selected ? 2 : 1,
+                    selected ? (index == 0 ? COLOR_YELLOW : COLOR_GREEN)
+                             : COLOR_MUTED);
+        draw_text(canvas, x + 31, 125, labels[index], 1,
+                  selected ? COLOR_TEXT : COLOR_MUTED);
+    }
+}
+
 static void draw_page(struct canvas *canvas, const struct cp0_ui *ui)
 {
     switch (ui->screen) {
@@ -2522,6 +2583,41 @@ bool cp0_ui_take_store_completion(
     return true;
 }
 
+void cp0_ui_show_store_install_prompt(
+    struct cp0_ui *ui, uint8_t app_count, uint8_t new_permissions,
+    uint8_t denied_permissions, uint64_t required_bytes,
+    uint64_t available_bytes)
+{
+    if (ui == NULL || app_count == 0 ||
+        app_count > CP0_UI_STORE_UPDATE_BATCH_MAX || required_bytes == 0 ||
+        available_bytes < required_bytes)
+        return;
+    ui->store_install_prompt = true;
+    ui->store_preflight_error = CP0_UI_STORE_PREFLIGHT_NONE;
+    ui->store_preflight_app_count = app_count;
+    ui->store_preflight_new_permissions = new_permissions;
+    ui->store_preflight_denied_permissions = denied_permissions;
+    ui->store_preflight_required_bytes = required_bytes;
+    ui->store_preflight_available_bytes = available_bytes;
+    ui->dialog_selected = 1;
+}
+
+void cp0_ui_show_store_preflight_error(
+    struct cp0_ui *ui, enum cp0_ui_store_preflight_error error)
+{
+    if (ui == NULL || error <= CP0_UI_STORE_PREFLIGHT_NONE ||
+        error > CP0_UI_STORE_PREFLIGHT_UNAVAILABLE)
+        return;
+    ui->store_install_prompt = true;
+    ui->store_preflight_error = error;
+    ui->store_preflight_app_count = 0;
+    ui->store_preflight_new_permissions = 0;
+    ui->store_preflight_denied_permissions = 0;
+    ui->store_preflight_required_bytes = 0;
+    ui->store_preflight_available_bytes = 0;
+    ui->dialog_selected = 0;
+}
+
 const char *cp0_ui_selected_store_app_id(const struct cp0_ui *ui)
 {
     const struct cp0_ui_store_app *app;
@@ -2998,7 +3094,7 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         return CP0_UI_EVENT_SCREENSHOT;
     }
     if (action == CP0_UI_HELP && !ui->permission_prompt &&
-        !ui->document_prompt) {
+        !ui->document_prompt && !ui->store_install_prompt) {
         ui->help_overlay = !ui->help_overlay;
         return CP0_UI_EVENT_NONE;
     }
@@ -3034,6 +3130,26 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             return CP0_UI_EVENT_DOCUMENT_CANCEL;
         else if (action == CP0_UI_ACCEPT && ui->document_count > 0)
             return CP0_UI_EVENT_DOCUMENT_SELECT;
+        return CP0_UI_EVENT_NONE;
+    }
+    if (ui->store_install_prompt) {
+        if (ui->store_preflight_error != CP0_UI_STORE_PREFLIGHT_NONE) {
+            if (action == CP0_UI_BACK || action == CP0_UI_ACCEPT)
+                ui->store_install_prompt = false;
+            return CP0_UI_EVENT_NONE;
+        }
+        if (action == CP0_UI_LEFT && ui->dialog_selected > 0)
+            ui->dialog_selected--;
+        else if (action == CP0_UI_RIGHT && ui->dialog_selected < 1)
+            ui->dialog_selected++;
+        else if (action == CP0_UI_BACK) {
+            ui->store_install_prompt = false;
+        } else if (action == CP0_UI_ACCEPT) {
+            unsigned int selected = ui->dialog_selected;
+            ui->store_install_prompt = false;
+            return selected == 0 ? CP0_UI_EVENT_STORE_INSTALL_CONFIRM
+                                 : CP0_UI_EVENT_NONE;
+        }
         return CP0_UI_EVENT_NONE;
     }
     if (action == CP0_UI_GO_HOME) {
@@ -3602,7 +3718,7 @@ void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
     draw_page(&canvas, ui);
     if (ui->notification_banner && !ui->power_dialog &&
         !ui->settings_confirm && !ui->permission_prompt &&
-        !ui->document_prompt)
+        !ui->document_prompt && !ui->store_install_prompt)
         draw_notification_banner(&canvas, ui);
     if (ui->power_dialog)
         draw_power_dialog(&canvas, ui);
@@ -3614,6 +3730,8 @@ void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
         draw_permission_dialog(&canvas, ui);
     else if (ui->document_prompt)
         draw_document_dialog(&canvas, ui);
+    else if (ui->store_install_prompt)
+        draw_store_install_prompt(&canvas, ui);
     else if (ui->help_overlay)
         draw_help_overlay(&canvas);
     else if (ui->system_action_overlay)

@@ -133,11 +133,17 @@ pub enum StoreCommand {
         limit: u8,
     },
     Refresh,
+    PreflightInstall {
+        app_ids: Vec<String>,
+        catalog_sequence: u64,
+    },
     Install {
         app_id: String,
+        authorization_id: u64,
     },
     InstallBatch {
         app_ids: Vec<String>,
+        authorization_id: u64,
     },
     Control {
         app_id: String,
@@ -208,6 +214,13 @@ pub enum StoreResponseData {
         apps: Vec<StoreAppSummary>,
     },
     RefreshAccepted,
+    InstallPreflight {
+        authorization_id: u64,
+        catalog_sequence: u64,
+        required_bytes: u64,
+        available_bytes: u64,
+        apps: Vec<StoreInstallPreflight>,
+    },
     InstallAccepted {
         app_id: String,
         version: String,
@@ -244,6 +257,15 @@ pub enum StoreResponseData {
 pub struct StoreInstallAccepted {
     pub app_id: String,
     pub version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoreInstallPreflight {
+    pub app_id: String,
+    pub version: String,
+    pub permissions: Vec<Permission>,
+    pub policy_denied_permissions: Vec<Permission>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -315,6 +337,9 @@ pub enum StoreErrorCode {
     InvalidState,
     Untrusted,
     ResourceExhausted,
+    PolicyRestricted,
+    InsufficientStorage,
+    CatalogChanged,
     Internal,
 }
 
@@ -666,8 +691,17 @@ impl StoreRequest {
                 validate_search_query(query)?;
                 validate_search_page(*offset, *limit)?;
             }
-            StoreCommand::Install { app_id }
-            | StoreCommand::Control { app_id, .. }
+            StoreCommand::Install {
+                app_id,
+                authorization_id,
+            } => {
+                if !cp0_manifest::is_valid_app_id(app_id) || *authorization_id == 0 {
+                    return Err(StoreProtocolError::Invalid(
+                        "store authorized install identity is invalid".into(),
+                    ));
+                }
+            }
+            StoreCommand::Control { app_id, .. }
             | StoreCommand::Details { app_id }
             | StoreCommand::Media { app_id, .. } => {
                 if !cp0_manifest::is_valid_app_id(app_id) {
@@ -676,8 +710,27 @@ impl StoreRequest {
                     ));
                 }
             }
-            StoreCommand::InstallBatch { app_ids } => {
+            StoreCommand::PreflightInstall {
+                app_ids,
+                catalog_sequence,
+            } => {
                 validate_install_batch_ids(app_ids)?;
+                if *catalog_sequence == 0 {
+                    return Err(StoreProtocolError::Invalid(
+                        "store preflight catalog sequence must be non-zero".into(),
+                    ));
+                }
+            }
+            StoreCommand::InstallBatch {
+                app_ids,
+                authorization_id,
+            } => {
+                validate_install_batch_ids(app_ids)?;
+                if *authorization_id == 0 {
+                    return Err(StoreProtocolError::Invalid(
+                        "store install authorization ID must be non-zero".into(),
+                    ));
+                }
             }
             StoreCommand::List | StoreCommand::Refresh => {}
         }
@@ -832,6 +885,37 @@ impl StoreResponseData {
                 Ok(())
             }
             Self::RefreshAccepted => Ok(()),
+            Self::InstallPreflight {
+                authorization_id,
+                catalog_sequence,
+                required_bytes,
+                available_bytes,
+                apps,
+            } => {
+                if *authorization_id == 0
+                    || *catalog_sequence == 0
+                    || *required_bytes == 0
+                    || *available_bytes < *required_bytes
+                    || apps.is_empty()
+                    || apps.len() > MAX_INSTALL_BATCH_APPS
+                {
+                    return Err(StoreProtocolError::Invalid(
+                        "store install preflight bounds are invalid".into(),
+                    ));
+                }
+                let mut previous = None;
+                for app in apps {
+                    app.validate()?;
+                    if previous.is_some_and(|value| value >= app.app_id.as_str()) {
+                        return Err(StoreProtocolError::Invalid(
+                            "store install preflight applications are duplicated or unsorted"
+                                .into(),
+                        ));
+                    }
+                    previous = Some(app.app_id.as_str());
+                }
+                Ok(())
+            }
             Self::InstallAccepted { app_id, version }
             | Self::OperationAccepted {
                 app_id, version, ..
@@ -1017,6 +1101,44 @@ fn validate_install_batch_ids(app_ids: &[String]) -> Result<(), StoreProtocolErr
             ));
         }
         previous = Some(app_id.as_str());
+    }
+    Ok(())
+}
+
+impl StoreInstallPreflight {
+    fn validate(&self) -> Result<(), StoreProtocolError> {
+        if !cp0_manifest::is_valid_app_id(&self.app_id)
+            || !cp0_manifest::is_valid_app_version(&self.version)
+        {
+            return Err(StoreProtocolError::Invalid(
+                "store install preflight identity is invalid".into(),
+            ));
+        }
+        validate_permission_list(&self.permissions, "preflight")?;
+        validate_permission_list(&self.policy_denied_permissions, "policy denied")?;
+        if self
+            .policy_denied_permissions
+            .iter()
+            .any(|permission| self.permissions.binary_search(permission).is_err())
+        {
+            return Err(StoreProtocolError::Invalid(
+                "store policy denied permissions are not requested by the application".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn validate_permission_list(
+    permissions: &[Permission],
+    label: &str,
+) -> Result<(), StoreProtocolError> {
+    if permissions.len() > Permission::ALL.len()
+        || permissions.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err(StoreProtocolError::Invalid(format!(
+            "store {label} permissions are duplicated or unsorted"
+        )));
     }
     Ok(())
 }
@@ -1555,6 +1677,7 @@ mod tests {
             request_id: 9,
             command: StoreCommand::Install {
                 app_id: "dev.cardputerzero.example".into(),
+                authorization_id: 1,
             },
         };
         let mut encoded = Vec::new();
@@ -1875,9 +1998,53 @@ mod tests {
             request_id: 48,
             command: StoreCommand::InstallBatch {
                 app_ids: app_ids.clone(),
+                authorization_id: 1,
             },
         };
         write_request(&mut Vec::new(), &request).unwrap();
+
+        let preflight_request = StoreRequest {
+            protocol_version: STORE_PROTOCOL_VERSION,
+            request_id: 47,
+            command: StoreCommand::PreflightInstall {
+                app_ids: app_ids.clone(),
+                catalog_sequence: 9,
+            },
+        };
+        write_request(&mut Vec::new(), &preflight_request).unwrap();
+        let preflight = StoreResponse::success(
+            47,
+            StoreResponseData::InstallPreflight {
+                authorization_id: 77,
+                catalog_sequence: 9,
+                required_bytes: 4096,
+                available_bytes: 8192,
+                apps: vec![
+                    StoreInstallPreflight {
+                        app_id: app_ids[0].clone(),
+                        version: "1.0.0".into(),
+                        permissions: vec![Permission::CameraCapture],
+                        policy_denied_permissions: vec![Permission::CameraCapture],
+                    },
+                    StoreInstallPreflight {
+                        app_id: app_ids[1].clone(),
+                        version: "2.0.0".into(),
+                        permissions: vec![Permission::NetworkClient],
+                        policy_denied_permissions: Vec::new(),
+                    },
+                ],
+            },
+        );
+        write_response(&mut Vec::new(), &preflight).unwrap();
+        let mut invalid_preflight = preflight.clone();
+        let StoreOutcome::Ok {
+            data: StoreResponseData::InstallPreflight { apps, .. },
+        } = &mut invalid_preflight.outcome
+        else {
+            unreachable!()
+        };
+        apps[0].policy_denied_permissions = vec![Permission::RadioLora];
+        assert!(invalid_preflight.validate().is_err());
 
         for invalid in [
             Vec::new(),
@@ -1891,7 +2058,10 @@ mod tests {
                 StoreRequest {
                     protocol_version: STORE_PROTOCOL_VERSION,
                     request_id: 49,
-                    command: StoreCommand::InstallBatch { app_ids: invalid },
+                    command: StoreCommand::InstallBatch {
+                        app_ids: invalid,
+                        authorization_id: 1,
+                    },
                 }
                 .validate()
                 .is_err()

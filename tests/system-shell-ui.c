@@ -166,6 +166,13 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     cp0_ui_sync_store_catalog(ui, &update_snapshot, 1, false, false);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     write_snapshot(directory, "store-updates", ui, frame);
+    cp0_ui_show_store_install_prompt(ui, 2, 3, 1, 24U * 1024U * 1024U,
+                                     180U * 1024U * 1024U);
+    write_snapshot(directory, "store-install-confirm", ui, frame);
+    assert(cp0_ui_handle_action(ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+    cp0_ui_show_store_preflight_error(ui, CP0_UI_STORE_PREFLIGHT_STORAGE);
+    write_snapshot(directory, "store-install-storage", ui, frame);
+    assert(cp0_ui_handle_action(ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
 
     cp0_ui_init(ui);
     cp0_ui_set_local_simulation(ui, true);
@@ -810,6 +817,24 @@ int main(int argc, char **argv)
            activity_ui.store_activity_progress_percent == 42);
     struct cp0_ui_store_completion completion;
     assert(!cp0_ui_take_store_completion(&activity_ui, &completion));
+
+    struct cp0_ui install_prompt_ui;
+    cp0_ui_init(&install_prompt_ui);
+    cp0_ui_show_store_install_prompt(&install_prompt_ui, 1, 2, 1, 4096,
+                                     8192);
+    assert(install_prompt_ui.store_install_prompt &&
+           install_prompt_ui.dialog_selected == 1 &&
+           install_prompt_ui.store_preflight_new_permissions == 2);
+    cp0_ui_handle_action(&install_prompt_ui, CP0_UI_LEFT);
+    assert(cp0_ui_handle_action(&install_prompt_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_INSTALL_CONFIRM);
+    assert(!install_prompt_ui.store_install_prompt);
+    cp0_ui_show_store_preflight_error(&install_prompt_ui,
+                                      CP0_UI_STORE_PREFLIGHT_POLICY);
+    assert(install_prompt_ui.store_install_prompt &&
+           cp0_ui_handle_action(&install_prompt_ui, CP0_UI_BACK) ==
+               CP0_UI_EVENT_NONE &&
+           !install_prompt_ui.store_install_prompt);
     cp0_ui_set_store_app_state(&activity_ui, activity_apps[1].app_id,
                                CP0_UI_STORE_PAUSED, 42);
     assert(activity_ui.store_activity &&

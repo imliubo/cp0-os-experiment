@@ -26,6 +26,9 @@ enum cp0_store_result {
     CP0_STORE_RESULT_OK = 0,
     CP0_STORE_RESULT_UNCONFIGURED = 1,
     CP0_STORE_RESULT_BUSY = 2,
+    CP0_STORE_RESULT_POLICY_RESTRICTED = 3,
+    CP0_STORE_RESULT_INSUFFICIENT_STORAGE = 4,
+    CP0_STORE_RESULT_CATALOG_CHANGED = 5,
     CP0_STORE_RESULT_ERROR = -1,
 };
 
@@ -88,6 +91,22 @@ struct cp0_store_catalog {
     struct cp0_store_app_summary apps[CP0_STORE_MAX_APPS];
 };
 
+struct cp0_store_install_preflight_app {
+    uint16_t permissions;
+    uint16_t policy_denied_permissions;
+    char app_id[CP0_STORE_APP_ID_BYTES];
+    char version[CP0_STORE_VERSION_BYTES];
+};
+
+struct cp0_store_install_preflight {
+    uint64_t authorization_id;
+    uint64_t catalog_sequence;
+    uint64_t required_bytes;
+    uint64_t available_bytes;
+    size_t count;
+    struct cp0_store_install_preflight_app apps[CP0_STORE_INSTALL_BATCH_MAX];
+};
+
 struct cp0_store_search_results {
     uint64_t sequence;
     uint64_t expires_unix_seconds;
@@ -144,8 +163,12 @@ int cp0_store_list(struct cp0_store_catalog *catalog);
 int cp0_store_search(const char *query, uint16_t offset, uint8_t limit,
                      struct cp0_store_search_results *results);
 int cp0_store_refresh(void);
-int cp0_store_install(const char *app_id);
-int cp0_store_install_batch(const char *const app_ids[], size_t app_count);
+int cp0_store_preflight_install(
+    uint64_t catalog_sequence, const char *const app_ids[], size_t app_count,
+    struct cp0_store_install_preflight *preflight);
+int cp0_store_install(const char *app_id, uint64_t authorization_id);
+int cp0_store_install_batch(const char *const app_ids[], size_t app_count,
+                            uint64_t authorization_id);
 int cp0_store_control(const char *app_id,
                       enum cp0_store_control_action action);
 int cp0_store_get_details(const char *app_id, const char *expected_version,

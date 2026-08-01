@@ -50,7 +50,7 @@ mkdir -p "$snapshot_dir"
     -o "$work_dir/system-shell-system-info-test"
 "$work_dir/system-shell-system-info-test"
 
-snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm store-background-progress.ppm store-description.ppm store-detail.ppm store-failed.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
+snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm store-background-progress.ppm store-description.ppm store-detail.ppm store-failed.ppm store-install-confirm.ppm store-install-storage.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
 if command -v sha256sum >/dev/null 2>&1; then
     actual=$(cd "$snapshot_dir" && sha256sum $snapshot_files)
 else
@@ -91,6 +91,8 @@ cc4e5bbf3f6dee26b0b6514661481c9217abe354a1dfa3459eac8cc7c7b27340  settings.ppm
 4c6117c8ed1a6ceb6555f2e058d7a42892f03f5fc5dc3c29d59890e803a13fab  store-description.ppm
 714a26b2be741003e0699b8b20e718c454168655db52a7ba5c36e7656c711d94  store-detail.ppm
 0d206108475fe5ed7b3e5bb59f500b3926f5c19c02359962e9aa145c3fdde3f1  store-failed.ppm
+e9906b64a47d9e7759205db7223fda3a6c2f6479f74d207072ce1ffb3f00ee69  store-install-confirm.ppm
+d0395c830145a281575d9ce37bf7007450dc31e7f4b922046e6dc897eda63b37  store-install-storage.ppm
 592c72d76f15abd7db0cc6d172376b65eace4554215ec0f8eae56f8746bad881  store-permissions.ppm
 1326fd73dc44ffa1424cee18058783d3f3cb9f0885c0a82217d2085722a49237  store-release-notes.ppm
 77168cfa3d1c0fb9d4840aa4e03a03d852a7565f4d96c4add814ad15a7af64a8  store-screenshot.ppm

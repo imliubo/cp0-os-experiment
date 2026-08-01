@@ -164,11 +164,15 @@ S7C 已增加全局 Store 后台状态：Store 页面或活动任务期间每秒
 Home、Tasks 和普通前台应用均可显示有界 `DL n%`、`INSTALL` 或 `QUEUE N` 状态。安装完成只由
 同一 App ID/版本的状态转换生成，首次 Catalog 不回放历史通知，多项完成聚合且不抢占权限、文档
 或确认界面。具体契约见 `STORE-BACKGROUND-STATUS-V1.md`。
+S7D 已将安装改为强制两步预检：签名 Catalog sequence、完整应用对象和 60 秒单次授权绑定；
+daemon 在下载前及授权消费时检查 root-owned 设备策略、allowlist、持久分区和 `/run` 峰值空间。
+Shell 只对新增权限弹出默认 Cancel 的可信确认，并显示策略屏蔽权限及所需/可用空间；Resume 也会
+重新预检策略和空间。具体契约见 `STORE-INSTALL-PREFLIGHT-V1.md`。
 
 - [x] 增加暂停、继续、取消和失败原因的稳定协议。
 - [x] 增加 Updates 页、单项更新和有界 Update All 队列。
 - [x] 增加下载状态栏、离开 Store 后进度和安装完成通知。
-- [ ] 增加新增权限确认、策略限制和存储空间预检。
+- [x] 增加新增权限确认、策略限制和存储空间预检。
 - [ ] 验证断电、断网、HTTP Range 错误、摘要错误和 appd handoff 崩溃恢复。
 - [ ] 自动更新保持默认关闭；后续按充电/网络/策略显式启用。
 
