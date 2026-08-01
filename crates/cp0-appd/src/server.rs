@@ -407,13 +407,14 @@ impl AppdServer {
             Ok(prepared) => prepared,
             Err(error) => return install_error_response(request_id, &error),
         };
-        self.commit_prepared_install(request_id, prepared)
+        self.commit_prepared_install(request_id, prepared, false)
     }
 
     fn commit_prepared_install(
         &self,
         request_id: u64,
         prepared: crate::PreparedInstall,
+        allow_running_idempotent_replay: bool,
     ) -> AppdResponse {
         let mut state = match self.state.lock() {
             Ok(state) => state,
@@ -431,14 +432,19 @@ impl AppdServer {
                 .registry()
                 .account(&prepared.manifest.id)
                 .is_some_and(|account| account.installed_version.is_some());
-            if already_registered && state.manager.is_running(&prepared.manifest.id)? {
-                return Err(AppManagerError::AlreadyRunning(prepared.manifest.id.clone()).into());
-            }
             let previous_version = state
                 .manager
                 .registry()
                 .account(&prepared.manifest.id)
                 .and_then(|account| account.installed_version.clone());
+            let idempotent_replay = allow_running_idempotent_replay
+                && previous_version.as_deref() == Some(prepared.manifest.version.as_str());
+            if already_registered
+                && !idempotent_replay
+                && state.manager.is_running(&prepared.manifest.id)?
+            {
+                return Err(AppManagerError::AlreadyRunning(prepared.manifest.id.clone()).into());
+            }
             let account = state.manager.prepare_account(&prepared.manifest.id)?;
             let (uid, gid) = crate::lookup_unix_account(&account.unix_user)?;
             if uid != account.unix_uid || gid != account.unix_uid {
@@ -452,7 +458,11 @@ impl AppdServer {
             Ok(ResponseData::Installed {
                 app_id: installed.app_id,
                 version: installed.version,
-                previous_version,
+                previous_version: if idempotent_replay {
+                    None
+                } else {
+                    previous_version
+                },
                 trust: match prepared.trust {
                     crate::TrustDecision::Store => "store",
                     crate::TrustDecision::DeveloperMode => "developer-mode",
@@ -506,11 +516,11 @@ impl AppdServer {
                 );
             }
         };
-        if !store_version_is_upgrade(current_version.as_deref(), &version) {
+        if !store_version_is_acceptable(current_version.as_deref(), &version) {
             return AppdResponse::error(
                 request_id,
                 ErrorCode::Conflict,
-                "store installation must increase the installed application version",
+                "store installation must increase or exactly replay the installed version",
             );
         }
         let Some(package_sha256) = cp0_store_protocol::decode_hex::<32>(&package_sha256) else {
@@ -532,7 +542,7 @@ impl AppdServer {
             Ok(prepared) => prepared,
             Err(error) => return install_error_response(request_id, &error),
         };
-        self.commit_prepared_install(request_id, prepared)
+        self.commit_prepared_install(request_id, prepared, true)
     }
 
     fn start_app(&self, state: &ServerState, app_id: &str) -> Result<String, CommandError> {
@@ -1574,6 +1584,11 @@ fn store_version_is_upgrade(current: Option<&str>, candidate: &str) -> bool {
     semver::Version::parse(current).is_ok_and(|current| candidate > current)
 }
 
+fn store_version_is_acceptable(current: Option<&str>, candidate: &str) -> bool {
+    semver::Version::parse(candidate).is_ok()
+        && (current == Some(candidate) || store_version_is_upgrade(current, candidate))
+}
+
 fn network_error_response(request_id: u64, error: &NetworkClientError) -> BrokerResponse {
     let (code, message) = match error {
         NetworkClientError::Service(ServiceNetworkErrorCode::InvalidRequest) => {
@@ -1836,13 +1851,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn store_installation_only_accepts_strict_version_upgrades() {
+    fn store_installation_accepts_exact_replay_and_strict_upgrade() {
         assert!(store_version_is_upgrade(None, "1.0.0"));
         assert!(store_version_is_upgrade(Some("1.0.0"), "1.0.1"));
         assert!(store_version_is_upgrade(Some("1.0.0-beta.1"), "1.0.0"));
         assert!(!store_version_is_upgrade(Some("1.0.0"), "1.0.0"));
         assert!(!store_version_is_upgrade(Some("2.0.0"), "1.9.9"));
         assert!(!store_version_is_upgrade(Some("1.0.0"), "invalid"));
+        assert!(store_version_is_acceptable(Some("1.0.0"), "1.0.0"));
+        assert!(!store_version_is_acceptable(Some("2.0.0"), "1.9.9"));
+        assert!(!store_version_is_acceptable(Some("invalid"), "invalid"));
     }
 
     #[test]

@@ -168,12 +168,17 @@ S7D 已将安装改为强制两步预检：签名 Catalog sequence、完整应�
 daemon 在下载前及授权消费时检查 root-owned 设备策略、allowlist、持久分区和 `/run` 峰值空间。
 Shell 只对新增权限弹出默认 Cancel 的可信确认，并显示策略屏蔽权限及所需/可用空间；Resume 也会
 重新预检策略和空间。具体契约见 `STORE-INSTALL-PREFLIGHT-V1.md`。
+S7E 已补齐中断恢复门禁：摘要命名分片可跨服务重启继续，错误 HTTP Range 在写入前拒绝，错误
+摘要会同步截断且绝不进入 appd；appd 对完整复验后的同版本同内容请求提供幂等重放，daemon 启动
+只清理严格命名的陈旧交接文件。进程、协议和故障注入测试已完成，真实断电证据仍由 S9 真机门禁
+采集。具体契约见 `STORE-INTERRUPTION-RECOVERY-V1.md`。
 
 - [x] 增加暂停、继续、取消和失败原因的稳定协议。
 - [x] 增加 Updates 页、单项更新和有界 Update All 队列。
 - [x] 增加下载状态栏、离开 Store 后进度和安装完成通知。
 - [x] 增加新增权限确认、策略限制和存储空间预检。
-- [ ] 验证断电、断网、HTTP Range 错误、摘要错误和 appd handoff 崩溃恢复。
+- [x] 验证断电、断网、HTTP Range 错误、摘要错误和 appd handoff 崩溃恢复。
+  本地门禁覆盖跨 daemon 实例和 appd 提交后断线；真实 CM0 断电/断网复验保留在 S9。
 - [ ] 自动更新保持默认关闭；后续按充电/网络/策略显式启用。
 
 完成条件：任何中断都不会生成半安装状态或绕过重新验证。

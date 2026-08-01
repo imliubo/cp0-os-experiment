@@ -167,7 +167,8 @@ boundary.
 On a provisioned test device, operators can exercise the fixed Store control
 surface with `sudo cp0ctl store list`, `sudo cp0ctl store search <query>
 [offset limit]`, `sudo cp0ctl store refresh` and `sudo cp0ctl store install
-<app-id>`. Search is local, bounded to eight results per page and does not send
+<app-id> --approve-permissions`. Search is local, bounded to eight results per
+page and does not send
 the query to an origin. The device chooses the catalog URL, package URL,
 expected identity, size and hash from root-owned configuration and the verified
 catalog; none can be supplied through these commands.

@@ -193,6 +193,8 @@ impl StoreSpaceProbe for SystemStoreSpaceProbe {
 #[derive(Debug, Clone)]
 pub struct UreqStoreNetwork {
     agent: Agent,
+    #[cfg(test)]
+    allow_http: bool,
 }
 
 impl Default for UreqStoreNetwork {
@@ -214,6 +216,24 @@ impl Default for UreqStoreNetwork {
                 DefaultConnector::default(),
                 PublicResolver::default(),
             ),
+            #[cfg(test)]
+            allow_http: false,
+        }
+    }
+}
+
+#[cfg(test)]
+impl UreqStoreNetwork {
+    fn for_http_test() -> Self {
+        let config = Config::builder()
+            .https_only(false)
+            .proxy(None)
+            .http_status_as_error(false)
+            .timeout_global(Some(Duration::from_secs(3)))
+            .build();
+        Self {
+            agent: Agent::new_with_config(config),
+            allow_http: true,
         }
     }
 }
@@ -285,7 +305,12 @@ impl StoreNetwork for UreqStoreNetwork {
         expected_bytes: u64,
         control: &mut dyn FnMut(u8) -> DownloadControl,
     ) -> Result<DownloadOutcome, StoreServiceError> {
+        #[cfg(not(test))]
         require_https(url)?;
+        #[cfg(test)]
+        if !self.allow_http {
+            require_https(url)?;
+        }
         if !(1..=cp0_store_protocol::MAX_PACKAGE_BYTES).contains(&expected_bytes) {
             return Err(StoreServiceError::Invalid(
                 "package size is outside limits".into(),
@@ -625,6 +650,7 @@ impl StoreService {
     ) -> Result<Arc<Self>, StoreServiceError> {
         fs::create_dir_all(paths.cache_root.join("packages"))?;
         prepare_media_directories(&paths)?;
+        cleanup_stale_appd_handoffs(&paths.appd_inbox)?;
         let catalog = match fs::read(&paths.catalog_cache) {
             Ok(encoded) => Some(load_trusted_catalog(&encoded, &paths)?),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -2440,18 +2466,78 @@ fn verify_package_file(path: &Path, app: &CatalogApp) -> Result<(), StoreService
 fn stage_for_appd(source: &Path, inbox: &Path) -> Result<PathBuf, StoreServiceError> {
     let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let destination = inbox.join(format!("store-{}-{sequence}.capp", std::process::id()));
-    let mut input = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(source)?;
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&destination)?;
-    io::copy(&mut input, &mut output)?;
-    output.sync_all()?;
+    let result = (|| -> Result<(), StoreServiceError> {
+        let mut input = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(source)?;
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&destination)?;
+        io::copy(&mut input, &mut output)?;
+        output.sync_all()?;
+        File::open(inbox)?.sync_all()?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_file(&destination);
+        return Err(error);
+    }
     Ok(destination)
+}
+
+fn cleanup_stale_appd_handoffs(inbox: &Path) -> Result<(), StoreServiceError> {
+    let metadata = fs::symlink_metadata(inbox)?;
+    // SAFETY: geteuid has no pointer arguments or caller-side preconditions.
+    let effective_uid = unsafe { libc::geteuid() };
+    // The inbox is dedicated to cp0-stored. A service restart may remove only
+    // its strict generated names, never arbitrary files or directories.
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != effective_uid
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(StoreServiceError::Invalid(
+            "appd handoff directory metadata is invalid".into(),
+        ));
+    }
+    let mut removed = false;
+    for entry in fs::read_dir(inbox)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(identifiers) = name
+            .strip_prefix("store-")
+            .and_then(|name| name.strip_suffix(".capp"))
+        else {
+            continue;
+        };
+        let Some((pid, sequence)) = identifiers.split_once('-') else {
+            continue;
+        };
+        if pid.is_empty()
+            || sequence.is_empty()
+            || pid.parse::<u32>().is_err()
+            || sequence.parse::<u64>().is_err()
+        {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            return Err(StoreServiceError::Invalid(
+                "appd handoff path is unexpectedly a directory".into(),
+            ));
+        }
+        fs::remove_file(entry.path())?;
+        removed = true;
+    }
+    if removed {
+        File::open(inbox)?.sync_all()?;
+    }
+    Ok(())
 }
 
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), StoreServiceError> {
@@ -2635,6 +2721,7 @@ mod tests {
         MEDIA_CATALOG_SCHEMA_VERSION, RICH_CATALOG_SCHEMA_VERSION, StoreAppDetails,
         encode_app_details, encode_signed_catalog, sign_catalog,
     };
+    use std::net::TcpListener;
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::sync::Barrier;
@@ -2876,6 +2963,39 @@ mod tests {
     }
 
     #[derive(Debug)]
+    struct DisconnectingNetwork {
+        package: Vec<u8>,
+    }
+
+    impl StoreNetwork for DisconnectingNetwork {
+        fn fetch_catalog(&self, _url: &str) -> Result<Vec<u8>, StoreServiceError> {
+            Err(StoreServiceError::Unavailable(
+                "mock catalog is unavailable",
+            ))
+        }
+
+        fn download_package(
+            &self,
+            _url: &str,
+            destination: &Path,
+            expected_bytes: u64,
+            control: &mut dyn FnMut(u8) -> DownloadControl,
+        ) -> Result<DownloadOutcome, StoreServiceError> {
+            assert_eq!(self.package.len() as u64, expected_bytes);
+            let mut file = open_resume_file(destination)?;
+            assert_eq!(file.metadata()?.len(), 0);
+            assert_eq!(control(0), DownloadControl::Continue);
+            let split = self.package.len() / 2;
+            file.write_all(&self.package[..split])?;
+            file.sync_all()?;
+            let _ = control(((split as u64 * 100) / expected_bytes) as u8);
+            Err(StoreServiceError::Unavailable(
+                "mock network disconnected during package response",
+            ))
+        }
+    }
+
+    #[derive(Debug)]
     struct MediaNetwork {
         catalog: Vec<u8>,
         package: Vec<u8>,
@@ -2955,6 +3075,32 @@ mod tests {
             Err(StoreServiceError::Unavailable(
                 "mock appd handoff is unavailable",
             ))
+        }
+    }
+
+    #[derive(Debug)]
+    struct CommitThenDisconnectInstaller {
+        first_handoff: AtomicBool,
+    }
+
+    impl CommitThenDisconnectInstaller {
+        fn new() -> Self {
+            Self {
+                first_handoff: AtomicBool::new(true),
+            }
+        }
+    }
+
+    impl AppInstaller for CommitThenDisconnectInstaller {
+        fn install(&self, _app: &CatalogApp, staged_path: &Path) -> Result<(), StoreServiceError> {
+            assert!(staged_path.is_file());
+            if self.first_handoff.swap(false, Ordering::SeqCst) {
+                Err(StoreServiceError::Unavailable(
+                    "mock appd committed before the connection closed",
+                ))
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -3057,6 +3203,7 @@ mod tests {
             for directory in [&cache_root, &trust_root, &inbox] {
                 fs::create_dir_all(directory).unwrap();
             }
+            fs::set_permissions(&inbox, fs::Permissions::from_mode(0o700)).unwrap();
             let secret = [9; 32];
             let public = cp0_package::public_key(&secret);
             let key_id = cp0_store_protocol::lower_hex(&cp0_package::key_id(&public));
@@ -3509,7 +3656,7 @@ mod tests {
     }
 
     #[test]
-    fn resumes_verifies_stages_and_installs_catalog_package() {
+    fn recovers_digest_bound_partial_after_service_power_loss() {
         let fixture = Fixture::new("install");
         let catalog = fixture.signed_catalog(1);
         fs::write(&fixture.paths.catalog_cache, &catalog).unwrap();
@@ -3949,6 +4096,211 @@ mod tests {
     }
 
     #[test]
+    fn recovers_after_network_disconnect_and_service_restart() {
+        let fixture = Fixture::new("network-restart");
+        let catalog = fixture.signed_catalog(1);
+        fs::write(&fixture.paths.catalog_cache, &catalog).unwrap();
+        let app = decode_signed_catalog(&catalog).unwrap().catalog.apps[0].clone();
+        let partial = fixture
+            .paths
+            .cache_root
+            .join("packages")
+            .join(format!("{}.part", app.package_sha256));
+        let first_service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(DisconnectingNetwork {
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+        first_service.start_install(&app.app_id).unwrap();
+        assert_eq!(
+            wait_for_store_state(&first_service, StoreAppState::Failed).failure_reason,
+            Some(StoreFailureReason::Network)
+        );
+        assert_eq!(
+            fs::metadata(&partial).unwrap().len(),
+            (fixture.package.len() / 2) as u64
+        );
+        drop(first_service);
+
+        let installer = Arc::new(MockInstaller::default());
+        let restarted_service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: fixture.package.clone(),
+            }),
+            installer.clone(),
+            [0],
+        )
+        .unwrap();
+        restarted_service.start_install(&app.app_id).unwrap();
+        wait_for_store_state(&restarted_service, StoreAppState::Installed);
+        assert_eq!(fs::read(&partial).unwrap(), fixture.package);
+        assert_eq!(installer.installed.lock().unwrap().as_slice(), [app.app_id]);
+    }
+
+    #[test]
+    fn truncates_bad_digest_and_recovers_from_a_clean_retry() {
+        let fixture = Fixture::new("digest-recovery");
+        let catalog = fixture.signed_catalog(1);
+        fs::write(&fixture.paths.catalog_cache, &catalog).unwrap();
+        let app = decode_signed_catalog(&catalog).unwrap().catalog.apps[0].clone();
+        let partial = fixture
+            .paths
+            .cache_root
+            .join("packages")
+            .join(format!("{}.part", app.package_sha256));
+        let rejected_installer = Arc::new(MockInstaller::default());
+        let bad_service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: vec![b'x'; fixture.package.len()],
+            }),
+            rejected_installer.clone(),
+            [0],
+        )
+        .unwrap();
+        bad_service.start_install(&app.app_id).unwrap();
+        assert_eq!(
+            wait_for_store_state(&bad_service, StoreAppState::Failed).failure_reason,
+            Some(StoreFailureReason::Verification)
+        );
+        assert_eq!(fs::metadata(&partial).unwrap().len(), 0);
+        assert!(rejected_installer.installed.lock().unwrap().is_empty());
+        drop(bad_service);
+
+        let recovered_installer = Arc::new(MockInstaller::default());
+        let recovered_service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: fixture.package.clone(),
+            }),
+            recovered_installer.clone(),
+            [0],
+        )
+        .unwrap();
+        recovered_service.start_install(&app.app_id).unwrap();
+        wait_for_store_state(&recovered_service, StoreAppState::Installed);
+        assert_eq!(
+            recovered_installer.installed.lock().unwrap().as_slice(),
+            [app.app_id]
+        );
+    }
+
+    #[test]
+    fn retries_an_appd_commit_after_the_response_connection_is_lost() {
+        let fixture = Fixture::new("appd-replay");
+        let catalog = fixture.signed_catalog(1);
+        fs::write(&fixture.paths.catalog_cache, &catalog).unwrap();
+        let app = decode_signed_catalog(&catalog).unwrap().catalog.apps[0].clone();
+        let installer = Arc::new(CommitThenDisconnectInstaller::new());
+        let first_service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: fixture.package.clone(),
+            }),
+            installer.clone(),
+            [0],
+        )
+        .unwrap();
+        first_service.start_install(&app.app_id).unwrap();
+        assert_eq!(
+            wait_for_store_state(&first_service, StoreAppState::Failed).failure_reason,
+            Some(StoreFailureReason::Installer)
+        );
+        assert!(
+            fs::read_dir(&fixture.paths.appd_inbox)
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        drop(first_service);
+
+        let restarted_service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: fixture.package.clone(),
+            }),
+            installer,
+            [0],
+        )
+        .unwrap();
+        restarted_service.start_install(&app.app_id).unwrap();
+        wait_for_store_state(&restarted_service, StoreAppState::Installed);
+        assert!(
+            fs::read_dir(&fixture.paths.appd_inbox)
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn startup_removes_only_strict_stale_appd_handoffs() {
+        let fixture = Fixture::new("stale-handoff");
+        let stale = fixture.paths.appd_inbox.join("store-123-7.capp");
+        let unrelated = fixture.paths.appd_inbox.join("operator-note");
+        fs::write(&stale, b"stale handoff").unwrap();
+        fs::write(&unrelated, b"preserve").unwrap();
+        StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(FailingNetwork),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+        assert!(!stale.exists());
+        assert_eq!(fs::read(unrelated).unwrap(), b"preserve");
+    }
+
+    #[test]
+    fn startup_refuses_generated_handoff_directories_without_removing_them() {
+        let fixture = Fixture::new("handoff-directory");
+        let suspicious = fixture.paths.appd_inbox.join("store-123-8.capp");
+        fs::create_dir(&suspicious).unwrap();
+        assert!(matches!(
+            StoreService::new(
+                fixture.paths.clone(),
+                StoreConfig { catalog_url: None },
+                Arc::new(FailingNetwork),
+                Arc::new(MockInstaller::default()),
+                [0],
+            ),
+            Err(StoreServiceError::Invalid(_))
+        ));
+        assert!(suspicious.is_dir());
+    }
+
+    #[test]
+    fn failed_appd_staging_copy_removes_its_incomplete_destination() {
+        let fixture = Fixture::new("handoff-copy-failure");
+        let invalid_source = fixture.root.join("source-directory");
+        fs::create_dir(&invalid_source).unwrap();
+        assert!(stage_for_appd(&invalid_source, &fixture.paths.appd_inbox).is_err());
+        assert!(
+            fs::read_dir(&fixture.paths.appd_inbox)
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn catalog_digest_change_invalidates_resume_and_remains_cancelable() {
         let fixture = Fixture::new("catalog-changed");
         let original_catalog = fixture.signed_catalog(1);
@@ -4278,6 +4630,76 @@ mod tests {
             service.start_install("dev.cardputerzero.storetest"),
             Err(StoreServiceError::Untrusted(_))
         ));
+    }
+
+    #[test]
+    fn rejects_mismatched_http_range_without_appending_and_then_recovers() {
+        let fixture = Fixture::new("http-range-recovery");
+        let packages = fixture.paths.cache_root.join("packages");
+        fs::create_dir_all(&packages).unwrap();
+        let partial = packages.join("http-range.part");
+        let package = b"0123456789abcdef";
+        fs::write(&partial, &package[..4]).unwrap();
+        fs::set_permissions(&partial, fs::Permissions::from_mode(0o600)).unwrap();
+        let network = UreqStoreNetwork::for_http_test();
+
+        let serve_once = |content_range: String| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let body = package[4..].to_vec();
+            let handle = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 512];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = stream.read(&mut buffer).unwrap();
+                    assert_ne!(read, 0);
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                let response = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: {content_range}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+                stream.write_all(&body).unwrap();
+                String::from_utf8(request).unwrap()
+            });
+            (format!("http://{address}/package.capp"), handle)
+        };
+
+        let (bad_url, bad_server) = serve_once(format!("bytes 3-15/{}", package.len()));
+        assert!(matches!(
+            network.download_package(&bad_url, &partial, package.len() as u64, &mut |_| {
+                DownloadControl::Continue
+            },),
+            Err(StoreServiceError::Invalid(_))
+        ));
+        assert_eq!(fs::read(&partial).unwrap(), &package[..4]);
+        assert!(
+            bad_server
+                .join()
+                .unwrap()
+                .to_ascii_lowercase()
+                .contains("\r\nrange: bytes=4-\r\n")
+        );
+
+        let (good_url, good_server) = serve_once(format!("bytes 4-15/{}", package.len()));
+        assert_eq!(
+            network
+                .download_package(&good_url, &partial, package.len() as u64, &mut |_| {
+                    DownloadControl::Continue
+                },)
+                .unwrap(),
+            DownloadOutcome::Complete
+        );
+        assert_eq!(fs::read(&partial).unwrap(), package);
+        assert!(
+            good_server
+                .join()
+                .unwrap()
+                .to_ascii_lowercase()
+                .contains("\r\nrange: bytes=4-\r\n")
+        );
     }
 
     #[test]

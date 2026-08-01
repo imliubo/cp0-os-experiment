@@ -276,7 +276,8 @@ case "$action" in
                 "remove prior test partials using a freshly provisioned test data partition"
             finish
         fi
-        if ! /usr/bin/cp0ctl store install "$app_id" >"$run_dir/install-first.json" 2>&1; then
+        if ! /usr/bin/cp0ctl store install "$app_id" --approve-permissions \
+            >"$run_dir/install-first.json" 2>&1; then
             record FAIL install-accepted "initial Store install request failed"
             finish
         fi
@@ -335,7 +336,8 @@ case "$action" in
                 "partial is missing or completed before the restart proof"
             finish
         fi
-        if ! /usr/bin/cp0ctl store install "$app_id" >"$run_dir/install-resume.json" 2>&1; then
+        if ! /usr/bin/cp0ctl store install "$app_id" --approve-permissions \
+            >"$run_dir/install-resume.json" 2>&1; then
             record FAIL resume-accepted "second Store install request failed"
             finish
         fi
@@ -362,7 +364,8 @@ case "$action" in
             record FAIL upgrade-precondition "installed version is ${current:-missing}, expected 1.0.0"
             finish
         fi
-        if /usr/bin/cp0ctl store install "$app_id" >"$run_dir/upgrade.json" 2>&1; then
+        if /usr/bin/cp0ctl store install "$app_id" --approve-permissions \
+            >"$run_dir/upgrade.json" 2>&1; then
             record PASS upgrade-accepted "$app_id $expected_version"
             if wait_installed; then
                 launch_installed
@@ -420,7 +423,7 @@ case "$action" in
                 "wait until the signed catalog expiry before running stale-v2"
             finish
         fi
-        if /usr/bin/cp0ctl store install "$app_id" \
+        if /usr/bin/cp0ctl store install "$app_id" --approve-permissions \
             >"$run_dir/stale-install.out" 2>"$run_dir/stale-install.err"; then
             record FAIL stale-install-rejected "expired catalog unexpectedly authorized install"
         elif grep -q 'Untrusted' "$run_dir/stale-install.err"; then

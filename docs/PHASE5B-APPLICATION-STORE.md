@@ -137,7 +137,7 @@ sudo cp0ctl store list
 sudo cp0ctl store search notes
 sudo cp0ctl store search notes 8 8
 sudo cp0ctl store refresh
-sudo cp0ctl store install dev.cardputerzero.example
+sudo cp0ctl store install dev.cardputerzero.example --approve-permissions
 ```
 
 `cp0ctl` rejects a response whose kind does not match the request, an install

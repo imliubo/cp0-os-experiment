@@ -95,6 +95,7 @@ grep -q 'cardputerzero-stored.service' "$device_script"
 grep -q 'partial_size < package_bytes' "$device_script"
 grep -q 'refresh-v1 | refresh-v2 | offline-v2 | stale-v2' "$device_script"
 grep -q 'resume-v1 | upgrade-v2' "$device_script"
+test "$(grep -c -- '--approve-permissions' "$device_script")" -eq 4
 grep -q 'resuming package download from byte' \
     "$repo_root/crates/cp0-stored/src/lib.rs"
 if grep -q 'CP0_STORE_SOCKET' "$device_script"; then
