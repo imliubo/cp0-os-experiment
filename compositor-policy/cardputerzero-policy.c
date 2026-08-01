@@ -44,6 +44,7 @@ struct cp0_policy {
     struct wl_listener compositor_destroy_listener;
     struct wl_listener compositor_wake_listener;
     struct wl_listener create_surface_listener;
+    struct wl_listener screenshot_authority_listener;
     struct wl_list surface_watches;
     struct wl_event_source *reassert_idle;
     uint32_t next_app_token;
@@ -522,6 +523,27 @@ shell_activate_app(struct wl_client *client, struct wl_resource *resource,
                token);
 }
 
+static void
+authorize_screenshot(struct wl_listener *listener,
+                     struct weston_output_capture_attempt *attempt)
+{
+    struct cp0_policy *policy =
+        wl_container_of(listener, policy, screenshot_authority_listener);
+    struct wl_client *shell_client =
+        policy->shell_resource == NULL
+            ? NULL
+            : wl_resource_get_client(policy->shell_resource);
+
+    if (policy->trusted_surface != NULL &&
+        attempt->who->client == shell_client &&
+        attempt->who->output->width == 320 &&
+        attempt->who->output->height == 170) {
+        attempt->authorized = true;
+    } else {
+        attempt->denied = true;
+    }
+}
+
 static const struct cp0_system_shell_v1_interface shell_implementation = {
     .destroy = shell_destroy_request,
     .register_surface = shell_register_surface,
@@ -614,6 +636,10 @@ system_key_binding(struct weston_keyboard *keyboard,
     if (action == UINT32_MAX || policy->shell_resource == NULL ||
         policy->trusted_surface == NULL)
         return;
+    if (action == CP0_SYSTEM_SHELL_V1_ACTION_SCREENSHOT) {
+        cp0_system_shell_v1_send_action(policy->shell_resource, action);
+        return;
+    }
     if (action <= CP0_SYSTEM_SHELL_V1_ACTION_POWER ||
         action == CP0_SYSTEM_SHELL_V1_ACTION_HELP)
         set_overlay_mode(policy, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL,
@@ -666,6 +692,7 @@ policy_destroyed(struct wl_listener *listener, void *data)
     }
     wl_list_remove(&policy->create_surface_listener.link);
     wl_list_remove(&policy->compositor_wake_listener.link);
+    wl_list_remove(&policy->screenshot_authority_listener.link);
     wl_list_remove(&policy->compositor_destroy_listener.link);
     if (policy->global != NULL)
         wl_global_destroy(policy->global);
@@ -711,6 +738,9 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
     policy->create_surface_listener.notify = surface_created;
     wl_signal_add(&compositor->create_surface_signal,
                   &policy->create_surface_listener);
+    weston_compositor_add_screenshot_authority(
+        compositor, &policy->screenshot_authority_listener,
+        authorize_screenshot);
     policy->compositor_destroy_listener.notify = policy_destroyed;
     wl_signal_add(&compositor->destroy_signal,
                   &policy->compositor_destroy_listener);
@@ -724,6 +754,7 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
     if (policy->global == NULL) {
         wl_list_remove(&policy->create_surface_listener.link);
         wl_list_remove(&policy->compositor_wake_listener.link);
+        wl_list_remove(&policy->screenshot_authority_listener.link);
         wl_list_remove(&policy->compositor_destroy_listener.link);
         weston_layer_fini(&policy->trusted_layer);
         weston_layer_fini(&policy->app_layer);

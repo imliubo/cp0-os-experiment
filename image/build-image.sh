@@ -107,11 +107,13 @@ mkdir -p "$pi_gen_dir/stage-cardputerzero-os/01-compositor/system-shell"
 cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$repo_root/system-shell/include/cp0_json.h" \
     "$repo_root/system-shell/include/cp0_appd_client.h" \
+    "$repo_root/system-shell/include/cp0_screenshot_store.h" \
     "$repo_root/system-shell/include/cp0_store_client.h" \
     "$repo_root/system-shell/include/cp0_system_info.h" \
     "$repo_root/system-shell/src/ui.c" \
     "$repo_root/system-shell/src/json.c" \
     "$repo_root/system-shell/src/appd_client.c" \
+    "$repo_root/system-shell/src/screenshot_store.c" \
     "$repo_root/system-shell/src/store_client.c" \
     "$repo_root/system-shell/src/system_info.c" \
     "$repo_root/system-shell/src/main.c" \

@@ -163,7 +163,11 @@ implemented as an unreliable userspace timer in each application.
   persistence by default.
 - [ ] Implement and validate the keyboard driver/compositor ESC long-press Home
   gesture; `Fn+K` must remain the foreground application's standard Home key.
-- [ ] Add screenshot and media-session brokers before replacing `REQUESTED`
-  overlays with successful completion states.
+- [x] Add the trusted screenshot broker with exact-client compositor
+  authorization, fixed 320x170 capture, atomic bounded PNG storage and
+  completion states. Physical `Fn+J` and SD latency remain device acceptance.
+- [ ] Add the media-session broker before replacing media `REQUESTED` overlays
+  with successful completion states.
 
-No X4 action is authorized during this local-development window.
+Local broker work may proceed independently. Deployment remains gated on the
+retained stability evidence passing verification and an explicit device step.

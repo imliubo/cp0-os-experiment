@@ -21,6 +21,9 @@ install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/cp0_appd_client.h" \
     "${shell_source}/cp0_appd_client.h"
 install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/cp0_screenshot_store.h" \
+    "${shell_source}/cp0_screenshot_store.h"
+install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/cp0_store_client.h" \
     "${shell_source}/cp0_store_client.h"
 install -D -m 0644 \
@@ -32,6 +35,9 @@ install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/json.c" \
     "${shell_source}/json.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/appd_client.c" \
     "${shell_source}/appd_client.c"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/screenshot_store.c" \
+    "${shell_source}/screenshot_store.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/store_client.c" \
     "${shell_source}/store_client.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/system_info.c" \
@@ -156,13 +162,15 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     -I/tmp/cardputerzero-weston-build/protocol \
     /tmp/cardputerzero-system-shell/main.c \
     /tmp/cardputerzero-system-shell/ui.c \
+    /tmp/cardputerzero-system-shell/screenshot_store.c \
     /tmp/cardputerzero-system-shell/json.c \
     /tmp/cardputerzero-system-shell/appd_client.c \
     /tmp/cardputerzero-system-shell/store_client.c \
     /tmp/cardputerzero-system-shell/system_info.c \
     /tmp/cardputerzero-policy/cardputerzero-system-shell-protocol.c \
     /tmp/cardputerzero-weston-build/protocol/xdg-shell-protocol.c \
-    \$(pkg-config --cflags --libs wayland-client libpng) \
+    /tmp/cardputerzero-weston-build/protocol/weston-output-capture-protocol.c \
+    \$(pkg-config --cflags --libs wayland-client libpng libdrm) \
     -o /tmp/cardputerzero-system-shell/cardputerzero-system-shell
 
 cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \

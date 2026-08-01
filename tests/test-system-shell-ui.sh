@@ -50,7 +50,15 @@ mkdir -p "$snapshot_dir"
     -o "$work_dir/system-shell-system-info-test"
 "$work_dir/system-shell-system-info-test"
 
-snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-auto-update.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-metrics-confirm.ppm settings-metrics.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm store-background-progress.ppm store-description.ppm store-detail.ppm store-failed.ppm store-install-confirm.ppm store-install-storage.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-today-collection.ppm store-today.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -I"$repo_root/system-shell/include" \
+    "$repo_root/system-shell/src/screenshot_store.c" \
+    "$repo_root/tests/system-shell-screenshot-store.c" \
+    $(pkg-config --cflags --libs libpng) \
+    -o "$work_dir/system-shell-screenshot-store-test"
+"$work_dir/system-shell-screenshot-store-test" "$work_dir/screenshot-store"
+
+snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-auto-update.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-metrics-confirm.ppm settings-metrics.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm store-background-progress.ppm store-description.ppm store-detail.ppm store-failed.ppm store-install-confirm.ppm store-install-storage.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-today-collection.ppm store-today.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm system-screenshot-saved.ppm system-screenshot-unavailable.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
 if command -v sha256sum >/dev/null 2>&1; then
     actual=$(cd "$snapshot_dir" && sha256sum $snapshot_files)
 else
@@ -110,6 +118,8 @@ f00d349cb5d000db552fe795a63df63738b9552d77e508758aadbc2216dd7689  store-today.pp
 39decf80c4307bda7d53bd2b0764a1d943b75a0e60f2f49b0890573a650a9e2c  store.ppm
 c8f03c8a917c9dfb0cecd57f32df1e6e11d913a75480e5ca11c2a35b04b0d62e  system-brightness.ppm
 34e659c664795fb8b2cef00fd6fd168c3fdf6e845421342b29cc41dc97b88558  system-help.ppm
+08d6748d211276816be4ad5f8efa25f5dc4b05564a052e7f19eeece8df65407e  system-screenshot-saved.ppm
+2f8807c1c20445e5a4ee4b942ef01a656925c60ae479ff59db7f4433244b6ec5  system-screenshot-unavailable.ppm
 a6035c53a535cab44d6065cbd27f70a57d2655ee1e13baf24c87ef9176e40239  theme-high-contrast.ppm
 2bfce46d55e7ef494607fe0d42b7e0d698e2c7470427b62e3fa300462bf0f4cc  theme-light.ppm
 b382c359864c04060e4676c13c50e9578d241f132009a2840a3a9ed8324cfae2  tasks.ppm'

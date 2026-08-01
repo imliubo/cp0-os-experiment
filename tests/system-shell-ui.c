@@ -393,6 +393,10 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
 
     cp0_ui_handle_action(ui, CP0_UI_BRIGHTNESS_UP);
     write_snapshot(directory, "system-brightness", ui, frame);
+    cp0_ui_set_screenshot_status(ui, CP0_UI_SCREENSHOT_SAVED);
+    write_snapshot(directory, "system-screenshot-saved", ui, frame);
+    cp0_ui_set_screenshot_status(ui, CP0_UI_SCREENSHOT_UNAVAILABLE);
+    write_snapshot(directory, "system-screenshot-unavailable", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_HELP);
     write_snapshot(directory, "system-help", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_HELP);
@@ -1151,6 +1155,16 @@ int main(int argc, char **argv)
            CP0_UI_EVENT_MEDIA_NEXT);
     assert(cp0_ui_handle_action(&ui, CP0_UI_SCREENSHOT) ==
            CP0_UI_EVENT_SCREENSHOT);
+    assert(ui.screenshot_status == CP0_UI_SCREENSHOT_REQUESTED);
+    cp0_ui_set_screenshot_status(&ui, CP0_UI_SCREENSHOT_SAVED);
+    assert(ui.system_action_overlay && ui.system_action_kind == 6 &&
+           ui.screenshot_status == CP0_UI_SCREENSHOT_SAVED);
+    cp0_ui_set_screenshot_status(&ui, CP0_UI_SCREENSHOT_FAILED);
+    assert(ui.screenshot_status == CP0_UI_SCREENSHOT_FAILED);
+    cp0_ui_set_screenshot_status(&ui, CP0_UI_SCREENSHOT_UNAVAILABLE);
+    assert(ui.screenshot_status == CP0_UI_SCREENSHOT_UNAVAILABLE);
+    cp0_ui_set_screenshot_status(&ui, CP0_UI_SCREENSHOT_BUSY);
+    assert(ui.screenshot_status == CP0_UI_SCREENSHOT_BUSY);
 
     struct cp0_ui production;
     cp0_ui_init(&production);

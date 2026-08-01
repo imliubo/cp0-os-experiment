@@ -2,12 +2,15 @@
 
 #include "cardputerzero-system-shell-client-protocol.h"
 #include "cp0_appd_client.h"
+#include "cp0_screenshot_store.h"
 #include "cp0_store_client.h"
 #include "cp0_system_info.h"
 #include "cp0_ui.h"
+#include "weston-output-capture-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 
 #include <errno.h>
+#include <drm_fourcc.h>
 #include <fcntl.h>
 #include <linux/input-event-codes.h>
 #include <poll.h>
@@ -25,6 +28,7 @@
 #include <wayland-client.h>
 
 #define BUFFER_COUNT 2
+#define SCREENSHOT_RETRY_MAX 2U
 
 _Static_assert(CP0_STORE_INSTALL_BATCH_MAX == CP0_UI_STORE_UPDATE_BATCH_MAX,
                "Store batch limits must match");
@@ -41,6 +45,12 @@ struct shell_buffer {
     bool busy;
 };
 
+struct screenshot_buffer {
+    struct wl_buffer *wl_buffer;
+    uint32_t *pixels;
+    size_t size;
+};
+
 struct shell {
     struct wl_display *display;
     struct wl_registry *registry;
@@ -50,6 +60,9 @@ struct shell {
     struct wl_keyboard *keyboard;
     struct xdg_wm_base *wm_base;
     struct cp0_system_shell_v1 *system_control;
+    struct weston_capture_v1 *capture_factory;
+    struct weston_capture_source_v1 *capture_source;
+    struct wl_output *capture_output;
     struct wl_surface *surface;
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *xdg_toplevel;
@@ -60,6 +73,15 @@ struct shell {
     uint32_t document_restore_mode;
     uint32_t notification_restore_mode;
     uint32_t system_action_restore_mode;
+    uint32_t screenshot_restore_mode;
+    uint32_t capture_factory_name;
+    uint32_t capture_output_name;
+    uint32_t capture_format;
+    int32_t capture_width;
+    int32_t capture_height;
+    unsigned int capture_retries;
+    bool capture_busy;
+    struct screenshot_buffer screenshot_buffer;
     int timer_fd;
     int width;
     int height;
@@ -85,6 +107,8 @@ static volatile sig_atomic_t stop_requested;
 static unsigned int shm_serial;
 
 static void shell_redraw(struct shell *shell);
+static void begin_screenshot(struct shell *shell);
+static void maybe_create_capture_source(struct shell *shell);
 
 static void cancel_notification(struct shell *shell, bool restore_mode)
 {
@@ -722,6 +746,221 @@ static bool create_buffer(struct shell *shell, struct shell_buffer *buffer,
     return true;
 }
 
+static void destroy_screenshot_buffer(struct screenshot_buffer *buffer)
+{
+    if (buffer->wl_buffer != NULL)
+        wl_buffer_destroy(buffer->wl_buffer);
+    if (buffer->pixels != NULL)
+        munmap(buffer->pixels, buffer->size);
+    memset(buffer, 0, sizeof(*buffer));
+}
+
+static uint32_t screenshot_base_overlay_mode(const struct shell *shell)
+{
+    if (shell->overlay_mode !=
+        CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION)
+        return shell->overlay_mode;
+    if (shell->ui.notification_banner)
+        return shell->notification_restore_mode;
+    if (shell->ui.system_action_overlay)
+        return shell->system_action_restore_mode;
+    return CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+}
+
+static void show_screenshot_status(struct shell *shell,
+                                   enum cp0_ui_screenshot_status status)
+{
+    cancel_notification(shell, false);
+    cancel_system_action(shell, false);
+    shell->system_action_restore_mode = shell->screenshot_restore_mode;
+    cp0_ui_set_screenshot_status(&shell->ui, status);
+    if (shell->screenshot_restore_mode ==
+        CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL) {
+        shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+    } else {
+        shell->overlay_mode =
+            CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION;
+        cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                              shell->overlay_mode);
+    }
+    shell_redraw(shell);
+}
+
+static bool create_screenshot_buffer(struct shell *shell)
+{
+    struct screenshot_buffer *buffer = &shell->screenshot_buffer;
+    const int stride = (int)CP0_SCREENSHOT_WIDTH * 4;
+    const size_t size = (size_t)stride * CP0_SCREENSHOT_HEIGHT;
+    struct wl_shm_pool *pool;
+    uint32_t shm_format;
+    int fd;
+
+    if (shell->capture_format == DRM_FORMAT_XRGB8888)
+        shm_format = WL_SHM_FORMAT_XRGB8888;
+    else if (shell->capture_format == DRM_FORMAT_ARGB8888)
+        shm_format = WL_SHM_FORMAT_ARGB8888;
+    else
+        return false;
+    destroy_screenshot_buffer(buffer);
+    fd = create_anonymous_file(size);
+    if (fd < 0)
+        return false;
+    buffer->pixels = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+                          0);
+    if (buffer->pixels == MAP_FAILED) {
+        buffer->pixels = NULL;
+        close(fd);
+        return false;
+    }
+    pool = wl_shm_create_pool(shell->shm, fd, (int)size);
+    buffer->wl_buffer = wl_shm_pool_create_buffer(
+        pool, 0, (int)CP0_SCREENSHOT_WIDTH, (int)CP0_SCREENSHOT_HEIGHT,
+        stride, shm_format);
+    wl_shm_pool_destroy(pool);
+    close(fd);
+    if (buffer->wl_buffer == NULL) {
+        munmap(buffer->pixels, size);
+        buffer->pixels = NULL;
+        return false;
+    }
+    buffer->size = size;
+    return true;
+}
+
+static bool issue_screenshot_capture(struct shell *shell)
+{
+    if (shell->capture_source == NULL || shell->capture_width !=
+            (int32_t)CP0_SCREENSHOT_WIDTH ||
+        shell->capture_height != (int32_t)CP0_SCREENSHOT_HEIGHT ||
+        (shell->capture_format != DRM_FORMAT_XRGB8888 &&
+         shell->capture_format != DRM_FORMAT_ARGB8888) ||
+        !create_screenshot_buffer(shell))
+        return false;
+    weston_capture_source_v1_capture(shell->capture_source,
+                                     shell->screenshot_buffer.wl_buffer);
+    shell->capture_busy = true;
+    return true;
+}
+
+static void finish_screenshot_capture(struct shell *shell, bool saved)
+{
+    shell->capture_busy = false;
+    destroy_screenshot_buffer(&shell->screenshot_buffer);
+    show_screenshot_status(shell, saved ? CP0_UI_SCREENSHOT_SAVED
+                                       : CP0_UI_SCREENSHOT_FAILED);
+}
+
+static void handle_capture_format(void *data,
+                                  struct weston_capture_source_v1 *source,
+                                  uint32_t format)
+{
+    struct shell *shell = data;
+    (void)source;
+    shell->capture_format = format;
+}
+
+static void handle_capture_size(void *data,
+                                struct weston_capture_source_v1 *source,
+                                int32_t width, int32_t height)
+{
+    struct shell *shell = data;
+    (void)source;
+    shell->capture_width = width;
+    shell->capture_height = height;
+}
+
+static void handle_capture_complete(void *data,
+                                    struct weston_capture_source_v1 *source)
+{
+    struct shell *shell = data;
+    char name[CP0_SCREENSHOT_NAME_MAX];
+    int result;
+    (void)source;
+
+    result = cp0_screenshot_store_save(
+        CP0_SCREENSHOT_DIRECTORY, shell->screenshot_buffer.pixels,
+        CP0_SCREENSHOT_WIDTH * CP0_SCREENSHOT_HEIGHT, name);
+    if (result == 0)
+        fprintf(stderr, "system-shell: screenshot saved as %s\n", name);
+    else
+        fprintf(stderr, "system-shell: screenshot save failed: %s\n",
+                strerror(errno));
+    finish_screenshot_capture(shell, result == 0);
+}
+
+static void handle_capture_retry(void *data,
+                                 struct weston_capture_source_v1 *source)
+{
+    struct shell *shell = data;
+    (void)source;
+
+    shell->capture_busy = false;
+    destroy_screenshot_buffer(&shell->screenshot_buffer);
+    shell->capture_retries++;
+    if (shell->capture_retries > SCREENSHOT_RETRY_MAX ||
+        !issue_screenshot_capture(shell)) {
+        fprintf(stderr, "system-shell: screenshot retry failed\n");
+        finish_screenshot_capture(shell, false);
+    }
+}
+
+static void handle_capture_failed(void *data,
+                                  struct weston_capture_source_v1 *source,
+                                  const char *message)
+{
+    struct shell *shell = data;
+    (void)source;
+    fprintf(stderr, "system-shell: screenshot capture failed: %s\n",
+            message == NULL ? "unknown error" : message);
+    finish_screenshot_capture(shell, false);
+}
+
+static const struct weston_capture_source_v1_listener capture_listener = {
+    .format = handle_capture_format,
+    .size = handle_capture_size,
+    .complete = handle_capture_complete,
+    .retry = handle_capture_retry,
+    .failed = handle_capture_failed,
+};
+
+static void maybe_create_capture_source(struct shell *shell)
+{
+    if (shell->capture_source != NULL || shell->capture_factory == NULL ||
+        shell->capture_output == NULL)
+        return;
+    shell->capture_source = weston_capture_v1_create(
+        shell->capture_factory, shell->capture_output,
+        WESTON_CAPTURE_V1_SOURCE_FRAMEBUFFER);
+    if (shell->capture_source != NULL) {
+        shell->capture_format = 0;
+        shell->capture_width = 0;
+        shell->capture_height = 0;
+        weston_capture_source_v1_add_listener(shell->capture_source,
+                                               &capture_listener, shell);
+    }
+}
+
+static void begin_screenshot(struct shell *shell)
+{
+    if (shell->capture_busy) {
+        fprintf(stderr, "system-shell: screenshot capture already in progress\n");
+        return;
+    }
+    shell->screenshot_restore_mode = screenshot_base_overlay_mode(shell);
+    shell->capture_retries = 0;
+    if (shell->capture_source == NULL || shell->capture_width == 0 ||
+        shell->capture_height == 0 || shell->capture_format == 0) {
+        fprintf(stderr, "system-shell: screenshot capture unavailable\n");
+        show_screenshot_status(shell, CP0_UI_SCREENSHOT_UNAVAILABLE);
+        return;
+    }
+    if (!issue_screenshot_capture(shell)) {
+        fprintf(stderr,
+                "system-shell: screenshot capture contract unsupported\n");
+        show_screenshot_status(shell, CP0_UI_SCREENSHOT_UNAVAILABLE);
+    }
+}
+
 static void update_status(struct shell *shell)
 {
     char clock_text[6] = "--:--";
@@ -1075,7 +1314,9 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                event == CP0_UI_EVENT_MEDIA_NEXT) {
         fprintf(stderr, "system-shell: media action requested; broker unavailable\n");
     } else if (event == CP0_UI_EVENT_SCREENSHOT) {
-        fprintf(stderr, "system-shell: screenshot requested; broker unavailable\n");
+        shell->ui.system_action_overlay = false;
+        shell->ui.system_action_ticks = 0;
+        begin_screenshot(shell);
     } else if (event == CP0_UI_EVENT_STORE_DETAILS) {
         shell_redraw(shell);
         wl_display_flush(shell->display);
@@ -1266,6 +1507,10 @@ static void handle_system_action(void *data,
         ui_action = CP0_UI_SCREENSHOT;
         break;
     default:
+        return;
+    }
+    if (action == CP0_SYSTEM_SHELL_V1_ACTION_SCREENSHOT) {
+        begin_screenshot(shell);
         return;
     }
     cancel_notification(shell, true);
@@ -1645,15 +1890,59 @@ static void handle_registry_global(void *data, struct wl_registry *registry,
             registry, name, &cp0_system_shell_v1_interface, bind_version);
         cp0_system_shell_v1_add_listener(shell->system_control,
                                          &system_control_listener, shell);
+    } else if (strcmp(interface, wl_output_interface.name) == 0 &&
+               shell->capture_output == NULL) {
+        uint32_t bind_version = version < 4 ? version : 4;
+        shell->capture_output =
+            wl_registry_bind(registry, name, &wl_output_interface,
+                             bind_version);
+        shell->capture_output_name = name;
+        maybe_create_capture_source(shell);
+    } else if (strcmp(interface, weston_capture_v1_interface.name) == 0) {
+        shell->capture_factory = wl_registry_bind(
+            registry, name, &weston_capture_v1_interface, 1);
+        shell->capture_factory_name = name;
+        maybe_create_capture_source(shell);
     }
 }
 
 static void handle_registry_remove(void *data, struct wl_registry *registry,
                                    uint32_t name)
 {
-    (void)data;
+    struct shell *shell = data;
     (void)registry;
-    (void)name;
+    if (name == shell->capture_output_name) {
+        if (shell->capture_source != NULL)
+            weston_capture_source_v1_destroy(shell->capture_source);
+        shell->capture_source = NULL;
+        destroy_screenshot_buffer(&shell->screenshot_buffer);
+        shell->capture_busy = false;
+        if (shell->capture_output != NULL) {
+            if (wl_output_get_version(shell->capture_output) >=
+                WL_OUTPUT_RELEASE_SINCE_VERSION)
+                wl_output_release(shell->capture_output);
+            else
+                wl_output_destroy(shell->capture_output);
+        }
+        shell->capture_output = NULL;
+        shell->capture_output_name = 0;
+        shell->capture_width = 0;
+        shell->capture_height = 0;
+        shell->capture_format = 0;
+    } else if (name == shell->capture_factory_name) {
+        if (shell->capture_source != NULL)
+            weston_capture_source_v1_destroy(shell->capture_source);
+        shell->capture_source = NULL;
+        destroy_screenshot_buffer(&shell->screenshot_buffer);
+        shell->capture_busy = false;
+        if (shell->capture_factory != NULL)
+            weston_capture_v1_destroy(shell->capture_factory);
+        shell->capture_factory = NULL;
+        shell->capture_factory_name = 0;
+        shell->capture_width = 0;
+        shell->capture_height = 0;
+        shell->capture_format = 0;
+    }
 }
 
 static const struct wl_registry_listener registry_listener = {
@@ -1764,6 +2053,18 @@ static void shell_destroy(struct shell *shell)
         close(shell->timer_fd);
     for (size_t index = 0; index < BUFFER_COUNT; index++)
         destroy_buffer(&shell->buffers[index]);
+    if (shell->capture_source != NULL)
+        weston_capture_source_v1_destroy(shell->capture_source);
+    destroy_screenshot_buffer(&shell->screenshot_buffer);
+    if (shell->capture_factory != NULL)
+        weston_capture_v1_destroy(shell->capture_factory);
+    if (shell->capture_output != NULL) {
+        if (wl_output_get_version(shell->capture_output) >=
+            WL_OUTPUT_RELEASE_SINCE_VERSION)
+            wl_output_release(shell->capture_output);
+        else
+            wl_output_destroy(shell->capture_output);
+    }
     if (shell->xdg_toplevel != NULL)
         xdg_toplevel_destroy(shell->xdg_toplevel);
     if (shell->xdg_surface != NULL)

@@ -110,6 +110,14 @@ enum cp0_ui_event {
     CP0_UI_EVENT_SCREENSHOT,
 };
 
+enum cp0_ui_screenshot_status {
+    CP0_UI_SCREENSHOT_REQUESTED,
+    CP0_UI_SCREENSHOT_SAVED,
+    CP0_UI_SCREENSHOT_FAILED,
+    CP0_UI_SCREENSHOT_UNAVAILABLE,
+    CP0_UI_SCREENSHOT_BUSY,
+};
+
 enum cp0_ui_authority {
     CP0_UI_AUTHORITY_PERSONAL,
     CP0_UI_AUTHORITY_PARENT,
@@ -385,6 +393,7 @@ struct cp0_ui {
     bool help_overlay;
     unsigned int system_action_kind;
     unsigned int system_action_ticks;
+    enum cp0_ui_screenshot_status screenshot_status;
     bool developer_mode;
     bool developer_mode_allowed;
     bool recovery_mode;
@@ -590,6 +599,8 @@ bool cp0_ui_show_notification(struct cp0_ui *ui, uint64_t notification_id,
                               const char *body);
 void cp0_ui_clear_notification(struct cp0_ui *ui);
 void cp0_ui_set_local_simulation(struct cp0_ui *ui, bool enabled);
+void cp0_ui_set_screenshot_status(struct cp0_ui *ui,
+                                  enum cp0_ui_screenshot_status status);
 bool cp0_ui_tick(struct cp0_ui *ui);
 enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                                         enum cp0_ui_action action);

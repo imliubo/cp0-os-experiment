@@ -39,13 +39,15 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     -I"$weston_build/protocol" \
     "$repo_root/system-shell/src/main.c" \
     "$repo_root/system-shell/src/ui.c" \
+    "$repo_root/system-shell/src/screenshot_store.c" \
     "$repo_root/system-shell/src/json.c" \
     "$repo_root/system-shell/src/appd_client.c" \
     "$repo_root/system-shell/src/store_client.c" \
     "$repo_root/system-shell/src/system_info.c" \
     "$output/cardputerzero-system-shell-protocol.c" \
     "$weston_build/protocol/xdg-shell-protocol.c" \
-    $(pkg-config --cflags --libs wayland-client libpng) \
+    "$weston_build/protocol/weston-output-capture-protocol.c" \
+    $(pkg-config --cflags --libs wayland-client libpng libdrm) \
     -o "$output/cardputerzero-system-shell"
 
 cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \
