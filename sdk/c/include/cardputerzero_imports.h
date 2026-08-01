@@ -68,4 +68,10 @@ cp0_result_t cp0_intent_send_raw(const uint8_t *action, uint32_t action_length, 
 CP0_IMPORT("cp0_intent_take")
 int64_t cp0_intent_take_raw(uint8_t *action, uint32_t action_capacity, uint8_t *payload, uint32_t payload_capacity);
 
+CP0_IMPORT("cp0_media_session_update")
+cp0_result_t cp0_media_session_update_raw(uint32_t state, uint32_t supported_actions);
+
+CP0_IMPORT("cp0_media_take_action")
+int32_t cp0_media_take_action_raw(void);
+
 #endif

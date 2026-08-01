@@ -290,6 +290,29 @@
       ],
       "native_fallback": -2,
       "wit": "intents.take"
+    },
+    {
+      "name": "cp0_media_session_update",
+      "runtime_function": "cp0_media_session_update",
+      "c_name": "cp0_media_session_update_raw",
+      "wamr_signature": "(ii)i",
+      "result": "result",
+      "parameters": [
+        { "name": "state", "type": "u32" },
+        { "name": "supported_actions", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "media.update-session"
+    },
+    {
+      "name": "cp0_media_take_action",
+      "runtime_function": "cp0_media_take_action",
+      "c_name": "cp0_media_take_action_raw",
+      "wamr_signature": "()i",
+      "result": "i32",
+      "parameters": [],
+      "native_fallback": -2,
+      "wit": "media.take-action"
     }
   ]
 }

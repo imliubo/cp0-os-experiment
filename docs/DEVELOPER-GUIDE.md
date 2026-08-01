@@ -179,6 +179,14 @@ Application logs are bounded and root-mediated:
 cargo run -p cp0ctl -- logs dev.example.clock --device pi@192.168.20.146
 ```
 
+Media applications register only playback state and supported global actions
+through `media::update_session` in Rust or `cp0_media_session_update` in C/C++.
+They consume Play/Pause, Previous and Next with `media::take_action` or
+`cp0_media_take_action`. The API has no target ID or application-supplied
+metadata; appd binds it to the authenticated foreground Runtime. Registration
+does not grant audio access, so actual playback still requires
+`audio.playback`. See [Media-session broker](MEDIA-SESSION-BROKER.md).
+
 ## Compatibility
 
 The current manifest SDK requirement is `1.0`, backed by WIT package

@@ -82,6 +82,9 @@ pub enum AppdCommand {
         prompt_id: u64,
         document_id: Option<String>,
     },
+    DispatchMediaAction {
+        action: crate::MediaAction,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,6 +170,10 @@ pub enum ResponseData {
         app_id: String,
         document_id: Option<String>,
     },
+    MediaActionDispatched {
+        app_id: String,
+        action: crate::MediaAction,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -202,6 +209,7 @@ pub enum ErrorCode {
     ResourceExhausted,
     Untrusted,
     Conflict,
+    Unavailable,
     Internal,
 }
 
@@ -657,6 +665,39 @@ mod tests {
                     permissions: vec![cp0_manifest::Permission::NotificationsPost],
                 }],
                 next_offset: None,
+            },
+        );
+        let mut encoded = Vec::new();
+        write_response(&mut encoded, &response).unwrap();
+        assert_eq!(
+            read_response(&mut Cursor::new(encoded)).unwrap(),
+            Some(response)
+        );
+    }
+
+    #[test]
+    fn round_trips_targetless_global_media_dispatch() {
+        let request = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 82,
+            command: AppdCommand::DispatchMediaAction {
+                action: crate::MediaAction::PlayPause,
+            },
+        };
+        let mut encoded = Vec::new();
+        write_request(&mut encoded, &request).unwrap();
+        let request_json = String::from_utf8(encoded.clone()).unwrap();
+        assert!(!request_json.contains("app_id"));
+        assert_eq!(
+            read_request(&mut Cursor::new(encoded)).unwrap(),
+            Some(request)
+        );
+
+        let response = AppdResponse::success(
+            82,
+            ResponseData::MediaActionDispatched {
+                app_id: "dev.cardputerzero.player".into(),
+                action: crate::MediaAction::PlayPause,
             },
         );
         let mut encoded = Vec::new();

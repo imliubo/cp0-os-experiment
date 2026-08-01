@@ -64,6 +64,11 @@ pub enum BrokerCommand {
         payload_base64: String,
     },
     TakeIntent,
+    UpdateMediaSession {
+        state: crate::MediaPlaybackState,
+        supported_actions: u8,
+    },
+    TakeMediaAction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +146,14 @@ pub enum BrokerOutcome {
         payload_base64: String,
     },
     IntentEmpty,
+    MediaSessionUpdated {
+        state: crate::MediaPlaybackState,
+        supported_actions: u8,
+    },
+    MediaAction {
+        action: crate::MediaAction,
+    },
+    MediaActionEmpty,
     Error {
         code: BrokerErrorCode,
         message: String,
@@ -193,6 +206,7 @@ pub enum BrokerProtocolError {
     InvalidRadio,
     InvalidStorage,
     InvalidIntent,
+    InvalidMediaSession,
 }
 
 impl fmt::Display for BrokerProtocolError {
@@ -225,6 +239,9 @@ impl fmt::Display for BrokerProtocolError {
             Self::InvalidRadio => formatter.write_str("invalid bounded LoRa operation"),
             Self::InvalidStorage => formatter.write_str("invalid private storage operation"),
             Self::InvalidIntent => formatter.write_str("invalid bounded intent operation"),
+            Self::InvalidMediaSession => {
+                formatter.write_str("invalid bounded media session operation")
+            }
         }
     }
 }
@@ -304,6 +321,12 @@ impl BrokerRequest {
                     return Err(BrokerProtocolError::InvalidIntent);
                 }
                 Ok(())
+            }
+            BrokerCommand::UpdateMediaSession {
+                state,
+                supported_actions,
+            } if !crate::valid_media_session_update(*state, *supported_actions) => {
+                Err(BrokerProtocolError::InvalidMediaSession)
             }
             _ => Ok(()),
         }
@@ -491,6 +514,37 @@ impl BrokerResponse {
         }
     }
 
+    pub fn media_session_updated(
+        request_id: u64,
+        state: crate::MediaPlaybackState,
+        supported_actions: u8,
+    ) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::MediaSessionUpdated {
+                state,
+                supported_actions,
+            },
+        }
+    }
+
+    pub fn media_action(request_id: u64, action: crate::MediaAction) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::MediaAction { action },
+        }
+    }
+
+    pub fn media_action_empty(request_id: u64) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::MediaActionEmpty,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), BrokerProtocolError> {
         if self.protocol_version != BROKER_PROTOCOL_VERSION {
             return Err(BrokerProtocolError::UnsupportedVersion(
@@ -582,6 +636,12 @@ impl BrokerResponse {
                 if payload.len() > crate::MAX_INTENT_PAYLOAD_BYTES {
                     return Err(BrokerProtocolError::InvalidIntent);
                 }
+            }
+            BrokerOutcome::MediaSessionUpdated {
+                state,
+                supported_actions,
+            } if !crate::valid_media_session_update(*state, *supported_actions) => {
+                return Err(BrokerProtocolError::InvalidMediaSession);
             }
             _ => {}
         }
@@ -1046,5 +1106,62 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn round_trips_targetless_media_session_coordination() {
+        let update = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 16,
+            command: BrokerCommand::UpdateMediaSession {
+                state: crate::MediaPlaybackState::Playing,
+                supported_actions: crate::MEDIA_ACTION_PLAY_PAUSE | crate::MEDIA_ACTION_NEXT,
+            },
+        };
+        let mut frame = Vec::new();
+        write_broker_request(&mut frame, &update).unwrap();
+        let encoded = String::from_utf8(frame.clone()).unwrap();
+        assert!(!encoded.contains("app_id"));
+        assert_eq!(
+            read_broker_request(&mut Cursor::new(frame)).unwrap(),
+            Some(update)
+        );
+        assert!(
+            BrokerResponse::media_session_updated(
+                16,
+                crate::MediaPlaybackState::Playing,
+                crate::MEDIA_ACTION_PLAY_PAUSE | crate::MEDIA_ACTION_NEXT,
+            )
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            BrokerResponse::media_action(17, crate::MediaAction::Next)
+                .validate()
+                .is_ok()
+        );
+        assert!(BrokerResponse::media_action_empty(17).validate().is_ok());
+
+        for (state, supported_actions) in [
+            (
+                crate::MediaPlaybackState::Inactive,
+                crate::MEDIA_ACTION_NEXT,
+            ),
+            (crate::MediaPlaybackState::Paused, 0),
+            (crate::MediaPlaybackState::Playing, 1 << 7),
+        ] {
+            assert!(
+                BrokerRequest {
+                    protocol_version: BROKER_PROTOCOL_VERSION,
+                    request_id: 18,
+                    command: BrokerCommand::UpdateMediaSession {
+                        state,
+                        supported_actions,
+                    },
+                }
+                .validate()
+                .is_err()
+            );
+        }
     }
 }

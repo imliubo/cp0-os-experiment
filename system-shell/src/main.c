@@ -1312,7 +1312,25 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
     } else if (event == CP0_UI_EVENT_MEDIA_PLAY_PAUSE ||
                event == CP0_UI_EVENT_MEDIA_PREVIOUS ||
                event == CP0_UI_EVENT_MEDIA_NEXT) {
-        fprintf(stderr, "system-shell: media action requested; broker unavailable\n");
+        enum cp0_media_action action =
+            event == CP0_UI_EVENT_MEDIA_PLAY_PAUSE
+                ? CP0_MEDIA_ACTION_PLAY_PAUSE
+                : (event == CP0_UI_EVENT_MEDIA_PREVIOUS
+                       ? CP0_MEDIA_ACTION_PREVIOUS
+                       : CP0_MEDIA_ACTION_NEXT);
+        char app_id[CP0_APP_ID_BYTES];
+        int result = cp0_appd_dispatch_media_action(action, app_id);
+        enum cp0_ui_media_status status =
+            result == CP0_MEDIA_DISPATCH_SENT
+                ? CP0_UI_MEDIA_SENT
+                : (result == CP0_MEDIA_DISPATCH_UNAVAILABLE
+                       ? CP0_UI_MEDIA_UNAVAILABLE
+                       : (result == CP0_MEDIA_DISPATCH_BUSY
+                              ? CP0_UI_MEDIA_BUSY
+                              : CP0_UI_MEDIA_FAILED));
+        cp0_ui_set_media_status(&shell->ui, status);
+        if (result == CP0_MEDIA_DISPATCH_SENT)
+            fprintf(stderr, "system-shell: media action sent to %s\n", app_id);
     } else if (event == CP0_UI_EVENT_SCREENSHOT) {
         shell->ui.system_action_overlay = false;
         shell->ui.system_action_ticks = 0;

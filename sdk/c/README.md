@@ -48,3 +48,9 @@ The Runtime does not expose a writable host filesystem.
 handoff. Actions are reverse-domain ASCII names up to 96 bytes, payloads are at
 most 1024 bytes, and a taken message is consumed once. No target application,
 socket or native IPC handle appears in the SDK.
+
+`cp0_media_session_update` registers the foreground application's playback
+state and supported Play/Pause, Previous and Next actions.
+`cp0_media_take_action` consumes one action routed by appd. The application
+cannot name another application or attach media metadata, and registration
+does not replace the `audio.playback` permission required for sound output.

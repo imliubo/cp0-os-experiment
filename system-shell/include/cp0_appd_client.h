@@ -47,6 +47,19 @@ enum cp0_device_mode {
     CP0_DEVICE_MODE_RECOVERY,
 };
 
+enum cp0_media_action {
+    CP0_MEDIA_ACTION_PLAY_PAUSE,
+    CP0_MEDIA_ACTION_PREVIOUS,
+    CP0_MEDIA_ACTION_NEXT,
+};
+
+enum cp0_media_dispatch_result {
+    CP0_MEDIA_DISPATCH_FAILED = -1,
+    CP0_MEDIA_DISPATCH_SENT = 0,
+    CP0_MEDIA_DISPATCH_UNAVAILABLE = 1,
+    CP0_MEDIA_DISPATCH_BUSY = 2,
+};
+
 struct cp0_device_settings {
     enum cp0_management_authority authority;
     bool developer_mode;
@@ -118,5 +131,7 @@ int cp0_appd_resolve_document(uint64_t prompt_id,
 int cp0_appd_get_device_settings(struct cp0_device_settings *settings);
 int cp0_appd_set_device_mode(enum cp0_device_mode mode, bool enabled,
                              struct cp0_device_settings *settings);
+int cp0_appd_dispatch_media_action(enum cp0_media_action action,
+                                   char app_id[CP0_APP_ID_BYTES]);
 
 #endif

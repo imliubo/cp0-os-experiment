@@ -166,8 +166,9 @@ implemented as an unreliable userspace timer in each application.
 - [x] Add the trusted screenshot broker with exact-client compositor
   authorization, fixed 320x170 capture, atomic bounded PNG storage and
   completion states. Physical `Fn+J` and SD latency remain device acceptance.
-- [ ] Add the media-session broker before replacing media `REQUESTED` overlays
-  with successful completion states.
+- [x] Add the targetless media-session broker with Runtime-bound identity,
+  bounded per-session actions, lifecycle clearing, SDK APIs and explicit Shell
+  completion states. Physical `Fn+Q/W/E` remains device acceptance.
 
 Local broker work may proceed independently. Deployment remains gated on the
 retained stability evidence passing verification and an explicit device step.

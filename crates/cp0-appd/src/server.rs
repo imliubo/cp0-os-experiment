@@ -24,12 +24,13 @@ use crate::{
     AudioClientError, BrokerCommand, BrokerErrorCode, BrokerProtocolError, BrokerRequest,
     BrokerResponse, CameraClient, CameraClientError, DevicePolicyEngine, DocumentClient,
     DocumentClientError, DocumentCoordinator, DocumentPromptError, DocumentRequestResult,
-    ErrorCode, GpioClient, GpioClientError, InstallError, IntentQueue, NetworkClient,
-    NetworkClientError, NotificationQueue, PackageInstaller, PermissionChoice,
-    PermissionCoordinator, PermissionPromptError, PermissionRequestResult, PolicyError,
-    RadioClient, RadioClientError, ResponseData, StorageClient, StorageClientError,
-    StoreMetricsClient, TrustPaths, TrustPolicy, encode_broker_response, peer_credentials,
-    read_broker_request, read_request, write_broker_response, write_response,
+    ErrorCode, GpioClient, GpioClientError, InstallError, IntentQueue, MediaAction,
+    MediaSessionBroker, MediaSessionError, NetworkClient, NetworkClientError, NotificationQueue,
+    PackageInstaller, PermissionChoice, PermissionCoordinator, PermissionPromptError,
+    PermissionRequestResult, PolicyError, RadioClient, RadioClientError, ResponseData,
+    StorageClient, StorageClientError, StoreMetricsClient, TrustPaths, TrustPolicy,
+    encode_broker_response, peer_credentials, read_broker_request, read_request,
+    write_broker_response, write_response,
 };
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -91,6 +92,7 @@ struct ServerState {
     notifications: NotificationQueue,
     document_prompts: DocumentCoordinator,
     intents: IntentQueue,
+    media_sessions: MediaSessionBroker,
     policy: DevicePolicyEngine,
 }
 
@@ -164,6 +166,7 @@ impl AppdServer {
                 notifications: NotificationQueue::default(),
                 document_prompts: DocumentCoordinator::default(),
                 intents: IntentQueue::default(),
+                media_sessions: MediaSessionBroker::default(),
                 policy: DevicePolicyEngine::unmanaged(),
             })),
             trusted_uids: trusted_uids.into_iter().collect(),
@@ -287,6 +290,12 @@ impl AppdServer {
             command @ AppdCommand::StoreInstall { .. } => {
                 return self.install_store_package(request_id, peer_uid, command);
             }
+            AppdCommand::DispatchMediaAction { action } => {
+                return self.dispatch_media_action(request_id, action);
+            }
+            AppdCommand::Stop { app_id } => {
+                return self.stop_app_control(request_id, &app_id);
+            }
             command => command,
         };
         let mut state = match self.state.lock() {
@@ -305,6 +314,9 @@ impl AppdServer {
             AppdCommand::StoreInstall { .. } => {
                 unreachable!("store install returned before state lock")
             }
+            AppdCommand::DispatchMediaAction { .. } => {
+                unreachable!("media dispatch returned before state lock")
+            }
             AppdCommand::Ping => Ok(ResponseData::Pong),
             AppdCommand::List { offset, limit } => {
                 Self::list_apps(&state, offset, limit).map_err(CommandError::Manager)
@@ -314,26 +326,13 @@ impl AppdServer {
             }
             AppdCommand::Start { app_id } => match self.start_app(&state, &app_id) {
                 Ok((unit, version)) => {
+                    state.media_sessions.clear();
                     started_runtime = Some((app_id.clone(), version, unit.clone()));
                     Ok(ResponseData::Started { app_id, unit })
                 }
                 Err(error) => Err(error),
             },
-            AppdCommand::Stop { app_id } => {
-                let runtime_token = self.mark_explicit_stop(&app_id);
-                match state.manager.stop(&app_id) {
-                    Ok(()) => {
-                        self.finish_explicit_stop(runtime_token);
-                        state.permissions.clear_app_session(&app_id);
-                        state.document_prompts.clear_app(&app_id);
-                        Ok(ResponseData::Stopped { app_id })
-                    }
-                    Err(error) => {
-                        self.cancel_explicit_stop(runtime_token);
-                        Err(CommandError::Manager(error))
-                    }
-                }
-            }
+            AppdCommand::Stop { .. } => unreachable!("stop returned before state lock"),
             AppdCommand::Uninstall { app_id } => {
                 let result = state
                     .manager
@@ -361,10 +360,13 @@ impl AppdServer {
                             .uninstall(&app_id)
                             .map_err(CommandError::Manager)
                     });
-                result.map(|removed| ResponseData::Uninstalled {
-                    app_id: removed.app_id,
-                    private_data_retained: true,
-                    package_cleanup_pending: removed.package_cleanup_pending,
+                result.map(|removed| {
+                    state.media_sessions.clear_app(&app_id);
+                    ResponseData::Uninstalled {
+                        app_id: removed.app_id,
+                        private_data_retained: true,
+                        package_cleanup_pending: removed.package_cleanup_pending,
+                    }
                 })
             }
             AppdCommand::Rollback { app_id } => state
@@ -438,6 +440,100 @@ impl AppdServer {
             Err(error) => {
                 eprintln!("cp0-appd: control request failed: {error}");
                 command_error_response(request_id, &error)
+            }
+        }
+    }
+
+    fn dispatch_media_action(&self, request_id: u64, action: MediaAction) -> AppdResponse {
+        let runtime = match self.runtime.lock() {
+            Ok(runtime) => runtime,
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application runtime state is unavailable",
+                );
+            }
+        };
+        let Some(session) = runtime.as_ref() else {
+            return AppdResponse::error(
+                request_id,
+                ErrorCode::Unavailable,
+                "no foreground application is running",
+            );
+        };
+        let runtime_token = session.token;
+        let active_app_id = session.app_id.clone();
+
+        // Keep runtime identity stable until the bounded queue mutation finishes.
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application service state is unavailable",
+                );
+            }
+        };
+        let result = state
+            .media_sessions
+            .dispatch(&active_app_id, runtime_token, action);
+        drop(state);
+        drop(runtime);
+        match result {
+            Ok(()) => AppdResponse::success(
+                request_id,
+                ResponseData::MediaActionDispatched {
+                    app_id: active_app_id,
+                    action,
+                },
+            ),
+            Err(MediaSessionError::Unavailable | MediaSessionError::Unsupported) => {
+                AppdResponse::error(
+                    request_id,
+                    ErrorCode::Unavailable,
+                    "the foreground application has no matching media session action",
+                )
+            }
+            Err(MediaSessionError::Full) => AppdResponse::error(
+                request_id,
+                ErrorCode::ResourceExhausted,
+                "the foreground media action queue is full",
+            ),
+        }
+    }
+
+    fn stop_app_control(&self, request_id: u64, app_id: &str) -> AppdResponse {
+        let runtime_token = self.mark_explicit_stop(app_id);
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                self.cancel_explicit_stop(runtime_token);
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application service state is unavailable",
+                );
+            }
+        };
+        let result = state.manager.stop(app_id).map(|()| {
+            state.permissions.clear_app_session(app_id);
+            state.document_prompts.clear_app(app_id);
+            state.media_sessions.clear_app(app_id);
+            ResponseData::Stopped {
+                app_id: app_id.into(),
+            }
+        });
+        drop(state);
+        match result {
+            Ok(data) => {
+                self.finish_explicit_stop(runtime_token);
+                AppdResponse::success(request_id, data)
+            }
+            Err(error) => {
+                self.cancel_explicit_stop(runtime_token);
+                command_error_response(request_id, &CommandError::Manager(error))
             }
         }
     }
@@ -670,6 +766,7 @@ impl AppdServer {
         if let Ok(mut state) = self.state.lock() {
             state.permissions.clear_app_session(&app_id);
             state.document_prompts.clear_app(&app_id);
+            state.media_sessions.clear_app(&app_id);
         }
         if crashed {
             self.report_runtime_metric(token, &app_id, &version, StoreRuntimeMetricEvent::Crash);
@@ -1129,6 +1226,35 @@ impl AppdServer {
                     None => BrokerResponse::intent_empty(request_id),
                 }
             }
+            BrokerCommand::UpdateMediaSession {
+                state: playback_state,
+                supported_actions,
+            } => {
+                if let Err(response) = self.with_current_media_caller(
+                    peer,
+                    request_id,
+                    |app_id, runtime_token, sessions| {
+                        sessions.update(app_id, runtime_token, playback_state, supported_actions);
+                    },
+                ) {
+                    return response;
+                }
+                BrokerResponse::media_session_updated(request_id, playback_state, supported_actions)
+            }
+            BrokerCommand::TakeMediaAction => {
+                let action = match self.with_current_media_caller(
+                    peer,
+                    request_id,
+                    |app_id, runtime_token, sessions| sessions.take(app_id, runtime_token),
+                ) {
+                    Ok(action) => action,
+                    Err(response) => return response,
+                };
+                match action {
+                    Some(action) => BrokerResponse::media_action(request_id, action),
+                    None => BrokerResponse::media_action_empty(request_id),
+                }
+            }
         }
     }
 
@@ -1227,25 +1353,27 @@ impl AppdServer {
     }
 
     fn complete_intent_transition(&self, transition: IntentTransition) {
+        let stop_token = self.mark_explicit_stop(&transition.sender_app_id);
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(_) => {
+                self.cancel_explicit_stop(stop_token);
                 eprintln!("cp0-appd: cannot switch applications after accepted intent");
                 return;
             }
         };
-        let stop_token = self.mark_explicit_stop(&transition.sender_app_id);
         match state.manager.is_running(&transition.sender_app_id) {
             Ok(true) => {
                 if let Err(error) = state.manager.stop(&transition.sender_app_id) {
+                    drop(state);
                     self.cancel_explicit_stop(stop_token);
                     eprintln!("cp0-appd: cannot stop intent sender: {error}");
                     return;
                 }
-                self.finish_explicit_stop(stop_token);
             }
-            Ok(false) => self.finish_explicit_stop(stop_token),
+            Ok(false) => {}
             Err(error) => {
+                drop(state);
                 self.cancel_explicit_stop(stop_token);
                 eprintln!("cp0-appd: cannot verify intent sender state: {error}");
                 return;
@@ -1255,16 +1383,21 @@ impl AppdServer {
             .permissions
             .clear_app_session(&transition.sender_app_id);
         state.document_prompts.clear_app(&transition.sender_app_id);
+        state.media_sessions.clear();
         let version = match state.manager.installed_manifest(&transition.target_app_id) {
             Ok(manifest) => manifest.version,
             Err(error) => {
+                drop(state);
+                self.finish_explicit_stop(stop_token);
                 eprintln!("cp0-appd: cannot inspect accepted intent receiver: {error}");
                 return;
             }
         };
-        match state.manager.start(&transition.target_app_id) {
+        let start_result = state.manager.start(&transition.target_app_id);
+        drop(state);
+        self.finish_explicit_stop(stop_token);
+        match start_result {
             Ok(unit) => {
-                drop(state);
                 self.start_runtime_monitor(transition.target_app_id, version, unit);
             }
             Err(error) => {
@@ -1588,6 +1721,52 @@ impl AppdServer {
                 ))
             }
         }
+    }
+
+    fn with_current_media_caller<T>(
+        &self,
+        peer: crate::PeerCredentials,
+        request_id: u64,
+        operation: impl FnOnce(&str, u64, &mut MediaSessionBroker) -> T,
+    ) -> Result<T, BrokerResponse> {
+        let app = self.authenticate_broker_caller(peer, request_id)?;
+        let runtime = match self.runtime.lock() {
+            Ok(runtime) => runtime,
+            Err(_) => {
+                return Err(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "application runtime state is unavailable",
+                ));
+            }
+        };
+        let Some(session) = runtime
+            .as_ref()
+            .filter(|session| session.app_id == app.app_id)
+        else {
+            return Err(BrokerResponse::error(
+                request_id,
+                BrokerErrorCode::Unavailable,
+                "application is not the current foreground runtime",
+            ));
+        };
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                return Err(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "application service state is unavailable",
+                ));
+            }
+        };
+
+        // Runtime must be locked before state so lifecycle and broker paths agree.
+        Ok(operation(
+            &app.app_id,
+            session.token,
+            &mut state.media_sessions,
+        ))
     }
 }
 

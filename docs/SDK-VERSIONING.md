@@ -38,4 +38,6 @@ WIT package 版本使用语义化版本。应用在 manifest 中声明所需的 
 导入和 Rust 私有导入均由该契约生成，CI 拒绝任何手工漂移。
 
 当前保留 `0.1` 和 `1.0` 两份不可变快照。两者都包含首版的 22 个 hostcall，因此
-1.0 应用和 legacy 0.1 应用使用同一套受限 Runtime 注册表，不需要第二套宿主接口。
+当前 24 个 hostcall 的 Runtime 注册表仍完整包含这 22 个名称和签名；新增的两个
+media-session hostcall 不改变既有应用的导入。1.0 应用和 legacy 0.1 应用继续使用
+同一套受限 Runtime 注册表，不需要第二套宿主接口。

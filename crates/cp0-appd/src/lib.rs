@@ -13,6 +13,7 @@ mod gpio_client;
 mod installer;
 mod intent;
 mod lifecycle;
+mod media_session;
 mod network_client;
 mod permission_prompt;
 mod permissions;
@@ -50,6 +51,11 @@ pub use intent::{
 pub use lifecycle::{
     AppManager, AppManagerError, AppUsage, InstalledApp, ManagerPaths, UninstalledApp,
     lookup_unix_account,
+};
+pub use media_session::{
+    MAX_PENDING_MEDIA_ACTIONS, MEDIA_ACTION_ALL, MEDIA_ACTION_NEXT, MEDIA_ACTION_PLAY_PAUSE,
+    MEDIA_ACTION_PREVIOUS, MediaAction, MediaPlaybackState, MediaSessionBroker, MediaSessionError,
+    valid_media_session_update,
 };
 pub use network_client::{
     DEFAULT_NETWORK_SOCKET, NetworkClient, NetworkClientError, NetworkHttpResponse,

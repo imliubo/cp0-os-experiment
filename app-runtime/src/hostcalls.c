@@ -176,6 +176,19 @@ static int64_t cp0_intent_take(wasm_exec_env_t execution_environment,
                                   (size_t)payload_capacity);
 }
 
+static int32_t cp0_media_session_update(
+    wasm_exec_env_t execution_environment, uint32_t state,
+    uint32_t supported_actions) {
+    (void)execution_environment;
+    return cp0_broker_media_session_update(state, supported_actions);
+}
+
+static int32_t cp0_media_take_action(
+    wasm_exec_env_t execution_environment) {
+    (void)execution_environment;
+    return cp0_broker_media_take_action();
+}
+
 static NativeSymbol symbols[] = {
 #include "hostcall_symbols.inc"
 };

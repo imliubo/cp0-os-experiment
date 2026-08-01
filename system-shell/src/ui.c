@@ -1773,8 +1773,16 @@ static void draw_system_action_overlay(struct canvas *canvas,
                 ? (unsigned int)ui->screenshot_status
                 : (unsigned int)CP0_UI_SCREENSHOT_FAILED;
         snprintf(value, sizeof(value), "%s", states[status]);
-    } else
-        snprintf(value, sizeof(value), "REQUESTED");
+    } else {
+        static const char *states[] = {
+            "REQUESTED", "SENT", "UNAVAILABLE", "BUSY", "FAILED",
+        };
+        unsigned int status =
+            ui->media_status <= CP0_UI_MEDIA_FAILED
+                ? (unsigned int)ui->media_status
+                : (unsigned int)CP0_UI_MEDIA_FAILED;
+        snprintf(value, sizeof(value), "%s", states[status]);
+    }
     draw_text(canvas, 82, 61, value, 2,
               kind == 2 && ui->muted ? COLOR_YELLOW : COLOR_GREEN);
 }
@@ -3406,6 +3414,16 @@ void cp0_ui_set_screenshot_status(struct cp0_ui *ui,
     ui->system_action_ticks = 2;
 }
 
+void cp0_ui_set_media_status(struct cp0_ui *ui,
+                             enum cp0_ui_media_status status)
+{
+    if (ui == NULL || status > CP0_UI_MEDIA_FAILED)
+        return;
+    ui->media_status = status;
+    ui->system_action_overlay = true;
+    ui->system_action_ticks = 2;
+}
+
 bool cp0_ui_tick(struct cp0_ui *ui)
 {
     if (ui == NULL || ui->system_action_ticks == 0)
@@ -3466,6 +3484,8 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         ui->system_action_ticks = 2;
         if (action == CP0_UI_SCREENSHOT)
             ui->screenshot_status = CP0_UI_SCREENSHOT_REQUESTED;
+        else
+            ui->media_status = CP0_UI_MEDIA_REQUESTED;
         if (action == CP0_UI_MEDIA_PLAY_PAUSE)
             return CP0_UI_EVENT_MEDIA_PLAY_PAUSE;
         if (action == CP0_UI_MEDIA_PREVIOUS)

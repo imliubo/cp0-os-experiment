@@ -26,6 +26,9 @@ int cp0_appd_test_parse_document_prompt_response(
 int cp0_appd_test_parse_device_settings_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *expected_kind, struct cp0_device_settings *settings);
+int cp0_appd_test_parse_media_action_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *expected_action, char app_id[CP0_APP_ID_BYTES]);
 
 int main(void)
 {
@@ -204,5 +207,43 @@ int main(void)
     assert(cp0_appd_test_parse_device_settings_response(
                invalid_settings, strlen(invalid_settings), 16,
                "device-settings", &settings) < 0);
+
+    static const char media_sent[] =
+        "{\"protocol_version\":1,\"request_id\":20,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{"
+        "\"kind\":\"media-action-dispatched\","
+        "\"app_id\":\"dev.cardputerzero.player\","
+        "\"action\":\"play-pause\"}}}";
+    static const char media_unavailable[] =
+        "{\"protocol_version\":1,\"request_id\":20,\"outcome\":{"
+        "\"status\":\"error\",\"code\":\"unavailable\","
+        "\"message\":\"inactive\"}}";
+    static const char media_busy[] =
+        "{\"protocol_version\":1,\"request_id\":20,\"outcome\":{"
+        "\"status\":\"error\",\"code\":\"resource-exhausted\","
+        "\"message\":\"full\"}}";
+    static const char media_extra[] =
+        "{\"protocol_version\":1,\"request_id\":20,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{"
+        "\"kind\":\"media-action-dispatched\","
+        "\"app_id\":\"dev.cardputerzero.player\","
+        "\"action\":\"play-pause\",\"target\":\"forged\"}}}";
+    char media_app_id[CP0_APP_ID_BYTES];
+    assert(cp0_appd_test_parse_media_action_response(
+               media_sent, strlen(media_sent), 20, "play-pause",
+               media_app_id) == CP0_MEDIA_DISPATCH_SENT);
+    assert(strcmp(media_app_id, "dev.cardputerzero.player") == 0);
+    assert(cp0_appd_test_parse_media_action_response(
+               media_sent, strlen(media_sent), 20, "next", media_app_id) ==
+           CP0_MEDIA_DISPATCH_FAILED);
+    assert(cp0_appd_test_parse_media_action_response(
+               media_unavailable, strlen(media_unavailable), 20, "next",
+               media_app_id) == CP0_MEDIA_DISPATCH_UNAVAILABLE);
+    assert(cp0_appd_test_parse_media_action_response(
+               media_busy, strlen(media_busy), 20, "next", media_app_id) ==
+           CP0_MEDIA_DISPATCH_BUSY);
+    assert(cp0_appd_test_parse_media_action_response(
+               media_extra, strlen(media_extra), 20, "play-pause",
+               media_app_id) == CP0_MEDIA_DISPATCH_FAILED);
     return 0;
 }

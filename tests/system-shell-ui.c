@@ -393,6 +393,15 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
 
     cp0_ui_handle_action(ui, CP0_UI_BRIGHTNESS_UP);
     write_snapshot(directory, "system-brightness", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_MEDIA_PLAY_PAUSE);
+    cp0_ui_set_media_status(ui, CP0_UI_MEDIA_SENT);
+    write_snapshot(directory, "system-media-sent", ui, frame);
+    cp0_ui_set_media_status(ui, CP0_UI_MEDIA_UNAVAILABLE);
+    write_snapshot(directory, "system-media-unavailable", ui, frame);
+    cp0_ui_set_media_status(ui, CP0_UI_MEDIA_BUSY);
+    write_snapshot(directory, "system-media-busy", ui, frame);
+    cp0_ui_set_media_status(ui, CP0_UI_MEDIA_FAILED);
+    write_snapshot(directory, "system-media-failed", ui, frame);
     cp0_ui_set_screenshot_status(ui, CP0_UI_SCREENSHOT_SAVED);
     write_snapshot(directory, "system-screenshot-saved", ui, frame);
     cp0_ui_set_screenshot_status(ui, CP0_UI_SCREENSHOT_UNAVAILABLE);
@@ -1153,6 +1162,16 @@ int main(int argc, char **argv)
     assert(cp0_ui_tick(&ui) && !ui.system_action_overlay);
     assert(cp0_ui_handle_action(&ui, CP0_UI_MEDIA_NEXT) ==
            CP0_UI_EVENT_MEDIA_NEXT);
+    assert(ui.media_status == CP0_UI_MEDIA_REQUESTED);
+    cp0_ui_set_media_status(&ui, CP0_UI_MEDIA_SENT);
+    assert(ui.system_action_overlay && ui.system_action_kind == 5 &&
+           ui.media_status == CP0_UI_MEDIA_SENT);
+    cp0_ui_set_media_status(&ui, CP0_UI_MEDIA_UNAVAILABLE);
+    assert(ui.media_status == CP0_UI_MEDIA_UNAVAILABLE);
+    cp0_ui_set_media_status(&ui, CP0_UI_MEDIA_BUSY);
+    assert(ui.media_status == CP0_UI_MEDIA_BUSY);
+    cp0_ui_set_media_status(&ui, CP0_UI_MEDIA_FAILED);
+    assert(ui.media_status == CP0_UI_MEDIA_FAILED);
     assert(cp0_ui_handle_action(&ui, CP0_UI_SCREENSHOT) ==
            CP0_UI_EVENT_SCREENSHOT);
     assert(ui.screenshot_status == CP0_UI_SCREENSHOT_REQUESTED);

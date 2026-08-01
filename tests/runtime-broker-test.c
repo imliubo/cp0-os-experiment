@@ -128,5 +128,27 @@ int main(void) {
     assert(memcmp(stored, "\x00\x01\xfe\xff", 4U) == 0);
     assert(cp0_broker_decode_storage_get_response(storage_missing, stored,
                                                   sizeof(stored)) == 0);
+
+    static const char media_next[] =
+        "{\"protocol_version\":1,\"request_id\":17,\"outcome\":{"
+        "\"status\":\"media-action\",\"action\":\"next\"}}\n";
+    static const char media_empty[] =
+        "{\"protocol_version\":1,\"request_id\":17,\"outcome\":{"
+        "\"status\":\"media-action-empty\"}}\n";
+    static const char media_invalid[] =
+        "{\"protocol_version\":1,\"request_id\":17,\"outcome\":{"
+        "\"status\":\"media-action\",\"action\":\"seek\"}}\n";
+    static const char media_unavailable[] =
+        "{\"protocol_version\":1,\"request_id\":17,\"outcome\":{"
+        "\"status\":\"error\",\"code\":\"unavailable\","
+        "\"message\":\"inactive\"}}\n";
+    assert(cp0_broker_decode_media_action_response(media_next) == 3);
+    assert(cp0_broker_decode_media_action_response(media_empty) == 0);
+    assert(cp0_broker_decode_media_action_response(media_invalid) ==
+           CP0_BROKER_INTERNAL);
+    assert(cp0_broker_decode_media_action_response(media_unavailable) ==
+           CP0_BROKER_UNAVAILABLE);
+    assert(cp0_broker_decode_media_action_response(NULL) ==
+           CP0_BROKER_INVALID_ARGUMENT);
     return 0;
 }

@@ -101,6 +101,25 @@ typedef struct cp0_intent_message {
     uint32_t payload_length;
 } cp0_intent_message_t;
 
+typedef enum cp0_media_playback_state {
+    CP0_MEDIA_INACTIVE = 0,
+    CP0_MEDIA_PAUSED = 1,
+    CP0_MEDIA_PLAYING = 2,
+} cp0_media_playback_state_t;
+
+typedef enum cp0_media_action {
+    CP0_MEDIA_PLAY_PAUSE = 1,
+    CP0_MEDIA_PREVIOUS = 2,
+    CP0_MEDIA_NEXT = 3,
+} cp0_media_action_t;
+
+#define CP0_MEDIA_SUPPORT_PLAY_PAUSE (1U << 0)
+#define CP0_MEDIA_SUPPORT_PREVIOUS (1U << 1)
+#define CP0_MEDIA_SUPPORT_NEXT (1U << 2)
+#define CP0_MEDIA_SUPPORT_ALL                                                  \
+    (CP0_MEDIA_SUPPORT_PLAY_PAUSE | CP0_MEDIA_SUPPORT_PREVIOUS |              \
+     CP0_MEDIA_SUPPORT_NEXT)
+
 #include "cardputerzero_imports.h"
 
 static inline cp0_result_t cp0_http_get(const uint8_t *url,
@@ -413,6 +432,35 @@ static inline cp0_result_t cp0_intent_take(
         return CP0_ERROR_INTERNAL;
     message->action_length = action_length;
     message->payload_length = payload_length;
+    return CP0_OK;
+}
+
+static inline cp0_result_t cp0_media_session_update(
+    cp0_media_playback_state_t state, uint32_t supported_actions) {
+    if ((supported_actions & ~CP0_MEDIA_SUPPORT_ALL) != 0U ||
+        (state == CP0_MEDIA_INACTIVE && supported_actions != 0U) ||
+        ((state == CP0_MEDIA_PAUSED || state == CP0_MEDIA_PLAYING) &&
+         supported_actions == 0U) ||
+        state < CP0_MEDIA_INACTIVE || state > CP0_MEDIA_PLAYING)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    return cp0_media_session_update_raw((uint32_t)state, supported_actions);
+}
+
+static inline cp0_result_t cp0_media_take_action(cp0_media_action_t *action,
+                                                 uint8_t *available) {
+    int32_t result;
+
+    if (action == NULL || available == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    result = cp0_media_take_action_raw();
+    if (result < 0)
+        return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
+                                           : CP0_ERROR_INTERNAL;
+    if (result > CP0_MEDIA_NEXT)
+        return CP0_ERROR_INTERNAL;
+    *available = result != 0;
+    if (result != 0)
+        *action = (cp0_media_action_t)result;
     return CP0_OK;
 }
 

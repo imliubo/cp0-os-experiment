@@ -48,11 +48,13 @@ and WAMR signature. Tests require all entries from both snapshots to remain
 present and unchanged. A compatible minor may add imports; removing an import
 or changing a signature requires a new SDK major.
 
-The frozen 1.0 contract contains 22 bounded hostcalls and is byte-for-byte ABI
-compatible with legacy 0.1. C11, C++17 and Rust WASM builds consume the
-generated declarations, while Runtime builds consume the same signature
-source. App installation accepts current SDK 1.0 and exact legacy 0.1, but not
-other pre-1.0 versions.
+The frozen 1.0 compatibility baseline contains 22 bounded hostcalls and is
+byte-for-byte ABI compatible with legacy 0.1. The current additive contract
+contains 24 hostcalls after adding media-session registration and action
+delivery; all 22 baseline names and signatures remain unchanged. C11, C++17
+and Rust WASM builds consume the generated declarations, while Runtime builds
+consume the same signature source. App installation accepts current SDK 1.0
+and exact legacy 0.1, but not other pre-1.0 versions.
 
 The pinned WAMR 2.4.5 AArch64 static Runtime rebuilt successfully with the
 generated registration table. Its Phase 4E SHA-256 is

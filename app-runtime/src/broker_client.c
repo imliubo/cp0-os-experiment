@@ -31,6 +31,15 @@
 #define CP0_STORAGE_MAX_VALUE_BYTES (8U * 1024U)
 #define CP0_INTENT_MAX_ACTION_BYTES 96U
 #define CP0_INTENT_MAX_PAYLOAD_BYTES 1024U
+#define CP0_MEDIA_STATE_INACTIVE 0U
+#define CP0_MEDIA_STATE_PAUSED 1U
+#define CP0_MEDIA_STATE_PLAYING 2U
+#define CP0_MEDIA_ACTION_PLAY_PAUSE (1U << 0)
+#define CP0_MEDIA_ACTION_PREVIOUS (1U << 1)
+#define CP0_MEDIA_ACTION_NEXT (1U << 2)
+#define CP0_MEDIA_ACTION_ALL                                                    \
+    (CP0_MEDIA_ACTION_PLAY_PAUSE | CP0_MEDIA_ACTION_PREVIOUS |                 \
+     CP0_MEDIA_ACTION_NEXT)
 
 static bool append_bytes(char *output, size_t capacity, size_t *offset,
                          const char *value, size_t length) {
@@ -1130,5 +1139,89 @@ int64_t cp0_broker_intent_take(uint8_t *action, size_t action_capacity,
     if (result != CP0_BROKER_OK)
         return result;
     return cp0_broker_decode_intent_response(response, action, action_capacity,
-                                             payload, payload_capacity);
+                                              payload, payload_capacity);
+}
+
+static bool valid_media_session(uint32_t state, uint32_t supported_actions) {
+    if ((supported_actions & ~CP0_MEDIA_ACTION_ALL) != 0U)
+        return false;
+    if (state == CP0_MEDIA_STATE_INACTIVE)
+        return supported_actions == 0U;
+    return (state == CP0_MEDIA_STATE_PAUSED || state == CP0_MEDIA_STATE_PLAYING) &&
+           supported_actions != 0U;
+}
+
+int32_t cp0_broker_media_session_update(uint32_t state,
+                                        uint32_t supported_actions) {
+    static const char *states[] = {"inactive", "paused", "playing"};
+    char request[320];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    uint32_t returned_actions;
+    size_t returned_state_length;
+    const char *returned_state;
+    int32_t result;
+    int written;
+
+    if (!valid_media_session(state, supported_actions))
+        return CP0_BROKER_INVALID_ARGUMENT;
+    written = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":16,\"command\":{"
+        "\"name\":\"update-media-session\",\"state\":\"%s\","
+        "\"supported_actions\":%u}}\n",
+        states[state], supported_actions);
+    if (written <= 0 || (size_t)written >= sizeof(request))
+        return CP0_BROKER_INTERNAL;
+    result = broker_exchange(request, (size_t)written, response,
+                             sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    if (strstr(response, "\"status\":\"media-session-updated\"") == NULL)
+        return decode_result(response);
+    returned_state = json_string_field(response, "state",
+                                       &returned_state_length);
+    if (returned_state == NULL || returned_state_length != strlen(states[state]) ||
+        memcmp(returned_state, states[state], returned_state_length) != 0 ||
+        !json_u32_field(response, "supported_actions", &returned_actions) ||
+        returned_actions != supported_actions)
+        return CP0_BROKER_INTERNAL;
+    return CP0_BROKER_OK;
+}
+
+int32_t cp0_broker_decode_media_action_response(const char *response) {
+    const char *action;
+    size_t action_length;
+
+    if (response == NULL)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    if (strstr(response, "\"status\":\"media-action-empty\"") != NULL)
+        return 0;
+    if (strstr(response, "\"status\":\"media-action\"") == NULL)
+        return decode_result(response);
+    action = json_string_field(response, "action", &action_length);
+    if (action == NULL)
+        return CP0_BROKER_INTERNAL;
+    if (action_length == sizeof("play-pause") - 1U &&
+        memcmp(action, "play-pause", action_length) == 0)
+        return 1;
+    if (action_length == sizeof("previous") - 1U &&
+        memcmp(action, "previous", action_length) == 0)
+        return 2;
+    if (action_length == sizeof("next") - 1U &&
+        memcmp(action, "next", action_length) == 0)
+        return 3;
+    return CP0_BROKER_INTERNAL;
+}
+
+int32_t cp0_broker_media_take_action(void) {
+    static const char request[] =
+        "{\"protocol_version\":1,\"request_id\":17,\"command\":{"
+        "\"name\":\"take-media-action\"}}\n";
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int32_t result = broker_exchange(request, sizeof(request) - 1U, response,
+                                     sizeof(response));
+
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_media_action_response(response);
 }

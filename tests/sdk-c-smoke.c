@@ -32,6 +32,8 @@ int sdk_c_smoke(void) {
     uint8_t intent_action_buffer[CP0_MAX_INTENT_ACTION_BYTES] = {0};
     uint8_t intent_payload[32] = {0};
     cp0_intent_message_t intent_message = {0};
+    cp0_media_action_t media_action = CP0_MEDIA_PLAY_PAUSE;
+    uint8_t media_action_available = 0;
     (void)cp0_poll_key_event(&event, sizeof(event), 0);
     (void)cp0_display_dimensions();
     (void)cp0_http_get(url, (uint32_t)(sizeof(url) - 1U), network_body,
@@ -60,6 +62,10 @@ int sdk_c_smoke(void) {
     (void)cp0_intent_take(intent_action_buffer, sizeof(intent_action_buffer),
                           intent_payload, sizeof(intent_payload),
                           &intent_message);
+    (void)cp0_media_session_update(
+        CP0_MEDIA_PLAYING,
+        CP0_MEDIA_SUPPORT_PLAY_PAUSE | CP0_MEDIA_SUPPORT_NEXT);
+    (void)cp0_media_take_action(&media_action, &media_action_available);
     return result == CP0_ERROR_UNAVAILABLE ? (int)cp0_monotonic_milliseconds()
                                            : (int)result;
 }

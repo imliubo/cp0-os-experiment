@@ -34,6 +34,11 @@ through appd. `intents::take` returns only the next message bound to the current
 application and consumes it once. The sender cannot name a target application
 or connect to another application's process.
 
+`media::update_session` registers playback state and a bounded set of global
+actions for the current foreground Runtime. `media::take_action` consumes one
+Play/Pause, Previous or Next action. The API contains no target application or
+media metadata and does not grant the separate `audio.playback` permission.
+
 `ui::Canvas` is the allocation-free reference renderer for the 320-pixel-wide
 display. It provides clipped RGB565 rectangles, a compact 5x7 font, buttons and
 progress bars. Applications own their frame buffer and submit it through

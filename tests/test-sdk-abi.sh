@@ -15,7 +15,7 @@ jq -e '
     .schema_version == 1 and
     .abi_version == "1.0" and
     .module == "cardputerzero" and
-    (.imports | length == 22) and
+    (.imports | length == 24) and
     ([.imports[].name] | length == (unique | length)) and
     ([.imports[].c_name] | length == (unique | length)) and
     ([.imports[].wit] | length == (unique | length))
@@ -46,4 +46,4 @@ if rg -n 'link_name = "cp0_' "$repo_root/sdk/rust/src" \
 fi
 
 registered=$(rg -c '^\{"cp0_' "$repo_root/app-runtime/src/hostcall_symbols.inc")
-test "$registered" -eq 22
+test "$registered" -eq 24

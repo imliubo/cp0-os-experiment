@@ -530,7 +530,10 @@ fn send_broker_command(command: BrokerCommand) -> Result<(), String> {
         | BrokerOutcome::StorageDeleted { .. }
         | BrokerOutcome::IntentAccepted { .. }
         | BrokerOutcome::IntentMessage { .. }
-        | BrokerOutcome::IntentEmpty => {
+        | BrokerOutcome::IntentEmpty
+        | BrokerOutcome::MediaSessionUpdated { .. }
+        | BrokerOutcome::MediaAction { .. }
+        | BrokerOutcome::MediaActionEmpty => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&response)

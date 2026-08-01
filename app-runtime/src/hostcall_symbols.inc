@@ -21,3 +21,5 @@
 {"cp0_storage_delete", (void *)cp0_storage_delete, "(*~)i", NULL},
 {"cp0_intent_send", (void *)cp0_intent_send, "(*~*~)i", NULL},
 {"cp0_intent_take", (void *)cp0_intent_take, "(*~*~)I", NULL},
+{"cp0_media_session_update", (void *)cp0_media_session_update, "(ii)i", NULL},
+{"cp0_media_take_action", (void *)cp0_media_take_action, "()i", NULL},

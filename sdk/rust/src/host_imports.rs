@@ -49,6 +49,10 @@ mod target {
         fn raw_cp0_intent_send(action: *const u8, action_length: u32, payload: *const u8, payload_length: u32) -> i32;
         #[link_name = "cp0_intent_take"]
         fn raw_cp0_intent_take(action: *mut u8, action_capacity: u32, payload: *mut u8, payload_capacity: u32) -> i64;
+        #[link_name = "cp0_media_session_update"]
+        fn raw_cp0_media_session_update(state: u32, supported_actions: u32) -> i32;
+        #[link_name = "cp0_media_take_action"]
+        fn raw_cp0_media_take_action() -> i32;
     }
 
     pub(crate) fn cp0_monotonic_milliseconds() -> u64 {
@@ -137,6 +141,14 @@ mod target {
 
     pub(crate) fn cp0_intent_take(action: *mut u8, action_capacity: u32, payload: *mut u8, payload_capacity: u32) -> i64 {
         unsafe { raw_cp0_intent_take(action, action_capacity, payload, payload_capacity) }
+    }
+
+    pub(crate) fn cp0_media_session_update(state: u32, supported_actions: u32) -> i32 {
+        unsafe { raw_cp0_media_session_update(state, supported_actions) }
+    }
+
+    pub(crate) fn cp0_media_take_action() -> i32 {
+        unsafe { raw_cp0_media_take_action() }
     }
 
 }
@@ -229,6 +241,14 @@ mod target {
     }
 
     pub(crate) const fn cp0_intent_take(_action: *mut u8, _action_capacity: u32, _payload: *mut u8, _payload_capacity: u32) -> i64 {
+        -2
+    }
+
+    pub(crate) const fn cp0_media_session_update(_state: u32, _supported_actions: u32) -> i32 {
+        -2
+    }
+
+    pub(crate) const fn cp0_media_take_action() -> i32 {
         -2
     }
 

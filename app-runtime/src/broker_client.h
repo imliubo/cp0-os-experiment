@@ -64,5 +64,9 @@ int64_t cp0_broker_decode_intent_response(const char *response,
                                           size_t action_capacity,
                                           uint8_t *payload,
                                           size_t payload_capacity);
+int32_t cp0_broker_media_session_update(uint32_t state,
+                                        uint32_t supported_actions);
+int32_t cp0_broker_media_take_action(void);
+int32_t cp0_broker_decode_media_action_response(const char *response);
 
 #endif

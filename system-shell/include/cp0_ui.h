@@ -118,6 +118,14 @@ enum cp0_ui_screenshot_status {
     CP0_UI_SCREENSHOT_BUSY,
 };
 
+enum cp0_ui_media_status {
+    CP0_UI_MEDIA_REQUESTED,
+    CP0_UI_MEDIA_SENT,
+    CP0_UI_MEDIA_UNAVAILABLE,
+    CP0_UI_MEDIA_BUSY,
+    CP0_UI_MEDIA_FAILED,
+};
+
 enum cp0_ui_authority {
     CP0_UI_AUTHORITY_PERSONAL,
     CP0_UI_AUTHORITY_PARENT,
@@ -394,6 +402,7 @@ struct cp0_ui {
     unsigned int system_action_kind;
     unsigned int system_action_ticks;
     enum cp0_ui_screenshot_status screenshot_status;
+    enum cp0_ui_media_status media_status;
     bool developer_mode;
     bool developer_mode_allowed;
     bool recovery_mode;
@@ -601,6 +610,8 @@ void cp0_ui_clear_notification(struct cp0_ui *ui);
 void cp0_ui_set_local_simulation(struct cp0_ui *ui, bool enabled);
 void cp0_ui_set_screenshot_status(struct cp0_ui *ui,
                                   enum cp0_ui_screenshot_status status);
+void cp0_ui_set_media_status(struct cp0_ui *ui,
+                             enum cp0_ui_media_status status);
 bool cp0_ui_tick(struct cp0_ui *ui);
 enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                                         enum cp0_ui_action action);

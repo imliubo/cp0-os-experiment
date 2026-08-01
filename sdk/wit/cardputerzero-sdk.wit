@@ -133,6 +133,31 @@ interface intents {
     take: func() -> result<option<message>, error-code>;
 }
 
+interface media {
+    use types.{error-code};
+
+    enum playback-state {
+        inactive,
+        paused,
+        playing,
+    }
+
+    flags action-capabilities {
+        play-pause,
+        previous,
+        next,
+    }
+
+    enum action {
+        play-pause,
+        previous,
+        next,
+    }
+
+    update-session: func(state: playback-state, supported-actions: action-capabilities) -> result<_, error-code>;
+    take-action: func() -> result<option<action>, error-code>;
+}
+
 interface application {
     run: func() -> s32;
 }
@@ -149,5 +174,6 @@ world cardputer-application {
     import radio;
     import storage;
     import intents;
+    import media;
     export application;
 }

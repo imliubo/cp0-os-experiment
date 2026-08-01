@@ -572,6 +572,115 @@ int cp0_appd_set_device_mode(enum cp0_device_mode mode, bool enabled,
                                    "device-mode-changed", settings);
 }
 
+static int parse_media_action_response(const char *response,
+                                       size_t response_length,
+                                       uint64_t request_id,
+                                       const char *expected_action,
+                                       char app_id[CP0_APP_ID_BYTES])
+{
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    int count = cp0_json_parse(response, response_length, tokens,
+                               CP0_APPD_JSON_TOKENS);
+    uint64_t parsed_version;
+    uint64_t parsed_id;
+    int version;
+    int response_id;
+    int outcome;
+    int status;
+
+    if (app_id == NULL || count <= 0 || tokens[0].type != CP0_JSON_OBJECT ||
+        tokens[0].children != 6)
+        return CP0_MEDIA_DISPATCH_FAILED;
+    version = cp0_json_object_get(response, tokens, (size_t)count, 0,
+                                  "protocol_version");
+    response_id = cp0_json_object_get(response, tokens, (size_t)count, 0,
+                                      "request_id");
+    outcome = cp0_json_object_get(response, tokens, (size_t)count, 0,
+                                  "outcome");
+    if (version < 0 || response_id < 0 || outcome < 0 ||
+        !cp0_json_get_u64(response, &tokens[version], &parsed_version) ||
+        !cp0_json_get_u64(response, &tokens[response_id], &parsed_id) ||
+        parsed_version != 1 || parsed_id != request_id ||
+        tokens[outcome].type != CP0_JSON_OBJECT)
+        return CP0_MEDIA_DISPATCH_FAILED;
+    status = cp0_json_object_get(response, tokens, (size_t)count, outcome,
+                                 "status");
+    if (status < 0)
+        return CP0_MEDIA_DISPATCH_FAILED;
+    if (cp0_json_string_equals(response, &tokens[status], "ok")) {
+        char returned_action[16];
+        int data;
+        int kind;
+
+        if (tokens[outcome].children != 4)
+            return CP0_MEDIA_DISPATCH_FAILED;
+        data = cp0_json_object_get(response, tokens, (size_t)count, outcome,
+                                   "data");
+        if (data < 0 || tokens[data].type != CP0_JSON_OBJECT ||
+            tokens[data].children != 6)
+            return CP0_MEDIA_DISPATCH_FAILED;
+        kind = cp0_json_object_get(response, tokens, (size_t)count, data,
+                                   "kind");
+        if (kind < 0 ||
+            !cp0_json_string_equals(response, &tokens[kind],
+                                    "media-action-dispatched") ||
+            !copy_member(response, tokens, (size_t)count, data, "app_id",
+                         app_id, CP0_APP_ID_BYTES) ||
+            !valid_app_id(app_id) ||
+            !copy_member(response, tokens, (size_t)count, data, "action",
+                         returned_action, sizeof(returned_action)) ||
+            strcmp(returned_action, expected_action) != 0)
+            return CP0_MEDIA_DISPATCH_FAILED;
+        return CP0_MEDIA_DISPATCH_SENT;
+    }
+    if (cp0_json_string_equals(response, &tokens[status], "error")) {
+        int code;
+        int message;
+
+        if (tokens[outcome].children != 6)
+            return CP0_MEDIA_DISPATCH_FAILED;
+        code = cp0_json_object_get(response, tokens, (size_t)count, outcome,
+                                   "code");
+        message = cp0_json_object_get(response, tokens, (size_t)count, outcome,
+                                      "message");
+        if (code < 0 || message < 0 || tokens[message].type != CP0_JSON_STRING)
+            return CP0_MEDIA_DISPATCH_FAILED;
+        if (cp0_json_string_equals(response, &tokens[code], "unavailable"))
+            return CP0_MEDIA_DISPATCH_UNAVAILABLE;
+        if (cp0_json_string_equals(response, &tokens[code],
+                                   "resource-exhausted"))
+            return CP0_MEDIA_DISPATCH_BUSY;
+    }
+    return CP0_MEDIA_DISPATCH_FAILED;
+}
+
+int cp0_appd_dispatch_media_action(enum cp0_media_action action,
+                                   char app_id[CP0_APP_ID_BYTES])
+{
+    static const char *actions[] = {"play-pause", "previous", "next"};
+    char request[320];
+    char response[CP0_APPD_FRAME_BYTES];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int request_length;
+
+    if (app_id == NULL || action < CP0_MEDIA_ACTION_PLAY_PAUSE ||
+        action > CP0_MEDIA_ACTION_NEXT)
+        return CP0_MEDIA_DISPATCH_FAILED;
+    app_id[0] = '\0';
+    request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"dispatch-media-action\",\"action\":\"%s\"}}\n",
+        (unsigned long long)request_id, actions[action]);
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 500) != 0)
+        return CP0_MEDIA_DISPATCH_FAILED;
+    return parse_media_action_response(response, response_length, request_id,
+                                       actions[action], app_id);
+}
+
 #ifdef CP0_APPD_CLIENT_TEST
 int cp0_appd_test_parse_app_page(
     const char *response, size_t response_length, uint64_t request_id,
@@ -614,6 +723,14 @@ int cp0_appd_test_parse_device_settings_response(
 {
     return parse_device_settings_response(response, response_length, request_id,
                                           expected_kind, settings);
+}
+
+int cp0_appd_test_parse_media_action_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *expected_action, char app_id[CP0_APP_ID_BYTES])
+{
+    return parse_media_action_response(response, response_length, request_id,
+                                       expected_action, app_id);
 }
 #endif
 
