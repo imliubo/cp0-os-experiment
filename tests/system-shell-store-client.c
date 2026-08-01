@@ -17,6 +17,9 @@ int cp0_store_test_parse_catalog_response(
 int cp0_store_test_parse_refresh_response(const char *response,
                                           size_t response_length,
                                           uint64_t request_id);
+int cp0_store_test_parse_auto_update_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    struct cp0_store_auto_update_status *status);
 int cp0_store_test_parse_install_response(const char *response,
                                           size_t response_length,
                                           uint64_t request_id,
@@ -138,6 +141,38 @@ int main(void)
     assert(parse_catalog(valid, 7, &catalog) == CP0_STORE_RESULT_OK);
     assert(catalog.sequence == 4 && catalog.count == 2 && !catalog.stale &&
            !catalog.truncated);
+
+    struct cp0_store_auto_update_status auto_update;
+    static const char valid_auto_update[] =
+        ENVELOPE_START("12")
+        "\"kind\":\"auto-update-status\",\"enabled\":true,"
+        "\"policy_allowed\":true,\"charging\":true,"
+        "\"unmetered_network\":false,\"due\":true,"
+        "\"checking\":false}}}";
+    assert(cp0_store_test_parse_auto_update_response(
+               valid_auto_update, strlen(valid_auto_update), 12,
+               &auto_update) == CP0_STORE_RESULT_OK);
+    assert(auto_update.enabled && auto_update.policy_allowed &&
+           auto_update.charging && !auto_update.unmetered_network &&
+           auto_update.due && !auto_update.checking);
+    static const char invalid_disabled_due[] =
+        ENVELOPE_START("13")
+        "\"kind\":\"auto-update-status\",\"enabled\":false,"
+        "\"policy_allowed\":true,\"charging\":true,"
+        "\"unmetered_network\":true,\"due\":true,"
+        "\"checking\":false}}}";
+    assert(cp0_store_test_parse_auto_update_response(
+               invalid_disabled_due, strlen(invalid_disabled_due), 13,
+               &auto_update) == CP0_STORE_RESULT_ERROR);
+    static const char invalid_auto_extra[] =
+        ENVELOPE_START("14")
+        "\"kind\":\"auto-update-status\",\"enabled\":true,"
+        "\"policy_allowed\":true,\"charging\":true,"
+        "\"unmetered_network\":true,\"due\":false,"
+        "\"checking\":false,\"extra\":true}}}";
+    assert(cp0_store_test_parse_auto_update_response(
+               invalid_auto_extra, strlen(invalid_auto_extra), 14,
+               &auto_update) == CP0_STORE_RESULT_ERROR);
     assert(strcmp(catalog.apps[0].app_id, "dev.cardputerzero.alpha") == 0);
     assert(catalog.apps[0].permissions ==
            (CP0_STORE_PERMISSION_CAMERA_CAPTURE |

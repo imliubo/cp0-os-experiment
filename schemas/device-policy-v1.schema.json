@@ -22,6 +22,10 @@
     "developer_mode_allowed": { "type": "boolean" },
     "recovery_mode_allowed": { "type": "boolean" },
     "store_install_allowed": { "type": "boolean" },
+    "store_auto_update_allowed": {
+      "type": "boolean",
+      "default": false
+    },
     "app_launch_policy": {
       "enum": ["allow-all", "allow-listed"]
     },

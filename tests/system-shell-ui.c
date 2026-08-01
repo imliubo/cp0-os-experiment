@@ -352,6 +352,11 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
         ui->settings_detail = true;
         write_snapshot(directory, setting_names[category], ui, frame);
     }
+    ui->settings_selected = 5;
+    ui->settings_item_selected = 4;
+    ui->settings_detail = true;
+    cp0_ui_set_auto_update(ui, true, true, true, false, true, true, false);
+    write_snapshot(directory, "settings-auto-update", ui, frame);
     ui->settings_selected = 7;
     ui->settings_item_selected = 1;
     ui->settings_detail = true;
@@ -435,6 +440,19 @@ int main(int argc, char **argv)
     assert(ui.settings_item_selected == 2);
     cp0_ui_handle_action(&ui, CP0_UI_BACK);
     assert(!ui.settings_detail && ui.screen == CP0_UI_SETTINGS);
+
+    ui.settings_selected = 5;
+    ui.settings_item_selected = 4;
+    ui.settings_detail = true;
+    cp0_ui_set_auto_update(&ui, true, false, false, true, true, false,
+                           false);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+    cp0_ui_set_auto_update(&ui, true, false, true, true, true, true, false);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_AUTO_UPDATE_ENABLE);
+    cp0_ui_set_auto_update(&ui, true, true, true, true, false, true, false);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_AUTO_UPDATE_DISABLE);
 
     cp0_ui_handle_action(&ui, CP0_UI_SHOW_POWER);
     render(&ui, frame);

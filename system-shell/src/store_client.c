@@ -446,6 +446,54 @@ static bool parse_state(const char *document, const struct cp0_json_token *token
     return false;
 }
 
+static int parse_auto_update_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    struct cp0_store_auto_update_status *status)
+{
+    struct cp0_json_token tokens[128];
+    struct cp0_store_auto_update_status decoded = {0};
+    size_t token_count;
+    int data;
+    int result;
+
+    if (status == NULL)
+        return CP0_STORE_RESULT_ERROR;
+    result = parse_envelope(response, response_length, request_id, tokens,
+                            sizeof(tokens) / sizeof(tokens[0]), &token_count,
+                            &data);
+    if (result != CP0_STORE_RESULT_OK)
+        return result;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int enabled = cp0_json_object_get(response, tokens, token_count, data,
+                                      "enabled");
+    int policy_allowed = cp0_json_object_get(
+        response, tokens, token_count, data, "policy_allowed");
+    int charging = cp0_json_object_get(response, tokens, token_count, data,
+                                       "charging");
+    int unmetered = cp0_json_object_get(response, tokens, token_count, data,
+                                        "unmetered_network");
+    int due = cp0_json_object_get(response, tokens, token_count, data, "due");
+    int checking = cp0_json_object_get(response, tokens, token_count, data,
+                                       "checking");
+    if (tokens[data].children != 14 || kind < 0 || enabled < 0 ||
+        policy_allowed < 0 || charging < 0 || unmetered < 0 || due < 0 ||
+        checking < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind],
+                                "auto-update-status") ||
+        !cp0_json_get_bool(response, &tokens[enabled], &decoded.enabled) ||
+        !cp0_json_get_bool(response, &tokens[policy_allowed],
+                           &decoded.policy_allowed) ||
+        !cp0_json_get_bool(response, &tokens[charging], &decoded.charging) ||
+        !cp0_json_get_bool(response, &tokens[unmetered],
+                           &decoded.unmetered_network) ||
+        !cp0_json_get_bool(response, &tokens[due], &decoded.due) ||
+        !cp0_json_get_bool(response, &tokens[checking], &decoded.checking) ||
+        ((!decoded.enabled) && (decoded.due || decoded.checking)))
+        return CP0_STORE_RESULT_ERROR;
+    *status = decoded;
+    return CP0_STORE_RESULT_OK;
+}
+
 static bool parse_failure_reason(
     const char *document, const struct cp0_json_token *token,
     enum cp0_store_failure_reason *reason)
@@ -1333,6 +1381,14 @@ int cp0_store_test_parse_refresh_response(const char *response,
                           "refresh-accepted", NULL);
 }
 
+int cp0_store_test_parse_auto_update_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    struct cp0_store_auto_update_status *status)
+{
+    return parse_auto_update_response(response, response_length, request_id,
+                                      status);
+}
+
 int cp0_store_test_parse_install_response(const char *response,
                                           size_t response_length,
                                           uint64_t request_id,
@@ -1487,6 +1543,45 @@ int cp0_store_refresh(void)
         return CP0_STORE_RESULT_ERROR;
     return parse_accepted(response, response_length, request_id,
                           "refresh-accepted", NULL);
+}
+
+int cp0_store_get_auto_update(struct cp0_store_auto_update_status *status)
+{
+    char request[192];
+    char response[1024];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{\"name\":\"get-auto-update\"}}\n",
+        (unsigned long long)request_id);
+    if (status == NULL || request_length <= 0 ||
+        (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 500, NULL) != 0)
+        return CP0_STORE_RESULT_ERROR;
+    return parse_auto_update_response(response, response_length, request_id,
+                                      status);
+}
+
+int cp0_store_set_auto_update(
+    bool enabled, struct cp0_store_auto_update_status *status)
+{
+    char request[224];
+    char response[1024];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{\"name\":\"set-auto-update\",\"enabled\":%s}}\n",
+        (unsigned long long)request_id, enabled ? "true" : "false");
+    if (status == NULL || request_length <= 0 ||
+        (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 3000, NULL) != 0)
+        return CP0_STORE_RESULT_ERROR;
+    return parse_auto_update_response(response, response_length, request_id,
+                                      status);
 }
 
 int cp0_store_preflight_install(

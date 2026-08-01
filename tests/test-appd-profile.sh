@@ -27,6 +27,8 @@ store_service="$repo_root/appd/systemd/cardputerzero-stored.service"
 store_socket="$repo_root/appd/systemd/cardputerzero-stored.socket"
 store_tmpfiles="$repo_root/appd/systemd/cardputerzero-store.conf"
 store_config="$repo_root/appd/store.conf"
+device_policy="$repo_root/appd/device-policy.json"
+production_device_policy="$repo_root/appd/device-policy-production.json"
 
 grep -q '^Requires=.*cardputerzero-appd.socket.*cardputerzero-broker.socket.*cardputerzero-networkd.socket' "$service"
 grep -q '^Requires=.*cardputerzero-documentd.socket' "$service"
@@ -123,7 +125,7 @@ grep -qx 'SupplementaryGroups=cp0-control' "$store_service"
 grep -qx 'MemoryMax=40M' "$store_service"
 grep -qx 'ProtectSystem=strict' "$store_service"
 grep -qx 'ReadWritePaths=/var/lib/cardputerzero/store /run/cardputerzero-appd/store' "$store_service"
-grep -qx 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' "$store_service"
+grep -qx 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK' "$store_service"
 grep -qx 'FileDescriptorName=control' "$store_socket"
 grep -qx 'SocketGroup=cp0-control' "$store_socket"
 grep -qx 'SocketMode=0660' "$store_socket"
@@ -131,6 +133,8 @@ grep -qx 'Service=cardputerzero-stored.service' "$store_socket"
 grep -qx 'd /var/lib/cardputerzero/store 0700 cp0-store cp0-store -' "$store_tmpfiles"
 grep -qx 'd /var/lib/cardputerzero/store/packages 0700 cp0-store cp0-store -' "$store_tmpfiles"
 grep -qx 'catalog_url=' "$store_config"
+jq -e '.store_auto_update_allowed == true' "$device_policy" >/dev/null
+jq -e '.store_auto_update_allowed == true' "$production_device_policy" >/dev/null
 if grep -Eq 'catalog_url=https?://' "$store_config"; then
     echo "error: product profile must not embed a store endpoint" >&2
     exit 1

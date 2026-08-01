@@ -48,6 +48,8 @@ pub struct DevicePolicy {
     pub developer_mode_allowed: bool,
     pub recovery_mode_allowed: bool,
     pub store_install_allowed: bool,
+    #[serde(default)]
+    pub store_auto_update_allowed: bool,
     pub app_launch_policy: AppLaunchPolicy,
     pub allowed_apps: Vec<String>,
     pub denied_permissions: Vec<Permission>,
@@ -134,6 +136,7 @@ impl Default for DevicePolicy {
             developer_mode_allowed: true,
             recovery_mode_allowed: true,
             store_install_allowed: true,
+            store_auto_update_allowed: true,
             app_launch_policy: AppLaunchPolicy::AllowAll,
             allowed_apps: Vec::new(),
             denied_permissions: Vec::new(),
@@ -316,6 +319,12 @@ impl DevicePolicyEngine {
         self.policy.store_install_allowed && self.policy.allows_app(app_id)
     }
 
+    pub fn allows_store_auto_update(&self, app_id: &str) -> bool {
+        self.policy.store_install_allowed
+            && self.policy.store_auto_update_allowed
+            && self.policy.allows_app(app_id)
+    }
+
     pub fn allows_app(&self, app_id: &str) -> bool {
         self.policy.allows_app(app_id)
     }
@@ -496,6 +505,21 @@ mod tests {
     }
 
     #[test]
+    fn legacy_policy_defaults_auto_updates_to_denied() {
+        let (_root, policy_path, paths) = fixture("legacy-auto-update");
+        fs::write(
+            &policy_path,
+            br#"{"schema_version":1,"authority":"personal","developer_mode_allowed":true,"recovery_mode_allowed":true,"store_install_allowed":true,"app_launch_policy":"allow-all","allowed_apps":[],"denied_permissions":[]}"#,
+        )
+        .unwrap();
+        let policy = DevicePolicy::load_secure(&policy_path, false).unwrap();
+        assert!(!policy.store_auto_update_allowed);
+        let engine = DevicePolicyEngine::load(&policy_path, paths, false).unwrap();
+        assert!(engine.allows_store_install("dev.cardputerzero.example"));
+        assert!(!engine.allows_store_auto_update("dev.cardputerzero.example"));
+    }
+
+    #[test]
     fn managed_policy_locks_modes_apps_store_and_permissions() {
         let (_root, policy_path, paths) = fixture("managed");
         set_mode_marker(&paths.developer, true, false).unwrap();
@@ -519,6 +543,7 @@ mod tests {
             Err(PolicyError::Locked(DeviceMode::Developer))
         ));
         assert!(engine.allows_store_install("dev.cardputerzero.allowed"));
+        assert!(engine.allows_store_auto_update("dev.cardputerzero.allowed"));
         assert!(!engine.allows_store_install("dev.cardputerzero.blocked"));
         assert!(engine.denies_permission(Permission::CameraCapture));
         engine.set_mode(DeviceMode::Developer, false).unwrap();

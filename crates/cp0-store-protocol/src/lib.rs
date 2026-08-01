@@ -133,6 +133,11 @@ pub enum StoreCommand {
         limit: u8,
     },
     Refresh,
+    GetAutoUpdate,
+    SetAutoUpdate {
+        enabled: bool,
+    },
+    RunAutoUpdate,
     PreflightInstall {
         app_ids: Vec<String>,
         catalog_sequence: u64,
@@ -214,6 +219,15 @@ pub enum StoreResponseData {
         apps: Vec<StoreAppSummary>,
     },
     RefreshAccepted,
+    AutoUpdateStatus {
+        enabled: bool,
+        policy_allowed: bool,
+        charging: bool,
+        unmetered_network: bool,
+        due: bool,
+        checking: bool,
+    },
+    AutoUpdateAccepted,
     InstallPreflight {
         authorization_id: u64,
         catalog_sequence: u64,
@@ -732,7 +746,11 @@ impl StoreRequest {
                     ));
                 }
             }
-            StoreCommand::List | StoreCommand::Refresh => {}
+            StoreCommand::List
+            | StoreCommand::Refresh
+            | StoreCommand::GetAutoUpdate
+            | StoreCommand::SetAutoUpdate { .. }
+            | StoreCommand::RunAutoUpdate => {}
         }
         if let StoreCommand::Media {
             media: StoreMediaSelector::Screenshot { index },
@@ -884,7 +902,20 @@ impl StoreResponseData {
                 }
                 Ok(())
             }
-            Self::RefreshAccepted => Ok(()),
+            Self::RefreshAccepted | Self::AutoUpdateAccepted => Ok(()),
+            Self::AutoUpdateStatus {
+                enabled,
+                due,
+                checking,
+                ..
+            } => {
+                if !enabled && (*due || *checking) {
+                    return Err(StoreProtocolError::Invalid(
+                        "disabled automatic update status cannot be due or checking".into(),
+                    ));
+                }
+                Ok(())
+            }
             Self::InstallPreflight {
                 authorization_id,
                 catalog_sequence,
@@ -1700,6 +1731,24 @@ mod tests {
         write_request(&mut encoded, &search).unwrap();
         assert_eq!(read_request(&mut encoded.as_slice()).unwrap(), Some(search));
 
+        for command in [
+            StoreCommand::GetAutoUpdate,
+            StoreCommand::SetAutoUpdate { enabled: true },
+            StoreCommand::RunAutoUpdate,
+        ] {
+            let request = StoreRequest {
+                protocol_version: STORE_PROTOCOL_VERSION,
+                request_id: 11,
+                command,
+            };
+            let mut encoded = Vec::new();
+            write_request(&mut encoded, &request).unwrap();
+            assert_eq!(
+                read_request(&mut encoded.as_slice()).unwrap(),
+                Some(request)
+            );
+        }
+
         for query in ["", " leading", "trailing ", "unsafe\nquery"] {
             let invalid = StoreRequest {
                 protocol_version: STORE_PROTOCOL_VERSION,
@@ -1754,6 +1803,36 @@ mod tests {
         let mut encoded = Vec::new();
         write_response(&mut encoded, &valid).unwrap();
         assert_eq!(read_response(&mut encoded.as_slice()).unwrap(), Some(valid));
+
+        let auto_update = StoreResponse::success(
+            5,
+            StoreResponseData::AutoUpdateStatus {
+                enabled: true,
+                policy_allowed: true,
+                charging: true,
+                unmetered_network: false,
+                due: true,
+                checking: false,
+            },
+        );
+        let mut encoded = Vec::new();
+        write_response(&mut encoded, &auto_update).unwrap();
+        assert_eq!(
+            read_response(&mut encoded.as_slice()).unwrap(),
+            Some(auto_update)
+        );
+        let invalid_auto_update = StoreResponse::success(
+            5,
+            StoreResponseData::AutoUpdateStatus {
+                enabled: false,
+                policy_allowed: true,
+                charging: true,
+                unmetered_network: true,
+                due: true,
+                checking: false,
+            },
+        );
+        assert!(write_response(&mut Vec::new(), &invalid_auto_update).is_err());
 
         let mut invalid_progress = response_app();
         invalid_progress.state = StoreAppState::Installed;

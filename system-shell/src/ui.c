@@ -1297,7 +1297,7 @@ static void draw_settings_page(struct canvas *canvas, const struct cp0_ui *ui)
 
 static unsigned int settings_item_count(unsigned int category)
 {
-    static const unsigned int counts[] = {6, 3, 4, 4, 5, 4, 6, 5};
+    static const unsigned int counts[] = {6, 3, 4, 4, 5, 5, 6, 5};
     return category < 8 ? counts[category] : 0;
 }
 
@@ -1399,7 +1399,7 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
     }
     case 5: {
         static const char *labels[] = {"INSTALLED APPS", "PERMISSIONS", "STORAGE",
-                                       "DOCUMENT ACCESS"};
+                                       "DOCUMENT ACCESS", "AUTO APP UPDATES"};
         *label = labels[item];
         if (item == 0)
             snprintf(value, 24, "%u APPS", ui->app_count);
@@ -1407,9 +1407,28 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
             snprintf(value, 24, "%u POLICY DENIED", ui->denied_permission_count);
         else if (item == 2)
             snprintf(value, 24, "DETAILS");
-        else {
+        else if (item == 3) {
             snprintf(value, 24, "UNAVAILABLE");
             *available = false;
+        } else if (!ui->auto_update_available) {
+            snprintf(value, 24, "UNKNOWN");
+            *available = false;
+        } else if (!ui->auto_update_enabled) {
+            snprintf(value, 24,
+                     "%s", ui->auto_update_policy_allowed ? "OFF" : "LOCKED");
+            *available = ui->auto_update_policy_allowed;
+        } else if (!ui->auto_update_policy_allowed) {
+            snprintf(value, 24, "LOCKED");
+        } else if (ui->auto_update_checking) {
+            snprintf(value, 24, "CHECKING");
+        } else if (!ui->auto_update_charging) {
+            snprintf(value, 24, "WAIT POWER");
+        } else if (!ui->auto_update_unmetered_network) {
+            snprintf(value, 24, "WAIT WIRED");
+        } else if (ui->auto_update_due) {
+            snprintf(value, 24, "DUE");
+        } else {
+            snprintf(value, 24, "ON");
         }
         break;
     }
@@ -1945,6 +1964,21 @@ void cp0_ui_set_device_settings(
     ui->app_launch_restricted = app_launch_restricted;
     ui->denied_permission_count = denied_permission_count;
     ui->settings_available = true;
+}
+
+void cp0_ui_set_auto_update(
+    struct cp0_ui *ui, bool available, bool enabled, bool policy_allowed,
+    bool charging, bool unmetered_network, bool due, bool checking)
+{
+    if (ui == NULL)
+        return;
+    ui->auto_update_available = available;
+    ui->auto_update_enabled = available && enabled;
+    ui->auto_update_policy_allowed = available && policy_allowed;
+    ui->auto_update_charging = available && charging;
+    ui->auto_update_unmetered_network = available && unmetered_network;
+    ui->auto_update_due = available && enabled && due;
+    ui->auto_update_checking = available && enabled && checking;
 }
 
 static bool copy_text(char *output, size_t capacity, const char *input)
@@ -3626,6 +3660,14 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 ui->screen = CP0_UI_DEVICE;
                 ui->device_page = 1;
                 ui->settings_detail = false;
+            } else if (ui->settings_selected == 5 && item == 4 &&
+                       action == CP0_UI_ACCEPT &&
+                       ui->auto_update_available &&
+                       (ui->auto_update_policy_allowed ||
+                        ui->auto_update_enabled)) {
+                return ui->auto_update_enabled
+                           ? CP0_UI_EVENT_AUTO_UPDATE_DISABLE
+                           : CP0_UI_EVENT_AUTO_UPDATE_ENABLE;
             } else if (ui->settings_selected == 6 && item <= 1 &&
                        action == CP0_UI_ACCEPT) {
                 ui->screen = CP0_UI_DEVICE;

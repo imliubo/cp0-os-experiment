@@ -16,6 +16,7 @@ Policy v1 can:
 
 - lock developer mode and recovery mode off;
 - disable all Store installation;
+- independently disable automatic Store updates;
 - change application launch from `allow-all` to an exact allowlist;
 - globally deny any SDK capability before a user permission prompt is shown.
 
@@ -89,15 +90,16 @@ root device-policy.json
         |
         +-- Settings mode locks -> appd atomic markers
         +-- developer install -> policy + marker + developer signature/key
-        +-- StoreInstall -> Store switch + application allowlist
+        +-- StoreInstall -> Store switch + automatic mode switch + application allowlist
         +-- Start -> application allowlist
         +-- capability request -> global deny before user decision
         +-- next boot -> compositor gate + tty1 recovery service
 ```
 
-The Store UID is authorized only for the catalog-bound `StoreInstall` command.
-It cannot read or change settings, start applications, inspect logs or use the
-root developer installation path.
+The Store UID is authorized only for the catalog-bound `StoreInstall` command
+and a dedicated paginated snapshot containing installed App ID, version and
+permissions. It cannot use the launcher list, read or change settings, start
+applications, inspect logs or use the root developer installation path.
 
 Automated coverage includes bounded/strict policy decoding, atomic mode state,
 locked modes, allowlist and capability decisions, developer installation

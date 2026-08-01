@@ -251,6 +251,25 @@ static void poll_device_settings(struct shell *shell)
         apply_device_settings(shell, &settings);
 }
 
+static void apply_auto_update_status(
+    struct shell *shell, const struct cp0_store_auto_update_status *status)
+{
+    cp0_ui_set_auto_update(
+        &shell->ui, true, status->enabled, status->policy_allowed,
+        status->charging, status->unmetered_network, status->due,
+        status->checking);
+}
+
+static void poll_auto_update_status(struct shell *shell)
+{
+    struct cp0_store_auto_update_status status;
+    if (cp0_store_get_auto_update(&status) == CP0_STORE_RESULT_OK)
+        apply_auto_update_status(shell, &status);
+    else
+        cp0_ui_set_auto_update(&shell->ui, false, false, false, false,
+                               false, false, false);
+}
+
 static const struct cp0_app_summary *installed_app(
     const struct shell *shell, const char *app_id)
 {
@@ -1060,6 +1079,20 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                     recovery ? "recovery" : "developer");
             poll_device_settings(shell);
         }
+    } else if (event == CP0_UI_EVENT_AUTO_UPDATE_ENABLE ||
+               event == CP0_UI_EVENT_AUTO_UPDATE_DISABLE) {
+        bool enabled = event == CP0_UI_EVENT_AUTO_UPDATE_ENABLE;
+        struct cp0_store_auto_update_status status;
+        if (cp0_store_set_auto_update(enabled, &status) ==
+            CP0_STORE_RESULT_OK) {
+            apply_auto_update_status(shell, &status);
+            fprintf(stderr, "system-shell: automatic app updates %s\n",
+                    enabled ? "enabled" : "disabled");
+        } else {
+            fprintf(stderr,
+                    "system-shell: automatic app update setting failed\n");
+            poll_auto_update_status(shell);
+        }
     }
     if (previous_screen != CP0_UI_STORE &&
         shell->ui.screen == CP0_UI_STORE) {
@@ -1067,8 +1100,10 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         poll_store_catalog(shell);
     }
     if (previous_screen != CP0_UI_SETTINGS &&
-        shell->ui.screen == CP0_UI_SETTINGS)
+        shell->ui.screen == CP0_UI_SETTINGS) {
         poll_device_settings(shell);
+        poll_auto_update_status(shell);
+    }
     shell_redraw(shell);
 }
 
@@ -1730,8 +1765,10 @@ static int shell_dispatch(struct shell *shell)
                     poll_app_catalog(shell);
                     poll_store_catalog(shell);
                     show_store_completion_notification(shell);
-                    if (shell->ui.screen == CP0_UI_SETTINGS)
+                    if (shell->ui.screen == CP0_UI_SETTINGS) {
                         poll_device_settings(shell);
+                        poll_auto_update_status(shell);
+                    }
                     shell->catalog_ticks = 0;
                 }
                 shell_redraw(shell);

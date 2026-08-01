@@ -175,6 +175,11 @@ HTTPS 公网地址，验证目录序列、有效期和签名，支持有严格 `
 `/var/lib/cardputerzero/apps/<app-id>/<version>`。目录默认未配置且镜像不内置生产
 信任根；详细边界见 `docs/PHASE5B-APPLICATION-STORE.md`。
 
+应用自动更新默认关闭。`cp0-stored` 使用私有原子偏好和六小时持久限频，只在外部供电、
+有线默认路由和独立 root 策略均允许时，从 appd 最小安装快照选择严格升级且不新增权限的
+应用；每批最多八项。最终 handoff 标记为 automatic，appd 再次执行自动更新策略、签名、
+摘要、版本和 manifest 复核；见 `docs/STORE-AUTO-UPDATE-V1.md`。
+
 root-owned `device-policy.json` 为家长/组织管理提供本地策略上限：可锁定开发者/恢复
 模式、禁用 Store 安装、限制可启动应用并全局拒绝 SDK 权限。appd 在安装、启动和
 每次 capability 请求处执行策略；全局拒绝优先于用户已有的持久允许。System Shell

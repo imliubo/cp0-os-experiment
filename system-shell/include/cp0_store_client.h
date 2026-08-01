@@ -159,10 +159,23 @@ struct cp0_store_image_metadata {
     char sha256[CP0_STORE_MEDIA_SHA256_BYTES];
 };
 
+struct cp0_store_auto_update_status {
+    bool enabled;
+    bool policy_allowed;
+    bool charging;
+    bool unmetered_network;
+    bool due;
+    bool checking;
+};
+
 int cp0_store_list(struct cp0_store_catalog *catalog);
 int cp0_store_search(const char *query, uint16_t offset, uint8_t limit,
                      struct cp0_store_search_results *results);
 int cp0_store_refresh(void);
+int cp0_store_get_auto_update(
+    struct cp0_store_auto_update_status *status);
+int cp0_store_set_auto_update(
+    bool enabled, struct cp0_store_auto_update_status *status);
 int cp0_store_preflight_install(
     uint64_t catalog_sequence, const char *const app_ids[], size_t app_count,
     struct cp0_store_install_preflight *preflight);

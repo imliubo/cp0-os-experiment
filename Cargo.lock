@@ -529,6 +529,9 @@ dependencies = [
  "cp0-store-metadata",
  "cp0-store-protocol",
  "libc",
+ "semver",
+ "serde",
+ "serde_json",
  "sha2",
  "ureq",
 ]

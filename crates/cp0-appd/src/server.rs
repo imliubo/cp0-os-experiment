@@ -286,6 +286,9 @@ impl AppdServer {
             AppdCommand::List { offset, limit } => {
                 Self::list_apps(&state, offset, limit).map_err(CommandError::Manager)
             }
+            AppdCommand::StoreListInstalled { offset, limit } => {
+                Self::list_store_apps(&state, offset, limit).map_err(CommandError::Manager)
+            }
             AppdCommand::Start { app_id } => self
                 .start_app(&state, &app_id)
                 .map(|unit| ResponseData::Started { app_id, unit }),
@@ -488,17 +491,23 @@ impl AppdServer {
             version,
             package_sha256,
             package_bytes,
+            automatic,
         } = command
         else {
             unreachable!("store installation requires store-install command")
         };
         let current_version = match self.state.lock() {
             Ok(state) => {
-                if !state.policy.allows_store_install(&app_id) {
+                let allowed = if automatic {
+                    state.policy.allows_store_auto_update(&app_id)
+                } else {
+                    state.policy.allows_store_install(&app_id)
+                };
+                if !allowed {
                     return AppdResponse::error(
                         request_id,
                         ErrorCode::Unauthorized,
-                        "store installation is blocked by device policy",
+                        "store installation mode is blocked by device policy",
                     );
                 }
                 state
@@ -589,6 +598,39 @@ impl AppdServer {
             u16::try_from(consumed).expect("application registry is bounded below u16::MAX")
         });
         Ok(ResponseData::Applications { apps, next_offset })
+    }
+
+    fn list_store_apps(
+        state: &ServerState,
+        offset: u16,
+        limit: u8,
+    ) -> Result<ResponseData, AppManagerError> {
+        let installed_apps = state.manager.installed_apps();
+        let mut apps = Vec::new();
+        for installed in installed_apps
+            .iter()
+            .skip(usize::from(offset))
+            .take(usize::from(limit))
+        {
+            let manifest = state.manager.installed_manifest(&installed.app_id)?;
+            let permissions = canonical_store_permissions(
+                manifest
+                    .permissions
+                    .into_iter()
+                    .map(|request| request.name)
+                    .collect(),
+            );
+            apps.push(crate::StoreInstalledApp {
+                app_id: installed.app_id.clone(),
+                version: installed.version.clone(),
+                permissions,
+            });
+        }
+        let consumed = usize::from(offset) + apps.len();
+        let next_offset = (consumed < installed_apps.len()).then(|| {
+            u16::try_from(consumed).expect("application registry is bounded below u16::MAX")
+        });
+        Ok(ResponseData::StoreApplications { apps, next_offset })
     }
 
     fn resolve_permission(
@@ -1372,7 +1414,10 @@ fn control_command_authorized(
     store_installer_uids: &BTreeSet<u32>,
 ) -> bool {
     if store_installer_uids.contains(&uid) {
-        return matches!(command, AppdCommand::StoreInstall { .. });
+        return matches!(
+            command,
+            AppdCommand::StoreInstall { .. } | AppdCommand::StoreListInstalled { .. }
+        );
     }
     if !trusted_uids.contains(&uid) {
         return false;
@@ -1381,7 +1426,7 @@ fn control_command_authorized(
         AppdCommand::Install { .. } | AppdCommand::Rollback { .. } | AppdCommand::Logs { .. } => {
             uid == 0
         }
-        AppdCommand::StoreInstall { .. } => false,
+        AppdCommand::StoreInstall { .. } | AppdCommand::StoreListInstalled { .. } => false,
         _ => true,
     }
 }
@@ -1415,6 +1460,13 @@ struct IntentTransition {
     intent_id: u64,
     sender_app_id: String,
     target_app_id: String,
+}
+
+fn canonical_store_permissions(
+    mut permissions: Vec<cp0_manifest::Permission>,
+) -> Vec<cp0_manifest::Permission> {
+    permissions.sort_unstable();
+    permissions
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1921,7 +1973,7 @@ mod tests {
     }
 
     #[test]
-    fn store_uid_has_only_the_catalog_bound_install_command() {
+    fn store_uid_has_only_install_and_minimal_installed_snapshot_commands() {
         let root = 0;
         let shell = 100;
         let store = 101;
@@ -1940,6 +1992,11 @@ mod tests {
             version: "1.0.0".into(),
             package_sha256: "11".repeat(32),
             package_bytes: 4096,
+            automatic: false,
+        };
+        let store_list = AppdCommand::StoreListInstalled {
+            offset: 0,
+            limit: 8,
         };
 
         assert!(control_command_authorized(
@@ -1978,6 +2035,18 @@ mod tests {
         assert!(!control_command_authorized(
             store, &normal, &trusted, &stores
         ));
+        assert!(control_command_authorized(
+            store,
+            &store_list,
+            &trusted,
+            &stores
+        ));
+        assert!(!control_command_authorized(
+            shell,
+            &store_list,
+            &trusted,
+            &stores
+        ));
         assert!(!control_command_authorized(
             store,
             &AppdCommand::SetDeviceMode {
@@ -1988,5 +2057,21 @@ mod tests {
             &stores
         ));
         assert!(!control_command_authorized(999, &normal, &trusted, &stores));
+    }
+
+    #[test]
+    fn store_snapshot_canonicalizes_manifest_permission_order() {
+        assert_eq!(
+            canonical_store_permissions(vec![
+                cp0_manifest::Permission::NotificationsPost,
+                cp0_manifest::Permission::NetworkClient,
+                cp0_manifest::Permission::CameraCapture,
+            ]),
+            vec![
+                cp0_manifest::Permission::NetworkClient,
+                cp0_manifest::Permission::CameraCapture,
+                cp0_manifest::Permission::NotificationsPost,
+            ]
+        );
     }
 }

@@ -93,6 +93,8 @@ enum cp0_ui_event {
     CP0_UI_EVENT_DEVELOPER_DISABLE,
     CP0_UI_EVENT_RECOVERY_ENABLE,
     CP0_UI_EVENT_RECOVERY_DISABLE,
+    CP0_UI_EVENT_AUTO_UPDATE_ENABLE,
+    CP0_UI_EVENT_AUTO_UPDATE_DISABLE,
     CP0_UI_EVENT_UNINSTALL_APP,
     CP0_UI_EVENT_MEDIA_PLAY_PAUSE,
     CP0_UI_EVENT_MEDIA_PREVIOUS,
@@ -346,6 +348,13 @@ struct cp0_ui {
     bool recovery_mode;
     bool recovery_mode_allowed;
     bool store_install_allowed;
+    bool auto_update_available;
+    bool auto_update_enabled;
+    bool auto_update_policy_allowed;
+    bool auto_update_charging;
+    bool auto_update_unmetered_network;
+    bool auto_update_due;
+    bool auto_update_checking;
     bool app_launch_restricted;
     enum cp0_ui_authority settings_authority;
     uint8_t denied_permission_count;
@@ -433,6 +442,9 @@ void cp0_ui_set_device_settings(
     bool developer_mode, bool developer_mode_allowed, bool recovery_mode,
     bool recovery_mode_allowed, bool store_install_allowed,
     bool app_launch_restricted, uint8_t denied_permission_count);
+void cp0_ui_set_auto_update(
+    struct cp0_ui *ui, bool available, bool enabled, bool policy_allowed,
+    bool charging, bool unmetered_network, bool due, bool checking);
 void cp0_ui_add_app(struct cp0_ui *ui, uint32_t token, const char *app_id);
 void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
                              const struct cp0_ui_catalog_app *apps,

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cp0_appd::{
     APPD_PROTOCOL_VERSION, AppdCommand, AppdRequest, DevicePolicy, ResponseData, ResponseOutcome,
-    read_response as read_appd_response, write_request as write_appd_request,
+    StoreInstalledApp, read_response as read_appd_response, write_request as write_appd_request,
 };
 use cp0_networkd::PublicResolver;
 use cp0_store_metadata::validate_png_structure;
@@ -29,6 +29,8 @@ use cp0_store_protocol::{
     decode_app_details, decode_signed_catalog, is_lower_hex, is_valid_https_url, read_request,
     response_requires_descriptor, send_response_with_fd, verify_catalog, write_response,
 };
+use semver::Version;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use ureq::config::Config;
 use ureq::unversioned::transport::DefaultConnector;
@@ -47,6 +49,11 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(45);
 const MAX_REDIRECTS: u32 = 2;
 const CLOCK_SKEW_SECONDS: u64 = 5 * 60;
 const INSTALL_AUTHORIZATION_TTL: Duration = Duration::from_secs(60);
+pub const AUTO_UPDATE_INTERVAL_SECONDS: u64 = 6 * 60 * 60;
+const AUTO_UPDATE_POLL_INTERVAL: Duration = Duration::from_secs(60);
+const AUTO_UPDATE_STATE_SCHEMA_VERSION: u32 = 1;
+const MAX_AUTO_UPDATE_STATE_BYTES: u64 = 1024;
+const MAX_INSTALLED_APPS: usize = 64;
 const INSTALL_DATA_RESERVE_BYTES: u64 = 16 * 1024 * 1024;
 const INSTALL_INBOX_RESERVE_BYTES: u64 = 8 * 1024 * 1024;
 pub const ICON_CACHE_BUDGET_BYTES: u64 = 4 * 1024 * 1024;
@@ -69,6 +76,7 @@ pub struct StorePaths {
     pub appd_inbox: PathBuf,
     pub appd_socket: PathBuf,
     pub device_policy: PathBuf,
+    pub auto_update_state: PathBuf,
     pub enforce_root_trust: bool,
 }
 
@@ -77,6 +85,7 @@ impl Default for StorePaths {
         let cache_root = PathBuf::from(DEFAULT_CACHE_ROOT);
         Self {
             catalog_cache: cache_root.join("catalog.json"),
+            auto_update_state: cache_root.join("auto-update.json"),
             cache_root,
             trust_root: PathBuf::from(DEFAULT_TRUST_ROOT),
             appd_inbox: PathBuf::from(DEFAULT_APPD_INBOX),
@@ -175,6 +184,42 @@ pub trait StoreNetwork: fmt::Debug + Send + Sync + 'static {
 
 pub trait AppInstaller: fmt::Debug + Send + Sync + 'static {
     fn install(&self, app: &CatalogApp, staged_path: &Path) -> Result<(), StoreServiceError>;
+
+    fn install_automatic(
+        &self,
+        app: &CatalogApp,
+        staged_path: &Path,
+    ) -> Result<(), StoreServiceError> {
+        self.install(app, staged_path)
+    }
+
+    fn installed_apps(&self) -> Result<Vec<StoreInstalledApp>, StoreServiceError> {
+        Err(StoreServiceError::Unavailable(
+            "installed application query is unavailable",
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutoUpdateConditions {
+    pub charging: bool,
+    pub unmetered_network: bool,
+}
+
+trait AutoUpdateProbe: fmt::Debug + Send + Sync + 'static {
+    fn conditions(&self) -> AutoUpdateConditions;
+}
+
+#[derive(Debug)]
+struct SystemAutoUpdateProbe;
+
+impl AutoUpdateProbe for SystemAutoUpdateProbe {
+    fn conditions(&self) -> AutoUpdateConditions {
+        AutoUpdateConditions {
+            charging: external_power_online(Path::new("/sys/class/power_supply")),
+            unmetered_network: wired_default_route_available(),
+        }
+    }
 }
 
 trait StoreSpaceProbe: fmt::Debug + Send + Sync + 'static {
@@ -429,17 +474,17 @@ impl AppdInstaller {
             socket: socket.into(),
         }
     }
-}
 
-impl AppInstaller for AppdInstaller {
-    fn install(&self, app: &CatalogApp, staged_path: &Path) -> Result<(), StoreServiceError> {
+    fn install_with_mode(
+        &self,
+        app: &CatalogApp,
+        staged_path: &Path,
+        automatic: bool,
+    ) -> Result<(), StoreServiceError> {
         let package_name = staged_path
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| StoreServiceError::Invalid("staged package name is invalid".into()))?;
-        let mut stream = UnixStream::connect(&self.socket)?;
-        stream.set_read_timeout(Some(APPD_TIMEOUT))?;
-        stream.set_write_timeout(Some(APPD_TIMEOUT))?;
         let request = AppdRequest {
             protocol_version: APPD_PROTOCOL_VERSION,
             request_id: 1,
@@ -449,15 +494,10 @@ impl AppInstaller for AppdInstaller {
                 version: app.version.clone(),
                 package_sha256: app.package_sha256.clone(),
                 package_bytes: app.package_bytes,
+                automatic,
             },
         };
-        write_appd_request(&mut stream, &request)
-            .map_err(|error| StoreServiceError::Invalid(error.to_string()))?;
-        let response = read_appd_response(&mut BufReader::new(stream))
-            .map_err(|error| StoreServiceError::Invalid(error.to_string()))?
-            .ok_or(StoreServiceError::Unavailable(
-                "appd closed the installation request",
-            ))?;
+        let response = self.request(&request)?;
         match response.outcome {
             ResponseOutcome::Ok {
                 data:
@@ -473,6 +513,109 @@ impl AppInstaller for AppdInstaller {
             )),
         }
     }
+
+    fn request(&self, request: &AppdRequest) -> Result<cp0_appd::AppdResponse, StoreServiceError> {
+        let mut stream = UnixStream::connect(&self.socket)?;
+        stream.set_read_timeout(Some(APPD_TIMEOUT))?;
+        stream.set_write_timeout(Some(APPD_TIMEOUT))?;
+        write_appd_request(&mut stream, request)
+            .map_err(|error| StoreServiceError::Invalid(error.to_string()))?;
+        let response = read_appd_response(&mut BufReader::new(stream))
+            .map_err(|error| StoreServiceError::Invalid(error.to_string()))?
+            .ok_or(StoreServiceError::Unavailable("appd closed the request"))?;
+        if response.request_id != request.request_id {
+            return Err(StoreServiceError::Invalid(
+                "appd response request ID does not match".into(),
+            ));
+        }
+        Ok(response)
+    }
+}
+
+impl AppInstaller for AppdInstaller {
+    fn install(&self, app: &CatalogApp, staged_path: &Path) -> Result<(), StoreServiceError> {
+        self.install_with_mode(app, staged_path, false)
+    }
+
+    fn install_automatic(
+        &self,
+        app: &CatalogApp,
+        staged_path: &Path,
+    ) -> Result<(), StoreServiceError> {
+        self.install_with_mode(app, staged_path, true)
+    }
+
+    fn installed_apps(&self) -> Result<Vec<StoreInstalledApp>, StoreServiceError> {
+        let mut apps = Vec::new();
+        let mut offset = 0_u16;
+        let mut request_id = 1_u64;
+        loop {
+            let request = AppdRequest {
+                protocol_version: APPD_PROTOCOL_VERSION,
+                request_id,
+                command: AppdCommand::StoreListInstalled {
+                    offset,
+                    limit: cp0_appd::MAX_APP_LIST_PAGE,
+                },
+            };
+            let response = self.request(&request)?;
+            let (page, next_offset) = match response.outcome {
+                ResponseOutcome::Ok {
+                    data: ResponseData::StoreApplications { apps, next_offset },
+                } => (apps, next_offset),
+                ResponseOutcome::Error { .. } => {
+                    return Err(StoreServiceError::Unavailable(
+                        "appd rejected the installed application query",
+                    ));
+                }
+                _ => {
+                    return Err(StoreServiceError::Invalid(
+                        "appd returned an unexpected installed application response".into(),
+                    ));
+                }
+            };
+            if page.len() > usize::from(cp0_appd::MAX_APP_LIST_PAGE) {
+                return Err(StoreServiceError::Invalid(
+                    "appd installed application page exceeds its bound".into(),
+                ));
+            }
+            for app in &page {
+                if !cp0_manifest::is_valid_app_id(&app.app_id)
+                    || !cp0_manifest::is_valid_app_version(&app.version)
+                    || app.permissions.len() > cp0_manifest::Permission::ALL.len()
+                    || app.permissions.windows(2).any(|pair| pair[0] >= pair[1])
+                    || apps
+                        .last()
+                        .is_some_and(|previous: &StoreInstalledApp| previous.app_id >= app.app_id)
+                {
+                    return Err(StoreServiceError::Invalid(
+                        "appd installed application snapshot is invalid".into(),
+                    ));
+                }
+            }
+            let consumed = usize::from(offset)
+                .checked_add(page.len())
+                .ok_or_else(|| StoreServiceError::Invalid("appd page offset overflow".into()))?;
+            if consumed > MAX_INSTALLED_APPS {
+                return Err(StoreServiceError::Invalid(
+                    "appd installed application snapshot exceeds its bound".into(),
+                ));
+            }
+            apps.extend(page);
+            match next_offset {
+                Some(next) if usize::from(next) == consumed && next > offset => {
+                    offset = next;
+                    request_id = request_id.saturating_add(1);
+                }
+                None => return Ok(apps),
+                _ => {
+                    return Err(StoreServiceError::Invalid(
+                        "appd installed application pagination is inconsistent".into(),
+                    ));
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -483,6 +626,7 @@ struct OperationState {
     progress_percent: u8,
     failure_reason: Option<StoreFailureReason>,
     control: DownloadControl,
+    automatic: bool,
 }
 
 #[derive(Debug)]
@@ -498,12 +642,55 @@ struct InstallFailure {
     source: StoreServiceError,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutoUpdatePersistentState {
+    schema_version: u32,
+    enabled: bool,
+    last_check_unix_seconds: u64,
+}
+
+impl Default for AutoUpdatePersistentState {
+    fn default() -> Self {
+        Self {
+            schema_version: AUTO_UPDATE_STATE_SCHEMA_VERSION,
+            enabled: false,
+            last_check_unix_seconds: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AutoUpdateStatus {
+    enabled: bool,
+    policy_allowed: bool,
+    charging: bool,
+    unmetered_network: bool,
+    due: bool,
+    checking: bool,
+}
+
+impl AutoUpdateStatus {
+    fn response(self) -> StoreResponseData {
+        StoreResponseData::AutoUpdateStatus {
+            enabled: self.enabled,
+            policy_allowed: self.policy_allowed,
+            charging: self.charging,
+            unmetered_network: self.unmetered_network,
+            due: self.due,
+            checking: self.checking,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct MutableState {
     catalog: Option<SignedCatalog>,
     operations: BTreeMap<String, OperationState>,
     install_authorization: Option<InstallAuthorization>,
     active_job: bool,
+    auto_update: AutoUpdatePersistentState,
+    auto_update_running: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -569,6 +756,7 @@ pub struct StoreService {
     network: Arc<dyn StoreNetwork>,
     installer: Arc<dyn AppInstaller>,
     space: Arc<dyn StoreSpaceProbe>,
+    auto_update_probe: Arc<dyn AutoUpdateProbe>,
     trusted_uids: BTreeSet<u32>,
     state: Mutex<MutableState>,
 }
@@ -648,6 +836,27 @@ impl StoreService {
         trusted_uids: impl IntoIterator<Item = u32>,
         space: Arc<dyn StoreSpaceProbe>,
     ) -> Result<Arc<Self>, StoreServiceError> {
+        Self::new_with_probes(
+            paths,
+            config,
+            network,
+            installer,
+            trusted_uids,
+            space,
+            Arc::new(SystemAutoUpdateProbe),
+        )
+    }
+
+    fn new_with_probes(
+        paths: StorePaths,
+        config: StoreConfig,
+        network: Arc<dyn StoreNetwork>,
+        installer: Arc<dyn AppInstaller>,
+        trusted_uids: impl IntoIterator<Item = u32>,
+        space: Arc<dyn StoreSpaceProbe>,
+        auto_update_probe: Arc<dyn AutoUpdateProbe>,
+    ) -> Result<Arc<Self>, StoreServiceError> {
+        prepare_private_cache_directory(&paths.cache_root)?;
         fs::create_dir_all(paths.cache_root.join("packages"))?;
         prepare_media_directories(&paths)?;
         cleanup_stale_appd_handoffs(&paths.appd_inbox)?;
@@ -656,15 +865,18 @@ impl StoreService {
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };
+        let auto_update = load_auto_update_state(&paths.auto_update_state)?;
         let service = Arc::new(Self {
             paths,
             config,
             network,
             installer,
             space,
+            auto_update_probe,
             trusted_uids: trusted_uids.into_iter().collect(),
             state: Mutex::new(MutableState {
                 catalog,
+                auto_update,
                 ..MutableState::default()
             }),
         });
@@ -675,6 +887,15 @@ impl StoreService {
     }
 
     pub fn serve(self: Arc<Self>, listener: UnixListener) -> io::Result<()> {
+        let scheduler = Arc::clone(&self);
+        thread::Builder::new()
+            .name("cp0-store-auto-update".into())
+            .spawn(move || {
+                loop {
+                    let _ = scheduler.start_auto_update_check();
+                    thread::sleep(AUTO_UPDATE_POLL_INTERVAL);
+                }
+            })?;
         loop {
             let (stream, _) = listener.accept()?;
             if let Err(error) = self.handle_connection(stream) {
@@ -756,6 +977,15 @@ impl StoreService {
             StoreCommand::Refresh => self
                 .start_refresh()
                 .map(|()| StoreResponseData::RefreshAccepted),
+            StoreCommand::GetAutoUpdate => {
+                self.auto_update_status().map(AutoUpdateStatus::response)
+            }
+            StoreCommand::SetAutoUpdate { enabled } => self
+                .set_auto_update(enabled)
+                .map(AutoUpdateStatus::response),
+            StoreCommand::RunAutoUpdate => self
+                .start_auto_update_check()
+                .map(|()| StoreResponseData::AutoUpdateAccepted),
             StoreCommand::PreflightInstall {
                 app_ids,
                 catalog_sequence,
@@ -794,6 +1024,279 @@ impl StoreService {
             Ok(data) => StoreResponse::success(request_id, data),
             Err(error) => service_error_response(request_id, &error),
         })
+    }
+
+    fn auto_update_status(&self) -> Result<AutoUpdateStatus, StoreServiceError> {
+        let policy =
+            DevicePolicy::load_secure(&self.paths.device_policy, self.paths.enforce_root_trust)
+                .map_err(|_| StoreServiceError::Unavailable("device policy is unavailable"))?;
+        let conditions = self.auto_update_probe.conditions();
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+        Ok(AutoUpdateStatus {
+            enabled: state.auto_update.enabled,
+            policy_allowed: policy.store_install_allowed && policy.store_auto_update_allowed,
+            charging: conditions.charging,
+            unmetered_network: conditions.unmetered_network,
+            due: auto_update_due(&state.auto_update, unix_time()),
+            checking: state.auto_update_running,
+        })
+    }
+
+    fn set_auto_update(
+        self: &Arc<Self>,
+        enabled: bool,
+    ) -> Result<AutoUpdateStatus, StoreServiceError> {
+        if enabled {
+            let policy =
+                DevicePolicy::load_secure(&self.paths.device_policy, self.paths.enforce_root_trust)
+                    .map_err(|_| StoreServiceError::Unavailable("device policy is unavailable"))?;
+            if !policy.store_install_allowed || !policy.store_auto_update_allowed {
+                return Err(StoreServiceError::PolicyRestricted);
+            }
+        }
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+            if state.auto_update.enabled != enabled {
+                let mut next = state.auto_update.clone();
+                next.enabled = enabled;
+                save_auto_update_state(&self.paths.auto_update_state, &next)?;
+                state.auto_update = next;
+            }
+        }
+        if enabled {
+            let _ = self.start_auto_update_check();
+        }
+        self.auto_update_status()
+    }
+
+    fn start_auto_update_check(self: &Arc<Self>) -> Result<(), StoreServiceError> {
+        {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+            if !state.auto_update.enabled
+                || !auto_update_due(&state.auto_update, unix_time())
+                || state.auto_update_running
+            {
+                return Err(StoreServiceError::InvalidState);
+            }
+        }
+        let status = self.auto_update_status()?;
+        if !status.enabled || !status.due || status.checking {
+            return Err(StoreServiceError::InvalidState);
+        }
+        if !status.policy_allowed {
+            return Err(StoreServiceError::PolicyRestricted);
+        }
+        if !status.charging {
+            return Err(StoreServiceError::Unavailable(
+                "automatic updates require external power",
+            ));
+        }
+        if !status.unmetered_network {
+            return Err(StoreServiceError::Unavailable(
+                "automatic updates require a wired default route",
+            ));
+        }
+
+        let now = unix_time();
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+            if !state.auto_update.enabled || !auto_update_due(&state.auto_update, now) {
+                return Err(StoreServiceError::InvalidState);
+            }
+            if state.active_job || state.auto_update_running {
+                return Err(StoreServiceError::Busy);
+            }
+            let previous = state.auto_update.clone();
+            state.active_job = true;
+            state.auto_update_running = true;
+            state.auto_update.last_check_unix_seconds = now;
+            if let Err(error) =
+                save_auto_update_state(&self.paths.auto_update_state, &state.auto_update)
+            {
+                state.auto_update = previous;
+                state.active_job = false;
+                state.auto_update_running = false;
+                return Err(error);
+            }
+        }
+
+        let service = Arc::clone(self);
+        thread::Builder::new()
+            .name("cp0-store-auto-check".into())
+            .spawn(move || {
+                if let Err(error) = service.run_auto_update_now() {
+                    eprintln!("cp0-stored: automatic update check failed: {error}");
+                }
+                service.finish_auto_update_check();
+            })
+            .map_err(|error| {
+                self.finish_auto_update_check();
+                StoreServiceError::Io(error)
+            })?;
+        Ok(())
+    }
+
+    fn run_auto_update_now(&self) -> Result<(), StoreServiceError> {
+        self.refresh_now()?;
+        let conditions = self.auto_update_probe.conditions();
+        if !conditions.charging || !conditions.unmetered_network {
+            return Err(StoreServiceError::Unavailable(
+                "automatic update conditions changed during the check",
+            ));
+        }
+        if !self
+            .state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?
+            .auto_update
+            .enabled
+        {
+            return Err(StoreServiceError::InvalidState);
+        }
+        let installed = self.installer.installed_apps()?;
+        let apps = self.auto_update_candidates(&installed)?;
+        if apps.is_empty() {
+            return Ok(());
+        }
+        self.validate_auto_update_preconditions(&apps)?;
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+            if !state.auto_update.enabled {
+                return Err(StoreServiceError::InvalidState);
+            }
+            let catalog = state
+                .catalog
+                .as_ref()
+                .ok_or(StoreServiceError::Unconfigured)?;
+            if !catalog_contains_exact_apps(catalog, &apps) {
+                return Err(StoreServiceError::CatalogChanged);
+            }
+            for app in &apps {
+                state.operations.insert(
+                    app.app_id.clone(),
+                    OperationState {
+                        version: app.version.clone(),
+                        package_sha256: app.package_sha256.clone(),
+                        state: StoreAppState::Queued,
+                        progress_percent: 0,
+                        failure_reason: None,
+                        control: DownloadControl::Continue,
+                        automatic: true,
+                    },
+                );
+            }
+        }
+        for app in apps {
+            let result = self.install_now(&app, true);
+            if let Err(failure) = &result {
+                eprintln!(
+                    "cp0-stored: {} automatic update failed: {}",
+                    app.app_id, failure.source
+                );
+            }
+            self.finish_install_operation(&app, result);
+        }
+        Ok(())
+    }
+
+    fn auto_update_candidates(
+        &self,
+        installed: &[StoreInstalledApp],
+    ) -> Result<Vec<CatalogApp>, StoreServiceError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+        let catalog = state
+            .catalog
+            .as_ref()
+            .ok_or(StoreServiceError::Unconfigured)?;
+        if unix_time() >= catalog.catalog.expires_unix_seconds {
+            return Err(StoreServiceError::Untrusted(
+                "catalog expired during automatic update selection".into(),
+            ));
+        }
+        let installed = installed
+            .iter()
+            .map(|app| (app.app_id.as_str(), app))
+            .collect::<BTreeMap<_, _>>();
+        let mut candidates = Vec::new();
+        for app in &catalog.catalog.apps {
+            let Some(current) = installed.get(app.app_id.as_str()) else {
+                continue;
+            };
+            let current_version = Version::parse(&current.version)
+                .map_err(|_| StoreServiceError::Invalid("installed version is invalid".into()))?;
+            let catalog_version = Version::parse(&app.version)
+                .map_err(|_| StoreServiceError::Invalid("catalog version is invalid".into()))?;
+            if catalog_version <= current_version
+                || app
+                    .permissions
+                    .iter()
+                    .any(|permission| current.permissions.binary_search(permission).is_err())
+            {
+                continue;
+            }
+            candidates.push(app.clone());
+            if candidates.len() == MAX_INSTALL_BATCH_APPS {
+                break;
+            }
+        }
+        Ok(candidates)
+    }
+
+    fn validate_auto_update_preconditions(
+        &self,
+        apps: &[CatalogApp],
+    ) -> Result<(), StoreServiceError> {
+        if !self
+            .state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?
+            .auto_update
+            .enabled
+        {
+            return Err(StoreServiceError::InvalidState);
+        }
+        let conditions = self.auto_update_probe.conditions();
+        if !conditions.charging || !conditions.unmetered_network {
+            return Err(StoreServiceError::Unavailable(
+                "automatic update conditions are no longer satisfied",
+            ));
+        }
+        let policy =
+            DevicePolicy::load_secure(&self.paths.device_policy, self.paths.enforce_root_trust)
+                .map_err(|_| StoreServiceError::Unavailable("device policy is unavailable"))?;
+        if apps.iter().any(|app| {
+            !policy.store_install_allowed
+                || !policy.store_auto_update_allowed
+                || !policy.allows_app(&app.app_id)
+        }) {
+            return Err(StoreServiceError::PolicyRestricted);
+        }
+        self.validate_install_preconditions(apps).map(|_| ())
+    }
+
+    fn finish_auto_update_check(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.active_job = false;
+            state.auto_update_running = false;
+        }
     }
 
     fn details_response(&self, app_id: &str) -> Result<StoreResponseData, StoreServiceError> {
@@ -1225,6 +1728,7 @@ impl StoreService {
                         progress_percent: 0,
                         failure_reason: None,
                         control: DownloadControl::Continue,
+                        automatic: false,
                     },
                 );
             }
@@ -1236,12 +1740,12 @@ impl StoreService {
                 version: app.version.clone(),
             })
             .collect();
-        self.spawn_install_worker(apps)?;
+        self.spawn_install_worker(apps, false)?;
         Ok(accepted)
     }
 
     fn resume_install(self: &Arc<Self>, app_id: &str) -> Result<String, StoreServiceError> {
-        let app = {
+        let (app, automatic) = {
             let mut state = self
                 .state
                 .lock()
@@ -1275,10 +1779,17 @@ impl StoreService {
             {
                 return Err(StoreServiceError::InvalidState);
             }
+            let automatic = operation.automatic;
             state.active_job = true;
-            app
+            (app, automatic)
         };
-        if let Err(error) = self.validate_install_preconditions(std::slice::from_ref(&app)) {
+        let preconditions = if automatic {
+            self.validate_auto_update_preconditions(std::slice::from_ref(&app))
+        } else {
+            self.validate_install_preconditions(std::slice::from_ref(&app))
+                .map(|_| ())
+        };
+        if let Err(error) = preconditions {
             self.release_job();
             return Err(error);
         }
@@ -1296,17 +1807,19 @@ impl StoreService {
                     progress_percent: 0,
                     failure_reason: None,
                     control: DownloadControl::Continue,
+                    automatic,
                 },
             );
         }
         let version = app.version.clone();
-        self.spawn_install_worker(vec![app])?;
+        self.spawn_install_worker(vec![app], automatic)?;
         Ok(version)
     }
 
     fn spawn_install_worker(
         self: &Arc<Self>,
         apps: Vec<CatalogApp>,
+        automatic: bool,
     ) -> Result<(), StoreServiceError> {
         let identities = apps
             .iter()
@@ -1323,7 +1836,7 @@ impl StoreService {
             .name("cp0-store-install".into())
             .spawn(move || {
                 for app in apps {
-                    let result = service.install_now(&app);
+                    let result = service.install_now(&app, automatic);
                     if let Err(failure) = &result {
                         eprintln!(
                             "cp0-stored: {} installation failed: {}",
@@ -1693,7 +2206,11 @@ impl StoreService {
         }
     }
 
-    fn install_now(&self, app: &CatalogApp) -> Result<InstallOutcome, InstallFailure> {
+    fn install_now(
+        &self,
+        app: &CatalogApp,
+        automatic: bool,
+    ) -> Result<InstallOutcome, InstallFailure> {
         let packages = self.paths.cache_root.join("packages");
         let partial = packages.join(format!("{}.part", app.package_sha256));
         let download = self
@@ -1745,7 +2262,11 @@ impl StoreService {
                 reason: StoreFailureReason::Storage,
                 source,
             })?;
-        let install_result = self.installer.install(app, &staged);
+        let install_result = if automatic {
+            self.installer.install_automatic(app, &staged)
+        } else {
+            self.installer.install(app, &staged)
+        };
         if let Err(error) = fs::remove_file(&staged) {
             eprintln!("cp0-stored: failed to remove appd staging file after handoff: {error}");
         }
@@ -2665,6 +3186,354 @@ fn unix_time() -> u64 {
         .as_secs()
 }
 
+fn auto_update_due(state: &AutoUpdatePersistentState, now: u64) -> bool {
+    state.enabled
+        && (state.last_check_unix_seconds == 0
+            || now < state.last_check_unix_seconds
+            || now.saturating_sub(state.last_check_unix_seconds) >= AUTO_UPDATE_INTERVAL_SECONDS)
+}
+
+fn load_auto_update_state(path: &Path) -> Result<AutoUpdatePersistentState, StoreServiceError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(AutoUpdatePersistentState::default());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    // SAFETY: geteuid has no pointer arguments or caller-side preconditions.
+    let effective_uid = unsafe { libc::geteuid() };
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != effective_uid
+        || metadata.mode() & 0o077 != 0
+        || metadata.len() == 0
+        || metadata.len() > MAX_AUTO_UPDATE_STATE_BYTES
+    {
+        return Err(StoreServiceError::Untrusted(
+            "automatic update state metadata is invalid".into(),
+        ));
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    let opened = file.metadata()?;
+    if opened.dev() != metadata.dev()
+        || opened.ino() != metadata.ino()
+        || opened.len() != metadata.len()
+    {
+        return Err(StoreServiceError::Untrusted(
+            "automatic update state changed while opening".into(),
+        ));
+    }
+    let mut encoded = Vec::with_capacity(opened.len() as usize);
+    file.read_to_end(&mut encoded)?;
+    let state: AutoUpdatePersistentState = serde_json::from_slice(&encoded)
+        .map_err(|error| StoreServiceError::Invalid(error.to_string()))?;
+    if state.schema_version != AUTO_UPDATE_STATE_SCHEMA_VERSION {
+        return Err(StoreServiceError::Invalid(
+            "automatic update state schema is unsupported".into(),
+        ));
+    }
+    Ok(state)
+}
+
+fn save_auto_update_state(
+    path: &Path,
+    state: &AutoUpdatePersistentState,
+) -> Result<(), StoreServiceError> {
+    if state.schema_version != AUTO_UPDATE_STATE_SCHEMA_VERSION {
+        return Err(StoreServiceError::Invalid(
+            "automatic update state schema is unsupported".into(),
+        ));
+    }
+    let mut encoded =
+        serde_json::to_vec(state).map_err(|error| StoreServiceError::Invalid(error.to_string()))?;
+    encoded.push(b'\n');
+    if encoded.len() as u64 > MAX_AUTO_UPDATE_STATE_BYTES {
+        return Err(StoreServiceError::Invalid(
+            "automatic update state exceeds its bound".into(),
+        ));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| StoreServiceError::Invalid("automatic update state has no parent".into()))?;
+    let parent_metadata = fs::symlink_metadata(parent)?;
+    // SAFETY: geteuid has no pointer arguments or caller-side preconditions.
+    let effective_uid = unsafe { libc::geteuid() };
+    if !parent_metadata.is_dir()
+        || parent_metadata.file_type().is_symlink()
+        || parent_metadata.uid() != effective_uid
+        || parent_metadata.mode() & 0o077 != 0
+    {
+        return Err(StoreServiceError::Untrusted(
+            "automatic update state directory is not private".into(),
+        ));
+    }
+    let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(
+        ".auto-update-{}-{sequence}.tmp",
+        std::process::id()
+    ));
+    let result = (|| -> io::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)?;
+        file.write_all(&encoded)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result.map_err(StoreServiceError::Io)
+}
+
+fn external_power_online(power_supply_root: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(power_supply_root) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let supply_type = fs::read_to_string(path.join("type"))
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        if supply_type == "Battery" {
+            let status = fs::read_to_string(path.join("status")).unwrap_or_default();
+            if matches!(status.trim(), "Charging" | "Full" | "Not charging") {
+                return true;
+            }
+        } else if fs::read_to_string(path.join("online")).is_ok_and(|online| online.trim() == "1") {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn wired_interface_for_index(sys_class_net: &Path, interface_index: u32) -> bool {
+    let Ok(entries) = fs::read_dir(sys_class_net) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let index = fs::read_to_string(path.join("ifindex"))
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok());
+        if index != Some(interface_index) {
+            continue;
+        }
+        let carrier =
+            fs::read_to_string(path.join("carrier")).is_ok_and(|value| value.trim() == "1");
+        let ethernet = fs::read_to_string(path.join("type")).is_ok_and(|value| value.trim() == "1");
+        return carrier && ethernet && !path.join("wireless").exists();
+    }
+    false
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wired_default_route_available() -> bool {
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn wired_default_route_available() -> bool {
+    #[repr(C)]
+    struct NetlinkHeader {
+        length: u32,
+        message_type: u16,
+        flags: u16,
+        sequence: u32,
+        port_id: u32,
+    }
+    #[repr(C)]
+    struct RouteMessage {
+        family: u8,
+        destination_length: u8,
+        source_length: u8,
+        tos: u8,
+        table: u8,
+        protocol: u8,
+        scope: u8,
+        route_type: u8,
+        flags: u32,
+    }
+    #[repr(C)]
+    struct RouteAttribute {
+        length: u16,
+        attribute_type: u16,
+    }
+    #[repr(C)]
+    struct RouteRequest {
+        header: NetlinkHeader,
+        route: RouteMessage,
+    }
+
+    const RTM_NEWROUTE: u16 = 24;
+    const RTM_GETROUTE: u16 = 26;
+    const NLMSG_DONE: u16 = 3;
+    const NLMSG_ERROR: u16 = 2;
+    const NLM_F_REQUEST: u16 = 1;
+    const NLM_F_DUMP: u16 = 0x300;
+    const RT_TABLE_MAIN: u32 = 254;
+    const RTN_UNICAST: u8 = 1;
+    const RTA_OIF: u16 = 4;
+    const RTA_TABLE: u16 = 15;
+
+    fn aligned(length: usize) -> usize {
+        (length + 3) & !3
+    }
+
+    // SAFETY: all pointers below refer to initialized fixed-size C-compatible
+    // structures or bounded receive buffers for the duration of each syscall.
+    unsafe {
+        let descriptor = libc::socket(
+            libc::AF_NETLINK,
+            libc::SOCK_RAW | libc::SOCK_CLOEXEC,
+            libc::NETLINK_ROUTE,
+        );
+        if descriptor < 0 {
+            return false;
+        }
+        let timeout = libc::timeval {
+            tv_sec: 1,
+            tv_usec: 0,
+        };
+        let _ = libc::setsockopt(
+            descriptor,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            (&timeout as *const libc::timeval).cast(),
+            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+        );
+        let request = RouteRequest {
+            header: NetlinkHeader {
+                length: std::mem::size_of::<RouteRequest>() as u32,
+                message_type: RTM_GETROUTE,
+                flags: NLM_F_REQUEST | NLM_F_DUMP,
+                sequence: 1,
+                port_id: 0,
+            },
+            route: RouteMessage {
+                family: libc::AF_UNSPEC as u8,
+                destination_length: 0,
+                source_length: 0,
+                tos: 0,
+                table: 0,
+                protocol: 0,
+                scope: 0,
+                route_type: 0,
+                flags: 0,
+            },
+        };
+        let mut kernel: libc::sockaddr_nl = std::mem::zeroed();
+        kernel.nl_family = libc::AF_NETLINK as u16;
+        let sent = libc::sendto(
+            descriptor,
+            (&request as *const RouteRequest).cast(),
+            std::mem::size_of::<RouteRequest>(),
+            0,
+            (&kernel as *const libc::sockaddr_nl).cast(),
+            std::mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t,
+        );
+        if sent != std::mem::size_of::<RouteRequest>() as isize {
+            libc::close(descriptor);
+            return false;
+        }
+        let mut buffer = [0_u8; 32 * 1024];
+        loop {
+            let received = libc::recv(descriptor, buffer.as_mut_ptr().cast(), buffer.len(), 0);
+            if received <= 0 {
+                libc::close(descriptor);
+                return false;
+            }
+            let mut offset = 0_usize;
+            while offset + std::mem::size_of::<NetlinkHeader>() <= received as usize {
+                let header =
+                    std::ptr::read_unaligned(buffer.as_ptr().add(offset).cast::<NetlinkHeader>());
+                let length = header.length as usize;
+                if length < std::mem::size_of::<NetlinkHeader>()
+                    || offset + length > received as usize
+                {
+                    libc::close(descriptor);
+                    return false;
+                }
+                if header.message_type == NLMSG_DONE {
+                    libc::close(descriptor);
+                    return false;
+                }
+                if header.message_type == NLMSG_ERROR {
+                    libc::close(descriptor);
+                    return false;
+                }
+                if header.message_type == RTM_NEWROUTE
+                    && length
+                        >= std::mem::size_of::<NetlinkHeader>()
+                            + std::mem::size_of::<RouteMessage>()
+                {
+                    let route_offset = offset + std::mem::size_of::<NetlinkHeader>();
+                    let route = std::ptr::read_unaligned(
+                        buffer.as_ptr().add(route_offset).cast::<RouteMessage>(),
+                    );
+                    let mut table = u32::from(route.table);
+                    let mut interface_index = None;
+                    let mut attribute_offset =
+                        route_offset + aligned(std::mem::size_of::<RouteMessage>());
+                    while attribute_offset + std::mem::size_of::<RouteAttribute>()
+                        <= offset + length
+                    {
+                        let attribute = std::ptr::read_unaligned(
+                            buffer
+                                .as_ptr()
+                                .add(attribute_offset)
+                                .cast::<RouteAttribute>(),
+                        );
+                        let attribute_length = usize::from(attribute.length);
+                        if attribute_length < std::mem::size_of::<RouteAttribute>()
+                            || attribute_offset + attribute_length > offset + length
+                        {
+                            break;
+                        }
+                        let value_offset = attribute_offset + std::mem::size_of::<RouteAttribute>();
+                        let value_length = attribute_length - std::mem::size_of::<RouteAttribute>();
+                        if attribute.attribute_type == RTA_OIF
+                            && value_length >= std::mem::size_of::<u32>()
+                        {
+                            interface_index = Some(std::ptr::read_unaligned(
+                                buffer.as_ptr().add(value_offset).cast::<u32>(),
+                            ));
+                        } else if attribute.attribute_type == RTA_TABLE
+                            && value_length >= std::mem::size_of::<u32>()
+                        {
+                            table = std::ptr::read_unaligned(
+                                buffer.as_ptr().add(value_offset).cast::<u32>(),
+                            );
+                        }
+                        attribute_offset += aligned(attribute_length);
+                    }
+                    if route.destination_length == 0
+                        && route.route_type == RTN_UNICAST
+                        && table == RT_TABLE_MAIN
+                        && interface_index.is_some_and(|index| {
+                            wired_interface_for_index(Path::new("/sys/class/net"), index)
+                        })
+                    {
+                        libc::close(descriptor);
+                        return true;
+                    }
+                }
+                offset += aligned(length);
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
     let mut credentials = libc::ucred {
@@ -3059,6 +3928,83 @@ mod tests {
         installed: Mutex<Vec<String>>,
     }
 
+    #[derive(Debug)]
+    struct AutoInstaller {
+        snapshot: Mutex<Vec<StoreInstalledApp>>,
+        automatic_installs: Mutex<Vec<String>>,
+    }
+
+    impl AutoInstaller {
+        fn new(snapshot: Vec<StoreInstalledApp>) -> Self {
+            Self {
+                snapshot: Mutex::new(snapshot),
+                automatic_installs: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl AppInstaller for AutoInstaller {
+        fn install(&self, _app: &CatalogApp, _staged_path: &Path) -> Result<(), StoreServiceError> {
+            panic!("automatic update test used the manual appd installation path")
+        }
+
+        fn install_automatic(
+            &self,
+            app: &CatalogApp,
+            staged_path: &Path,
+        ) -> Result<(), StoreServiceError> {
+            assert!(staged_path.is_file());
+            self.automatic_installs
+                .lock()
+                .unwrap()
+                .push(app.app_id.clone());
+            if let Some(installed) = self
+                .snapshot
+                .lock()
+                .unwrap()
+                .iter_mut()
+                .find(|installed| installed.app_id == app.app_id)
+            {
+                installed.version = app.version.clone();
+                installed.permissions = app.permissions.clone();
+            }
+            Ok(())
+        }
+
+        fn installed_apps(&self) -> Result<Vec<StoreInstalledApp>, StoreServiceError> {
+            Ok(self.snapshot.lock().unwrap().clone())
+        }
+    }
+
+    #[derive(Debug)]
+    struct MockAutoUpdateProbe {
+        conditions: Mutex<AutoUpdateConditions>,
+    }
+
+    impl MockAutoUpdateProbe {
+        fn new(charging: bool, unmetered_network: bool) -> Self {
+            Self {
+                conditions: Mutex::new(AutoUpdateConditions {
+                    charging,
+                    unmetered_network,
+                }),
+            }
+        }
+
+        fn set(&self, charging: bool, unmetered_network: bool) {
+            *self.conditions.lock().unwrap() = AutoUpdateConditions {
+                charging,
+                unmetered_network,
+            };
+        }
+    }
+
+    impl AutoUpdateProbe for MockAutoUpdateProbe {
+        fn conditions(&self) -> AutoUpdateConditions {
+            *self.conditions.lock().unwrap()
+        }
+    }
+
     impl AppInstaller for MockInstaller {
         fn install(&self, app: &CatalogApp, staged_path: &Path) -> Result<(), StoreServiceError> {
             assert!(staged_path.is_file());
@@ -3141,10 +4087,11 @@ mod tests {
                     progress_percent: 0,
                     failure_reason: None,
                     control: DownloadControl::Continue,
+                    automatic: false,
                 },
             );
         }
-        let result = service.install_now(app);
+        let result = service.install_now(app, false);
         assert!(matches!(&result, Ok(InstallOutcome::Installed)));
         service.finish_install_operation(app, result);
         service.release_job();
@@ -3152,7 +4099,7 @@ mod tests {
 
     fn wait_for_store_state(service: &StoreService, expected: StoreAppState) -> StoreAppSummary {
         for _ in 0..2_000 {
-            if let StoreResponseData::Catalog { apps, .. } = service.catalog_response().unwrap() {
+            if let Ok(StoreResponseData::Catalog { apps, .. }) = service.catalog_response() {
                 if apps[0].state == expected {
                     return apps[0].clone();
                 }
@@ -3168,7 +4115,7 @@ mod tests {
         expected: StoreAppState,
     ) -> StoreAppSummary {
         for _ in 0..2_000 {
-            if let StoreResponseData::Catalog { apps, .. } = service.catalog_response().unwrap() {
+            if let Ok(StoreResponseData::Catalog { apps, .. }) = service.catalog_response() {
                 if let Some(app) = apps
                     .into_iter()
                     .find(|app| app.app_id == app_id && app.state == expected)
@@ -3210,12 +4157,13 @@ mod tests {
             fs::write(trust_root.join(format!("{key_id}.pub")), public).unwrap();
             fs::write(
                 &device_policy,
-                br#"{"schema_version":1,"authority":"personal","developer_mode_allowed":true,"recovery_mode_allowed":true,"store_install_allowed":true,"app_launch_policy":"allow-all","allowed_apps":[],"denied_permissions":[]}"#,
+                br#"{"schema_version":1,"authority":"personal","developer_mode_allowed":true,"recovery_mode_allowed":true,"store_install_allowed":true,"store_auto_update_allowed":true,"app_launch_policy":"allow-all","allowed_apps":[],"denied_permissions":[]}"#,
             )
             .unwrap();
             Self {
                 paths: StorePaths {
                     catalog_cache: cache_root.join("catalog.json"),
+                    auto_update_state: cache_root.join("auto-update.json"),
                     cache_root,
                     trust_root,
                     appd_inbox: inbox,
@@ -4346,6 +5294,7 @@ mod tests {
                 progress_percent: 20,
                 failure_reason: None,
                 control: DownloadControl::Continue,
+                automatic: false,
             },
         );
 
@@ -4630,6 +5579,246 @@ mod tests {
             service.start_install("dev.cardputerzero.storetest"),
             Err(StoreServiceError::Untrusted(_))
         ));
+    }
+
+    #[test]
+    fn persists_default_off_auto_update_preference_and_reports_closed_gates() {
+        let fixture = Fixture::new("auto-update-preference");
+        let probe = Arc::new(MockAutoUpdateProbe::new(false, false));
+        let service = StoreService::new_with_probes(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: Some("https://store.example.com/catalog.json".into()),
+            },
+            Arc::new(MockNetwork {
+                catalog: fixture.signed_catalog(1),
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+            Arc::new(MockSpaceProbe(u64::MAX)),
+            probe.clone(),
+        )
+        .unwrap();
+        let status = service.auto_update_status().unwrap();
+        assert!(!status.enabled && status.policy_allowed && status.due == false);
+        assert!(!status.charging && !status.unmetered_network && !status.checking);
+
+        let status = service.set_auto_update(true).unwrap();
+        assert!(status.enabled && status.due);
+        let metadata = fs::symlink_metadata(&fixture.paths.auto_update_state).unwrap();
+        assert!(metadata.is_file() && metadata.mode() & 0o777 == 0o600);
+        drop(service);
+
+        let restarted = StoreService::new_with_probes(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(FailingNetwork),
+            Arc::new(MockInstaller::default()),
+            [0],
+            Arc::new(MockSpaceProbe(u64::MAX)),
+            probe.clone(),
+        )
+        .unwrap();
+        assert!(restarted.auto_update_status().unwrap().enabled);
+        probe.set(true, false);
+        let status = restarted.auto_update_status().unwrap();
+        assert!(status.charging && !status.unmetered_network);
+        assert!(matches!(
+            restarted.start_auto_update_check(),
+            Err(StoreServiceError::Unavailable(_))
+        ));
+        restarted.set_auto_update(false).unwrap();
+        drop(restarted);
+
+        let disabled = load_auto_update_state(&fixture.paths.auto_update_state).unwrap();
+        assert!(!disabled.enabled && disabled.last_check_unix_seconds == 0);
+        fs::write(
+            &fixture.paths.device_policy,
+            br#"{"schema_version":1,"authority":"personal","developer_mode_allowed":true,"recovery_mode_allowed":true,"store_install_allowed":true,"store_auto_update_allowed":false,"app_launch_policy":"allow-all","allowed_apps":[],"denied_permissions":[]}"#,
+        )
+        .unwrap();
+        let locked = StoreService::new_with_probes(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(FailingNetwork),
+            Arc::new(MockInstaller::default()),
+            [0],
+            Arc::new(MockSpaceProbe(u64::MAX)),
+            probe,
+        )
+        .unwrap();
+        assert!(matches!(
+            locked.set_auto_update(true),
+            Err(StoreServiceError::PolicyRestricted)
+        ));
+        drop(locked);
+        fs::set_permissions(
+            &fixture.paths.auto_update_state,
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        assert!(matches!(
+            load_auto_update_state(&fixture.paths.auto_update_state),
+            Err(StoreServiceError::Untrusted(_))
+        ));
+    }
+
+    #[test]
+    fn auto_update_selects_only_strict_permission_preserving_upgrades() {
+        let fixture = Fixture::new("auto-update-selection");
+        let mut alpha = fixture.catalog_app(
+            "dev.cardputerzero.alpha",
+            "Alpha",
+            "Permission preserving update",
+        );
+        alpha.version = "2.0.0".into();
+        alpha.permissions = vec![cp0_manifest::Permission::NetworkClient];
+        let mut beta = fixture.catalog_app(
+            "dev.cardputerzero.beta",
+            "Beta",
+            "Update requesting a new permission",
+        );
+        beta.version = "2.0.0".into();
+        beta.permissions = vec![
+            cp0_manifest::Permission::CameraCapture,
+            cp0_manifest::Permission::NetworkClient,
+        ];
+        let mut gamma = fixture.catalog_app(
+            "dev.cardputerzero.gamma",
+            "Gamma",
+            "Already current application",
+        );
+        gamma.permissions = vec![cp0_manifest::Permission::NetworkClient];
+        let mut new_app = fixture.catalog_app(
+            "dev.cardputerzero.newapp",
+            "New App",
+            "Not installed on this device",
+        );
+        new_app.version = "2.0.0".into();
+        let catalog = fixture.signed_catalog_with_apps(
+            9,
+            unix_time() + 3600,
+            vec![alpha.clone(), beta, gamma, new_app],
+        );
+        let installer = Arc::new(AutoInstaller::new(vec![
+            StoreInstalledApp {
+                app_id: alpha.app_id.clone(),
+                version: "1.0.0".into(),
+                permissions: alpha.permissions.clone(),
+            },
+            StoreInstalledApp {
+                app_id: "dev.cardputerzero.beta".into(),
+                version: "1.0.0".into(),
+                permissions: vec![cp0_manifest::Permission::CameraCapture],
+            },
+            StoreInstalledApp {
+                app_id: "dev.cardputerzero.gamma".into(),
+                version: "1.0.0".into(),
+                permissions: vec![cp0_manifest::Permission::NetworkClient],
+            },
+        ]));
+        let service = StoreService::new_with_probes(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: Some("https://store.example.com/catalog.json".into()),
+            },
+            Arc::new(MockNetwork {
+                catalog,
+                package: fixture.package.clone(),
+            }),
+            installer.clone(),
+            [0],
+            Arc::new(MockSpaceProbe(u64::MAX)),
+            Arc::new(MockAutoUpdateProbe::new(true, true)),
+        )
+        .unwrap();
+
+        service.set_auto_update(true).unwrap();
+        wait_for_app_state(&service, &alpha.app_id, StoreAppState::Installed);
+        assert_eq!(
+            installer.automatic_installs.lock().unwrap().as_slice(),
+            [alpha.app_id.as_str()]
+        );
+        let state = service.state.lock().unwrap();
+        assert!(state.auto_update.last_check_unix_seconds > 0);
+        assert!(!state.auto_update_running && !auto_update_due(&state.auto_update, unix_time()));
+        assert!(!state.operations.contains_key("dev.cardputerzero.beta"));
+        assert!(!state.operations.contains_key("dev.cardputerzero.gamma"));
+        assert!(!state.operations.contains_key("dev.cardputerzero.newapp"));
+        drop(state);
+        assert!(matches!(
+            service.start_auto_update_check(),
+            Err(StoreServiceError::InvalidState)
+        ));
+    }
+
+    #[test]
+    fn auto_update_candidate_batch_is_bounded_to_eight() {
+        let fixture = Fixture::new("auto-update-bound");
+        let mut catalog_apps = Vec::new();
+        let mut installed_apps = Vec::new();
+        for index in 0..10 {
+            let app_id = format!("dev.cardputerzero.app{index:02}");
+            let mut app = fixture.catalog_app(
+                &app_id,
+                &format!("App {index:02}"),
+                "Bounded automatic update candidate",
+            );
+            app.version = "2.0.0".into();
+            installed_apps.push(StoreInstalledApp {
+                app_id,
+                version: "1.0.0".into(),
+                permissions: Vec::new(),
+            });
+            catalog_apps.push(app);
+        }
+        let catalog = fixture.signed_catalog_with_apps(10, unix_time() + 3600, catalog_apps);
+        let service = StoreService::new_with_probes(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: Some("https://store.example.com/catalog.json".into()),
+            },
+            Arc::new(MockNetwork {
+                catalog,
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+            Arc::new(MockSpaceProbe(u64::MAX)),
+            Arc::new(MockAutoUpdateProbe::new(true, true)),
+        )
+        .unwrap();
+        service.refresh_now().unwrap();
+        let candidates = service.auto_update_candidates(&installed_apps).unwrap();
+        assert_eq!(candidates.len(), MAX_INSTALL_BATCH_APPS);
+        assert_eq!(candidates[0].app_id, "dev.cardputerzero.app00");
+        assert_eq!(candidates[7].app_id, "dev.cardputerzero.app07");
+    }
+
+    #[test]
+    fn power_and_wired_interface_probes_fail_closed() {
+        let fixture = Fixture::new("auto-update-probes");
+        let power = fixture.root.join("power");
+        let battery = power.join("battery");
+        fs::create_dir_all(&battery).unwrap();
+        fs::write(battery.join("type"), "Battery\n").unwrap();
+        fs::write(battery.join("status"), "Discharging\n").unwrap();
+        assert!(!external_power_online(&power));
+        fs::write(battery.join("status"), "Charging\n").unwrap();
+        assert!(external_power_online(&power));
+
+        let interfaces = fixture.root.join("net");
+        let ethernet = interfaces.join("eth0");
+        fs::create_dir_all(ethernet.join("wireless")).unwrap();
+        fs::write(ethernet.join("ifindex"), "2\n").unwrap();
+        fs::write(ethernet.join("carrier"), "1\n").unwrap();
+        fs::write(ethernet.join("type"), "1\n").unwrap();
+        assert!(!wired_interface_for_index(&interfaces, 2));
+        fs::remove_dir(ethernet.join("wireless")).unwrap();
+        assert!(wired_interface_for_index(&interfaces, 2));
+        fs::write(ethernet.join("carrier"), "0\n").unwrap();
+        assert!(!wired_interface_for_index(&interfaces, 2));
     }
 
     #[test]

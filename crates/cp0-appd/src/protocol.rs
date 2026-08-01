@@ -31,6 +31,10 @@ pub enum AppdCommand {
         offset: u16,
         limit: u8,
     },
+    StoreListInstalled {
+        offset: u16,
+        limit: u8,
+    },
     Start {
         app_id: String,
     },
@@ -49,6 +53,7 @@ pub enum AppdCommand {
         version: String,
         package_sha256: String,
         package_bytes: u64,
+        automatic: bool,
     },
     Rollback {
         app_id: String,
@@ -100,6 +105,10 @@ pub enum ResponseData {
     Pong,
     Applications {
         apps: Vec<AppSummary>,
+        next_offset: Option<u16>,
+    },
+    StoreApplications {
+        apps: Vec<StoreInstalledApp>,
         next_offset: Option<u16>,
     },
     Started {
@@ -171,6 +180,14 @@ pub struct AppSummary {
     pub installed_at_unix_seconds: u64,
     pub package_bytes: u64,
     pub data_bytes: u64,
+    pub permissions: Vec<cp0_manifest::Permission>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoreInstalledApp {
+    pub app_id: String,
+    pub version: String,
     pub permissions: Vec<cp0_manifest::Permission>,
 }
 
@@ -266,7 +283,9 @@ impl AppdRequest {
             return Err(ProtocolError::UnsupportedVersion(self.protocol_version));
         }
         match &self.command {
-            AppdCommand::List { limit, .. } if !(1..=MAX_APP_LIST_PAGE).contains(limit) => {
+            AppdCommand::List { limit, .. } | AppdCommand::StoreListInstalled { limit, .. }
+                if !(1..=MAX_APP_LIST_PAGE).contains(limit) =>
+            {
                 Err(ProtocolError::InvalidPagination)
             }
             AppdCommand::Start { app_id }
@@ -304,6 +323,7 @@ impl AppdRequest {
                 version,
                 package_sha256,
                 package_bytes,
+                ..
             } if !is_valid_package_name(package_name)
                 || !cp0_manifest::is_valid_app_id(app_id)
                 || !cp0_manifest::is_valid_app_version(version)
@@ -697,6 +717,18 @@ mod tests {
             oversized_page.validate(),
             Err(ProtocolError::InvalidPagination)
         ));
+        let invalid_store_page = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 4,
+            command: AppdCommand::StoreListInstalled {
+                offset: 0,
+                limit: 0,
+            },
+        };
+        assert!(matches!(
+            invalid_store_page.validate(),
+            Err(ProtocolError::InvalidPagination)
+        ));
 
         for package_name in ["../escape.capp", ".hidden.capp", "nested/app.capp", "x"] {
             let request = AppdRequest {
@@ -721,6 +753,7 @@ mod tests {
                 version: "1.0.0".into(),
                 package_sha256: "11".repeat(32),
                 package_bytes: 4096,
+                automatic: false,
             },
         };
         assert!(store_install.validate().is_ok());

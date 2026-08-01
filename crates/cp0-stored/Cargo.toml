@@ -13,4 +13,7 @@ cp0-store-metadata = { path = "../cp0-store-metadata" }
 cp0-store-protocol = { path = "../cp0-store-protocol" }
 libc.workspace = true
 sha2.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 ureq = { version = "=3.3.0", default-features = false, features = ["rustls"] }
