@@ -499,7 +499,7 @@ fn validate_public_jwks(jwks: &Value, accepted_algorithms: &[String]) -> Result<
     Ok(())
 }
 
-fn normalize_verified_email(value: &str) -> Result<String, OidcError> {
+pub(crate) fn normalize_verified_email(value: &str) -> Result<String, OidcError> {
     let normalized = value.trim().to_ascii_lowercase();
     let mut parts = normalized.split('@');
     if !value.is_ascii()

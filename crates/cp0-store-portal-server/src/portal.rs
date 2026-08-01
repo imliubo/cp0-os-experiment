@@ -20,6 +20,8 @@ use uuid::Uuid;
 
 use crate::{AuthIntent, OidcError, OidcProvider, PortalSecrets, sha256_hex};
 
+mod invitation;
+
 const SESSION_COOKIE: &str = "__Host-cp0_portal";
 const SESSION_IDLE_SECONDS: i64 = 1800;
 const SESSION_ABSOLUTE_SECONDS: i64 = 28800;
@@ -53,7 +55,7 @@ struct PortalServiceInner {
     post_login_uri: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct TeamSummary {
     team_id: String,
     name: String,
@@ -141,6 +143,7 @@ enum PortalError {
     Conflict,
     PreconditionRequired,
     PreconditionFailed,
+    RateLimited,
     Unavailable,
     Internal,
 }
@@ -700,6 +703,25 @@ pub fn router(service: PortalService) -> Router {
             "/portal/v1/session:step-up",
             post(begin_step_up).layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
         )
+        .route(
+            "/portal/v1/teams/{team_id}/invitations",
+            get(invitation::list_invitations).post(invitation::create_invitation),
+        )
+        .route(
+            "/portal/v1/invitations/{invitation_action}",
+            post(invitation::cancel_invitation)
+                .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/portal/v1/invitations:inspect",
+            post(invitation::inspect_invitation)
+                .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/portal/v1/invitations:accept",
+            post(invitation::accept_invitation)
+                .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
         .with_state(service)
 }
 
@@ -1193,6 +1215,11 @@ impl PortalError {
                 StatusCode::PRECONDITION_FAILED,
                 "precondition-failed",
                 "Precondition failed",
+            ),
+            Self::RateLimited => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate-limited",
+                "Request rate limited",
             ),
             Self::Unavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,

@@ -98,8 +98,10 @@ OIDC transaction, session, invitation and Membership-binding state machines
 are implemented with SQL bypass acceptance. The dedicated Portal BFF implements
 the external OIDC login, callback, digest-only session, CSRF, idle/absolute
 expiry, MFA step-up rotation, and logout slice with PostgreSQL end-to-end
-acceptance. Identity-link and invitation HTTP flows, provider MFA
-enrollment/recovery, reviewer SSO, and production abuse controls remain
-unimplemented. Re-inviting a removed external identity requires a future,
+acceptance. The invitation create/list/inspect/cancel/accept flow, encrypted
+email-worker handoff, exact replay, expiry, acceptance session rotation, and
+transaction rollback are also implemented. Identity-link HTTP, the production
+email adapter, provider MFA enrollment/recovery, reviewer SSO, and production
+abuse controls remain unimplemented. Re-inviting a removed external identity requires a future,
 separately versioned membership record design; this endpoint never reactivates
 a removed row.

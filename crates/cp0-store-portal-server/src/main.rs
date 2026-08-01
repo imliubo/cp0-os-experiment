@@ -33,6 +33,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &required_env("CP0_PORTAL_NONCE_KEY")?,
         &required_env("CP0_PORTAL_PKCE_KEY")?,
         &required_env("CP0_PORTAL_SUBJECT_KEY")?,
+        &required_env("CP0_PORTAL_INVITATION_KEY")?,
     )
     .map_err(|_| "Portal keys must be distinct 32-byte base64url values")?;
     let mut providers: Vec<Arc<dyn OidcProvider>> = Vec::with_capacity(config.providers.len());

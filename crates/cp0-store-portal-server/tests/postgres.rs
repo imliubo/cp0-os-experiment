@@ -1,5 +1,6 @@
 use std::env;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -8,8 +9,9 @@ use axum::http::{Method, Request, StatusCode};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cp0_store_portal_server::{
-    AuthIntent, OidcError, OidcFuture, OidcProvider, PortalSecrets, PortalService,
-    VerifiedIdentity, connect, migrate, pkce_challenge, router, sha256_hex,
+    AuthIntent, InvitationDelivery, InvitationDeliveryFailure, InvitationDeliveryFuture,
+    InvitationEmailWorker, InvitationMailer, OidcError, OidcFuture, OidcProvider, PortalSecrets,
+    PortalService, VerifiedIdentity, connect, migrate, pkce_challenge, router, sha256_hex,
 };
 use serde_json::Value;
 use sqlx::{Executor, Row};
@@ -65,10 +67,21 @@ impl OidcProvider for FakeProvider {
             if nonce.len() != 43 || pkce_verifier.len() != 43 || !code.starts_with("valid-") {
                 return Err(OidcError::InvalidToken);
             }
+            let invitee = code.contains("invitee");
             Ok(VerifiedIdentity {
                 issuer: ISSUER.to_owned(),
-                subject: "provider-subject-must-never-be-returned".to_owned(),
-                email: "developer@example.com".to_owned(),
+                subject: if invitee {
+                    "provider-invitee-subject-must-never-be-returned"
+                } else {
+                    "provider-subject-must-never-be-returned"
+                }
+                .to_owned(),
+                email: if invitee {
+                    "invitee@example.com"
+                } else {
+                    "developer@example.com"
+                }
+                .to_owned(),
                 email_verified: true,
                 mfa_authenticated_unix_seconds: (intent == AuthIntent::StepUp).then_some(now),
             })
@@ -88,8 +101,16 @@ async fn portal_oidc_session_acceptance() {
     let nonce_key = URL_SAFE_NO_PAD.encode([8_u8; 32]);
     let pkce_key = URL_SAFE_NO_PAD.encode([9_u8; 32]);
     let subject_key = URL_SAFE_NO_PAD.encode([10_u8; 32]);
-    let secrets =
-        PortalSecrets::from_base64(&csrf_key, &nonce_key, &pkce_key, &subject_key).unwrap();
+    let invitation_key = URL_SAFE_NO_PAD.encode([11_u8; 32]);
+    let secrets = PortalSecrets::from_base64(
+        &csrf_key,
+        &nonce_key,
+        &pkce_key,
+        &subject_key,
+        &invitation_key,
+    )
+    .unwrap();
+    let delivery_secrets = secrets.clone();
     let application = router(
         PortalService::new(
             pool.clone(),
@@ -294,6 +315,592 @@ async fn portal_oidc_session_acceptance() {
     assert_eq!(stepped_body["mfa_step_up_fresh"], true);
     let stepped_csrf = stepped_body["csrf_token"].as_str().unwrap();
 
+    let create_body = serde_json::to_vec(&serde_json::json!({
+        "email": "Invitee@Example.COM",
+        "role": "release-manager"
+    }))
+    .unwrap();
+    let team_etag = format!("\"{}\"", stepped_body["teams"][0]["resource_version"]);
+    let create_headers = [
+        (COOKIE.as_str(), second_cookie.as_str()),
+        ("x-csrf-token", stepped_csrf),
+        ("idempotency-key", "portal-invitation-create-0001"),
+        ("if-match", team_etag.as_str()),
+        ("origin", "https://developer.cardputerzero.dev"),
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/json"),
+    ];
+    let created = call_with_body(
+        &application,
+        Method::POST,
+        "/portal/v1/teams/team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/invitations",
+        &create_headers,
+        &create_body,
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    assert_eq!(header(&created, ETAG.as_str()), "\"2\"");
+    let created_body: Value = serde_json::from_slice(&created.body).unwrap();
+    assert!(created_body["invitation_id"].as_str().is_some());
+    assert_eq!(created_body["email"], "invitee@example.com");
+    assert!(!String::from_utf8_lossy(&created.body).contains("invitation_token"));
+    let create_replay = call_with_body(
+        &application,
+        Method::POST,
+        "/portal/v1/teams/team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/invitations",
+        &create_headers,
+        &create_body,
+    )
+    .await;
+    assert_eq!(create_replay.status, StatusCode::CREATED);
+    assert_eq!(create_replay.body, created.body);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM team_invitations")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+
+    let mailer = CapturingMailer::default();
+    let worker = InvitationEmailWorker::new(
+        pool.clone(),
+        delivery_secrets,
+        "https://developer.cardputerzero.dev",
+    )
+    .unwrap();
+    assert!(
+        worker
+            .run_once("portal-mailer-test", &mailer)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !worker
+            .run_once("portal-mailer-test", &mailer)
+            .await
+            .unwrap()
+    );
+    let acceptance_url = mailer.urls.lock().unwrap()[0].clone();
+    let invitation_token = Url::parse(&acceptance_url)
+        .unwrap()
+        .fragment()
+        .unwrap()
+        .strip_prefix("token=")
+        .unwrap()
+        .to_owned();
+    assert_eq!(invitation_token.len(), 43);
+    let inspect_body =
+        serde_json::to_vec(&serde_json::json!({"invitation_token": invitation_token})).unwrap();
+    let inspect = call_with_body(
+        &application,
+        Method::POST,
+        "/portal/v1/invitations:inspect",
+        &[("content-type", "application/json")],
+        &inspect_body,
+    )
+    .await;
+    assert_eq!(inspect.status, StatusCode::OK);
+    let preview: Value = serde_json::from_slice(&inspect.body).unwrap();
+    assert_eq!(preview["team_name"], "Portal Team");
+    assert_eq!(preview["masked_email"], "i***@example.com");
+    assert!(!String::from_utf8_lossy(&inspect.body).contains("invitee@example.com"));
+
+    let wrong_accept_headers = [
+        (COOKIE.as_str(), second_cookie.as_str()),
+        ("x-csrf-token", stepped_csrf),
+        ("idempotency-key", "portal-invitation-wrong-account-0001"),
+        ("origin", "https://developer.cardputerzero.dev"),
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/json"),
+    ];
+    assert_eq!(
+        call_with_body(
+            &application,
+            Method::POST,
+            "/portal/v1/invitations:accept",
+            &wrong_accept_headers,
+            &inspect_body,
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
+    );
+
+    let invitee_login = call(
+        &application,
+        Method::GET,
+        "/portal/auth/login?provider=primary",
+        &[],
+    )
+    .await;
+    let invitee_login_uri = Url::parse(header(&invitee_login, LOCATION.as_str())).unwrap();
+    let invitee_state = invitee_login_uri
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let invitee_callback = call(
+        &application,
+        Method::GET,
+        &format!("/portal/auth/callback?code=valid-invitee-login-code-0001&state={invitee_state}"),
+        &[],
+    )
+    .await;
+    assert_eq!(invitee_callback.status, StatusCode::SEE_OTHER);
+    let invitee_cookie = session_cookie(&invitee_callback);
+    let invitee_session = call(
+        &application,
+        Method::GET,
+        "/portal/v1/session",
+        &[(COOKIE.as_str(), &invitee_cookie)],
+    )
+    .await;
+    let invitee_session_body: Value = serde_json::from_slice(&invitee_session.body).unwrap();
+    let invitee_csrf = invitee_session_body["csrf_token"].as_str().unwrap();
+    let accept_headers = [
+        (COOKIE.as_str(), invitee_cookie.as_str()),
+        ("x-csrf-token", invitee_csrf),
+        ("idempotency-key", "portal-invitation-accept-0001"),
+        ("origin", "https://developer.cardputerzero.dev"),
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/json"),
+    ];
+    let accepted = call_with_body(
+        &application,
+        Method::POST,
+        "/portal/v1/invitations:accept",
+        &accept_headers,
+        &inspect_body,
+    )
+    .await;
+    assert_eq!(accepted.status, StatusCode::OK);
+    assert_eq!(header(&accepted, ETAG.as_str()), "\"3\"");
+    let rotated_invitee_cookie = session_cookie(&accepted);
+    assert_ne!(invitee_cookie, rotated_invitee_cookie);
+    assert_eq!(
+        call(
+            &application,
+            Method::GET,
+            "/portal/v1/session",
+            &[(COOKIE.as_str(), &invitee_cookie)],
+        )
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let rotated_invitee_session = call(
+        &application,
+        Method::GET,
+        "/portal/v1/session",
+        &[(COOKIE.as_str(), &rotated_invitee_cookie)],
+    )
+    .await;
+    let rotated_invitee_body: Value =
+        serde_json::from_slice(&rotated_invitee_session.body).unwrap();
+    assert_eq!(rotated_invitee_body["teams"][0]["role"], "release-manager");
+    let rotated_invitee_csrf = rotated_invitee_body["csrf_token"].as_str().unwrap();
+    let replay_headers = [
+        (COOKIE.as_str(), rotated_invitee_cookie.as_str()),
+        ("x-csrf-token", rotated_invitee_csrf),
+        ("idempotency-key", "portal-invitation-accept-0001"),
+        ("origin", "https://developer.cardputerzero.dev"),
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/json"),
+    ];
+    let accept_replay = call_with_body(
+        &application,
+        Method::POST,
+        "/portal/v1/invitations:accept",
+        &replay_headers,
+        &inspect_body,
+    )
+    .await;
+    assert_eq!(accept_replay.status, StatusCode::OK);
+    assert_eq!(accept_replay.body, accepted.body);
+
+    let cancel_create_body = serde_json::to_vec(&serde_json::json!({
+        "email": "cancel@example.com",
+        "role": "viewer"
+    }))
+    .unwrap();
+    let cancel_create_headers = [
+        (COOKIE.as_str(), second_cookie.as_str()),
+        ("x-csrf-token", stepped_csrf),
+        ("idempotency-key", "portal-invitation-create-0002"),
+        ("if-match", "\"3\""),
+        ("origin", "https://developer.cardputerzero.dev"),
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/json"),
+    ];
+    let cancel_created = call_with_body(
+        &application,
+        Method::POST,
+        "/portal/v1/teams/team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/invitations",
+        &cancel_create_headers,
+        &cancel_create_body,
+    )
+    .await;
+    assert_eq!(cancel_created.status, StatusCode::CREATED);
+    let cancel_created_body: Value = serde_json::from_slice(&cancel_created.body).unwrap();
+    let cancel_invitation_id = cancel_created_body["invitation_id"].as_str().unwrap();
+    let cancel_headers = [
+        (COOKIE.as_str(), second_cookie.as_str()),
+        ("x-csrf-token", stepped_csrf),
+        ("idempotency-key", "portal-invitation-cancel-0001"),
+        ("if-match", "\"4\""),
+        ("origin", "https://developer.cardputerzero.dev"),
+        ("sec-fetch-site", "same-origin"),
+        ("content-length", "0"),
+    ];
+    let cancelled = call(
+        &application,
+        Method::POST,
+        &format!("/portal/v1/invitations/{cancel_invitation_id}:cancel"),
+        &cancel_headers,
+    )
+    .await;
+    assert_eq!(cancelled.status, StatusCode::OK);
+    assert_eq!(header(&cancelled, ETAG.as_str()), "\"5\"");
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT state FROM portal_invitation_deliveries WHERE invitation_id = $1",
+        )
+        .bind(cancel_invitation_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "cancelled"
+    );
+    let cancelled_ciphertext: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT token_ciphertext FROM portal_invitation_deliveries WHERE invitation_id = $1",
+    )
+    .bind(cancel_invitation_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(cancelled_ciphertext.is_none());
+
+    let invitations = call(
+        &application,
+        Method::GET,
+        "/portal/v1/teams/team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/invitations",
+        &[(COOKIE.as_str(), second_cookie.as_str())],
+    )
+    .await;
+    assert_eq!(invitations.status, StatusCode::OK);
+    assert_eq!(header(&invitations, ETAG.as_str()), "\"5\"");
+    let invitations_body: Value = serde_json::from_slice(&invitations.body).unwrap();
+    assert_eq!(invitations_body["items"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM outbox_events WHERE payload::text LIKE $1",
+        )
+        .bind(format!("%{invitation_token}%"))
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM audit_events event \
+             WHERE to_jsonb(event)::text LIKE $1",
+        )
+        .bind(format!("%{invitation_token}%"))
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM idempotency_records record \
+             WHERE to_jsonb(record)::text LIKE $1",
+        )
+        .bind(format!("%{invitation_token}%"))
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM portal_invitation_deliveries \
+             WHERE token_ciphertext IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+
+    let database_now: i64 =
+        sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let mut expiry_transaction = pool.begin().await.unwrap();
+    sqlx::query(
+        "UPDATE teams SET resource_version = 6 \
+         WHERE team_id = 'team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+    )
+    .execute(&mut *expiry_transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO team_invitations (invitation_id, team_id, email, role, token_sha256, \
+         state, invited_by_member_id, team_resource_version, created_unix_seconds, \
+         expires_unix_seconds) VALUES \
+         ('invite_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', \
+          'team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'expired@example.com', 'viewer', $1, \
+          'pending', 'member_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 6, $2, $3)",
+    )
+    .bind("e".repeat(64))
+    .bind(database_now - 604800)
+    .bind(database_now)
+    .execute(&mut *expiry_transaction)
+    .await
+    .unwrap();
+    expiry_transaction.commit().await.unwrap();
+    assert!(
+        worker
+            .run_once("portal-mailer-test", &mailer)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT state FROM team_invitations \
+             WHERE invitation_id = 'invite_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "expired"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT resource_version FROM teams \
+             WHERE team_id = 'team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        7
+    );
+
+    let retry_create_body = serde_json::to_vec(&serde_json::json!({
+        "email": "retry@example.com",
+        "role": "developer"
+    }))
+    .unwrap();
+    let retry_create_headers = [
+        (COOKIE.as_str(), second_cookie.as_str()),
+        ("x-csrf-token", stepped_csrf),
+        ("idempotency-key", "portal-invitation-create-0003"),
+        ("if-match", "\"7\""),
+        ("origin", "https://developer.cardputerzero.dev"),
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/json"),
+    ];
+    let retry_created = call_with_body(
+        &application,
+        Method::POST,
+        "/portal/v1/teams/team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/invitations",
+        &retry_create_headers,
+        &retry_create_body,
+    )
+    .await;
+    assert_eq!(retry_created.status, StatusCode::CREATED);
+    let retry_created_body: Value = serde_json::from_slice(&retry_created.body).unwrap();
+    let retry_invitation_id = retry_created_body["invitation_id"].as_str().unwrap();
+    let transient_mailer = FailingMailer(InvitationDeliveryFailure::Transient("provider-timeout"));
+    assert!(
+        worker
+            .run_once("portal-mailer-test", &transient_mailer)
+            .await
+            .unwrap()
+    );
+    let retry_delivery = sqlx::query(
+        "SELECT state, token_ciphertext IS NOT NULL AS has_ciphertext, attempts, last_error_code \
+         FROM portal_invitation_deliveries WHERE invitation_id = $1",
+    )
+    .bind(retry_invitation_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(retry_delivery.get::<String, _>("state"), "pending");
+    assert!(retry_delivery.get::<bool, _>("has_ciphertext"));
+    assert_eq!(retry_delivery.get::<i16, _>("attempts"), 1);
+    assert_eq!(
+        retry_delivery.get::<String, _>("last_error_code"),
+        "provider-timeout"
+    );
+
+    let failed_create_body = serde_json::to_vec(&serde_json::json!({
+        "email": "failed@example.com",
+        "role": "viewer"
+    }))
+    .unwrap();
+    let failed_create_headers = [
+        (COOKIE.as_str(), second_cookie.as_str()),
+        ("x-csrf-token", stepped_csrf),
+        ("idempotency-key", "portal-invitation-create-0004"),
+        ("if-match", "\"8\""),
+        ("origin", "https://developer.cardputerzero.dev"),
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/json"),
+    ];
+    let failed_created = call_with_body(
+        &application,
+        Method::POST,
+        "/portal/v1/teams/team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/invitations",
+        &failed_create_headers,
+        &failed_create_body,
+    )
+    .await;
+    assert_eq!(failed_created.status, StatusCode::CREATED);
+    let failed_created_body: Value = serde_json::from_slice(&failed_created.body).unwrap();
+    let failed_invitation_id = failed_created_body["invitation_id"].as_str().unwrap();
+    let permanent_mailer =
+        FailingMailer(InvitationDeliveryFailure::Permanent("recipient-rejected"));
+    assert!(
+        worker
+            .run_once("portal-mailer-test", &permanent_mailer)
+            .await
+            .unwrap()
+    );
+    let failed_delivery = sqlx::query(
+        "SELECT state, token_ciphertext IS NULL AS secret_cleared, last_error_code \
+         FROM portal_invitation_deliveries WHERE invitation_id = $1",
+    )
+    .bind(failed_invitation_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(failed_delivery.get::<String, _>("state"), "failed");
+    assert!(failed_delivery.get::<bool, _>("secret_cleared"));
+    assert_eq!(
+        failed_delivery.get::<String, _>("last_error_code"),
+        "recipient-rejected"
+    );
+
+    pool.execute(
+        "CREATE FUNCTION fail_portal_invitation_audit() RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN IF NEW.action = 'team.invitation-created' THEN \
+         RAISE EXCEPTION 'injected Portal invitation audit failure'; END IF; RETURN NEW; END; $$",
+    )
+    .await
+    .unwrap();
+    pool.execute(
+        "CREATE TRIGGER fail_portal_invitation_audit_trigger BEFORE INSERT ON audit_events \
+         FOR EACH ROW EXECUTE FUNCTION fail_portal_invitation_audit()",
+    )
+    .await
+    .unwrap();
+    let rollback_create_body = serde_json::to_vec(&serde_json::json!({
+        "email": "rollback@example.com",
+        "role": "viewer"
+    }))
+    .unwrap();
+    let rollback_create_headers = [
+        (COOKIE.as_str(), second_cookie.as_str()),
+        ("x-csrf-token", stepped_csrf),
+        ("idempotency-key", "portal-invitation-create-rollback-0001"),
+        ("if-match", "\"9\""),
+        ("origin", "https://developer.cardputerzero.dev"),
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/json"),
+    ];
+    let rollback_failure = call_with_body(
+        &application,
+        Method::POST,
+        "/portal/v1/teams/team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/invitations",
+        &rollback_create_headers,
+        &rollback_create_body,
+    )
+    .await;
+    assert_eq!(rollback_failure.status, StatusCode::SERVICE_UNAVAILABLE);
+    pool.execute("DROP TRIGGER fail_portal_invitation_audit_trigger ON audit_events")
+        .await
+        .unwrap();
+    pool.execute("DROP FUNCTION fail_portal_invitation_audit()")
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT resource_version FROM teams \
+             WHERE team_id = 'team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        9
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM team_invitations WHERE email = 'rollback@example.com'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM idempotency_records WHERE request_sha256 = $1",
+        )
+        .bind(sha256_hex(
+            &serde_json::to_vec(&serde_json::json!({
+                "email": "rollback@example.com",
+                "expected_version": 9,
+                "operation": "invitation-create",
+                "role": "viewer",
+                "team_id": "team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }))
+            .unwrap()
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE portal_invitation_deliveries SET state = 'leased', \
+             attempts = attempts + 1, lease_owner = 'early-takeover', \
+             lease_expires_unix_seconds = available_unix_seconds + 60, \
+             last_error_code = NULL, resource_version = resource_version + 1 \
+             WHERE invitation_id = $1",
+        )
+        .bind(retry_invitation_id)
+        .execute(&pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE portal_invitation_deliveries SET state = 'pending', \
+             token_ciphertext = decode(repeat('00', 64), 'hex'), \
+             available_unix_seconds = available_unix_seconds + 60, \
+             last_error_code = 'forged-retry', resource_version = resource_version + 1 \
+             WHERE invitation_id = $1",
+        )
+        .bind(failed_invitation_id)
+        .execute(&pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM portal_invitation_deliveries WHERE invitation_id = $1")
+            .bind(failed_invitation_id)
+            .execute(&pool)
+            .await,
+        "55000",
+    );
+
     let logout_headers = [
         (COOKIE.as_str(), second_cookie.as_str()),
         ("x-csrf-token", stepped_csrf),
@@ -355,13 +962,23 @@ async fn call(
     path: &str,
     headers: &[(&str, &str)],
 ) -> HttpResult {
+    call_with_body(application, method, path, headers, &[]).await
+}
+
+async fn call_with_body(
+    application: &Router,
+    method: Method,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) -> HttpResult {
     let mut request = Request::builder().method(method).uri(path);
     for (name, value) in headers {
         request = request.header(*name, *value);
     }
     let response = application
         .clone()
-        .oneshot(request.body(Body::empty()).unwrap())
+        .oneshot(request.body(Body::from(body.to_vec())).unwrap())
         .await
         .unwrap();
     let status = response.status();
@@ -423,10 +1040,50 @@ async fn seed_membership(pool: &sqlx::PgPool) {
 
 async fn reset(pool: &sqlx::PgPool) {
     pool.execute(
-        "TRUNCATE oidc_login_transactions, portal_sessions, team_invitations, \
-         external_identity_links, portal_accounts, access_tokens, team_members, teams \
+        "TRUNCATE portal_invitation_deliveries, oidc_login_transactions, portal_sessions, \
+         team_invitations, external_identity_links, portal_accounts, access_tokens, \
+         team_members, teams, idempotency_records, audit_events, outbox_events \
          RESTART IDENTITY CASCADE",
     )
     .await
     .unwrap();
+}
+
+#[derive(Default)]
+struct CapturingMailer {
+    urls: Mutex<Vec<String>>,
+}
+
+impl InvitationMailer for CapturingMailer {
+    fn deliver<'a>(&'a self, delivery: InvitationDelivery<'a>) -> InvitationDeliveryFuture<'a> {
+        Box::pin(async move {
+            assert_eq!(delivery.email, "invitee@example.com");
+            assert_eq!(delivery.team_name, "Portal Team");
+            assert_eq!(delivery.role, "release-manager");
+            self.urls
+                .lock()
+                .unwrap()
+                .push(delivery.acceptance_url.to_owned());
+            Ok(())
+        })
+    }
+}
+
+struct FailingMailer(InvitationDeliveryFailure);
+
+impl InvitationMailer for FailingMailer {
+    fn deliver<'a>(&'a self, _delivery: InvitationDelivery<'a>) -> InvitationDeliveryFuture<'a> {
+        Box::pin(async move { Err(self.0) })
+    }
+}
+
+fn assert_sqlstate<T: std::fmt::Debug>(result: Result<T, sqlx::Error>, expected: &str) {
+    let error = result.expect_err("statement must fail closed");
+    assert_eq!(
+        error
+            .as_database_error()
+            .and_then(|database| database.code())
+            .as_deref(),
+        Some(expected)
+    );
 }

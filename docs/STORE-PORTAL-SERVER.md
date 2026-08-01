@@ -7,9 +7,9 @@ tables. It is a separate process from `cp0-store-control-server`: browsers do
 not receive Store control tokens, upstream tokens, refresh tokens, OIDC
 subjects, or signing material.
 
-This slice implements login, callback, session read, MFA step-up, and logout.
-Identity-link and invitation routes remain disabled until their own
-transactional acceptance slices are complete.
+This slice implements login, callback, session read, MFA step-up, logout, and
+the Team invitation lifecycle. Identity-link routes remain disabled until their
+transactional acceptance slice is complete.
 
 ## HTTP boundary
 
@@ -22,17 +22,23 @@ The implemented routes are:
 | `GET /portal/v1/session` | returns bounded Account, Team, expiry, MFA freshness, CSRF, and session-version data |
 | `POST /portal/v1/session:step-up` | starts an idempotent same-provider MFA challenge |
 | `POST /portal/v1/session:logout` | terminally revokes the current session and expires the cookie |
+| `GET/POST /portal/v1/teams/{team_id}/invitations` | lists the latest 100 invitations or creates one Owner/MFA-authorized invitation |
+| `POST /portal/v1/invitations/{invitation_id}:cancel` | terminally cancels one pending invitation and clears undelivered secret material |
+| `POST /portal/v1/invitations:inspect` | returns only Team name, masked email, role, and expiry for a valid pending token |
+| `POST /portal/v1/invitations:accept` | binds the verified session email, atomically creates membership, and rotates the session |
 
 The session cookie is `__Host-cp0_portal` with `Secure`, `HttpOnly`,
 `SameSite=Strict`, `Path=/`, and no `Domain`. Mutation routes require the exact
 configured `Origin`, `Sec-Fetch-Site: same-origin`, the session CSRF value, and
-an `Idempotency-Key`; step-up also requires the session `ETag` in `If-Match`.
-The two current mutation routes accept an empty body only.
+an `Idempotency-Key`. Step-up, invitation creation, and cancellation also
+require the relevant strong `ETag` in `If-Match`. Step-up, logout, and
+cancellation accept an empty body only; invitation JSON is strictly bounded to
+1 KiB with unknown fields rejected.
 
 All responses are `no-store`, use a no-referrer policy and return a bounded,
 closed Problem body on failure. Provider tokens, raw external subjects,
-database messages, state, nonce, PKCE verifiers, and session secrets are never
-returned in JSON.
+database messages, state, nonce, PKCE verifiers, session secrets, and raw
+invitation tokens are never returned in JSON.
 
 ## Configuration
 
@@ -93,8 +99,9 @@ Required environment variables:
 | `CP0_PORTAL_NONCE_KEY` | 32-byte unpadded base64url nonce/state HMAC key |
 | `CP0_PORTAL_PKCE_KEY` | 32-byte unpadded base64url XChaCha20-Poly1305 key |
 | `CP0_PORTAL_SUBJECT_KEY` | 32-byte unpadded base64url issuer/subject HMAC key |
+| `CP0_PORTAL_INVITATION_KEY` | 32-byte unpadded base64url invitation-delivery encryption key |
 
-The four purpose keys must be distinct. Provider client secrets are loaded only
+The five purpose keys must be distinct. Provider client secrets are loaded only
 from the uppercase environment-variable name specified by
 `client_secret_env`; omit that field for a public PKCE client.
 
@@ -113,11 +120,40 @@ audience, signature, nonce, verified email, bounded issue time, and a subject no
 larger than 1024 bytes. Step-up additionally requires a configured ACR and an
 `auth_time` no older than five minutes.
 
-The database stores only SHA-256 session/state/nonce digests, an HMAC of the
-issuer and subject, and authenticated encryption of the short-lived PKCE
-verifier. Sessions expire after 30 minutes idle or eight hours absolute.
-Callback consumption, Account/link creation, session rotation, revocation,
+The database stores only SHA-256 session/state/nonce/invitation digests, an HMAC
+of the issuer and subject, and purpose-separated authenticated encryption of
+short-lived PKCE verifiers and pending email-delivery tokens. Sessions expire
+after 30 minutes idle or eight hours absolute. Callback consumption,
+Account/link creation, session rotation, invitation mutation, revocation,
 audit, and outbox work use `SERIALIZABLE` transactions and the database clock.
+
+## Invitation delivery
+
+Creation accepts only `developer`, `release-manager`, or `viewer`, normalizes
+the verified ASCII email shape, and requires an active Owner membership,
+membership 2FA enabled, and a provider MFA proof no older than five minutes.
+One Team may contain at most 100 live members plus pending invitations. The BFF
+also limits creation to 20 invitations per Team per hour and three for the same
+normalized Team/email pair per day. A removed membership identity cannot be
+re-invited through v1.
+
+The raw 256-bit token is stored only as a SHA-256 acceptance digest and as an
+XChaCha20-Poly1305 envelope in `portal_invitation_deliveries`. The envelope is
+bound to the invitation ID and never enters API responses, audit events,
+idempotency records, or the general outbox. `InvitationEmailWorker` leases one
+job for 60 seconds, commits before decrypting or calling the supplied
+`InvitationMailer`, and passes an acceptance URL with the token in the fragment.
+It clears ciphertext after delivery, cancellation, permanent failure, corrupt
+ciphertext, or expiry. Transient failures use bounded exponential retry and a
+maximum of 16 attempts. The same worker atomically expires seven-day invitations,
+advances the Team version, and appends audit/outbox evidence.
+
+The repository supplies the durable worker and a strict adapter trait, not a
+production email-vendor adapter. Production enablement requires a reviewed
+transactional provider implementation that does not log request bodies or URLs,
+plus bounce, suppression, retention, and abuse-response policy. Callers should
+run `run_once` in a supervised bounded loop and back off when it returns
+`false`.
 
 Production should use a dedicated least-privilege database role, an encrypted
 database connection, a secrets manager, structured request-ID logging without
@@ -145,5 +181,7 @@ CP0_STORE_TEST_DATABASE_URL='postgresql://...' \
 
 That gate covers PKCE confidentiality, subject HMAC storage, login/session
 creation, CSRF and origin rejection, idle refresh, idempotent step-up, verified
-MFA rotation, stale-cookie rejection, logout, transaction replay rejection,
-and provider-side terminal failure.
+MFA rotation, stale-cookie rejection, logout, invitation create/list/inspect/
+cancel/accept and exact replay, email success/retry/failure, token secrecy,
+acceptance session rotation, expiry, SQL bypass rejection, injected transaction
+rollback, and provider-side terminal failure.

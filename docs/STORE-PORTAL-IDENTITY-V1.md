@@ -144,8 +144,8 @@ Implementation proceeds in four acceptance slices:
    with SQL bypass tests;
 2. [complete] generic OIDC Authorization Code + PKCE callback, cookie/CSRF
    enforcement, rotation, idle/absolute expiry and logout;
-3. invitation create/list/inspect/cancel/accept with email-worker handoff,
-   exact replay, Team limits and transaction rollback tests;
+3. [complete] invitation create/list/inspect/cancel/accept with email-worker
+   handoff, exact replay, Team limits and transaction rollback tests;
 4. Portal integration, two-provider link/unlink recovery tests, session theft
    containment, membership suspension/removal propagation and production IdP
    conformance.
