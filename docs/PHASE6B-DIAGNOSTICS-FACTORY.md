@@ -2,10 +2,12 @@
 
 ## Policy
 
-CardputerZero OS does not run a telemetry uploader. Diagnostic collection is a
-local, explicit root operation and all generated files remain below `/run`, so
-they are RAM-backed and disappear on reboot. Support tooling does not contact a
-network endpoint, create a persistent identifier or modify application state.
+CardputerZero diagnostic and support tooling does not upload telemetry.
+Diagnostic collection is a local, explicit root operation and all generated
+files remain below `/run`, so they are RAM-backed and disappear on reboot.
+Support tooling does not contact a network endpoint, create a persistent
+identifier or modify application state. The separately consented Store weekly
+counter contract in `STORE-METRICS-V1.md` cannot read or include these bundles.
 
 The default support bundle excludes:
 

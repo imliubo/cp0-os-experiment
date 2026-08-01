@@ -22,6 +22,9 @@ use cp0_store_control::{
     register_app_request_sha256, validate_submission_spec,
 };
 use cp0_store_metadata::{ImageAsset, ReleaseState, SubmissionState};
+use cp0_store_metrics::{
+    AggregateMetricsReport, MAX_METRICS_REPORT_BYTES, WEEK_SECONDS, encode_report, week_start,
+};
 use cp0_store_risk::RiskAssessment;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -40,6 +43,7 @@ const DEVICE_POLL_INTERVAL_SECONDS: i16 = 5;
 const ACCESS_TOKEN_TTL_SECONDS: i64 = 15 * 60;
 const MAX_ACTIVE_DEVICE_AUTHORIZATIONS: i64 = 10_000;
 const MFA_STEP_UP_MAX_AGE_SECONDS: i64 = 5 * 60;
+const METRICS_BATCH_TTL_SECONDS: i64 = 15 * 24 * 60 * 60;
 const MAX_TEAM_MEMBERS: usize = 100;
 const DEVICE_VERIFICATION_URI: &str = "https://developer.cardputerzero.dev/activate";
 const DEVICE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -2910,6 +2914,134 @@ impl StoreControlService {
         transaction.commit().await.map_err(TxError::Sql)?;
         Ok(message)
     }
+
+    async fn ingest_aggregate_metrics(
+        &self,
+        report: &AggregateMetricsReport,
+    ) -> Result<(), ApiError> {
+        report.validate().map_err(|_| ApiError::invalid_request())?;
+        let encoded = encode_report(report).map_err(|_| ApiError::invalid_request())?;
+        let report_sha256 = sha256_hex(&encoded);
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        let now = database_now(&mut transaction)
+            .await
+            .map_err(ApiError::from_transaction)?;
+        sqlx::query("DELETE FROM store_metric_batches WHERE expires_unix_seconds <= $1")
+            .bind(now)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+
+        let existing = sqlx::query_scalar::<_, String>(
+            "SELECT report_sha256 FROM store_metric_batches WHERE batch_id = $1",
+        )
+        .bind(&report.batch_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| ApiError::unavailable())?;
+        if let Some(existing) = existing {
+            if existing != report_sha256 {
+                return Err(ApiError::idempotency_conflict());
+            }
+            transaction
+                .commit()
+                .await
+                .map_err(|_| ApiError::unavailable())?;
+            return Ok(());
+        }
+
+        let now = u64::try_from(now).map_err(|_| ApiError::internal())?;
+        let current_week = week_start(now);
+        if report.week_start_unix_seconds.checked_add(WEEK_SECONDS) != Some(current_week) {
+            return Err(ApiError::invalid_request());
+        }
+        for record in &report.records {
+            let published: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM store_package_artifacts artifact \
+                 JOIN releases release ON release.release_id = artifact.release_id \
+                 WHERE release.app_id = $1 AND release.version = $2 \
+                   AND artifact.catalog_app->>'app_id' = $1 \
+                   AND artifact.catalog_app->>'version' = $2)",
+            )
+            .bind(&record.app_id)
+            .bind(&record.version)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+            if !published {
+                return Err(ApiError::invalid_request());
+            }
+        }
+
+        let inserted = sqlx::query(
+            "INSERT INTO store_metric_batches (batch_id, week_start_unix_seconds, \
+             report_sha256, received_unix_seconds, expires_unix_seconds) \
+             VALUES ($1, $2, $3, $4, $4 + $5) ON CONFLICT (batch_id) DO NOTHING",
+        )
+        .bind(&report.batch_id)
+        .bind(
+            i64::try_from(report.week_start_unix_seconds)
+                .map_err(|_| ApiError::invalid_request())?,
+        )
+        .bind(&report_sha256)
+        .bind(i64::try_from(now).map_err(|_| ApiError::internal())?)
+        .bind(METRICS_BATCH_TTL_SECONDS)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| ApiError::unavailable())?;
+        if inserted.rows_affected() == 0 {
+            let existing = sqlx::query_scalar::<_, String>(
+                "SELECT report_sha256 FROM store_metric_batches WHERE batch_id = $1",
+            )
+            .bind(&report.batch_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+            if existing != report_sha256 {
+                return Err(ApiError::idempotency_conflict());
+            }
+            transaction
+                .commit()
+                .await
+                .map_err(|_| ApiError::unavailable())?;
+            return Ok(());
+        }
+
+        for record in &report.records {
+            sqlx::query(
+                "INSERT INTO store_metric_aggregates (week_start_unix_seconds, app_id, version, \
+                 batch_count, install_count, launch_count, crash_count, updated_unix_seconds) \
+                 VALUES ($1, $2, $3, 1, $4, $5, $6, $7) \
+                 ON CONFLICT (week_start_unix_seconds, app_id, version) DO UPDATE SET \
+                 batch_count = store_metric_aggregates.batch_count + 1, \
+                 install_count = store_metric_aggregates.install_count + EXCLUDED.install_count, \
+                 launch_count = store_metric_aggregates.launch_count + EXCLUDED.launch_count, \
+                 crash_count = store_metric_aggregates.crash_count + EXCLUDED.crash_count, \
+                 updated_unix_seconds = EXCLUDED.updated_unix_seconds",
+            )
+            .bind(
+                i64::try_from(report.week_start_unix_seconds)
+                    .map_err(|_| ApiError::invalid_request())?,
+            )
+            .bind(&record.app_id)
+            .bind(&record.version)
+            .bind(i64::from(record.installs))
+            .bind(i64::from(record.launches))
+            .bind(i64::from(record.crashes))
+            .bind(i64::try_from(now).map_err(|_| ApiError::internal())?)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ApiError::unavailable())
+    }
 }
 
 pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool, sqlx::Error> {
@@ -2926,6 +3058,10 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
 
 pub fn router(service: StoreControlService) -> Router {
     Router::new()
+        .route(
+            "/metrics/v1/aggregate",
+            post(post_aggregate_metrics).layer(DefaultBodyLimit::max(MAX_METRICS_REPORT_BYTES)),
+        )
         .route(
             "/oauth/device/code",
             post(post_device_code).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
@@ -3002,6 +3138,13 @@ pub fn router(service: StoreControlService) -> Router {
 struct DeviceCodeRequest {
     client_id: String,
     scope: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+struct MetricsAcceptedResponse {
+    accepted: bool,
+    batch_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4772,6 +4915,30 @@ async fn reserve_idempotency(
     }
 }
 
+async fn post_aggregate_metrics(
+    State(service): State<StoreControlService>,
+    payload: Result<Json<AggregateMetricsReport>, JsonRejection>,
+) -> Response {
+    let request_id = request_id();
+    let Json(report) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return metrics_error_response(json_rejection(rejection), request_id);
+        }
+    };
+    match service.ingest_aggregate_metrics(&report).await {
+        Ok(()) => metrics_json_response(
+            StatusCode::ACCEPTED,
+            MetricsAcceptedResponse {
+                accepted: true,
+                batch_id: report.batch_id,
+            },
+            request_id,
+        ),
+        Err(error) => metrics_error_response(error, request_id),
+    }
+}
+
 async fn post_device_code(
     State(service): State<StoreControlService>,
     payload: Result<Json<DeviceCodeRequest>, JsonRejection>,
@@ -5644,6 +5811,22 @@ fn oauth_json_response<T: Serialize>(
     request_id: String,
 ) -> Response {
     let mut response = json_response(status, resource, request_id);
+    add_oauth_cache_headers(&mut response);
+    response
+}
+
+fn metrics_json_response<T: Serialize>(
+    status: StatusCode,
+    resource: T,
+    request_id: String,
+) -> Response {
+    let mut response = json_response(status, resource, request_id);
+    add_oauth_cache_headers(&mut response);
+    response
+}
+
+fn metrics_error_response(error: ApiError, request_id: String) -> Response {
+    let mut response = error.response(request_id);
     add_oauth_cache_headers(&mut response);
     response
 }

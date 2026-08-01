@@ -374,6 +374,13 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     ui->settings_detail = true;
     cp0_ui_set_auto_update(ui, true, true, true, false, true, true, false);
     write_snapshot(directory, "settings-auto-update", ui, frame);
+    ui->settings_item_selected = 5;
+    cp0_ui_set_metrics(ui, true, true, true, true, true);
+    write_snapshot(directory, "settings-metrics", ui, frame);
+    cp0_ui_set_metrics(ui, true, false, true, true, false);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    write_snapshot(directory, "settings-metrics-confirm", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_BACK);
     ui->settings_selected = 7;
     ui->settings_item_selected = 1;
     ui->settings_detail = true;
@@ -470,6 +477,21 @@ int main(int argc, char **argv)
     cp0_ui_set_auto_update(&ui, true, true, true, true, false, true, false);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_AUTO_UPDATE_DISABLE);
+
+    ui.settings_item_selected = 5;
+    cp0_ui_set_metrics(&ui, true, false, true, true, false);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+    assert(ui.settings_confirm && ui.settings_confirm_metrics &&
+           ui.dialog_selected == 1);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+    assert(!ui.settings_confirm);
+    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    cp0_ui_handle_action(&ui, CP0_UI_LEFT);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_METRICS_ENABLE);
+    cp0_ui_set_metrics(&ui, true, true, true, true, false);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_METRICS_DISABLE);
 
     cp0_ui_handle_action(&ui, CP0_UI_SHOW_POWER);
     render(&ui, frame);

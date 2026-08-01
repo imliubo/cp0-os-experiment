@@ -26,6 +26,10 @@
       "type": "boolean",
       "default": false
     },
+    "store_metrics_allowed": {
+      "type": "boolean",
+      "default": false
+    },
     "app_launch_policy": {
       "enum": ["allow-all", "allow-listed"]
     },

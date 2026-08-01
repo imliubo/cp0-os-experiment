@@ -1,0 +1,17 @@
+FROM cardputerzero-pigen:ca8aeed0ae30
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        wayland-protocols \
+        libwayland-dev \
+        libpixman-1-dev \
+        libxkbcommon-dev \
+        libinput-dev \
+        libdrm-dev \
+        libpng-dev \
+        libseat-dev \
+        libudev-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+ENTRYPOINT ["/bin/bash"]

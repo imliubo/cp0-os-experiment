@@ -23,6 +23,9 @@ int cp0_store_test_parse_refresh_response(const char *response,
 int cp0_store_test_parse_auto_update_response(
     const char *response, size_t response_length, uint64_t request_id,
     struct cp0_store_auto_update_status *status);
+int cp0_store_test_parse_metrics_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    struct cp0_store_metrics_status *status);
 int cp0_store_test_parse_install_response(const char *response,
                                           size_t response_length,
                                           uint64_t request_id,
@@ -216,6 +219,25 @@ int main(void)
     assert(cp0_store_test_parse_auto_update_response(
                invalid_auto_extra, strlen(invalid_auto_extra), 14,
                &auto_update) == CP0_STORE_RESULT_ERROR);
+    struct cp0_store_metrics_status metrics;
+    static const char valid_metrics[] =
+        ENVELOPE_START("15")
+        "\"kind\":\"metrics-status\",\"enabled\":true,"
+        "\"policy_allowed\":true,\"configured\":true,"
+        "\"pending\":true}}}";
+    assert(cp0_store_test_parse_metrics_response(
+               valid_metrics, strlen(valid_metrics), 15, &metrics) ==
+           CP0_STORE_RESULT_OK);
+    assert(metrics.enabled && metrics.policy_allowed && metrics.configured &&
+           metrics.pending);
+    static const char invalid_metrics[] =
+        ENVELOPE_START("16")
+        "\"kind\":\"metrics-status\",\"enabled\":false,"
+        "\"policy_allowed\":true,\"configured\":true,"
+        "\"pending\":true}}}";
+    assert(cp0_store_test_parse_metrics_response(
+               invalid_metrics, strlen(invalid_metrics), 16, &metrics) ==
+           CP0_STORE_RESULT_ERROR);
     assert(strcmp(catalog.apps[0].app_id, "dev.cardputerzero.alpha") == 0);
     assert(catalog.apps[0].permissions ==
            (CP0_STORE_PERMISSION_CAMERA_CAPTURE |

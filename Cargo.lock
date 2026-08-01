@@ -414,6 +414,7 @@ dependencies = [
  "cp0-manifest",
  "cp0-store-control",
  "cp0-store-metadata",
+ "cp0-store-metrics",
  "cp0-store-risk",
  "serde",
  "serde_json",
@@ -426,6 +427,15 @@ dependencies = [
 
 [[package]]
 name = "cp0-store-metadata"
+version = "0.1.0"
+dependencies = [
+ "cp0-manifest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cp0-store-metrics"
 version = "0.1.0"
 dependencies = [
  "cp0-manifest",
@@ -527,6 +537,7 @@ dependencies = [
  "cp0-networkd",
  "cp0-package",
  "cp0-store-metadata",
+ "cp0-store-metrics",
  "cp0-store-protocol",
  "libc",
  "semver",

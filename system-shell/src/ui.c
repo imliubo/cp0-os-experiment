@@ -1356,7 +1356,7 @@ static void draw_settings_page(struct canvas *canvas, const struct cp0_ui *ui)
 
 static unsigned int settings_item_count(unsigned int category)
 {
-    static const unsigned int counts[] = {6, 3, 4, 4, 5, 5, 6, 5};
+    static const unsigned int counts[] = {6, 3, 4, 4, 5, 6, 6, 5};
     return category < 8 ? counts[category] : 0;
 }
 
@@ -1457,8 +1457,10 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
         break;
     }
     case 5: {
-        static const char *labels[] = {"INSTALLED APPS", "PERMISSIONS", "STORAGE",
-                                       "DOCUMENT ACCESS", "AUTO APP UPDATES"};
+        static const char *labels[] = {
+            "INSTALLED APPS", "PERMISSIONS", "STORAGE",
+            "DOCUMENT ACCESS", "AUTO APP UPDATES", "APP METRICS",
+        };
         *label = labels[item];
         if (item == 0)
             snprintf(value, 24, "%u APPS", ui->app_count);
@@ -1469,25 +1471,38 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
         else if (item == 3) {
             snprintf(value, 24, "UNAVAILABLE");
             *available = false;
-        } else if (!ui->auto_update_available) {
+        } else if (item == 4 && !ui->auto_update_available) {
             snprintf(value, 24, "UNKNOWN");
             *available = false;
-        } else if (!ui->auto_update_enabled) {
+        } else if (item == 4 && !ui->auto_update_enabled) {
             snprintf(value, 24,
                      "%s", ui->auto_update_policy_allowed ? "OFF" : "LOCKED");
             *available = ui->auto_update_policy_allowed;
-        } else if (!ui->auto_update_policy_allowed) {
+        } else if (item == 4 && !ui->auto_update_policy_allowed) {
             snprintf(value, 24, "LOCKED");
-        } else if (ui->auto_update_checking) {
+        } else if (item == 4 && ui->auto_update_checking) {
             snprintf(value, 24, "CHECKING");
-        } else if (!ui->auto_update_charging) {
+        } else if (item == 4 && !ui->auto_update_charging) {
             snprintf(value, 24, "WAIT POWER");
-        } else if (!ui->auto_update_unmetered_network) {
+        } else if (item == 4 && !ui->auto_update_unmetered_network) {
             snprintf(value, 24, "WAIT WIRED");
-        } else if (ui->auto_update_due) {
+        } else if (item == 4 && ui->auto_update_due) {
             snprintf(value, 24, "DUE");
-        } else {
+        } else if (item == 4) {
             snprintf(value, 24, "ON");
+        } else if (!ui->metrics_available) {
+            snprintf(value, 24, "UNKNOWN");
+            *available = false;
+        } else if (!ui->metrics_configured) {
+            snprintf(value, 24, "NOT CONFIGURED");
+            *available = false;
+        } else if (!ui->metrics_policy_allowed) {
+            snprintf(value, 24, "LOCKED");
+            *available = false;
+        } else if (!ui->metrics_enabled) {
+            snprintf(value, 24, "OFF");
+        } else {
+            snprintf(value, 24, "%s", ui->metrics_pending ? "ON - PENDING" : "ON");
         }
         break;
     }
@@ -1570,14 +1585,18 @@ static void draw_settings_confirm(struct canvas *canvas,
     fill_rect(canvas, 0, 21, CP0_UI_WIDTH, CP0_UI_HEIGHT - 21, 0x00090b0cu);
     fill_rect(canvas, 24, 35, 272, 108, COLOR_SURFACE);
     stroke_rect(canvas, 24, 35, 272, 108, 2, COLOR_YELLOW);
-    draw_text(canvas, 42, 50,
-              ui->settings_confirm_recovery ? "ENABLE RECOVERY BOOT"
-                                            : "ENABLE DEVELOPER MODE",
-              1, COLOR_TEXT);
-    draw_text(canvas, 42, 72,
-              ui->settings_confirm_recovery ? "NEXT BOOT OPENS CONSOLE"
-                                            : "DEV PACKAGES MAY INSTALL",
-              1, COLOR_MUTED);
+    const char *heading = ui->settings_confirm_metrics
+                              ? "SHARE APP METRICS"
+                              : (ui->settings_confirm_recovery
+                                     ? "ENABLE RECOVERY BOOT"
+                                     : "ENABLE DEVELOPER MODE");
+    const char *detail = ui->settings_confirm_metrics
+                             ? "WEEKLY COUNTS; NO ID OR LOGS"
+                             : (ui->settings_confirm_recovery
+                                    ? "NEXT BOOT OPENS CONSOLE"
+                                    : "DEV PACKAGES MAY INSTALL");
+    draw_text(canvas, 42, 50, heading, 1, COLOR_TEXT);
+    draw_text(canvas, 42, 72, detail, 1, COLOR_MUTED);
     for (unsigned int index = 0; index < 2; index++) {
         int x = 48 + (int)index * 116;
         bool selected = ui->dialog_selected == index;
@@ -2038,6 +2057,18 @@ void cp0_ui_set_auto_update(
     ui->auto_update_unmetered_network = available && unmetered_network;
     ui->auto_update_due = available && enabled && due;
     ui->auto_update_checking = available && enabled && checking;
+}
+
+void cp0_ui_set_metrics(struct cp0_ui *ui, bool available, bool enabled,
+                        bool policy_allowed, bool configured, bool pending)
+{
+    if (ui == NULL)
+        return;
+    ui->metrics_available = available;
+    ui->metrics_policy_allowed = available && policy_allowed;
+    ui->metrics_configured = available && configured;
+    ui->metrics_enabled = available && enabled && policy_allowed && configured;
+    ui->metrics_pending = ui->metrics_enabled && pending;
 }
 
 static bool copy_text(char *output, size_t capacity, const char *input)
@@ -3454,11 +3485,13 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             ui->settings_confirm = false;
         } else if (action == CP0_UI_ACCEPT) {
             bool recovery = ui->settings_confirm_recovery;
+            bool metrics = ui->settings_confirm_metrics;
             unsigned int selected = ui->dialog_selected;
             ui->settings_confirm = false;
             if (selected == 0)
-                return recovery ? CP0_UI_EVENT_RECOVERY_ENABLE
-                                : CP0_UI_EVENT_DEVELOPER_ENABLE;
+                return metrics ? CP0_UI_EVENT_METRICS_ENABLE
+                               : (recovery ? CP0_UI_EVENT_RECOVERY_ENABLE
+                                           : CP0_UI_EVENT_DEVELOPER_ENABLE);
         }
         return CP0_UI_EVENT_NONE;
     }
@@ -3902,6 +3935,16 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 return ui->auto_update_enabled
                            ? CP0_UI_EVENT_AUTO_UPDATE_DISABLE
                            : CP0_UI_EVENT_AUTO_UPDATE_ENABLE;
+            } else if (ui->settings_selected == 5 && item == 5 &&
+                       action == CP0_UI_ACCEPT && ui->metrics_available) {
+                if (ui->metrics_enabled)
+                    return CP0_UI_EVENT_METRICS_DISABLE;
+                if (ui->metrics_policy_allowed && ui->metrics_configured) {
+                    ui->settings_confirm = true;
+                    ui->settings_confirm_recovery = false;
+                    ui->settings_confirm_metrics = true;
+                    ui->dialog_selected = 1;
+                }
             } else if (ui->settings_selected == 6 && item <= 1 &&
                        action == CP0_UI_ACCEPT) {
                 ui->screen = CP0_UI_DEVICE;
@@ -3919,6 +3962,7 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 if (allowed) {
                     ui->settings_confirm = true;
                     ui->settings_confirm_recovery = recovery;
+                    ui->settings_confirm_metrics = false;
                     ui->dialog_selected = 1;
                 }
             }

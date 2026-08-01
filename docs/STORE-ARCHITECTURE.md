@@ -222,6 +222,13 @@ editorial resource version。Publisher 只有在所有引用 Release 仍可发�
 `cp0-stored` 通过独立 `today` IPC 返回同一 sequence 的有界完整应用摘要；Shell 在响应 sequence
 不一致、旧 Catalog、null 或解析错误时清空运营状态，避免混合两个快照。
 
+S8B 增加与 Catalog 完全分离的可选聚合路径。`cp0-stored` 独占 mode 0600 的有界周状态，
+System Shell 只能读取状态和设置同意，appd 只能以 root 身份提交精确已安装版本的启动/崩溃计数。
+设备不保存或发送设备 ID、事件时间、搜索词、日志、退出状态或堆栈；只上传上一完整 UTC 周。
+随机 128-bit batch ID 在首次请求前持久化，只有 HTTPS 202 精确回显该 ID 后才删除本地周数据。
+后端用 15 天摘要收据去重，验证 published artifact，并在 20 个独立批次前隐藏公开聚合。
+完整契约见 `STORE-METRICS-V1.md`。
+
 #### 下载与更新
 
 - 同一时间只允许一个 Store 下载/安装任务，避免 CM0 内存和 SD 抖动；

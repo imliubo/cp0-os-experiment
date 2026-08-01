@@ -5,6 +5,7 @@
   "recovery_mode_allowed": true,
   "store_install_allowed": true,
   "store_auto_update_allowed": true,
+  "store_metrics_allowed": true,
   "app_launch_policy": "allow-all",
   "allowed_apps": [],
   "denied_permissions": []

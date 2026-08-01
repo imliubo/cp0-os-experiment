@@ -50,6 +50,8 @@ pub struct DevicePolicy {
     pub store_install_allowed: bool,
     #[serde(default)]
     pub store_auto_update_allowed: bool,
+    #[serde(default)]
+    pub store_metrics_allowed: bool,
     pub app_launch_policy: AppLaunchPolicy,
     pub allowed_apps: Vec<String>,
     pub denied_permissions: Vec<Permission>,
@@ -137,6 +139,7 @@ impl Default for DevicePolicy {
             recovery_mode_allowed: true,
             store_install_allowed: true,
             store_auto_update_allowed: true,
+            store_metrics_allowed: true,
             app_launch_policy: AppLaunchPolicy::AllowAll,
             allowed_apps: Vec::new(),
             denied_permissions: Vec::new(),
@@ -505,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_policy_defaults_auto_updates_to_denied() {
+    fn legacy_policy_defaults_new_store_features_to_denied() {
         let (_root, policy_path, paths) = fixture("legacy-auto-update");
         fs::write(
             &policy_path,
@@ -514,6 +517,7 @@ mod tests {
         .unwrap();
         let policy = DevicePolicy::load_secure(&policy_path, false).unwrap();
         assert!(!policy.store_auto_update_allowed);
+        assert!(!policy.store_metrics_allowed);
         let engine = DevicePolicyEngine::load(&policy_path, paths, false).unwrap();
         assert!(engine.allows_store_install("dev.cardputerzero.example"));
         assert!(!engine.allows_store_auto_update("dev.cardputerzero.example"));

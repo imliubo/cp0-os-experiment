@@ -133,8 +133,12 @@ grep -qx 'Service=cardputerzero-stored.service' "$store_socket"
 grep -qx 'd /var/lib/cardputerzero/store 0700 cp0-store cp0-store -' "$store_tmpfiles"
 grep -qx 'd /var/lib/cardputerzero/store/packages 0700 cp0-store cp0-store -' "$store_tmpfiles"
 grep -qx 'catalog_url=' "$store_config"
+grep -qx 'metrics_url=' "$store_config"
+grep -q 'cardputerzero-stored.socket' "$service"
 jq -e '.store_auto_update_allowed == true' "$device_policy" >/dev/null
 jq -e '.store_auto_update_allowed == true' "$production_device_policy" >/dev/null
+jq -e '.store_metrics_allowed == true' "$device_policy" >/dev/null
+jq -e '.store_metrics_allowed == true' "$production_device_policy" >/dev/null
 if grep -Eq 'catalog_url=https?://' "$store_config"; then
     echo "error: product profile must not embed a store endpoint" >&2
     exit 1

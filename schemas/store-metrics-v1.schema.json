@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cardputerzero.dev/schemas/store-metrics-v1.schema.json",
+  "title": "CardputerZero Store aggregate metrics v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "batch_id", "week_start_unix_seconds", "records"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "batch_id": {
+      "type": "string",
+      "pattern": "^batch_[0-9a-f]{32}$"
+    },
+    "week_start_unix_seconds": {
+      "type": "integer",
+      "minimum": 345600
+    },
+    "records": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/app_metric" }
+    }
+  },
+  "$defs": {
+    "app_metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app_id", "version", "installs", "launches", "crashes"],
+      "properties": {
+        "app_id": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*){2,}$"
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)([-+][0-9A-Za-z.-]+)*$"
+        },
+        "installs": { "type": "integer", "minimum": 0, "maximum": 8 },
+        "launches": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "crashes": { "type": "integer", "minimum": 0, "maximum": 4096 }
+      }
+    }
+  }
+}

@@ -161,6 +161,15 @@ pub enum StoreCommand {
         enabled: bool,
     },
     RunAutoUpdate,
+    GetMetrics,
+    SetMetrics {
+        enabled: bool,
+    },
+    RecordRuntimeMetric {
+        app_id: String,
+        version: String,
+        event: StoreRuntimeMetricEvent,
+    },
     PreflightInstall {
         app_ids: Vec<String>,
         catalog_sequence: u64,
@@ -192,6 +201,13 @@ pub enum StoreControlAction {
     Pause,
     Resume,
     Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StoreRuntimeMetricEvent {
+    Launch,
+    Crash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -257,6 +273,13 @@ pub enum StoreResponseData {
         checking: bool,
     },
     AutoUpdateAccepted,
+    MetricsStatus {
+        enabled: bool,
+        policy_allowed: bool,
+        configured: bool,
+        pending: bool,
+    },
+    MetricRecorded,
     InstallPreflight {
         authorization_id: u64,
         catalog_sequence: u64,
@@ -844,6 +867,17 @@ impl StoreRequest {
                     ));
                 }
             }
+            StoreCommand::RecordRuntimeMetric {
+                app_id, version, ..
+            } => {
+                if !cp0_manifest::is_valid_app_id(app_id)
+                    || !cp0_manifest::is_valid_app_version(version)
+                {
+                    return Err(StoreProtocolError::Invalid(
+                        "store runtime metric identity is invalid".into(),
+                    ));
+                }
+            }
             StoreCommand::PreflightInstall {
                 app_ids,
                 catalog_sequence,
@@ -871,7 +905,9 @@ impl StoreRequest {
             | StoreCommand::Refresh
             | StoreCommand::GetAutoUpdate
             | StoreCommand::SetAutoUpdate { .. }
-            | StoreCommand::RunAutoUpdate => {}
+            | StoreCommand::RunAutoUpdate
+            | StoreCommand::GetMetrics
+            | StoreCommand::SetMetrics { .. } => {}
         }
         if let StoreCommand::Media {
             media: StoreMediaSelector::Screenshot { index },
@@ -1039,7 +1075,7 @@ impl StoreResponseData {
                 }
                 Ok(())
             }
-            Self::RefreshAccepted | Self::AutoUpdateAccepted => Ok(()),
+            Self::RefreshAccepted | Self::AutoUpdateAccepted | Self::MetricRecorded => Ok(()),
             Self::AutoUpdateStatus {
                 enabled,
                 due,
@@ -1049,6 +1085,19 @@ impl StoreResponseData {
                 if !enabled && (*due || *checking) {
                     return Err(StoreProtocolError::Invalid(
                         "disabled automatic update status cannot be due or checking".into(),
+                    ));
+                }
+                Ok(())
+            }
+            Self::MetricsStatus {
+                enabled,
+                policy_allowed,
+                configured,
+                pending,
+            } => {
+                if *enabled && (!*policy_allowed || !*configured) || !*enabled && *pending {
+                    return Err(StoreProtocolError::Invalid(
+                        "store metrics status is inconsistent".into(),
                     ));
                 }
                 Ok(())
@@ -1958,6 +2007,13 @@ mod tests {
             StoreCommand::GetAutoUpdate,
             StoreCommand::SetAutoUpdate { enabled: true },
             StoreCommand::RunAutoUpdate,
+            StoreCommand::GetMetrics,
+            StoreCommand::SetMetrics { enabled: true },
+            StoreCommand::RecordRuntimeMetric {
+                app_id: "dev.cardputerzero.example".into(),
+                version: "1.2.3".into(),
+                event: StoreRuntimeMetricEvent::Launch,
+            },
         ] {
             let request = StoreRequest {
                 protocol_version: STORE_PROTOCOL_VERSION,
@@ -2056,6 +2112,32 @@ mod tests {
             },
         );
         assert!(write_response(&mut Vec::new(), &invalid_auto_update).is_err());
+
+        let metrics = StoreResponse::success(
+            6,
+            StoreResponseData::MetricsStatus {
+                enabled: true,
+                policy_allowed: true,
+                configured: true,
+                pending: true,
+            },
+        );
+        let mut encoded = Vec::new();
+        write_response(&mut encoded, &metrics).unwrap();
+        assert_eq!(
+            read_response(&mut encoded.as_slice()).unwrap(),
+            Some(metrics)
+        );
+        let invalid_metrics = StoreResponse::success(
+            6,
+            StoreResponseData::MetricsStatus {
+                enabled: false,
+                policy_allowed: true,
+                configured: true,
+                pending: true,
+            },
+        );
+        assert!(write_response(&mut Vec::new(), &invalid_metrics).is_err());
 
         let mut invalid_progress = response_app();
         invalid_progress.state = StoreAppState::Installed;

@@ -1,8 +1,9 @@
 # Phase 6F: resource and performance acceptance
 
 Phase 6F turns the CM0 performance budget into enforced runtime limits and a
-repeatable device report. It does not relax any application isolation boundary
-and does not add a background telemetry service.
+repeatable local device report. It does not relax any application isolation
+boundary and its performance collector never uploads. The separate optional
+Store weekly counters are defined and bounded by `STORE-METRICS-V1.md`.
 
 ## Enforced limits
 

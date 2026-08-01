@@ -22,6 +22,7 @@ mod radio_client;
 mod registry;
 mod server;
 mod storage_client;
+mod store_metrics_client;
 
 pub use audio_client::{AudioClient, AudioClientError, DEFAULT_AUDIO_SOCKET};
 pub use broker::{
@@ -79,6 +80,7 @@ pub use registry::{
 };
 pub use server::{AppdServer, CapabilityServices, ServerError};
 pub use storage_client::{DEFAULT_STORAGE_SOCKET, StorageClient, StorageClientError};
+pub use store_metrics_client::{DEFAULT_STORE_SOCKET, StoreMetricsClient, StoreMetricsClientError};
 
 pub const DEFAULT_APPS_ROOT: &str = "/var/lib/cardputerzero/apps";
 pub const DEFAULT_DATA_ROOT: &str = "/var/lib/cardputerzero/data";

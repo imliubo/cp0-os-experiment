@@ -21,6 +21,7 @@ members = [
     "crates/cp0-storaged",
     "crates/cp0-store-control",
     "crates/cp0-store-control-server",
+    "crates/cp0-store-metrics",
     "crates/cp0-store-metadata",
     "crates/cp0-store-protocol",
     "crates/cp0-store-publisher",

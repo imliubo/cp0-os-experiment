@@ -9,6 +9,7 @@ use cp0_store_control::register_app_request_sha256;
 use cp0_store_control_server::{
     MAX_UPLOAD_CHUNK_BYTES, StoreControlService, connect, migrate, router,
 };
+use cp0_store_metrics::{WEEK_SECONDS, week_start};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPool;
@@ -87,10 +88,276 @@ async fn postgres_http_transaction_acceptance() {
     verify_oauth_device_flow(&application, &pool).await;
     verify_team_management(&application, &pool).await;
     verify_editorial_backend(&application, &pool).await;
+    verify_metrics_backend(&application, &pool).await;
     verify_database_immutability(&pool).await;
     tokio::fs::remove_dir_all(object_root)
         .await
         .expect("remove repository-local test object store");
+}
+
+async fn verify_metrics_backend(application: &Router, pool: &PgPool) {
+    const APP_ID: &str = "dev.cardputerzero.metrics-test";
+    const VERSION: &str = "1.0.0";
+    seed_published_metrics_artifact(pool, APP_ID, VERSION).await;
+    let now: i64 = sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let report_week = week_start(u64::try_from(now).unwrap()) - WEEK_SECONDS;
+    let report = |batch: u128, installs: u64, launches: u64, crashes: u64| {
+        json!({
+            "schema_version": 1,
+            "batch_id": format!("batch_{batch:032x}"),
+            "week_start_unix_seconds": report_week,
+            "records": [{
+                "app_id": APP_ID,
+                "version": VERSION,
+                "installs": installs,
+                "launches": launches,
+                "crashes": crashes
+            }]
+        })
+    };
+
+    let mut forbidden = report(1, 1, 3, 1);
+    forbidden["device_id"] = json!("device-forbidden");
+    let invalid = call(
+        application.clone(),
+        Method::POST,
+        "/metrics/v1/aggregate",
+        None,
+        None,
+        Some(forbidden),
+    )
+    .await;
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+    assert_oauth_headers(&invalid);
+
+    let current_week = report(2, 1, 1, 0);
+    let mut current_week = current_week;
+    current_week["week_start_unix_seconds"] = json!(week_start(u64::try_from(now).unwrap()));
+    assert_eq!(
+        call(
+            application.clone(),
+            Method::POST,
+            "/metrics/v1/aggregate",
+            None,
+            None,
+            Some(current_week),
+        )
+        .await
+        .status,
+        StatusCode::BAD_REQUEST
+    );
+
+    let first_report = report(3, 1, 3, 1);
+    let first = call(
+        application.clone(),
+        Method::POST,
+        "/metrics/v1/aggregate",
+        None,
+        None,
+        Some(first_report.clone()),
+    )
+    .await;
+    assert_eq!(first.status, StatusCode::ACCEPTED);
+    assert_oauth_headers(&first);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&first.body).unwrap(),
+        json!({"accepted": true, "batch_id": format!("batch_{:032x}", 3)})
+    );
+    let replay = call(
+        application.clone(),
+        Method::POST,
+        "/metrics/v1/aggregate",
+        None,
+        None,
+        Some(first_report.clone()),
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::ACCEPTED);
+    assert_eq!(replay.body, first.body);
+    assert_eq!(
+        metric_counts(pool, report_week, APP_ID, VERSION).await,
+        (1, 1, 3, 1)
+    );
+
+    let conflict = call(
+        application.clone(),
+        Method::POST,
+        "/metrics/v1/aggregate",
+        None,
+        None,
+        Some(report(3, 1, 4, 1)),
+    )
+    .await;
+    assert_eq!(conflict.status, StatusCode::CONFLICT);
+
+    let unknown = call(
+        application.clone(),
+        Method::POST,
+        "/metrics/v1/aggregate",
+        None,
+        None,
+        Some(json!({
+            "schema_version": 1,
+            "batch_id": format!("batch_{:032x}", 4),
+            "week_start_unix_seconds": report_week,
+            "records": [{
+                "app_id": APP_ID,
+                "version": "2.0.0",
+                "installs": 0,
+                "launches": 1,
+                "crashes": 0
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(unknown.status, StatusCode::BAD_REQUEST);
+
+    for batch in 5..=22 {
+        let accepted = call(
+            application.clone(),
+            Method::POST,
+            "/metrics/v1/aggregate",
+            None,
+            None,
+            Some(report(batch, 0, 1, 0)),
+        )
+        .await;
+        assert_eq!(accepted.status, StatusCode::ACCEPTED);
+    }
+    assert_eq!(
+        metric_counts(pool, report_week, APP_ID, VERSION).await,
+        (19, 1, 21, 1)
+    );
+    assert_eq!(
+        public_metric_rows(pool, report_week, APP_ID, VERSION).await,
+        0
+    );
+
+    assert_eq!(
+        call(
+            application.clone(),
+            Method::POST,
+            "/metrics/v1/aggregate",
+            None,
+            None,
+            Some(report(23, 0, 1, 0)),
+        )
+        .await
+        .status,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        metric_counts(pool, report_week, APP_ID, VERSION).await,
+        (20, 1, 22, 1)
+    );
+    assert_eq!(
+        public_metric_rows(pool, report_week, APP_ID, VERSION).await,
+        1
+    );
+
+    let batch_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name FROM information_schema.columns \
+         WHERE table_schema = 'public' AND table_name = 'store_metric_batches' \
+         ORDER BY ordinal_position",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        batch_columns,
+        [
+            "batch_id",
+            "week_start_unix_seconds",
+            "report_sha256",
+            "received_unix_seconds",
+            "expires_unix_seconds"
+        ]
+    );
+    let metrics_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name FROM information_schema.columns \
+         WHERE table_schema = 'public' AND table_name LIKE 'store_metric_%'",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert!(metrics_columns.iter().all(|column| {
+        !column.contains("device")
+            && !column.contains("ip")
+            && !column.contains("body")
+            && !column.contains("raw")
+            && !column.contains("stack")
+    }));
+
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE store_metric_aggregates SET batch_count = batch_count + 2 \
+             WHERE week_start_unix_seconds = $1 AND app_id = $2 AND version = $3",
+        )
+        .bind(i64::try_from(report_week).unwrap())
+        .bind(APP_ID)
+        .bind(VERSION)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("UPDATE store_metric_batches SET report_sha256 = $1 WHERE batch_id = $2")
+            .bind("f".repeat(64))
+            .bind(format!("batch_{:032x}", 3))
+            .execute(pool)
+            .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM store_metric_batches WHERE batch_id = $1")
+            .bind(format!("batch_{:032x}", 3))
+            .execute(pool)
+            .await,
+        "55000",
+    );
+
+    let received = now - 1_296_001;
+    sqlx::query(
+        "INSERT INTO store_metric_batches (batch_id, week_start_unix_seconds, report_sha256, \
+         received_unix_seconds, expires_unix_seconds) VALUES ($1, $2, $3, $4, $4 + 1296000)",
+    )
+    .bind(format!("batch_{:032x}", 24))
+    .bind(i64::try_from(report_week).unwrap())
+    .bind("e".repeat(64))
+    .bind(received)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        call(
+            application.clone(),
+            Method::POST,
+            "/metrics/v1/aggregate",
+            None,
+            None,
+            Some(first_report),
+        )
+        .await
+        .status,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM store_metric_batches WHERE batch_id = $1"
+        )
+        .bind(format!("batch_{:032x}", 24))
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        metric_counts(pool, report_week, APP_ID, VERSION).await,
+        (20, 1, 22, 1)
+    );
 }
 
 async fn verify_exact_replay(application: &Router, pool: &PgPool) {
@@ -4064,7 +4331,8 @@ async fn reset_database(pool: &PgPool) {
         .await
         .unwrap();
     pool.execute(
-        "TRUNCATE store_catalog_snapshots, store_publication_jobs, \
+        "TRUNCATE store_metric_batches, store_metric_aggregates, \
+         store_package_artifacts, store_catalog_snapshots, store_publication_jobs, \
          store_editorial_revisions, store_editorial_layouts, \
          store_operator_access_tokens, store_operators, \
          outbox_events, audit_events, idempotency_records, oauth_device_authorizations, \
@@ -4079,6 +4347,279 @@ async fn reset_database(pool: &PgPool) {
     pool.execute("INSERT INTO catalog_sequence (singleton, last_sequence) VALUES (TRUE, 0)")
         .await
         .unwrap();
+}
+
+async fn seed_published_metrics_artifact(pool: &PgPool, app_id: &str, version: &str) {
+    const SUBMISSION_ID: &str = "sub_70707070707070707070707070707070";
+    const RELEASE_ID: &str = "rel_70707070707070707070707070707070";
+    const EVENT_ID: &str = "evt_70707070707070707070707070707070";
+    const PRIMARY_ASSIGNMENT: &str = "assignment_70707070707070707070707070707070";
+    const SECONDARY_ASSIGNMENT: &str = "assignment_71717171717171717171717171717171";
+    const CATALOG_SEQUENCE: i64 = 970;
+    let now: i64 = sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let package_sha256 = "7".repeat(64);
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO apps (app_id, owner_team_id, default_locale, created_unix_seconds) \
+         VALUES ($1, $2, 'en', $3)",
+    )
+    .bind(app_id)
+    .bind(TEAM_A)
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO submissions (submission_id, app_id, version, revision, state, \
+         package_sha256, package_bytes, listing_sha256, listing_bytes, assets, \
+         resource_version, created_unix_seconds) VALUES \
+         ($1, $2, $3, 1, 'ready-for-review', $4, 100, $5, 100, '[{},{}]'::jsonb, 1, $6)",
+    )
+    .bind(SUBMISSION_ID)
+    .bind(app_id)
+    .bind(version)
+    .bind(&package_sha256)
+    .bind("8".repeat(64))
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO review_assignments (assignment_id, submission_id, reviewer_id, \
+         assignment_kind, state, source_resource_version, created_unix_seconds) \
+         VALUES ($1, $2, $3, 'primary', 'active', 1, $4)",
+    )
+    .bind(PRIMARY_ASSIGNMENT)
+    .bind(SUBMISSION_ID)
+    .bind(REVIEWER_A)
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'in-review', resource_version = 2 \
+         WHERE submission_id = $1",
+    )
+    .bind(SUBMISSION_ID)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO review_decisions (decision_id, submission_id, reviewer_id, decision, \
+         reason_codes, note, created_unix_seconds, assignment_id) VALUES \
+         ('decision_70707070707070707070707070707070', $1, $2, 'approved', '{}', '', $3, $4)",
+    )
+    .bind(SUBMISSION_ID)
+    .bind(REVIEWER_A)
+    .bind(now)
+    .bind(PRIMARY_ASSIGNMENT)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE review_assignments SET state = 'completed', completed_unix_seconds = $1 \
+         WHERE assignment_id = $2",
+    )
+    .bind(now)
+    .bind(PRIMARY_ASSIGNMENT)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'pending-secondary-review', resource_version = 3 \
+         WHERE submission_id = $1",
+    )
+    .bind(SUBMISSION_ID)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO review_assignments (assignment_id, submission_id, reviewer_id, \
+         assignment_kind, state, source_resource_version, created_unix_seconds) \
+         VALUES ($1, $2, $3, 'secondary', 'active', 3, $4)",
+    )
+    .bind(SECONDARY_ASSIGNMENT)
+    .bind(SUBMISSION_ID)
+    .bind(REVIEWER_B)
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'in-review', resource_version = 4 \
+         WHERE submission_id = $1",
+    )
+    .bind(SUBMISSION_ID)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO review_decisions (decision_id, submission_id, reviewer_id, decision, \
+         reason_codes, note, created_unix_seconds, assignment_id) VALUES \
+         ('decision_71717171717171717171717171717171', $1, $2, 'approved', '{}', '', $3, $4)",
+    )
+    .bind(SUBMISSION_ID)
+    .bind(REVIEWER_B)
+    .bind(now)
+    .bind(SECONDARY_ASSIGNMENT)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE review_assignments SET state = 'completed', completed_unix_seconds = $1 \
+         WHERE assignment_id = $2",
+    )
+    .bind(now)
+    .bind(SECONDARY_ASSIGNMENT)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'approved', resource_version = 5 \
+         WHERE submission_id = $1",
+    )
+    .bind(SUBMISSION_ID)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO releases (release_id, submission_id, app_id, version, state, \
+         rollout_percent, resource_version, created_unix_seconds) \
+         VALUES ($1, $2, $3, $4, 'ready', 100, 1, $5)",
+    )
+    .bind(RELEASE_ID)
+    .bind(SUBMISSION_ID)
+    .bind(app_id)
+    .bind(version)
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE releases SET state = 'publishing', resource_version = 2 WHERE release_id = $1",
+    )
+    .bind(RELEASE_ID)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO outbox_events (event_id, topic, aggregate_kind, aggregate_id, \
+         aggregate_version, request_sha256, payload, created_unix_seconds) VALUES \
+         ($1, 'release.publish-requested', 'release', $2, 2, $3, $4, $5)",
+    )
+    .bind(EVENT_ID)
+    .bind(RELEASE_ID)
+    .bind(sha256_hex(EVENT_ID.as_bytes()))
+    .bind(json!({
+        "release_id": RELEASE_ID,
+        "app_id": app_id,
+        "version": version,
+        "state": "publishing"
+    }))
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO store_publication_jobs (event_id, release_id, job_kind, \
+         source_resource_version, source_state, state, created_unix_seconds) \
+         VALUES ($1, $2, 'publish-release', 2, 'publishing', 'queued', $3)",
+    )
+    .bind(EVENT_ID)
+    .bind(RELEASE_ID)
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE store_publication_jobs SET state = 'running', lease_token = $1, \
+         leased_until_unix_seconds = $2, attempts = 1, catalog_sequence = $3, \
+         published_unix_seconds = $4, expires_unix_seconds = $5, developer_name = 'Team A' \
+         WHERE event_id = $6",
+    )
+    .bind("lease_70707070707070707070707070707070")
+    .bind(now + 300)
+    .bind(CATALOG_SEQUENCE)
+    .bind(now)
+    .bind(now + 86_400)
+    .bind(EVENT_ID)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO store_package_artifacts (release_id, submission_id, catalog_sequence, \
+         package_sha256, package_bytes, relative_path, store_key_id, catalog_app, \
+         created_unix_seconds) VALUES ($1, $2, $3, $4, 100, $5, $6, $7, $8)",
+    )
+    .bind(RELEASE_ID)
+    .bind(SUBMISSION_ID)
+    .bind(CATALOG_SEQUENCE)
+    .bind(&package_sha256)
+    .bind(format!(
+        "generations/{CATALOG_SEQUENCE}/packages/{RELEASE_ID}.capp"
+    ))
+    .bind("9".repeat(64))
+    .bind(json!({
+        "app_id": app_id,
+        "version": version,
+        "package_sha256": package_sha256,
+        "package_bytes": 100
+    }))
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE releases SET state = 'published', catalog_sequence = $2, resource_version = 3 \
+         WHERE release_id = $1",
+    )
+    .bind(RELEASE_ID)
+    .bind(CATALOG_SEQUENCE)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    transaction.commit().await.unwrap();
+}
+
+async fn metric_counts(
+    pool: &PgPool,
+    week: u64,
+    app_id: &str,
+    version: &str,
+) -> (i64, i64, i64, i64) {
+    let row = sqlx::query(
+        "SELECT batch_count, install_count, launch_count, crash_count \
+         FROM store_metric_aggregates \
+         WHERE week_start_unix_seconds = $1 AND app_id = $2 AND version = $3",
+    )
+    .bind(i64::try_from(week).unwrap())
+    .bind(app_id)
+    .bind(version)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    (
+        row.get("batch_count"),
+        row.get("install_count"),
+        row.get("launch_count"),
+        row.get("crash_count"),
+    )
+}
+
+async fn public_metric_rows(pool: &PgPool, week: u64, app_id: &str, version: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM store_public_metric_aggregates \
+         WHERE week_start_unix_seconds = $1 AND app_id = $2 AND version = $3",
+    )
+    .bind(i64::try_from(week).unwrap())
+    .bind(app_id)
+    .bind(version)
+    .fetch_one(pool)
+    .await
+    .unwrap()
 }
 
 fn test_object_root() -> PathBuf {

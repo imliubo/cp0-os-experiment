@@ -1,9 +1,12 @@
-.PHONY: check test fmt fuzz-check fuzz-smoke portal-check review-console-check store-control-db-check compositor app-runtime appd example-app malicious-apps devkit image verify-image
+.PHONY: check test fmt fuzz-check fuzz-smoke portal-check review-console-check store-control-db-check compositor compositor-builder app-runtime appd example-app malicious-apps devkit image verify-image
+
+COMPOSITOR_BUILDER_IMAGE := cp0-phase2b-builder:weston-14
 
 check: fmt
 	jq empty schemas/app-manifest-v1.schema.json schemas/os-release-v1.schema.json \
 		schemas/store-review-v1.schema.json \
 		schemas/store-listing-v1.schema.json \
+		schemas/store-metrics-v1.schema.json \
 		schemas/store-control-v1.openapi.json \
 		schemas/device-policy-v1.schema.json appd/device-policy.json \
 		appd/device-policy-production.json \
@@ -78,11 +81,17 @@ store-control-db-check:
 	cargo test -p cp0-store-scan-worker --test postgres -- --ignored --nocapture
 	cargo test -p cp0-store-publisher --test postgres -- --ignored --nocapture
 
-compositor:
+compositor-builder:
+	docker build \
+		--file containers/compositor-builder/Containerfile \
+		--tag "$(COMPOSITOR_BUILDER_IMAGE)" \
+		containers/compositor-builder
+
+compositor: compositor-builder
 	docker run --rm \
 		-v "$(CURDIR):/work" \
 		-w /work \
-		cp0-phase2b-builder:weston-14 \
+		"$(COMPOSITOR_BUILDER_IMAGE)" \
 		./scripts/build-compositor.sh
 
 app-runtime:

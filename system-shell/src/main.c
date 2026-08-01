@@ -270,6 +270,23 @@ static void poll_auto_update_status(struct shell *shell)
                                false, false, false);
 }
 
+static void apply_metrics_status(
+    struct shell *shell, const struct cp0_store_metrics_status *status)
+{
+    cp0_ui_set_metrics(&shell->ui, true, status->enabled,
+                       status->policy_allowed, status->configured,
+                       status->pending);
+}
+
+static void poll_metrics_status(struct shell *shell)
+{
+    struct cp0_store_metrics_status status;
+    if (cp0_store_get_metrics(&status) == CP0_STORE_RESULT_OK)
+        apply_metrics_status(shell, &status);
+    else
+        cp0_ui_set_metrics(&shell->ui, false, false, false, false, false);
+}
+
 static const struct cp0_app_summary *installed_app(
     const struct shell *shell, const char *app_id)
 {
@@ -1122,6 +1139,19 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                     "system-shell: automatic app update setting failed\n");
             poll_auto_update_status(shell);
         }
+    } else if (event == CP0_UI_EVENT_METRICS_ENABLE ||
+               event == CP0_UI_EVENT_METRICS_DISABLE) {
+        bool enabled = event == CP0_UI_EVENT_METRICS_ENABLE;
+        struct cp0_store_metrics_status status;
+        if (cp0_store_set_metrics(enabled, &status) == CP0_STORE_RESULT_OK) {
+            apply_metrics_status(shell, &status);
+            fprintf(stderr, "system-shell: aggregate app metrics %s\n",
+                    enabled ? "enabled" : "disabled and cleared");
+        } else {
+            fprintf(stderr,
+                    "system-shell: aggregate app metrics setting failed\n");
+            poll_metrics_status(shell);
+        }
     }
     if (previous_screen != CP0_UI_STORE &&
         shell->ui.screen == CP0_UI_STORE) {
@@ -1132,6 +1162,7 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         shell->ui.screen == CP0_UI_SETTINGS) {
         poll_device_settings(shell);
         poll_auto_update_status(shell);
+        poll_metrics_status(shell);
     }
     shell_redraw(shell);
 }
@@ -1797,6 +1828,7 @@ static int shell_dispatch(struct shell *shell)
                     if (shell->ui.screen == CP0_UI_SETTINGS) {
                         poll_device_settings(shell);
                         poll_auto_update_status(shell);
+                        poll_metrics_status(shell);
                     }
                     shell->catalog_ticks = 0;
                 }

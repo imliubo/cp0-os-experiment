@@ -21,14 +21,19 @@ use cp0_appd::{
 };
 use cp0_networkd::PublicResolver;
 use cp0_store_metadata::validate_png_structure;
+use cp0_store_metrics::{
+    AggregateMetricsReport, AppMetricRecord, MAX_METRIC_RECORDS, MAX_METRICS_REPORT_BYTES,
+    MAX_WEEKLY_INSTALLS, MAX_WEEKLY_LAUNCHES, METRICS_SCHEMA_VERSION, WEEK_SECONDS, encode_report,
+    week_start,
+};
 use cp0_store_protocol::{
     CatalogApp, CatalogImageResource, CatalogObjectResource, MAX_INSTALL_BATCH_APPS, SignedCatalog,
     StoreAppDetails, StoreAppState, StoreAppSummary, StoreCommand, StoreControlAction,
     StoreEditorial, StoreEditorialCollection, StoreErrorCode, StoreFailureReason,
     StoreInstallAccepted, StoreInstallPreflight, StoreMediaMetadata, StoreMediaSelector,
-    StoreRequest, StoreResponse, StoreResponseData, decode_app_details, decode_signed_catalog,
-    is_lower_hex, is_valid_https_url, read_request, response_requires_descriptor,
-    send_response_with_fd, verify_catalog, write_response,
+    StoreRequest, StoreResponse, StoreResponseData, StoreRuntimeMetricEvent, decode_app_details,
+    decode_signed_catalog, is_lower_hex, is_valid_https_url, read_request,
+    response_requires_descriptor, send_response_with_fd, verify_catalog, write_response,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -54,6 +59,8 @@ pub const AUTO_UPDATE_INTERVAL_SECONDS: u64 = 6 * 60 * 60;
 const AUTO_UPDATE_POLL_INTERVAL: Duration = Duration::from_secs(60);
 const AUTO_UPDATE_STATE_SCHEMA_VERSION: u32 = 1;
 const MAX_AUTO_UPDATE_STATE_BYTES: u64 = 1024;
+const METRICS_STATE_SCHEMA_VERSION: u32 = 1;
+const MAX_METRICS_STATE_BYTES: u64 = 64 * 1024;
 const MAX_INSTALLED_APPS: usize = 64;
 const INSTALL_DATA_RESERVE_BYTES: u64 = 16 * 1024 * 1024;
 const INSTALL_INBOX_RESERVE_BYTES: u64 = 8 * 1024 * 1024;
@@ -67,6 +74,7 @@ static AUTHORIZATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreConfig {
     pub catalog_url: Option<String>,
+    pub metrics_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +86,7 @@ pub struct StorePaths {
     pub appd_socket: PathBuf,
     pub device_policy: PathBuf,
     pub auto_update_state: PathBuf,
+    pub metrics_state: PathBuf,
     pub enforce_root_trust: bool,
 }
 
@@ -87,6 +96,7 @@ impl Default for StorePaths {
         Self {
             catalog_cache: cache_root.join("catalog.json"),
             auto_update_state: cache_root.join("auto-update.json"),
+            metrics_state: cache_root.join("metrics.json"),
             cache_root,
             trust_root: PathBuf::from(DEFAULT_TRUST_ROOT),
             appd_inbox: PathBuf::from(DEFAULT_APPD_INBOX),
@@ -171,6 +181,12 @@ pub trait StoreNetwork: fmt::Debug + Send + Sync + 'static {
     ) -> Result<Vec<u8>, StoreServiceError> {
         Err(StoreServiceError::Unavailable(
             "store media download is unavailable",
+        ))
+    }
+
+    fn upload_metrics(&self, _url: &str, _encoded: &[u8]) -> Result<String, StoreServiceError> {
+        Err(StoreServiceError::Unavailable(
+            "store metrics upload is unavailable",
         ))
     }
 
@@ -342,6 +358,41 @@ impl StoreNetwork for UreqStoreNetwork {
             ));
         }
         Ok(encoded)
+    }
+
+    fn upload_metrics(&self, url: &str, encoded: &[u8]) -> Result<String, StoreServiceError> {
+        require_https(url)?;
+        if encoded.is_empty() || encoded.len() > MAX_METRICS_REPORT_BYTES {
+            return Err(StoreServiceError::Invalid(
+                "store metrics report exceeds its bound".into(),
+            ));
+        }
+        let mut response = self
+            .agent
+            .post(url)
+            .header("Content-Type", "application/json")
+            .header("Accept-Encoding", "identity")
+            .send(encoded)
+            .map_err(map_network_error)?;
+        if response.status().as_u16() != 202 {
+            return Err(StoreServiceError::Unavailable(
+                "metrics server did not accept the aggregate",
+            ));
+        }
+        let encoded = response
+            .body_mut()
+            .with_config()
+            .limit(1025)
+            .read_to_vec()
+            .map_err(map_network_error)?;
+        let accepted: MetricsAccepted = serde_json::from_slice(&encoded)
+            .map_err(|_| StoreServiceError::Invalid("metrics acknowledgement is invalid".into()))?;
+        if !accepted.accepted || !cp0_store_metrics::is_valid_batch_id(&accepted.batch_id) {
+            return Err(StoreServiceError::Invalid(
+                "metrics acknowledgement is invalid".into(),
+            ));
+        }
+        Ok(accepted.batch_id)
     }
 
     fn download_package(
@@ -651,6 +702,40 @@ struct AutoUpdatePersistentState {
     last_check_unix_seconds: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MetricsPersistentState {
+    schema_version: u32,
+    enabled: bool,
+    weeks: Vec<MetricsWeek>,
+    pending: Option<AggregateMetricsReport>,
+}
+
+impl Default for MetricsPersistentState {
+    fn default() -> Self {
+        Self {
+            schema_version: METRICS_STATE_SCHEMA_VERSION,
+            enabled: false,
+            weeks: Vec::new(),
+            pending: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MetricsWeek {
+    week_start_unix_seconds: u64,
+    records: Vec<AppMetricRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MetricsAccepted {
+    accepted: bool,
+    batch_id: String,
+}
+
 impl Default for AutoUpdatePersistentState {
     fn default() -> Self {
         Self {
@@ -669,6 +754,25 @@ struct AutoUpdateStatus {
     unmetered_network: bool,
     due: bool,
     checking: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MetricsStatus {
+    enabled: bool,
+    policy_allowed: bool,
+    configured: bool,
+    pending: bool,
+}
+
+impl MetricsStatus {
+    fn response(self) -> StoreResponseData {
+        StoreResponseData::MetricsStatus {
+            enabled: self.enabled,
+            policy_allowed: self.policy_allowed,
+            configured: self.configured,
+            pending: self.pending,
+        }
+    }
 }
 
 impl AutoUpdateStatus {
@@ -692,6 +796,8 @@ struct MutableState {
     active_job: bool,
     auto_update: AutoUpdatePersistentState,
     auto_update_running: bool,
+    metrics: MetricsPersistentState,
+    metrics_upload_running: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -780,33 +886,46 @@ impl StoreConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, StoreServiceError> {
         let encoded = fs::read_to_string(path)?;
         let mut catalog_url = None;
+        let mut metrics_url = None;
         for line in encoded.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let Some(value) = line.strip_prefix("catalog_url=") else {
-                return Err(StoreServiceError::Invalid(
-                    "store configuration contains an unknown field".into(),
-                ));
-            };
-            if catalog_url.is_some() {
-                return Err(StoreServiceError::Invalid(
-                    "store catalog URL is duplicated".into(),
-                ));
+            let (target, value, duplicate_message, invalid_message) =
+                if let Some(value) = line.strip_prefix("catalog_url=") {
+                    (
+                        &mut catalog_url,
+                        value,
+                        "store catalog URL is duplicated",
+                        "store catalog URL must be bounded HTTPS",
+                    )
+                } else if let Some(value) = line.strip_prefix("metrics_url=") {
+                    (
+                        &mut metrics_url,
+                        value,
+                        "store metrics URL is duplicated",
+                        "store metrics URL must be bounded HTTPS",
+                    )
+                } else {
+                    return Err(StoreServiceError::Invalid(
+                        "store configuration contains an unknown field".into(),
+                    ));
+                };
+            if target.is_some() {
+                return Err(StoreServiceError::Invalid(duplicate_message.into()));
             }
             if value.is_empty() {
-                catalog_url = Some(None);
+                *target = Some(None);
             } else if is_valid_https_url(value) {
-                catalog_url = Some(Some(value.into()));
+                *target = Some(Some(value.into()));
             } else {
-                return Err(StoreServiceError::Invalid(
-                    "store catalog URL must be bounded HTTPS".into(),
-                ));
+                return Err(StoreServiceError::Invalid(invalid_message.into()));
             }
         }
         Ok(Self {
             catalog_url: catalog_url.unwrap_or(None),
+            metrics_url: metrics_url.unwrap_or(None),
         })
     }
 }
@@ -867,6 +986,18 @@ impl StoreService {
             Err(error) => return Err(error.into()),
         };
         let auto_update = load_auto_update_state(&paths.auto_update_state)?;
+        let mut metrics = load_metrics_state(&paths.metrics_state)?;
+        let metrics_allowed =
+            DevicePolicy::load_secure(&paths.device_policy, paths.enforce_root_trust)
+                .map(|policy| policy.store_metrics_allowed)
+                .unwrap_or(false)
+                && config.metrics_url.is_some();
+        if !metrics_allowed
+            && (metrics.enabled || !metrics.weeks.is_empty() || metrics.pending.is_some())
+        {
+            metrics = MetricsPersistentState::default();
+            save_metrics_state(&paths.metrics_state, &metrics)?;
+        }
         let service = Arc::new(Self {
             paths,
             config,
@@ -878,6 +1009,7 @@ impl StoreService {
             state: Mutex::new(MutableState {
                 catalog,
                 auto_update,
+                metrics,
                 ..MutableState::default()
             }),
         });
@@ -894,6 +1026,7 @@ impl StoreService {
             .spawn(move || {
                 loop {
                     let _ = scheduler.start_auto_update_check();
+                    let _ = scheduler.start_metrics_upload();
                     thread::sleep(AUTO_UPDATE_POLL_INTERVAL);
                 }
             })?;
@@ -934,7 +1067,7 @@ impl StoreService {
                 error.to_string(),
             ))
         } else {
-            self.dispatch_connection(request)
+            self.dispatch_connection(request, uid)
         };
         if response_requires_descriptor(&dispatched.response) != dispatched.descriptor.is_some() {
             return Err(io::Error::new(
@@ -952,11 +1085,22 @@ impl StoreService {
     }
 
     pub fn dispatch(self: &Arc<Self>, request: StoreRequest) -> StoreResponse {
-        self.dispatch_connection(request).response
+        self.dispatch_connection(request, 0).response
     }
 
-    fn dispatch_connection(self: &Arc<Self>, request: StoreRequest) -> DispatchedResponse {
+    fn dispatch_connection(
+        self: &Arc<Self>,
+        request: StoreRequest,
+        peer_uid: u32,
+    ) -> DispatchedResponse {
         let request_id = request.request_id;
+        if matches!(&request.command, StoreCommand::RecordRuntimeMetric { .. }) && peer_uid != 0 {
+            return DispatchedResponse::without_descriptor(StoreResponse::error(
+                request_id,
+                StoreErrorCode::Unauthorized,
+                "runtime metrics can only be recorded by the system application service",
+            ));
+        }
         if let StoreCommand::Media { app_id, media } = request.command {
             return match self.media_response(&app_id, media) {
                 Ok((data, descriptor)) => DispatchedResponse {
@@ -988,6 +1132,17 @@ impl StoreService {
             StoreCommand::RunAutoUpdate => self
                 .start_auto_update_check()
                 .map(|()| StoreResponseData::AutoUpdateAccepted),
+            StoreCommand::GetMetrics => self.metrics_status().map(MetricsStatus::response),
+            StoreCommand::SetMetrics { enabled } => {
+                self.set_metrics(enabled).map(MetricsStatus::response)
+            }
+            StoreCommand::RecordRuntimeMetric {
+                app_id,
+                version,
+                event,
+            } => self
+                .record_runtime_metric(&app_id, &version, event)
+                .map(|()| StoreResponseData::MetricRecorded),
             StoreCommand::PreflightInstall {
                 app_ids,
                 catalog_sequence,
@@ -1075,6 +1230,312 @@ impl StoreService {
             let _ = self.start_auto_update_check();
         }
         self.auto_update_status()
+    }
+
+    fn metrics_status(&self) -> Result<MetricsStatus, StoreServiceError> {
+        let configured = self.config.metrics_url.is_some();
+        let policy =
+            DevicePolicy::load_secure(&self.paths.device_policy, self.paths.enforce_root_trust);
+        let policy_allowed = policy
+            .as_ref()
+            .map(|policy| policy.store_metrics_allowed)
+            .unwrap_or(false);
+        if !configured || !policy_allowed {
+            self.clear_metrics()?;
+        }
+        if policy.is_err() {
+            return Err(StoreServiceError::Unavailable(
+                "device policy is unavailable",
+            ));
+        }
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+        Ok(MetricsStatus {
+            enabled: state.metrics.enabled,
+            policy_allowed,
+            configured,
+            pending: state.metrics.pending.is_some() || !state.metrics.weeks.is_empty(),
+        })
+    }
+
+    fn set_metrics(&self, enabled: bool) -> Result<MetricsStatus, StoreServiceError> {
+        if enabled {
+            if self.config.metrics_url.is_none() {
+                return Err(StoreServiceError::Unconfigured);
+            }
+            let policy =
+                DevicePolicy::load_secure(&self.paths.device_policy, self.paths.enforce_root_trust)
+                    .map_err(|_| StoreServiceError::Unavailable("device policy is unavailable"))?;
+            if !policy.store_metrics_allowed {
+                return Err(StoreServiceError::PolicyRestricted);
+            }
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+            if !state.metrics.enabled {
+                let mut next = state.metrics.clone();
+                next.enabled = true;
+                save_metrics_state(&self.paths.metrics_state, &next)?;
+                state.metrics = next;
+            }
+        } else {
+            self.clear_metrics()?;
+        }
+        self.metrics_status()
+    }
+
+    fn clear_metrics(&self) -> Result<(), StoreServiceError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+        if state.metrics != MetricsPersistentState::default() {
+            let next = MetricsPersistentState::default();
+            save_metrics_state(&self.paths.metrics_state, &next)?;
+            state.metrics = next;
+        }
+        Ok(())
+    }
+
+    fn record_runtime_metric(
+        &self,
+        app_id: &str,
+        version: &str,
+        event: StoreRuntimeMetricEvent,
+    ) -> Result<(), StoreServiceError> {
+        if !cp0_manifest::is_valid_app_id(app_id) || !cp0_manifest::is_valid_app_version(version) {
+            return Err(StoreServiceError::Invalid(
+                "runtime metric application identity is invalid".into(),
+            ));
+        }
+        if !self.metrics_enabled()? {
+            return Err(StoreServiceError::InvalidState);
+        }
+        let installed = self.installer.installed_apps()?;
+        if !installed
+            .iter()
+            .any(|app| app.app_id == app_id && app.version == version)
+        {
+            return Err(StoreServiceError::NotFound);
+        }
+        self.record_metric(app_id, version, Some(event))
+    }
+
+    fn record_install_metric(&self, app_id: &str, version: &str) -> Result<(), StoreServiceError> {
+        if !self.metrics_enabled()? {
+            return Err(StoreServiceError::InvalidState);
+        }
+        self.record_metric(app_id, version, None)
+    }
+
+    fn metrics_enabled(&self) -> Result<bool, StoreServiceError> {
+        self.state
+            .lock()
+            .map(|state| state.metrics.enabled)
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))
+    }
+
+    fn record_metric(
+        &self,
+        app_id: &str,
+        version: &str,
+        event: Option<StoreRuntimeMetricEvent>,
+    ) -> Result<(), StoreServiceError> {
+        let status = self.metrics_status()?;
+        if !status.enabled {
+            return Err(StoreServiceError::InvalidState);
+        }
+        let now = unix_time();
+        let current_week = week_start(now);
+        if current_week == 0 {
+            return Err(StoreServiceError::Invalid(
+                "system clock cannot produce a metrics week".into(),
+            ));
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+        let mut next = state.metrics.clone();
+        normalize_metrics_state(&mut next, now);
+        let week_index = match next
+            .weeks
+            .binary_search_by_key(&current_week, |week| week.week_start_unix_seconds)
+        {
+            Ok(index) => index,
+            Err(index) => {
+                next.weeks.insert(
+                    index,
+                    MetricsWeek {
+                        week_start_unix_seconds: current_week,
+                        records: Vec::new(),
+                    },
+                );
+                index
+            }
+        };
+        let records = &mut next.weeks[week_index].records;
+        let identity = (app_id, version);
+        let record_index = records.binary_search_by(|record| {
+            (record.app_id.as_str(), record.version.as_str()).cmp(&identity)
+        });
+        let record = match record_index {
+            Ok(index) => &mut records[index],
+            Err(index) => {
+                if records.len() == MAX_METRIC_RECORDS {
+                    return Ok(());
+                }
+                records.insert(
+                    index,
+                    AppMetricRecord {
+                        app_id: app_id.into(),
+                        version: version.into(),
+                        installs: 0,
+                        launches: 0,
+                        crashes: 0,
+                    },
+                );
+                &mut records[index]
+            }
+        };
+        match event {
+            None => record.installs = record.installs.saturating_add(1).min(MAX_WEEKLY_INSTALLS),
+            Some(StoreRuntimeMetricEvent::Launch) => {
+                record.launches = record.launches.saturating_add(1).min(MAX_WEEKLY_LAUNCHES);
+            }
+            Some(StoreRuntimeMetricEvent::Crash) => {
+                if record.crashes < record.launches {
+                    record.crashes += 1;
+                }
+            }
+        }
+        if record.installs == 0 && record.launches == 0 {
+            records.remove(record_index.unwrap_or_else(|index| index));
+            if records.is_empty() {
+                next.weeks.remove(week_index);
+            }
+            return Ok(());
+        }
+        save_metrics_state(&self.paths.metrics_state, &next)?;
+        state.metrics = next;
+        Ok(())
+    }
+
+    fn start_metrics_upload(self: &Arc<Self>) -> Result<(), StoreServiceError> {
+        let status = self.metrics_status()?;
+        if !status.enabled {
+            return Err(StoreServiceError::InvalidState);
+        }
+        if !status.policy_allowed {
+            return Err(StoreServiceError::PolicyRestricted);
+        }
+        let metrics_url = self
+            .config
+            .metrics_url
+            .clone()
+            .ok_or(StoreServiceError::Unconfigured)?;
+        let now = unix_time();
+        let current_week = week_start(now);
+        let previous_week = current_week
+            .checked_sub(WEEK_SECONDS)
+            .ok_or(StoreServiceError::InvalidState)?;
+        let report = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+            if state.metrics_upload_running {
+                return Err(StoreServiceError::Busy);
+            }
+            let mut next = state.metrics.clone();
+            normalize_metrics_state(&mut next, now);
+            if next.pending.is_none() {
+                let week = next
+                    .weeks
+                    .iter()
+                    .find(|week| week.week_start_unix_seconds == previous_week)
+                    .ok_or(StoreServiceError::InvalidState)?;
+                if week.records.is_empty() {
+                    return Err(StoreServiceError::InvalidState);
+                }
+                next.pending = Some(AggregateMetricsReport {
+                    schema_version: METRICS_SCHEMA_VERSION,
+                    batch_id: random_metrics_batch_id()?,
+                    week_start_unix_seconds: previous_week,
+                    records: week.records.clone(),
+                });
+            }
+            let report = next
+                .pending
+                .clone()
+                .ok_or(StoreServiceError::InvalidState)?;
+            let encoded = encode_report(&report)
+                .map_err(|error| StoreServiceError::Invalid(error.to_string()))?;
+            save_metrics_state(&self.paths.metrics_state, &next)?;
+            state.metrics = next;
+            state.metrics_upload_running = true;
+            (report, encoded)
+        };
+
+        let service = Arc::clone(self);
+        thread::Builder::new()
+            .name("cp0-store-metrics".into())
+            .spawn(move || {
+                let result = service.network.upload_metrics(&metrics_url, &report.1);
+                if let Err(error) = &result {
+                    eprintln!("cp0-stored: aggregate metrics upload failed: {error}");
+                }
+                service.finish_metrics_upload(&report.0, result);
+            })
+            .map_err(|error| {
+                if let Ok(mut state) = self.state.lock() {
+                    state.metrics_upload_running = false;
+                }
+                StoreServiceError::Io(error)
+            })?;
+        Ok(())
+    }
+
+    fn finish_metrics_upload(
+        &self,
+        report: &AggregateMetricsReport,
+        result: Result<String, StoreServiceError>,
+    ) {
+        let policy_allowed =
+            DevicePolicy::load_secure(&self.paths.device_policy, self.paths.enforce_root_trust)
+                .is_ok_and(|policy| policy.store_metrics_allowed);
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.metrics_upload_running = false;
+        if !policy_allowed || self.config.metrics_url.is_none() {
+            let next = MetricsPersistentState::default();
+            if let Err(error) = save_metrics_state(&self.paths.metrics_state, &next) {
+                eprintln!("cp0-stored: failed to clear revoked metrics: {error}");
+            } else {
+                state.metrics = next;
+            }
+            return;
+        }
+        let Ok(batch_id) = result else {
+            return;
+        };
+        if batch_id != report.batch_id || state.metrics.pending.as_ref() != Some(report) {
+            eprintln!("cp0-stored: ignored a mismatched metrics acknowledgement");
+            return;
+        }
+        let mut next = state.metrics.clone();
+        next.pending = None;
+        next.weeks
+            .retain(|week| week.week_start_unix_seconds != report.week_start_unix_seconds);
+        if let Err(error) = save_metrics_state(&self.paths.metrics_state, &next) {
+            eprintln!("cp0-stored: failed to commit metrics acknowledgement: {error}");
+        } else {
+            state.metrics = next;
+        }
     }
 
     fn start_auto_update_check(self: &Arc<Self>) -> Result<(), StoreServiceError> {
@@ -2233,6 +2694,7 @@ impl StoreService {
         app: &CatalogApp,
         result: Result<InstallOutcome, InstallFailure>,
     ) {
+        let installed = matches!(&result, Ok(InstallOutcome::Installed));
         if let Ok(mut state) = self.state.lock() {
             let Some(operation) = state.operations.get_mut(&app.app_id) else {
                 return;
@@ -2261,6 +2723,13 @@ impl StoreService {
                     operation.state = StoreAppState::Failed;
                     operation.progress_percent = 0;
                     operation.failure_reason = Some(failure.reason);
+                }
+            }
+        }
+        if installed {
+            if let Err(error) = self.record_install_metric(&app.app_id, &app.version) {
+                if !matches!(error, StoreServiceError::InvalidState) {
+                    eprintln!("cp0-stored: failed to record install aggregate: {error}");
                 }
             }
         }
@@ -3253,6 +3722,176 @@ fn auto_update_due(state: &AutoUpdatePersistentState, now: u64) -> bool {
             || now.saturating_sub(state.last_check_unix_seconds) >= AUTO_UPDATE_INTERVAL_SECONDS)
 }
 
+fn normalize_metrics_state(state: &mut MetricsPersistentState, now: u64) {
+    let current_week = week_start(now);
+    let previous_week = current_week.saturating_sub(WEEK_SECONDS);
+    state.weeks.retain(|week| {
+        week.week_start_unix_seconds == current_week
+            || week.week_start_unix_seconds == previous_week
+    });
+    if state
+        .pending
+        .as_ref()
+        .is_some_and(|pending| pending.week_start_unix_seconds != previous_week)
+    {
+        state.pending = None;
+    }
+}
+
+fn random_metrics_batch_id() -> Result<String, StoreServiceError> {
+    let mut random = [0_u8; 16];
+    let mut source = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open("/dev/urandom")?;
+    source.read_exact(&mut random)?;
+    Ok(format!("batch_{}", cp0_store_protocol::lower_hex(&random)))
+}
+
+fn validate_metrics_state(state: &MetricsPersistentState) -> Result<(), StoreServiceError> {
+    if state.schema_version != METRICS_STATE_SCHEMA_VERSION {
+        return Err(StoreServiceError::Invalid(
+            "metrics state schema is unsupported".into(),
+        ));
+    }
+    if !state.enabled && (!state.weeks.is_empty() || state.pending.is_some()) {
+        return Err(StoreServiceError::Invalid(
+            "disabled metrics state contains unsent data".into(),
+        ));
+    }
+    if state.weeks.len() > 2 {
+        return Err(StoreServiceError::Invalid(
+            "metrics state retains too many weeks".into(),
+        ));
+    }
+    let mut previous_week = None;
+    for week in &state.weeks {
+        if !cp0_store_metrics::is_week_start(week.week_start_unix_seconds)
+            || previous_week.is_some_and(|previous| previous >= week.week_start_unix_seconds)
+            || week.records.is_empty()
+            || week.records.len() > MAX_METRIC_RECORDS
+        {
+            return Err(StoreServiceError::Invalid(
+                "metrics week is outside limits".into(),
+            ));
+        }
+        let report = AggregateMetricsReport {
+            schema_version: METRICS_SCHEMA_VERSION,
+            batch_id: "batch_00000000000000000000000000000000".into(),
+            week_start_unix_seconds: week.week_start_unix_seconds,
+            records: week.records.clone(),
+        };
+        report
+            .validate()
+            .map_err(|error| StoreServiceError::Invalid(error.to_string()))?;
+        previous_week = Some(week.week_start_unix_seconds);
+    }
+    if let Some(pending) = &state.pending {
+        pending
+            .validate()
+            .map_err(|error| StoreServiceError::Invalid(error.to_string()))?;
+        if !state.weeks.iter().any(|week| {
+            week.week_start_unix_seconds == pending.week_start_unix_seconds
+                && week.records == pending.records
+        }) {
+            return Err(StoreServiceError::Invalid(
+                "pending metrics do not match retained aggregates".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn load_metrics_state(path: &Path) -> Result<MetricsPersistentState, StoreServiceError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(MetricsPersistentState::default());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    // SAFETY: geteuid has no pointer arguments or caller-side preconditions.
+    let effective_uid = unsafe { libc::geteuid() };
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != effective_uid
+        || metadata.mode() & 0o077 != 0
+        || metadata.len() == 0
+        || metadata.len() > MAX_METRICS_STATE_BYTES
+    {
+        return Err(StoreServiceError::Untrusted(
+            "metrics state metadata is invalid".into(),
+        ));
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    let opened = file.metadata()?;
+    if opened.dev() != metadata.dev()
+        || opened.ino() != metadata.ino()
+        || opened.len() != metadata.len()
+    {
+        return Err(StoreServiceError::Untrusted(
+            "metrics state changed while opening".into(),
+        ));
+    }
+    let mut encoded = Vec::with_capacity(opened.len() as usize);
+    file.read_to_end(&mut encoded)?;
+    let state: MetricsPersistentState = serde_json::from_slice(&encoded)
+        .map_err(|error| StoreServiceError::Invalid(error.to_string()))?;
+    validate_metrics_state(&state)?;
+    Ok(state)
+}
+
+fn save_metrics_state(
+    path: &Path,
+    state: &MetricsPersistentState,
+) -> Result<(), StoreServiceError> {
+    validate_metrics_state(state)?;
+    let mut encoded =
+        serde_json::to_vec(state).map_err(|error| StoreServiceError::Invalid(error.to_string()))?;
+    encoded.push(b'\n');
+    if encoded.len() as u64 > MAX_METRICS_STATE_BYTES {
+        return Err(StoreServiceError::Invalid(
+            "metrics state exceeds its bound".into(),
+        ));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| StoreServiceError::Invalid("metrics state has no parent".into()))?;
+    let parent_metadata = fs::symlink_metadata(parent)?;
+    // SAFETY: geteuid has no pointer arguments or caller-side preconditions.
+    let effective_uid = unsafe { libc::geteuid() };
+    if !parent_metadata.is_dir()
+        || parent_metadata.file_type().is_symlink()
+        || parent_metadata.uid() != effective_uid
+        || parent_metadata.mode() & 0o077 != 0
+    {
+        return Err(StoreServiceError::Untrusted(
+            "metrics state directory is not private".into(),
+        ));
+    }
+    let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(".metrics-{}-{sequence}.tmp", std::process::id()));
+    let result = (|| -> io::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)?;
+        file.write_all(&encoded)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result.map_err(StoreServiceError::Io)
+}
+
 fn load_auto_update_state(path: &Path) -> Result<AutoUpdatePersistentState, StoreServiceError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -3706,6 +4345,55 @@ mod tests {
                 },
                 DownloadControl::Cancel => DownloadOutcome::Canceled,
             })
+        }
+    }
+
+    #[derive(Debug)]
+    struct MetricsNetwork {
+        fail_first: AtomicBool,
+        uploads: Mutex<Vec<AggregateMetricsReport>>,
+    }
+
+    impl MetricsNetwork {
+        fn new(fail_first: bool) -> Self {
+            Self {
+                fail_first: AtomicBool::new(fail_first),
+                uploads: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl StoreNetwork for MetricsNetwork {
+        fn fetch_catalog(&self, _url: &str) -> Result<Vec<u8>, StoreServiceError> {
+            Err(StoreServiceError::Unavailable(
+                "mock catalog is unavailable",
+            ))
+        }
+
+        fn upload_metrics(&self, _url: &str, encoded: &[u8]) -> Result<String, StoreServiceError> {
+            let report = cp0_store_metrics::decode_report(encoded)
+                .map_err(|error| StoreServiceError::Invalid(error.to_string()))?;
+            let batch_id = report.batch_id.clone();
+            self.uploads.lock().unwrap().push(report);
+            if self.fail_first.swap(false, Ordering::SeqCst) {
+                Err(StoreServiceError::Unavailable(
+                    "mock metrics endpoint disconnected",
+                ))
+            } else {
+                Ok(batch_id)
+            }
+        }
+
+        fn download_package(
+            &self,
+            _url: &str,
+            _destination: &Path,
+            _expected_bytes: u64,
+            _control: &mut dyn FnMut(u8) -> DownloadControl,
+        ) -> Result<DownloadOutcome, StoreServiceError> {
+            Err(StoreServiceError::Unavailable(
+                "mock package is unavailable",
+            ))
         }
     }
 
@@ -4189,6 +4877,26 @@ mod tests {
         panic!("{app_id} did not reach {expected:?}");
     }
 
+    fn wait_for_metrics_upload(service: &StoreService) {
+        for _ in 0..2_000 {
+            if !service.state.lock().unwrap().metrics_upload_running {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        panic!("metrics upload did not finish");
+    }
+
+    fn wait_for_auto_update_check(service: &StoreService) {
+        for _ in 0..2_000 {
+            if !service.state.lock().unwrap().auto_update_running {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        panic!("automatic update check did not finish");
+    }
+
     struct Fixture {
         root: PathBuf,
         paths: StorePaths,
@@ -4218,13 +4926,14 @@ mod tests {
             fs::write(trust_root.join(format!("{key_id}.pub")), public).unwrap();
             fs::write(
                 &device_policy,
-                br#"{"schema_version":1,"authority":"personal","developer_mode_allowed":true,"recovery_mode_allowed":true,"store_install_allowed":true,"store_auto_update_allowed":true,"app_launch_policy":"allow-all","allowed_apps":[],"denied_permissions":[]}"#,
+                br#"{"schema_version":1,"authority":"personal","developer_mode_allowed":true,"recovery_mode_allowed":true,"store_install_allowed":true,"store_auto_update_allowed":true,"store_metrics_allowed":true,"app_launch_policy":"allow-all","allowed_apps":[],"denied_permissions":[]}"#,
             )
             .unwrap();
             Self {
                 paths: StorePaths {
                     catalog_cache: cache_root.join("catalog.json"),
                     auto_update_state: cache_root.join("auto-update.json"),
+                    metrics_state: cache_root.join("metrics.json"),
                     cache_root,
                     trust_root,
                     appd_inbox: inbox,
@@ -4402,6 +5111,7 @@ mod tests {
             fixture.paths.clone(),
             StoreConfig {
                 catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
             },
             Arc::new(MockNetwork {
                 catalog: first.clone(),
@@ -4418,6 +5128,7 @@ mod tests {
             fixture.paths.clone(),
             StoreConfig {
                 catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
             },
             Arc::new(MockNetwork {
                 catalog: fixture.signed_catalog(4),
@@ -4440,6 +5151,7 @@ mod tests {
             fixture.paths.clone(),
             StoreConfig {
                 catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
             },
             Arc::new(MockNetwork {
                 catalog: changed,
@@ -4465,7 +5177,10 @@ mod tests {
         let fixture = Fixture::new("today");
         let service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: fixture.package.clone(),
@@ -4572,6 +5287,7 @@ mod tests {
             fixture.paths.clone(),
             StoreConfig {
                 catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
             },
             Arc::new(MediaNetwork {
                 catalog: catalog.clone(),
@@ -4621,13 +5337,16 @@ mod tests {
             0
         );
 
-        let rich = service.dispatch_connection(StoreRequest {
-            protocol_version: cp0_store_protocol::STORE_PROTOCOL_VERSION,
-            request_id: 71,
-            command: StoreCommand::Details {
-                app_id: app.app_id.clone(),
+        let rich = service.dispatch_connection(
+            StoreRequest {
+                protocol_version: cp0_store_protocol::STORE_PROTOCOL_VERSION,
+                request_id: 71,
+                command: StoreCommand::Details {
+                    app_id: app.app_id.clone(),
+                },
             },
-        });
+            0,
+        );
         assert!(rich.descriptor.is_none());
         assert!(matches!(
             rich.response.outcome,
@@ -4647,14 +5366,17 @@ mod tests {
                 png_fixture(320, 170),
             ),
         ] {
-            let media = service.dispatch_connection(StoreRequest {
-                protocol_version: cp0_store_protocol::STORE_PROTOCOL_VERSION,
-                request_id,
-                command: StoreCommand::Media {
-                    app_id: app.app_id.clone(),
-                    media: selector,
+            let media = service.dispatch_connection(
+                StoreRequest {
+                    protocol_version: cp0_store_protocol::STORE_PROTOCOL_VERSION,
+                    request_id,
+                    command: StoreCommand::Media {
+                        app_id: app.app_id.clone(),
+                        media: selector,
+                    },
                 },
-            });
+                0,
+            );
             assert!(response_requires_descriptor(&media.response));
             let mut descriptor = media.descriptor.unwrap();
             let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFL) };
@@ -4680,6 +5402,7 @@ mod tests {
             fixture.paths.clone(),
             StoreConfig {
                 catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
             },
             Arc::new(MediaNetwork {
                 catalog: catalog.clone(),
@@ -4755,7 +5478,10 @@ mod tests {
         symlink(&target, fixture.paths.cache_root.join("media")).unwrap();
         let service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: fixture.package.clone(),
@@ -4787,6 +5513,7 @@ mod tests {
             fixture.paths.clone(),
             StoreConfig {
                 catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
             },
             Arc::new(MockNetwork {
                 catalog,
@@ -4822,7 +5549,10 @@ mod tests {
         let installer = Arc::new(MockInstaller::default());
         let service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             network.clone(),
             installer.clone(),
             [0],
@@ -4875,7 +5605,10 @@ mod tests {
         let network = Arc::new(PausableNetwork::new(fixture.package.clone()));
         let service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             network.clone(),
             Arc::new(MockInstaller::default()),
             [0],
@@ -4917,7 +5650,10 @@ mod tests {
         let installer = Arc::new(MockInstaller::default());
         let service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             network.clone(),
             installer.clone(),
             [0],
@@ -4986,6 +5722,7 @@ mod tests {
             fixture.paths.clone(),
             StoreConfig {
                 catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
             },
             network.clone(),
             installer.clone(),
@@ -5077,7 +5814,10 @@ mod tests {
             .clone();
         let network_service = StoreService::new(
             network_fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(FailingNetwork),
             Arc::new(MockInstaller::default()),
             [0],
@@ -5099,7 +5839,10 @@ mod tests {
             .clone();
         let storage_service = StoreService::new(
             storage_fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: storage_fixture.package.clone(),
@@ -5130,7 +5873,10 @@ mod tests {
             .clone();
         let verification_service = StoreService::new(
             verification_fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: vec![b'x'; verification_fixture.package.len()],
@@ -5157,7 +5903,10 @@ mod tests {
             .clone();
         let installer_service = StoreService::new(
             installer_fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: installer_fixture.package.clone(),
@@ -5184,7 +5933,10 @@ mod tests {
         let installer = Arc::new(BlockingInstaller::new());
         let service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: fixture.package.clone(),
@@ -5223,7 +5975,10 @@ mod tests {
             .join(format!("{}.part", app.package_sha256));
         let first_service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(DisconnectingNetwork {
                 package: fixture.package.clone(),
             }),
@@ -5245,7 +6000,10 @@ mod tests {
         let installer = Arc::new(MockInstaller::default());
         let restarted_service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: fixture.package.clone(),
@@ -5274,7 +6032,10 @@ mod tests {
         let rejected_installer = Arc::new(MockInstaller::default());
         let bad_service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: vec![b'x'; fixture.package.len()],
@@ -5295,7 +6056,10 @@ mod tests {
         let recovered_installer = Arc::new(MockInstaller::default());
         let recovered_service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: fixture.package.clone(),
@@ -5321,7 +6085,10 @@ mod tests {
         let installer = Arc::new(CommitThenDisconnectInstaller::new());
         let first_service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: fixture.package.clone(),
@@ -5345,7 +6112,10 @@ mod tests {
 
         let restarted_service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: fixture.package.clone(),
@@ -5373,7 +6143,10 @@ mod tests {
         fs::write(&unrelated, b"preserve").unwrap();
         StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(FailingNetwork),
             Arc::new(MockInstaller::default()),
             [0],
@@ -5391,7 +6164,10 @@ mod tests {
         assert!(matches!(
             StoreService::new(
                 fixture.paths.clone(),
-                StoreConfig { catalog_url: None },
+                StoreConfig {
+                    catalog_url: None,
+                    metrics_url: None
+                },
                 Arc::new(FailingNetwork),
                 Arc::new(MockInstaller::default()),
                 [0],
@@ -5436,6 +6212,7 @@ mod tests {
             fixture.paths.clone(),
             StoreConfig {
                 catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
             },
             Arc::new(MockNetwork {
                 catalog: replacement_catalog,
@@ -5517,7 +6294,10 @@ mod tests {
         fs::write(&fixture.paths.catalog_cache, catalog).unwrap();
         let service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: fixture.package.clone(),
@@ -5595,7 +6375,10 @@ mod tests {
         fs::write(&fixture.paths.catalog_cache, encoded).unwrap();
         let service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: fixture.package.clone(),
@@ -5635,7 +6418,10 @@ mod tests {
         .unwrap();
         let service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: fixture.package.clone(),
@@ -5694,7 +6480,10 @@ mod tests {
         .unwrap();
         let low_space = StoreService::new_with_space_probe(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: fixture.package.clone(),
@@ -5725,7 +6514,10 @@ mod tests {
         fs::write(&fixture.paths.catalog_cache, catalog).unwrap();
         let service = StoreService::new(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(MockNetwork {
                 catalog: Vec::new(),
                 package: fixture.package.clone(),
@@ -5757,6 +6549,7 @@ mod tests {
             fixture.paths.clone(),
             StoreConfig {
                 catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
             },
             Arc::new(MockNetwork {
                 catalog: fixture.signed_catalog(1),
@@ -5780,7 +6573,10 @@ mod tests {
 
         let restarted = StoreService::new_with_probes(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(FailingNetwork),
             Arc::new(MockInstaller::default()),
             [0],
@@ -5808,7 +6604,10 @@ mod tests {
         .unwrap();
         let locked = StoreService::new_with_probes(
             fixture.paths.clone(),
-            StoreConfig { catalog_url: None },
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: None,
+            },
             Arc::new(FailingNetwork),
             Arc::new(MockInstaller::default()),
             [0],
@@ -5830,6 +6629,160 @@ mod tests {
             load_auto_update_state(&fixture.paths.auto_update_state),
             Err(StoreServiceError::Untrusted(_))
         ));
+    }
+
+    #[test]
+    fn metrics_are_default_off_bounded_and_cleared_on_consent_or_policy_revocation() {
+        let fixture = Fixture::new("metrics-consent");
+        let app_id = "dev.cardputerzero.metrics";
+        let version = "1.2.3";
+        let installer = Arc::new(AutoInstaller::new(vec![StoreInstalledApp {
+            app_id: app_id.into(),
+            version: version.into(),
+            permissions: Vec::new(),
+        }]));
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: Some("https://store.example.com/metrics/v1/aggregate".into()),
+            },
+            Arc::new(MetricsNetwork::new(false)),
+            installer,
+            [0],
+        )
+        .unwrap();
+
+        let status = service.metrics_status().unwrap();
+        assert!(!status.enabled && status.policy_allowed && status.configured && !status.pending);
+        assert!(matches!(
+            service.record_runtime_metric(app_id, version, StoreRuntimeMetricEvent::Launch),
+            Err(StoreServiceError::InvalidState)
+        ));
+        service.set_metrics(true).unwrap();
+        service
+            .record_runtime_metric(app_id, version, StoreRuntimeMetricEvent::Launch)
+            .unwrap();
+        service
+            .record_runtime_metric(app_id, version, StoreRuntimeMetricEvent::Crash)
+            .unwrap();
+        service.record_install_metric(app_id, version).unwrap();
+        {
+            let state = service.state.lock().unwrap();
+            let record = &state.metrics.weeks[0].records[0];
+            assert_eq!(
+                (record.installs, record.launches, record.crashes),
+                (1, 1, 1)
+            );
+        }
+        assert!(
+            fs::read_to_string(&fixture.paths.metrics_state)
+                .unwrap()
+                .contains(app_id)
+        );
+
+        service.set_metrics(false).unwrap();
+        assert_eq!(
+            load_metrics_state(&fixture.paths.metrics_state).unwrap(),
+            MetricsPersistentState::default()
+        );
+        service.set_metrics(true).unwrap();
+        service.record_install_metric(app_id, version).unwrap();
+        let mut policy: serde_json::Value =
+            serde_json::from_slice(&fs::read(&fixture.paths.device_policy).unwrap()).unwrap();
+        policy["store_metrics_allowed"] = serde_json::Value::Bool(false);
+        fs::write(
+            &fixture.paths.device_policy,
+            serde_json::to_vec(&policy).unwrap(),
+        )
+        .unwrap();
+        let status = service.metrics_status().unwrap();
+        assert!(!status.enabled && !status.policy_allowed && !status.pending);
+        assert_eq!(
+            load_metrics_state(&fixture.paths.metrics_state).unwrap(),
+            MetricsPersistentState::default()
+        );
+
+        let denied = service.dispatch_connection(
+            StoreRequest {
+                protocol_version: cp0_store_protocol::STORE_PROTOCOL_VERSION,
+                request_id: 44,
+                command: StoreCommand::RecordRuntimeMetric {
+                    app_id: app_id.into(),
+                    version: version.into(),
+                    event: StoreRuntimeMetricEvent::Launch,
+                },
+            },
+            1000,
+        );
+        assert!(matches!(
+            denied.response.outcome,
+            cp0_store_protocol::StoreOutcome::Error {
+                code: StoreErrorCode::Unauthorized,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn metrics_retry_reuses_batch_and_clears_only_after_exact_acknowledgement() {
+        let fixture = Fixture::new("metrics-retry");
+        let network = Arc::new(MetricsNetwork::new(true));
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: None,
+                metrics_url: Some("https://store.example.com/metrics/v1/aggregate".into()),
+            },
+            network.clone(),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+        service.set_metrics(true).unwrap();
+        let previous_week = week_start(unix_time()) - WEEK_SECONDS;
+        {
+            let mut state = service.state.lock().unwrap();
+            state.metrics.weeks.push(MetricsWeek {
+                week_start_unix_seconds: previous_week,
+                records: vec![AppMetricRecord {
+                    app_id: "dev.cardputerzero.metrics".into(),
+                    version: "1.2.3".into(),
+                    installs: 1,
+                    launches: 2,
+                    crashes: 1,
+                }],
+            });
+            save_metrics_state(&fixture.paths.metrics_state, &state.metrics).unwrap();
+        }
+
+        service.start_metrics_upload().unwrap();
+        wait_for_metrics_upload(&service);
+        let pending = service
+            .state
+            .lock()
+            .unwrap()
+            .metrics
+            .pending
+            .as_ref()
+            .unwrap()
+            .clone();
+        let first_batch = pending.batch_id.clone();
+        assert!(cp0_store_metrics::is_valid_batch_id(&first_batch));
+        service.finish_metrics_upload(
+            &pending,
+            Ok("batch_ffffffffffffffffffffffffffffffff".into()),
+        );
+        assert!(service.state.lock().unwrap().metrics.pending.is_some());
+        service.start_metrics_upload().unwrap();
+        wait_for_metrics_upload(&service);
+        let state = service.state.lock().unwrap();
+        assert!(state.metrics.pending.is_none() && state.metrics.weeks.is_empty());
+        drop(state);
+        let uploads = network.uploads.lock().unwrap();
+        assert_eq!(uploads.len(), 2);
+        assert_eq!(uploads[0].batch_id, first_batch);
+        assert_eq!(uploads[1].batch_id, first_batch);
     }
 
     #[test]
@@ -5890,6 +6843,7 @@ mod tests {
             fixture.paths.clone(),
             StoreConfig {
                 catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
             },
             Arc::new(MockNetwork {
                 catalog,
@@ -5904,6 +6858,7 @@ mod tests {
 
         service.set_auto_update(true).unwrap();
         wait_for_app_state(&service, &alpha.app_id, StoreAppState::Installed);
+        wait_for_auto_update_check(&service);
         assert_eq!(
             installer.automatic_installs.lock().unwrap().as_slice(),
             [alpha.app_id.as_str()]
@@ -5946,6 +6901,7 @@ mod tests {
             fixture.paths.clone(),
             StoreConfig {
                 catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
             },
             Arc::new(MockNetwork {
                 catalog,
@@ -6087,10 +7043,11 @@ mod tests {
         let config = root.join("store.conf");
         fs::write(
             &config,
-            "catalog_url=https://store.example.com/v1/catalog.json\n",
+            "catalog_url=https://store.example.com/v1/catalog.json\nmetrics_url=https://store.example.com/metrics/v1/aggregate\n",
         )
         .unwrap();
-        assert!(StoreConfig::load(&config).unwrap().catalog_url.is_some());
+        let loaded = StoreConfig::load(&config).unwrap();
+        assert!(loaded.catalog_url.is_some() && loaded.metrics_url.is_some());
         fs::write(
             &config,
             "catalog_url=http://store.example.com/catalog.json\n",

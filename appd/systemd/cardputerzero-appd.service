@@ -1,7 +1,7 @@
 [Unit]
 Description=CardputerZero application lifecycle daemon
-Requires=cardputerzero-appd.socket cardputerzero-broker.socket cardputerzero-networkd.socket cardputerzero-documentd.socket cardputerzero-audiod.socket cardputerzero-camerad.socket cardputerzero-gpiod.socket cardputerzero-radiod.socket cardputerzero-storaged.socket
-After=cardputerzero-appd.socket cardputerzero-broker.socket cardputerzero-networkd.socket cardputerzero-documentd.socket cardputerzero-audiod.socket cardputerzero-camerad.socket cardputerzero-gpiod.socket cardputerzero-radiod.socket cardputerzero-storaged.socket
+Requires=cardputerzero-appd.socket cardputerzero-broker.socket cardputerzero-networkd.socket cardputerzero-documentd.socket cardputerzero-audiod.socket cardputerzero-camerad.socket cardputerzero-gpiod.socket cardputerzero-radiod.socket cardputerzero-storaged.socket cardputerzero-stored.socket
+After=cardputerzero-appd.socket cardputerzero-broker.socket cardputerzero-networkd.socket cardputerzero-documentd.socket cardputerzero-audiod.socket cardputerzero-camerad.socket cardputerzero-gpiod.socket cardputerzero-radiod.socket cardputerzero-storaged.socket cardputerzero-stored.socket
 
 [Service]
 Type=simple

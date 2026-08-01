@@ -3,6 +3,7 @@ use std::fmt;
 use std::io::BufReader;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -15,6 +16,7 @@ use cp0_manifest::Permission;
 use cp0_network_protocol::NetworkErrorCode as ServiceNetworkErrorCode;
 use cp0_radio_protocol::RadioErrorCode as ServiceRadioErrorCode;
 use cp0_storage_protocol::StorageErrorCode as ServiceStorageErrorCode;
+use cp0_store_protocol::StoreRuntimeMetricEvent;
 
 use crate::protocol::APPD_PROTOCOL_VERSION;
 use crate::{
@@ -25,13 +27,14 @@ use crate::{
     ErrorCode, GpioClient, GpioClientError, InstallError, IntentQueue, NetworkClient,
     NetworkClientError, NotificationQueue, PackageInstaller, PermissionChoice,
     PermissionCoordinator, PermissionPromptError, PermissionRequestResult, PolicyError,
-    RadioClient, RadioClientError, ResponseData, StorageClient, StorageClientError, TrustPaths,
-    TrustPolicy, encode_broker_response, peer_credentials, read_broker_request, read_request,
-    write_broker_response, write_response,
+    RadioClient, RadioClientError, ResponseData, StorageClient, StorageClientError,
+    StoreMetricsClient, TrustPaths, TrustPolicy, encode_broker_response, peer_credentials,
+    read_broker_request, read_request, write_broker_response, write_response,
 };
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
 const BROKER_CLIENT_TIMEOUT: Duration = Duration::from_millis(500);
+const RUNTIME_MONITOR_RETRY: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 pub enum ServerError {
@@ -65,6 +68,9 @@ pub struct AppdServer {
     store_installer_uids: BTreeSet<u32>,
     capabilities: CapabilityServices,
     installer: PackageInstaller,
+    store_metrics: StoreMetricsClient,
+    runtime: Arc<Mutex<Option<RuntimeSession>>>,
+    runtime_sequence: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -86,6 +92,14 @@ struct ServerState {
     document_prompts: DocumentCoordinator,
     intents: IntentQueue,
     policy: DevicePolicyEngine,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeSession {
+    token: u64,
+    app_id: String,
+    version: String,
+    explicit_stop: bool,
 }
 
 impl AppdServer {
@@ -155,6 +169,9 @@ impl AppdServer {
             trusted_uids: trusted_uids.into_iter().collect(),
             store_installer_uids: BTreeSet::new(),
             capabilities,
+            store_metrics: StoreMetricsClient::default(),
+            runtime: Arc::new(Mutex::new(None)),
+            runtime_sequence: Arc::new(AtomicU64::new(1)),
             installer: PackageInstaller::new(
                 crate::DEFAULT_APPS_ROOT,
                 TrustPolicy::new(TrustPaths::default(), true),
@@ -174,6 +191,11 @@ impl AppdServer {
             .lock()
             .expect("new application server state cannot be poisoned")
             .policy = policy;
+        self
+    }
+
+    pub fn with_store_metrics_client(mut self, client: StoreMetricsClient) -> Self {
+        self.store_metrics = client;
         self
     }
 
@@ -277,6 +299,7 @@ impl AppdServer {
                 );
             }
         };
+        let mut started_runtime = None;
         let result: Result<ResponseData, CommandError> = match command {
             AppdCommand::Install { .. } => unreachable!("install returned before state lock"),
             AppdCommand::StoreInstall { .. } => {
@@ -289,17 +312,28 @@ impl AppdServer {
             AppdCommand::StoreListInstalled { offset, limit } => {
                 Self::list_store_apps(&state, offset, limit).map_err(CommandError::Manager)
             }
-            AppdCommand::Start { app_id } => self
-                .start_app(&state, &app_id)
-                .map(|unit| ResponseData::Started { app_id, unit }),
-            AppdCommand::Stop { app_id } => match state.manager.stop(&app_id) {
-                Ok(()) => {
-                    state.permissions.clear_app_session(&app_id);
-                    state.document_prompts.clear_app(&app_id);
-                    Ok(ResponseData::Stopped { app_id })
+            AppdCommand::Start { app_id } => match self.start_app(&state, &app_id) {
+                Ok((unit, version)) => {
+                    started_runtime = Some((app_id.clone(), version, unit.clone()));
+                    Ok(ResponseData::Started { app_id, unit })
                 }
-                Err(error) => Err(CommandError::Manager(error)),
+                Err(error) => Err(error),
             },
+            AppdCommand::Stop { app_id } => {
+                let runtime_token = self.mark_explicit_stop(&app_id);
+                match state.manager.stop(&app_id) {
+                    Ok(()) => {
+                        self.finish_explicit_stop(runtime_token);
+                        state.permissions.clear_app_session(&app_id);
+                        state.document_prompts.clear_app(&app_id);
+                        Ok(ResponseData::Stopped { app_id })
+                    }
+                    Err(error) => {
+                        self.cancel_explicit_stop(runtime_token);
+                        Err(CommandError::Manager(error))
+                    }
+                }
+            }
             AppdCommand::Uninstall { app_id } => {
                 let result = state
                     .manager
@@ -395,6 +429,10 @@ impl AppdServer {
                 })
                 .map_err(CommandError::Document),
         };
+        drop(state);
+        if let Some((app_id, version, unit)) = started_runtime {
+            self.start_runtime_monitor(app_id, version, unit);
+        }
         match result {
             Ok(data) => AppdResponse::success(request_id, data),
             Err(error) => {
@@ -554,13 +592,142 @@ impl AppdServer {
         self.commit_prepared_install(request_id, prepared, true)
     }
 
-    fn start_app(&self, state: &ServerState, app_id: &str) -> Result<String, CommandError> {
+    fn start_app(
+        &self,
+        state: &ServerState,
+        app_id: &str,
+    ) -> Result<(String, String), CommandError> {
         if !state.policy.allows_app(app_id) {
             return Err(CommandError::Restricted(
                 "application launch is blocked by device policy",
             ));
         }
-        state.manager.start(app_id).map_err(CommandError::Manager)
+        let version = state
+            .manager
+            .installed_manifest(app_id)
+            .map_err(CommandError::Manager)?
+            .version;
+        state
+            .manager
+            .start(app_id)
+            .map(|unit| (unit, version))
+            .map_err(CommandError::Manager)
+    }
+
+    fn start_runtime_monitor(&self, app_id: String, version: String, unit: String) {
+        let token = self.runtime_sequence.fetch_add(1, Ordering::Relaxed);
+        let Ok(mut runtime) = self.runtime.lock() else {
+            eprintln!("cp0-appd: runtime metrics state is unavailable");
+            return;
+        };
+        *runtime = Some(RuntimeSession {
+            token,
+            app_id: app_id.clone(),
+            version: version.clone(),
+            explicit_stop: false,
+        });
+        drop(runtime);
+
+        let server = self.clone();
+        if let Err(error) = thread::Builder::new()
+            .name("cp0-app-runtime-watch".into())
+            .spawn(move || server.monitor_runtime(token, app_id, version, unit))
+        {
+            eprintln!("cp0-appd: cannot start runtime monitor: {error}");
+            if let Ok(mut runtime) = self.runtime.lock() {
+                if runtime
+                    .as_ref()
+                    .is_some_and(|session| session.token == token)
+                {
+                    *runtime = None;
+                }
+            }
+        }
+    }
+
+    fn monitor_runtime(&self, token: u64, app_id: String, version: String, unit: String) {
+        self.report_runtime_metric(token, &app_id, &version, StoreRuntimeMetricEvent::Launch);
+        loop {
+            if !self.runtime_is_current(token) {
+                return;
+            }
+            match crate::lifecycle::wait_for_unit_stopped(&unit) {
+                Ok(()) => break,
+                Err(error) => {
+                    eprintln!("cp0-appd: runtime monitor wait failed for {app_id}: {error}");
+                    thread::sleep(RUNTIME_MONITOR_RETRY);
+                }
+            }
+        }
+
+        let crashed = match self.runtime.lock() {
+            Ok(mut runtime) => match take_runtime_end(&mut runtime, token) {
+                Some(crashed) => crashed,
+                None => return,
+            },
+            Err(_) => return,
+        };
+        if let Ok(mut state) = self.state.lock() {
+            state.permissions.clear_app_session(&app_id);
+            state.document_prompts.clear_app(&app_id);
+        }
+        if crashed {
+            self.report_runtime_metric(token, &app_id, &version, StoreRuntimeMetricEvent::Crash);
+        }
+    }
+
+    fn report_runtime_metric(
+        &self,
+        token: u64,
+        app_id: &str,
+        version: &str,
+        event: StoreRuntimeMetricEvent,
+    ) {
+        if let Err(error) = self.store_metrics.record(token, app_id, version, event) {
+            eprintln!("cp0-appd: optional runtime aggregate was not recorded: {error}");
+        }
+    }
+
+    fn runtime_is_current(&self, token: u64) -> bool {
+        self.runtime.lock().is_ok_and(|runtime| {
+            runtime
+                .as_ref()
+                .is_some_and(|session| session.token == token)
+        })
+    }
+
+    fn mark_explicit_stop(&self, app_id: &str) -> Option<u64> {
+        let mut runtime = self.runtime.lock().ok()?;
+        let session = runtime
+            .as_mut()
+            .filter(|session| session.app_id == app_id)?;
+        session.explicit_stop = true;
+        Some(session.token)
+    }
+
+    fn cancel_explicit_stop(&self, token: Option<u64>) {
+        let Some(token) = token else {
+            return;
+        };
+        if let Ok(mut runtime) = self.runtime.lock() {
+            if let Some(session) = runtime.as_mut().filter(|session| session.token == token) {
+                session.explicit_stop = false;
+            }
+        }
+    }
+
+    fn finish_explicit_stop(&self, token: Option<u64>) {
+        let Some(token) = token else {
+            return;
+        };
+        if let Ok(mut runtime) = self.runtime.lock() {
+            if runtime
+                .as_ref()
+                .is_some_and(|session| session.token == token)
+            {
+                *runtime = None;
+            }
+        }
     }
 
     fn list_apps(
@@ -1067,15 +1234,19 @@ impl AppdServer {
                 return;
             }
         };
+        let stop_token = self.mark_explicit_stop(&transition.sender_app_id);
         match state.manager.is_running(&transition.sender_app_id) {
             Ok(true) => {
                 if let Err(error) = state.manager.stop(&transition.sender_app_id) {
+                    self.cancel_explicit_stop(stop_token);
                     eprintln!("cp0-appd: cannot stop intent sender: {error}");
                     return;
                 }
+                self.finish_explicit_stop(stop_token);
             }
-            Ok(false) => {}
+            Ok(false) => self.finish_explicit_stop(stop_token),
             Err(error) => {
+                self.cancel_explicit_stop(stop_token);
                 eprintln!("cp0-appd: cannot verify intent sender state: {error}");
                 return;
             }
@@ -1084,8 +1255,21 @@ impl AppdServer {
             .permissions
             .clear_app_session(&transition.sender_app_id);
         state.document_prompts.clear_app(&transition.sender_app_id);
-        if let Err(error) = state.manager.start(&transition.target_app_id) {
-            eprintln!("cp0-appd: cannot start accepted intent receiver: {error}");
+        let version = match state.manager.installed_manifest(&transition.target_app_id) {
+            Ok(manifest) => manifest.version,
+            Err(error) => {
+                eprintln!("cp0-appd: cannot inspect accepted intent receiver: {error}");
+                return;
+            }
+        };
+        match state.manager.start(&transition.target_app_id) {
+            Ok(unit) => {
+                drop(state);
+                self.start_runtime_monitor(transition.target_app_id, version, unit);
+            }
+            Err(error) => {
+                eprintln!("cp0-appd: cannot start accepted intent receiver: {error}");
+            }
         }
     }
 
@@ -1898,6 +2082,13 @@ fn cgroup_contains_unit(cgroup: &str, unit: &str) -> bool {
     })
 }
 
+fn take_runtime_end(runtime: &mut Option<RuntimeSession>, token: u64) -> Option<bool> {
+    let session = runtime.as_ref().filter(|session| session.token == token)?;
+    let crashed = !session.explicit_stop;
+    *runtime = None;
+    Some(crashed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1948,6 +2139,27 @@ mod tests {
             "malformed\n",
             "cardputerzero-app-20000.service"
         ));
+    }
+
+    #[test]
+    fn counts_only_unexpected_runtime_disappearance_as_a_crash() {
+        let session = |explicit_stop| RuntimeSession {
+            token: 7,
+            app_id: "dev.cardputerzero.test".into(),
+            version: "1.2.3".into(),
+            explicit_stop,
+        };
+        let mut unexpected = Some(session(false));
+        assert_eq!(take_runtime_end(&mut unexpected, 7), Some(true));
+        assert!(unexpected.is_none());
+
+        let mut explicit = Some(session(true));
+        assert_eq!(take_runtime_end(&mut explicit, 7), Some(false));
+        assert!(explicit.is_none());
+
+        let mut newer = Some(session(false));
+        assert_eq!(take_runtime_end(&mut newer, 6), None);
+        assert!(newer.is_some());
     }
 
     #[test]

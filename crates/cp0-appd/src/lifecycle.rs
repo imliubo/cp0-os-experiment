@@ -614,6 +614,17 @@ fn unit_is_active(unit: &str) -> Result<bool, AppManagerError> {
     Ok(status.success())
 }
 
+pub(crate) fn wait_for_unit_stopped(unit: &str) -> Result<(), AppManagerError> {
+    let status = Command::new(SYSTEMCTL_PATH)
+        .args(["--quiet", "wait", unit])
+        .status()
+        .map_err(|error| AppManagerError::CommandIo("systemctl", error))?;
+    if !status.success() && unit_is_active(unit)? {
+        return Err(AppManagerError::UnitFailed("wait"));
+    }
+    Ok(())
+}
+
 fn secure_metadata(path: &Path, field: &'static str) -> Result<Metadata, AppManagerError> {
     let metadata =
         std::fs::symlink_metadata(path).map_err(|_| AppManagerError::InvalidPackagePath(field))?;

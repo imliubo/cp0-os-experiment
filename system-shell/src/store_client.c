@@ -494,6 +494,48 @@ static int parse_auto_update_response(
     return CP0_STORE_RESULT_OK;
 }
 
+static int parse_metrics_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    struct cp0_store_metrics_status *status)
+{
+    struct cp0_json_token tokens[96];
+    struct cp0_store_metrics_status decoded = {0};
+    size_t token_count;
+    int data;
+    int result;
+
+    if (status == NULL)
+        return CP0_STORE_RESULT_ERROR;
+    result = parse_envelope(response, response_length, request_id, tokens,
+                            sizeof(tokens) / sizeof(tokens[0]), &token_count,
+                            &data);
+    if (result != CP0_STORE_RESULT_OK)
+        return result;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int enabled = cp0_json_object_get(response, tokens, token_count, data,
+                                      "enabled");
+    int policy_allowed = cp0_json_object_get(
+        response, tokens, token_count, data, "policy_allowed");
+    int configured = cp0_json_object_get(response, tokens, token_count, data,
+                                         "configured");
+    int pending = cp0_json_object_get(response, tokens, token_count, data,
+                                      "pending");
+    if (tokens[data].children != 10 || kind < 0 || enabled < 0 ||
+        policy_allowed < 0 || configured < 0 || pending < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind], "metrics-status") ||
+        !cp0_json_get_bool(response, &tokens[enabled], &decoded.enabled) ||
+        !cp0_json_get_bool(response, &tokens[policy_allowed],
+                           &decoded.policy_allowed) ||
+        !cp0_json_get_bool(response, &tokens[configured], &decoded.configured) ||
+        !cp0_json_get_bool(response, &tokens[pending], &decoded.pending) ||
+        (decoded.enabled &&
+         (!decoded.policy_allowed || !decoded.configured)) ||
+        (!decoded.enabled && decoded.pending))
+        return CP0_STORE_RESULT_ERROR;
+    *status = decoded;
+    return CP0_STORE_RESULT_OK;
+}
+
 static bool parse_failure_reason(
     const char *document, const struct cp0_json_token *token,
     enum cp0_store_failure_reason *reason)
@@ -1532,6 +1574,13 @@ int cp0_store_test_parse_auto_update_response(
                                       status);
 }
 
+int cp0_store_test_parse_metrics_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    struct cp0_store_metrics_status *status)
+{
+    return parse_metrics_response(response, response_length, request_id, status);
+}
+
 int cp0_store_test_parse_install_response(const char *response,
                                           size_t response_length,
                                           uint64_t request_id,
@@ -1748,6 +1797,43 @@ int cp0_store_set_auto_update(
         return CP0_STORE_RESULT_ERROR;
     return parse_auto_update_response(response, response_length, request_id,
                                       status);
+}
+
+int cp0_store_get_metrics(struct cp0_store_metrics_status *status)
+{
+    char request[192];
+    char response[1024];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{\"name\":\"get-metrics\"}}\n",
+        (unsigned long long)request_id);
+    if (status == NULL || request_length <= 0 ||
+        (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 500, NULL) != 0)
+        return CP0_STORE_RESULT_ERROR;
+    return parse_metrics_response(response, response_length, request_id, status);
+}
+
+int cp0_store_set_metrics(bool enabled,
+                          struct cp0_store_metrics_status *status)
+{
+    char request[224];
+    char response[1024];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{\"name\":\"set-metrics\",\"enabled\":%s}}\n",
+        (unsigned long long)request_id, enabled ? "true" : "false");
+    if (status == NULL || request_length <= 0 ||
+        (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 3000, NULL) != 0)
+        return CP0_STORE_RESULT_ERROR;
+    return parse_metrics_response(response, response_length, request_id, status);
 }
 
 int cp0_store_preflight_install(

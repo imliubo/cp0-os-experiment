@@ -191,6 +191,13 @@ struct cp0_store_auto_update_status {
     bool checking;
 };
 
+struct cp0_store_metrics_status {
+    bool enabled;
+    bool policy_allowed;
+    bool configured;
+    bool pending;
+};
+
 int cp0_store_list(struct cp0_store_catalog *catalog);
 int cp0_store_today(struct cp0_store_today *today);
 int cp0_store_search(const char *query, uint16_t offset, uint8_t limit,
@@ -200,6 +207,9 @@ int cp0_store_get_auto_update(
     struct cp0_store_auto_update_status *status);
 int cp0_store_set_auto_update(
     bool enabled, struct cp0_store_auto_update_status *status);
+int cp0_store_get_metrics(struct cp0_store_metrics_status *status);
+int cp0_store_set_metrics(bool enabled,
+                          struct cp0_store_metrics_status *status);
 int cp0_store_preflight_install(
     uint64_t catalog_sequence, const char *const app_ids[], size_t app_count,
     struct cp0_store_install_preflight *preflight);

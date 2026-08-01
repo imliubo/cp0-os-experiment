@@ -7,10 +7,11 @@
 
 ### System Experience
 
-- appd 应用详情、安装时间、包/数据大小和卸载协议正在并行开发；
-- Settings 分组、应用管理、硬件诊断和官方 Fn 快捷键仍未完成；
-- 最大文本、禁用能力、确认弹窗和完整像素回归仍需补齐；
-- ARM64 compositor 构建和 `make check` 必须在每个本地里程碑通过。
+- appd 应用详情、安装时间、包/数据大小、卸载协议，以及 Settings 分组、应用管理、
+  硬件诊断和官方 Fn 快捷键的本地实现与像素回归已完成；
+- ARM64 compositor 构建现由仓库内 builder 定义复现，`make check` 与 AArch64 构建仍须在
+  每个本地里程碑通过；
+- 真实硬件写入、LCD 覆盖层、输入延迟和持久性仍由 X4 真机门禁确认。
 
 ### Store 产品化
 
@@ -22,9 +23,9 @@
   邀请/移除、Portal 会话、Review 生产 SSO、生产对象存储/GC、动态
   恶意样本和生产 HSM/key ceremony 尚未实现；隔离 Scanner、文件 key Publisher/Catalog
   Builder 与完整前缀 transparency log 的 outbox/租约、签名、失败恢复和原子结果纵向切片已完成；
-- 设备端 Today/Apps/Search/Updates 和分页搜索模型已实现，签名 Catalog v2 富字段本地搜索已接入；
-  Catalog v3 图标/截图/details 不可变发布与设备端有界原子缓存已完成，富字段详情展示和更新队列
-  尚未实现；
+- 设备端 Today/Apps/Search/Updates、分页搜索、Catalog v3 富媒体详情、下载/更新队列、
+  中断恢复和默认关闭的自动更新均已实现；Catalog v4 只投影 approved Release 的 Today
+  editorial，默认关闭且无设备身份的周聚合指标已完成设备与 PostgreSQL 纵向切片；
 - 后端可从 approved Release 自动发布，`cp0ctl` OAuth 已接入；Portal 的账户、会话和团队管理
   仍未形成完整自助流程；
 - 当前 Store 安全底座可以复用，详细阶段见 `STORE-ROADMAP.md`。
@@ -78,8 +79,8 @@
 
 | Phase | 实现状态 | 尚缺的完成证据 |
 | --- | --- | --- |
-| Phase 2 | 核心窗口/可信 UI/输入已实现 | 24 小时证据、扩展系统体验和最终真机部署 |
+| Phase 2 | 核心窗口/可信 UI/输入及扩展系统体验本地实现已完成 | 24 小时证据和最终真机部署 |
 | Phase 3 | Runtime、sandbox 和能力 broker 已实现 | 音频/GPIO/存储/相机/LoRa 的对应真机门禁 |
 | Phase 4 | SDK 1.0、CLI、模拟器和 DevKit 已实现 | 后续 Store submit CLI 属 Store 产品阶段 |
-| Phase 5 | 双签名、原子安装、静态 Store、OAuth、Team 角色管理、隔离扫描、独立双审、Review Console、Discovery Catalog v2 和 Release/Publisher 控制纵向切片已实现 | Identity 登录/邀请/会话、Review 生产 SSO、生产 HSM、富媒体资源与六步真机证据 |
+| Phase 5 | 双签名、原子安装、Store 设备体验、OAuth、Team 角色管理、隔离扫描、独立双审、Review Console、Catalog v4/Today、自动更新和匿名周聚合纵向切片已实现 | Identity 登录/邀请/会话、Review 生产 SSO、生产 HSM、运营/灾备演练与六步真机证据 |
 | Phase 6 | profile、验证器和安全工具已实现 | 性能/功耗、烧录介质、A/B 硬件和第三方评审 |

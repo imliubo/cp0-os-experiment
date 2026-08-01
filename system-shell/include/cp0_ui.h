@@ -99,6 +99,8 @@ enum cp0_ui_event {
     CP0_UI_EVENT_RECOVERY_DISABLE,
     CP0_UI_EVENT_AUTO_UPDATE_ENABLE,
     CP0_UI_EVENT_AUTO_UPDATE_DISABLE,
+    CP0_UI_EVENT_METRICS_ENABLE,
+    CP0_UI_EVENT_METRICS_DISABLE,
     CP0_UI_EVENT_UNINSTALL_APP,
     CP0_UI_EVENT_MEDIA_PLAY_PAUSE,
     CP0_UI_EVENT_MEDIA_PREVIOUS,
@@ -349,6 +351,7 @@ struct cp0_ui {
     bool settings_available;
     bool settings_confirm;
     bool settings_confirm_recovery;
+    bool settings_confirm_metrics;
     bool store_install_prompt;
     enum cp0_ui_store_preflight_error store_preflight_error;
     uint8_t store_preflight_app_count;
@@ -384,6 +387,11 @@ struct cp0_ui {
     bool auto_update_unmetered_network;
     bool auto_update_due;
     bool auto_update_checking;
+    bool metrics_available;
+    bool metrics_enabled;
+    bool metrics_policy_allowed;
+    bool metrics_configured;
+    bool metrics_pending;
     bool app_launch_restricted;
     enum cp0_ui_authority settings_authority;
     uint8_t denied_permission_count;
@@ -479,6 +487,8 @@ void cp0_ui_set_device_settings(
 void cp0_ui_set_auto_update(
     struct cp0_ui *ui, bool available, bool enabled, bool policy_allowed,
     bool charging, bool unmetered_network, bool due, bool checking);
+void cp0_ui_set_metrics(struct cp0_ui *ui, bool available, bool enabled,
+                        bool policy_allowed, bool configured, bool pending);
 void cp0_ui_add_app(struct cp0_ui *ui, uint32_t token, const char *app_id);
 void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
                              const struct cp0_ui_catalog_app *apps,
