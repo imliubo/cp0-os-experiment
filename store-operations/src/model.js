@@ -84,87 +84,76 @@ export function applyDecision(reports, reportId, request) {
   } : report);
 }
 
-const release = (suffix, appId, name, version, category, accent) => ({
-  releaseId: `rel_${suffix.repeat(32)}`,
-  appId,
-  name,
-  version,
-  category,
-  accent,
-  state: "published",
-});
+const ACCENTS = ["green", "blue", "amber", "red", "cyan", "violet"];
 
-export function createOperationsData() {
-  const releases = [
-    release("1", "dev.cardputerzero.field-notes", "Field Notes", "2.3.0", "Productivity", "green"),
-    release("2", "dev.cardputerzero.signal-lab", "Signal Lab", "1.8.2", "Utilities", "blue"),
-    release("3", "dev.cardputerzero.pocket-calc", "Pocket Calc", "1.4.1", "Utilities", "amber"),
-    release("4", "dev.cardputerzero.neon-snake", "Neon Snake", "1.2.0", "Games", "red"),
-    release("5", "dev.cardputerzero.weather-deck", "Weather Deck", "3.0.1", "Lifestyle", "cyan"),
-    release("6", "dev.cardputerzero.hex-reader", "Hex Reader", "0.9.4", "Developer Tools", "violet"),
-  ];
+function accentFor(appId) {
+  let hash = 0;
+  for (const character of appId) hash = (hash * 31 + character.codePointAt(0)) >>> 0;
+  return ACCENTS[hash % ACCENTS.length];
+}
+
+function relativeTime(unixSeconds, nowSeconds) {
+  const elapsed = Math.max(0, nowSeconds - unixSeconds);
+  if (elapsed < 60) return "just now";
+  if (elapsed < 3600) return `${Math.floor(elapsed / 60)} min ago`;
+  if (elapsed < 86400) return `${Math.floor(elapsed / 3600)} hr ago`;
+  return `${Math.floor(elapsed / 86400)} d ago`;
+}
+
+export function mapPublishedRelease(value) {
   return {
-    releases,
-    editorial: {
-      layout_id: "today",
-      headline: "Small tools, ready for the field",
-      featured_release_id: releases[0].releaseId,
-      collections: [
-        { title: "Work offline", release_ids: [releases[1].releaseId, releases[2].releaseId] },
-        { title: "New this week", release_ids: [releases[3].releaseId, releases[4].releaseId] },
-      ],
-      resource_version: 7,
-      updated_unix_seconds: 1785600000,
-    },
-    reports: [
-      {
-        reportId: `report_${"a".repeat(32)}`,
-        releaseId: releases[1].releaseId,
-        appId: releases[1].appId,
-        appName: releases[1].name,
-        version: releases[1].version,
-        reasonCode: "privacy",
-        slaClass: "security",
-        state: "submitted",
-        disposition: null,
-        decisionReasonCodes: [],
-        acknowledgementDue: 1785607200,
-        resolutionDue: 1785852000,
-        resourceVersion: 1,
-        received: "18 min ago",
-      },
-      {
-        reportId: `report_${"b".repeat(32)}`,
-        releaseId: releases[3].releaseId,
-        appId: releases[3].appId,
-        appName: releases[3].name,
-        version: releases[3].version,
-        reasonCode: "harmful-content",
-        slaClass: "standard",
-        state: "submitted",
-        disposition: null,
-        decisionReasonCodes: [],
-        acknowledgementDue: 1785848400,
-        resolutionDue: 1786813200,
-        resourceVersion: 1,
-        received: "2 hr ago",
-      },
-      {
-        reportId: `report_${"c".repeat(32)}`,
-        releaseId: releases[4].releaseId,
-        appId: releases[4].appId,
-        appName: releases[4].name,
-        version: releases[4].version,
-        reasonCode: "fraud",
-        slaClass: "standard",
-        state: "submitted",
-        disposition: null,
-        decisionReasonCodes: [],
-        acknowledgementDue: 1785852000,
-        resolutionDue: 1786816800,
-        resourceVersion: 3,
-        received: "4 hr ago",
-      },
-    ],
+    releaseId: value.release_id,
+    appId: value.app_id,
+    name: value.name,
+    version: value.version,
+    category: value.category ? formatCode(value.category) : "Uncategorized",
+    catalogSequence: value.catalog_sequence,
+    accent: accentFor(value.app_id),
+    state: "published",
+  };
+}
+
+export function mapEditorial(value) {
+  return {
+    layout_id: value.layout_id,
+    headline: value.headline,
+    featured_release_id: value.featured.release_id,
+    collections: value.collections.map((collection) => ({
+      title: collection.title,
+      release_ids: collection.items.map((item) => item.release_id),
+    })),
+    resource_version: value.resource_version,
+    updated_unix_seconds: value.updated_unix_seconds,
+  };
+}
+
+export function emptyEditorial() {
+  return {
+    layout_id: "today",
+    headline: "",
+    featured_release_id: "",
+    collections: [{ title: "", release_ids: [] }],
+    resource_version: null,
+    updated_unix_seconds: null,
+  };
+}
+
+export function mapReport(value, releases = [], nowSeconds = Math.floor(Date.now() / 1000)) {
+  const release = releases.find((candidate) => candidate.releaseId === value.release_id || candidate.appId === value.app_id);
+  return {
+    reportId: value.report_id,
+    releaseId: value.release_id,
+    appId: value.app_id,
+    appName: release?.name ?? value.app_id,
+    version: value.version,
+    reasonCode: value.reason_code,
+    slaClass: value.sla_class,
+    state: value.state,
+    disposition: value.disposition,
+    decisionReasonCodes: [...value.decision_reason_codes],
+    acknowledgementDue: value.acknowledgement_due_unix_seconds,
+    resolutionDue: value.resolution_due_unix_seconds,
+    resourceVersion: value.resource_version,
+    received: relativeTime(value.created_unix_seconds, nowSeconds),
   };
 }

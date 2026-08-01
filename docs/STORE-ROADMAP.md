@@ -107,7 +107,8 @@ S5L 已将所有 Submission 升级为独立双审：主审批准进入 pending-s
 PostgreSQL 17 验收。风险分级和 Review Console 前端仍待实现。
 S5M 已新增独立 Review Console：primary/secondary/我的活动 assignment 有界队列、搜索、扫描结果、
 提交截图、hash、权限/import、消息、审计、领取和结构化决定均可操作；严格客户端绑定 ETag/幂等且
-不向 Store Control API 发送浏览器 cookie。S8I 已接入 workforce BFF 会话适配；真实 IdP 部署仍待实现。
+不向 Store Control API 发送浏览器 cookie。S8I 已接入 workforce BFF 会话适配，S8J 已将队列、详情、
+领取、消息和决定全部接入真实 Store Control 数据；真实 IdP 部署仍待实现。
 S5N 已新增版本化审核风险策略：隔离 Scanner 根据真实 SDK 权限确定 standard/elevated/high，
 append-only assessment 绑定 scan/report SHA-256，PostgreSQL 触发器重算并拒绝伪造、乱序、修改和
 删除；Review Queue/OpenAPI/Console 使用同一结果。S8I 已完成 production-shaped workforce BFF 与
@@ -254,7 +255,8 @@ Release 候选、SLA moderation 队列和结构化处置均可操作；严格客
 moderation v1 API，使用短期 operator bearer token、`credentials: omit`、强 ETag、随机幂等键和
 64 KiB 响应上限。S8G 已补齐真实 published-Release discovery：控制面只列出 approved、当前
 published、具有匹配不可变 artifact 且为每个 App 最新投影的 Release，使用 50 项上限的严格
-keyset cursor；前端同时修正为后端规范的 `rel_` ID 并严格验证响应。fixture 替换、双人处置和
+keyset cursor；前端同时修正为后端规范的 `rel_` ID 并严格验证响应。S8J 已移除运行时 fixture，
+将 Today、Release 分页、moderation 分页和处置全部接入 workforce BFF/Store Control；双人处置和
 正式政策执行仍保持关闭。
 
 S8H 已冻结 Review Console/Store Operations 共用但 audience 严格分离的 workforce identity v1：
@@ -266,6 +268,13 @@ PostgreSQL 17 数据库验收；Review/Operations 前端仅对 BFF 使用 cookie
 `credentials: omit`，Bearer 只在内存按 audience/scope 缓存。生产 IdP/JWKS、密钥托管、域名部署
 和现场撤销演练仍是外部门禁。具体契约见 `STORE-WORKFORCE-IDENTITY-V1.md` 和
 `STORE-WORKFORCE-SERVER.md`。
+
+S8J 已闭合两个内部控制台的真实数据路径。Scan Worker 在结果提交事务内写入不可变审核展示元数据，
+Review Queue/Detail 只接受与 ready-for-review 扫描、默认 locale 和风险摘要完整绑定的数据；服务端
+读取时重新验证报告 SHA-256 和风险绑定，异常即拒绝。Review Console 使用有界 Queue/Detail API，
+Store Operations 使用真实 Today/Release/moderation API；两者只向各自 workforce BFF 发送 cookie，
+Control token 仅驻留内存，所有 mutation 后重新读取服务端状态。升级前产生且缺少新投影的扫描记录
+不会进入审核队列，必须重新扫描，这是有意的 fail-closed 兼容策略。
 
 - [x] Today/专题运营工具只能引用 approved Release。
 - [x] 建立最小化、可选、去标识化的安装、启动和崩溃聚合指标。

@@ -57,6 +57,31 @@ async fn postgres_scan_worker_acceptance() {
     assert_submission(&pool, &accepted.submission_id, "ready-for-review", 3).await;
     assert_eq!(count(&pool, "submission_scan_results").await, 1);
     assert_eq!(count(&pool, "submission_risk_assessments").await, 1);
+    assert_eq!(count(&pool, "submission_review_metadata").await, 1);
+    let review_metadata = sqlx::query(
+        "SELECT name, category, default_locale FROM submission_review_metadata \
+         WHERE submission_id = $1",
+    )
+    .bind(&accepted.submission_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(review_metadata.get::<String, _>("name"), "Scan Test");
+    assert_eq!(review_metadata.get::<String, _>("category"), "utilities");
+    assert_eq!(review_metadata.get::<String, _>("default_locale"), "en-US");
+    let metadata_mutation = sqlx::query(
+        "UPDATE submission_review_metadata SET name = 'Changed' WHERE submission_id = $1",
+    )
+    .bind(&accepted.submission_id)
+    .execute(&pool)
+    .await;
+    assert_sqlstate(metadata_mutation, "55000");
+    let metadata_deletion =
+        sqlx::query("DELETE FROM submission_review_metadata WHERE submission_id = $1")
+            .bind(&accepted.submission_id)
+            .execute(&pool)
+            .await;
+    assert_sqlstate(metadata_deletion, "55000");
     let risk = sqlx::query(
         "SELECT policy_version, tier, reason_codes FROM submission_risk_assessments \
          WHERE submission_id = $1",
@@ -133,6 +158,16 @@ async fn postgres_scan_worker_acceptance() {
         finding["findings"][0]["code"],
         "package.developer-key-untrusted"
     );
+    let forged_review_metadata = sqlx::query(
+        "INSERT INTO submission_review_metadata (scan_id, submission_id, name, category, \
+         default_locale, created_unix_seconds) \
+         SELECT scan_id, submission_id, 'Rejected', 'utilities', 'en-US', created_unix_seconds \
+         FROM submission_scan_results WHERE submission_id = $1",
+    )
+    .bind(&rejected.submission_id)
+    .execute(&pool)
+    .await;
+    assert_sqlstate(forged_review_metadata, "23514");
     let reactivate = sqlx::query(
         "UPDATE developer_keys SET state = 'active', revoked_unix_seconds = NULL WHERE key_id = $1",
     )

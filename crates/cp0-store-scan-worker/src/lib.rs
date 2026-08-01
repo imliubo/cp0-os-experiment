@@ -5,7 +5,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cp0_store_metadata::ImageAsset;
+use cp0_store_metadata::{ImageAsset, StoreListing};
 use cp0_store_scan::{ScanAsset, ScanDisposition, ScanInput, ScanReport};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -16,6 +16,7 @@ use uuid::Uuid;
 const LEASE_SECONDS: i64 = 60;
 const MAX_ATTEMPTS: i16 = 8;
 const MAX_CHUNK_BYTES: usize = 256 * 1024;
+const MAX_TRANSACTION_RETRIES: usize = 3;
 
 #[derive(Debug)]
 pub enum WorkerError {
@@ -105,6 +106,22 @@ impl ScanWorker {
     }
 
     pub async fn run_once(&self) -> Result<RunOutcome, WorkerError> {
+        let mut retries = 0;
+        loop {
+            match self.run_once_inner().await {
+                Err(error)
+                    if retries < MAX_TRANSACTION_RETRIES
+                        && is_retryable_transaction_error(&error) =>
+                {
+                    retries += 1;
+                    tokio::task::yield_now().await;
+                }
+                outcome => return outcome,
+            }
+        }
+    }
+
+    async fn run_once_inner(&self) -> Result<RunOutcome, WorkerError> {
         self.enqueue_one().await?;
         self.recover_expired_leases().await?;
         let Some(job) = self.claim_one().await? else {
@@ -139,7 +156,18 @@ impl ScanWorker {
             trusted_developer_keys: &bundle.trusted_developer_keys,
         });
         let disposition = report.disposition;
-        if let Err(error) = self.complete_job(&job, &report).await {
+        let review_listing = if disposition == ScanDisposition::ReadyForReview {
+            Some(
+                cp0_store_metadata::parse_and_validate(&bundle.listing)
+                    .map_err(|_| WorkerError::InvalidState("review listing is invalid"))?,
+            )
+        } else {
+            None
+        };
+        if let Err(error) = self
+            .complete_job(&job, &report, review_listing.as_ref())
+            .await
+        {
             let _ = self.defer_job(&job, "commit-failed").await;
             return Err(error);
         }
@@ -432,7 +460,12 @@ impl ScanWorker {
         Ok(encoded)
     }
 
-    async fn complete_job(&self, job: &ScanJob, report: &ScanReport) -> Result<(), WorkerError> {
+    async fn complete_job(
+        &self,
+        job: &ScanJob,
+        report: &ScanReport,
+        review_listing: Option<&StoreListing>,
+    ) -> Result<(), WorkerError> {
         let report_value = serde_json::to_value(report)
             .map_err(|_| WorkerError::InvalidState("scan report cannot be encoded"))?;
         let report_encoded = serde_json::to_vec(report)
@@ -455,6 +488,33 @@ impl ScanWorker {
             (_, Some(_)) => {
                 return Err(WorkerError::InvalidState(
                     "non-reviewable scan report has a risk assessment",
+                ));
+            }
+        };
+        let review_metadata = match (report.disposition, review_listing) {
+            (ScanDisposition::ReadyForReview, Some(listing)) => {
+                let localization = listing
+                    .localizations
+                    .iter()
+                    .find(|localization| localization.locale == listing.default_locale)
+                    .ok_or(WorkerError::InvalidState(
+                        "review listing has no default localization",
+                    ))?;
+                Some((
+                    localization.name.as_str(),
+                    listing.category.as_str(),
+                    listing.default_locale.as_str(),
+                ))
+            }
+            (ScanDisposition::ReadyForReview, None) => {
+                return Err(WorkerError::InvalidState(
+                    "reviewable scan has no listing metadata",
+                ));
+            }
+            (_, None) => None,
+            (_, Some(_)) => {
+                return Err(WorkerError::InvalidState(
+                    "non-reviewable scan has listing metadata",
                 ));
             }
         };
@@ -521,6 +581,20 @@ impl ScanWorker {
         .bind(now)
         .execute(&mut *transaction)
         .await?;
+        if let Some((name, category, default_locale)) = review_metadata {
+            sqlx::query(
+                "INSERT INTO submission_review_metadata (scan_id, submission_id, name, category, \
+                 default_locale, created_unix_seconds) VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(&scan_id)
+            .bind(&job.submission_id)
+            .bind(name)
+            .bind(category)
+            .bind(default_locale)
+            .bind(now)
+            .execute(&mut *transaction)
+            .await?;
+        }
         if let Some(risk) = risk {
             let reason_codes = serde_json::to_value(&risk.reasons)
                 .map_err(|_| WorkerError::InvalidState("risk assessment cannot be encoded"))?;
@@ -820,6 +894,14 @@ fn valid_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn is_retryable_transaction_error(error: &WorkerError) -> bool {
+    matches!(
+        error,
+        WorkerError::Database(sqlx::Error::Database(database_error))
+            if matches!(database_error.code().as_deref(), Some("40001" | "40P01"))
+    )
 }
 
 fn prefixed_uuid(prefix: &str) -> String {

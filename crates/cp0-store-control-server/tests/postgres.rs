@@ -1417,6 +1417,9 @@ async fn verify_review_backend(application: &Router, pool: &PgPool) {
     assert_eq!(first_page["items"][0]["risk"]["policy_version"], 1);
     assert_eq!(first_page["items"][0]["risk"]["tier"], "standard");
     assert_eq!(first_page["items"][0]["risk"]["reasons"], json!([]));
+    assert_eq!(first_page["items"][0]["app"]["name"], "Field Notes");
+    assert_eq!(first_page["items"][0]["app"]["developer_name"], "Team A");
+    assert_eq!(first_page["items"][0]["app"]["category"], "productivity");
     assert_eq!(
         first_page["items"][1]["submission"]["submission_id"],
         SUBMISSION_B
@@ -1439,6 +1442,40 @@ async fn verify_review_backend(application: &Router, pool: &PgPool) {
         SUBMISSION_C
     );
     assert!(second_page["next_cursor"].is_null());
+
+    let detail = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/review/submissions/{SUBMISSION_A}"),
+        Some(REVIEWER_A_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(detail.status, StatusCode::OK);
+    assert_eq!(etag_version(&detail), 1);
+    let detail_body: Value = serde_json::from_slice(&detail.body).unwrap();
+    assert_eq!(detail_body["submission"]["submission_id"], SUBMISSION_A);
+    assert_eq!(detail_body["review_stage"], "primary");
+    assert_eq!(detail_body["assigned_to_caller"], false);
+    assert_eq!(detail_body["scan"]["scanner_version"], "cp0-store-scan/1");
+    assert_eq!(detail_body["scan"]["permissions"], json!([]));
+    assert_eq!(detail_body["assignments"], json!([]));
+    assert_eq!(detail_body["decisions"], json!([]));
+    assert_eq!(detail_body["messages"], json!([]));
+    assert_eq!(detail_body["messages_truncated"], false);
+    assert_eq!(detail_body["audit_truncated"], false);
+
+    let invalid_detail = call(
+        application.clone(),
+        Method::GET,
+        "/v1/review/submissions/not-a-submission",
+        Some(REVIEWER_A_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&invalid_detail, StatusCode::BAD_REQUEST, "invalid-request");
 
     let missing_etag = call(
         application.clone(),
@@ -3248,7 +3285,8 @@ async fn seed_standard_risk_assessment(
         "findings": [],
         "risk": {"policy_version": 1, "tier": "standard", "reasons": []}
     });
-    let report_sha256 = sha256_hex(serde_json::to_vec(&report).unwrap().as_slice());
+    let typed_report: cp0_store_scan::ScanReport = serde_json::from_value(report.clone()).unwrap();
+    let report_sha256 = cp0_store_scan::report_sha256(&typed_report).unwrap();
     sqlx::query(
         "INSERT INTO outbox_events (event_id, topic, aggregate_kind, aggregate_id, \
          aggregate_version, request_sha256, payload, created_unix_seconds, published_unix_seconds) \
@@ -3298,6 +3336,17 @@ async fn seed_standard_risk_assessment(
     .bind(scan_id)
     .bind(submission_id)
     .bind(report_sha256)
+    .bind(created_unix_seconds)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO submission_review_metadata (scan_id, submission_id, name, category, \
+         default_locale, created_unix_seconds) \
+         VALUES ($1, $2, 'Field Notes', 'productivity', 'en-US', $3)",
+    )
+    .bind(format!("scan_{suffix}"))
+    .bind(submission_id)
     .bind(created_unix_seconds)
     .execute(pool)
     .await

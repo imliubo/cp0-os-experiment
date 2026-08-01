@@ -13,6 +13,7 @@ cp0-store-metrics = { path = "../cp0-store-metrics" }
 cp0-store-metadata = { path = "../cp0-store-metadata" }
 cp0-store-protocol = { path = "../cp0-store-protocol" }
 cp0-store-risk = { path = "../cp0-store-risk" }
+cp0-store-scan = { path = "../cp0-store-scan" }
 serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true

@@ -2,6 +2,8 @@
 
 S5E adds the first PostgreSQL and HTTP vertical slice for human Store review.
 S5L extends it with mandatory independent secondary review and double approval.
+S8J adds the immutable review read model, bounded Submission detail API, and
+the production-shaped Review Console data path.
 It runs in the Store control plane and is never installed on a CardputerZero
 device.
 
@@ -11,9 +13,15 @@ device.
   `ready-for-review` and `pending-secondary-review` Submissions plus the caller's
   active assignment using a stable, bounded cursor. Each `ReviewQueueItem`
   carries `review_stage`, `assigned_to_caller` and the immutable versioned risk
-  assessment bound to its Scanner report; a primary reviewer never sees their
-  own Submission as a secondary-review candidate. The default page size is 25
-  and the hard limit is 50.
+  assessment bound to its Scanner report plus the authoritative App display
+  name, developer name, and category; a primary reviewer never sees their own
+  Submission as a secondary-review candidate. The default page size is 25 and
+  the hard limit is 50.
+- `GET /v1/review/submissions/{submission_id}` returns the authoritative
+  Submission and App summary, bound risk assessment, verified scan summary,
+  imports, permissions, findings, assignments, decisions, the latest six
+  messages, and the latest 32 security-relevant audit projections. Explicit
+  truncation flags distinguish a complete history from a bounded tail.
 - `POST /v1/review/submissions/{submission_id}:begin` atomically claims a
   Submission and changes it to `in-review`.
 - `POST /v1/review/submissions/{submission_id}/decisions` appends one structured
@@ -68,12 +76,23 @@ reason code and a bounded actionable note. S5L applies the stronger two-review
 baseline to every Submission. S5N adds the deterministic risk tiers and database
 anti-forgery checks described in `STORE-RISK-POLICY.md`.
 
+S8J stores `submission_review_metadata` in the Scan Worker's successful result
+transaction. It immutably binds the Submission, ready-for-review scan, App
+display name, category, default locale, and creation time. Database constraint
+triggers reject mismatched or non-ready scans, and update/delete triggers make
+the projection append-only. Queue and detail reads inner-join this projection;
+older scans that predate it therefore fail closed and must be scanned again
+before they can enter the queue.
+
 S5M adds the standalone React/Vite Review Console with queue stage/search
 filters, submitted-screen inspection, exact hashes, scan findings, permissions,
 imports, messages, audit history, claim controls and structured decisions. Its
 strict API client omits browser credentials and binds claims/decisions to ETags
-and idempotency keys. Production workforce SSO/BFF remains an external identity
-boundary.
+and idempotency keys. S8I supplies the audience-specific workforce BFF;
+S8J removes runtime fixtures, obtains short-lived `store.review` tokens in
+memory, reads queue/detail state from Store Control, and refreshes authoritative
+state after every mutation. Production IdP/JWKS and deployment remain external
+gates.
 
 ## Verification
 
@@ -90,4 +109,6 @@ paths, required ETags, live 2FA/expiry/revocation, cross-domain credentials,
 exact replay, concurrent claims, primary-reviewer exclusion from secondary
 review, assignment authorization, structured decision validation, developer
 team isolation, append-only records, injected secondary-decision rollback,
-double-approved Release enforcement, and database token-domain uniqueness.
+double-approved Release enforcement, database token-domain uniqueness,
+immutable review-metadata bindings, fail-closed legacy scans, detail bounds,
+and scan-report digest/risk revalidation.

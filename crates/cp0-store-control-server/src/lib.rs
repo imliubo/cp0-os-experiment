@@ -29,6 +29,7 @@ use cp0_store_metrics::{
 };
 use cp0_store_protocol::CatalogApp;
 use cp0_store_risk::RiskAssessment;
+use cp0_store_scan::{ScanDisposition, ScanFinding, ScanReport};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -50,6 +51,10 @@ const MAX_ACTIVE_DEVICE_AUTHORIZATIONS: i64 = 10_000;
 const MFA_STEP_UP_MAX_AGE_SECONDS: i64 = 5 * 60;
 const METRICS_BATCH_TTL_SECONDS: i64 = 15 * 24 * 60 * 60;
 const MAX_TEAM_MEMBERS: usize = 100;
+const MAX_REVIEW_DETAIL_MESSAGES: usize = 6;
+const MAX_REVIEW_DETAIL_AUDIT_EVENTS: usize = 32;
+const MAX_REVIEW_DETAIL_ASSIGNMENTS: usize = 8;
+const MAX_REVIEW_DETAIL_DECISIONS: usize = 8;
 const DEVICE_VERIFICATION_URI: &str = "https://developer.cardputerzero.dev/activate";
 const DEVICE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 const DEVICE_CLIENT_ID: &str = "cp0ctl";
@@ -2559,6 +2564,8 @@ impl StoreControlService {
              submission.revision, submission.state, submission.package_sha256, \
              submission.package_bytes, submission.listing_sha256, submission.listing_bytes, \
              submission.assets, submission.resource_version, submission.created_unix_seconds, \
+             review_metadata.name AS review_name, review_metadata.category AS review_category, \
+             team.name AS developer_name, \
              current_assignment.assignment_kind AS current_assignment_kind, \
              CASE WHEN submission.state = 'ready-for-review' THEN 'primary' \
                   WHEN submission.state = 'pending-secondary-review' THEN 'secondary' \
@@ -2568,6 +2575,11 @@ impl StoreControlService {
              FROM submissions submission \
              JOIN submission_scan_results scan_result \
                ON scan_result.submission_id = submission.submission_id \
+             JOIN submission_review_metadata review_metadata \
+               ON review_metadata.submission_id = submission.submission_id AND \
+                  review_metadata.scan_id = scan_result.scan_id \
+             JOIN apps app ON app.app_id = submission.app_id \
+             JOIN teams team ON team.team_id = app.owner_team_id \
              JOIN LATERAL ( \
                SELECT policy_version, tier, reason_codes \
                FROM submission_risk_assessments assessment \
@@ -2610,6 +2622,7 @@ impl StoreControlService {
                     .is_some();
                 Ok(ReviewQueueItemResponse {
                     submission: stored_submission_from_row(row)?.response,
+                    app: review_app_from_row(row)?,
                     review_stage: row.get("review_stage"),
                     assigned_to_caller,
                     risk: risk_assessment_from_row(row)?,
@@ -2628,6 +2641,224 @@ impl StoreControlService {
         };
         items.shrink_to_fit();
         Ok(ReviewQueueResponse { items, next_cursor })
+    }
+
+    async fn get_review_submission_detail(
+        &self,
+        token: &str,
+        submission_id: &str,
+    ) -> Result<ReviewSubmissionDetailResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        let identity = authenticate_reviewer(&mut transaction, &token_sha256)
+            .await
+            .map_err(ApiError::from_transaction)?;
+        require_reviewer_write(&identity)?;
+        let row = sqlx::query(
+            "SELECT submission.submission_id, submission.app_id, submission.version, \
+             submission.revision, submission.state, submission.package_sha256, \
+             submission.package_bytes, submission.listing_sha256, submission.listing_bytes, \
+             submission.assets, submission.resource_version, submission.created_unix_seconds, \
+             review_metadata.name AS review_name, review_metadata.category AS review_category, \
+             team.name AS developer_name, scan_result.scan_id, scan_result.scanner_version, \
+             scan_result.report, scan_result.report_sha256, \
+             caller_assignment.assignment_kind AS caller_assignment_kind, \
+             caller_assignment.state AS caller_assignment_state, \
+             CASE WHEN submission.state = 'ready-for-review' THEN 'primary' \
+                  WHEN submission.state = 'pending-secondary-review' THEN 'secondary' \
+                  ELSE caller_assignment.assignment_kind END AS review_stage, \
+             current_risk.policy_version AS risk_policy_version, \
+             current_risk.tier AS risk_tier, current_risk.reason_codes AS risk_reason_codes \
+             FROM submissions submission \
+             JOIN submission_scan_results scan_result \
+               ON scan_result.submission_id = submission.submission_id \
+             JOIN submission_review_metadata review_metadata \
+               ON review_metadata.submission_id = submission.submission_id AND \
+                  review_metadata.scan_id = scan_result.scan_id \
+             JOIN apps app ON app.app_id = submission.app_id \
+             JOIN teams team ON team.team_id = app.owner_team_id \
+             JOIN LATERAL ( \
+               SELECT policy_version, tier, reason_codes \
+               FROM submission_risk_assessments assessment \
+               WHERE assessment.scan_id = scan_result.scan_id \
+               ORDER BY policy_version DESC LIMIT 1 \
+             ) current_risk ON TRUE \
+             LEFT JOIN LATERAL ( \
+               SELECT assignment_kind, state FROM review_assignments assignment \
+               WHERE assignment.submission_id = submission.submission_id AND \
+                     assignment.reviewer_id = $1 \
+               ORDER BY (state = 'active') DESC, created_unix_seconds DESC, assignment_id DESC \
+               LIMIT 1 \
+             ) caller_assignment ON TRUE \
+             WHERE submission.submission_id = $2 AND ( \
+               submission.state = 'ready-for-review' OR \
+               (submission.state = 'pending-secondary-review' AND NOT EXISTS ( \
+                 SELECT 1 FROM review_assignments assignment \
+                 WHERE assignment.submission_id = submission.submission_id AND \
+                       assignment.reviewer_id = $1 \
+               )) OR caller_assignment.assignment_kind IS NOT NULL \
+             )",
+        )
+        .bind(&identity.reviewer_id)
+        .bind(submission_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| ApiError::unavailable())?
+        .ok_or_else(ApiError::not_found)?;
+
+        let risk = risk_assessment_from_row(&row)?;
+        let report_value: Value = row.get("report");
+        let report: ScanReport =
+            serde_json::from_value(report_value).map_err(|_| ApiError::internal())?;
+        let report_sha256: String = row.get("report_sha256");
+        if report.disposition != ScanDisposition::ReadyForReview
+            || report.risk.as_ref() != Some(&risk)
+            || report.scanner_version != row.get::<String, _>("scanner_version")
+            || cp0_store_scan::report_sha256(&report).map_err(|_| ApiError::internal())?
+                != report_sha256
+        {
+            return Err(ApiError::internal());
+        }
+
+        let mut message_rows = sqlx::query(
+            "SELECT message.message_id, message.actor_id, message.actor_kind, message.body, \
+             message.created_unix_seconds, \
+             CASE WHEN message.actor_kind = 'reviewer' THEN reviewer.email \
+                  ELSE team.name END AS actor_label \
+             FROM review_messages message \
+             LEFT JOIN reviewers reviewer ON message.actor_kind = 'reviewer' AND \
+                  reviewer.reviewer_id = message.actor_id \
+             LEFT JOIN team_members member ON message.actor_kind = 'developer' AND \
+                  member.member_id = message.actor_id \
+             LEFT JOIN teams team ON team.team_id = member.team_id \
+             WHERE message.submission_id = $1 \
+             ORDER BY message.created_unix_seconds DESC, message.message_id DESC LIMIT $2",
+        )
+        .bind(submission_id)
+        .bind(i64::try_from(MAX_REVIEW_DETAIL_MESSAGES + 1).map_err(|_| ApiError::internal())?)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| ApiError::unavailable())?;
+        let messages_truncated = message_rows.len() > MAX_REVIEW_DETAIL_MESSAGES;
+        message_rows.truncate(MAX_REVIEW_DETAIL_MESSAGES);
+        message_rows.reverse();
+        let messages = message_rows
+            .into_iter()
+            .map(|row| {
+                Ok(ReviewDetailMessageResponse {
+                    message_id: row.get("message_id"),
+                    actor_id: row.get("actor_id"),
+                    actor_kind: row.get("actor_kind"),
+                    actor_label: row
+                        .get::<Option<String>, _>("actor_label")
+                        .ok_or_else(ApiError::internal)?,
+                    body: row.get("body"),
+                    created_unix_seconds: u64::try_from(row.get::<i64, _>("created_unix_seconds"))
+                        .map_err(|_| ApiError::internal())?,
+                })
+            })
+            .collect::<Result<Vec<_>, ApiError>>()?;
+
+        let assignment_rows = sqlx::query(
+            "SELECT assignment.assignment_id, assignment.reviewer_id, reviewer.email, \
+             reviewer.role, assignment.assignment_kind, assignment.state, \
+             assignment.created_unix_seconds, assignment.completed_unix_seconds \
+             FROM review_assignments assignment \
+             JOIN reviewers reviewer ON reviewer.reviewer_id = assignment.reviewer_id \
+             WHERE assignment.submission_id = $1 \
+             ORDER BY assignment.created_unix_seconds, assignment.assignment_id LIMIT $2",
+        )
+        .bind(submission_id)
+        .bind(i64::try_from(MAX_REVIEW_DETAIL_ASSIGNMENTS + 1).map_err(|_| ApiError::internal())?)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| ApiError::unavailable())?;
+        if assignment_rows.len() > MAX_REVIEW_DETAIL_ASSIGNMENTS {
+            return Err(ApiError::internal());
+        }
+        let assignments = assignment_rows
+            .into_iter()
+            .map(|row| review_assignment_from_row(&row))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let decision_rows = sqlx::query(
+            "SELECT decision.decision_id, decision.reviewer_id, reviewer.email, \
+             decision.decision, decision.reason_codes, decision.note, \
+             decision.created_unix_seconds, decision.assignment_id \
+             FROM review_decisions decision \
+             JOIN reviewers reviewer ON reviewer.reviewer_id = decision.reviewer_id \
+             WHERE decision.submission_id = $1 \
+             ORDER BY decision.created_unix_seconds, decision.decision_id LIMIT $2",
+        )
+        .bind(submission_id)
+        .bind(i64::try_from(MAX_REVIEW_DETAIL_DECISIONS + 1).map_err(|_| ApiError::internal())?)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| ApiError::unavailable())?;
+        if decision_rows.len() > MAX_REVIEW_DETAIL_DECISIONS {
+            return Err(ApiError::internal());
+        }
+        let decisions = decision_rows
+            .into_iter()
+            .map(|row| review_decision_from_row(&row))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut audit_rows = sqlx::query(
+            "SELECT sequence, occurred_unix_seconds, actor_id, action, before_state, after_state, \
+             resource_version FROM audit_events \
+             WHERE object_kind = 'submission' AND object_id = $1 \
+             ORDER BY sequence DESC LIMIT $2",
+        )
+        .bind(submission_id)
+        .bind(i64::try_from(MAX_REVIEW_DETAIL_AUDIT_EVENTS + 1).map_err(|_| ApiError::internal())?)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| ApiError::unavailable())?;
+        let audit_truncated = audit_rows.len() > MAX_REVIEW_DETAIL_AUDIT_EVENTS;
+        audit_rows.truncate(MAX_REVIEW_DETAIL_AUDIT_EVENTS);
+        audit_rows.reverse();
+        let audit = audit_rows
+            .into_iter()
+            .map(|row| review_audit_from_row(&row))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        let submission = stored_submission_from_row(&row)?.response;
+        let review_stage = row
+            .get::<Option<String>, _>("review_stage")
+            .ok_or_else(ApiError::internal)?;
+        let assigned_to_caller = row
+            .get::<Option<String>, _>("caller_assignment_state")
+            .is_some_and(|state| state == "active");
+        Ok(ReviewSubmissionDetailResponse {
+            submission,
+            app: review_app_from_row(&row)?,
+            review_stage,
+            assigned_to_caller,
+            risk,
+            scan: ReviewScanResponse {
+                scan_id: row.get("scan_id"),
+                scanner_version: report.scanner_version,
+                report_sha256,
+                developer_key_sha256: report.developer_key_sha256,
+                imports: report.imports,
+                permissions: report.permissions,
+                findings: report.findings,
+            },
+            assignments,
+            decisions,
+            messages,
+            messages_truncated,
+            audit,
+            audit_truncated,
+        })
     }
 
     async fn begin_review(
@@ -4005,7 +4236,9 @@ pub fn router(service: StoreControlService) -> Router {
         .route("/v1/review/submissions", get(list_review_queue))
         .route(
             "/v1/review/submissions/{submission_action}",
-            post(begin_review).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+            get(get_review_submission_detail)
+                .post(begin_review)
+                .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
         )
         .route(
             "/v1/review/submissions/{submission_id}/decisions",
@@ -4309,9 +4542,96 @@ struct ReviewQueueResponse {
 #[serde(deny_unknown_fields)]
 struct ReviewQueueItemResponse {
     submission: SubmissionResponse,
+    app: ReviewAppResponse,
     review_stage: String,
     assigned_to_caller: bool,
     risk: RiskAssessment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewAppResponse {
+    name: String,
+    developer_name: String,
+    category: StoreCategory,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewScanResponse {
+    scan_id: String,
+    scanner_version: String,
+    report_sha256: String,
+    developer_key_sha256: Option<String>,
+    imports: Vec<String>,
+    permissions: Vec<String>,
+    findings: Vec<ScanFinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewAssignmentResponse {
+    assignment_id: String,
+    reviewer_id: String,
+    reviewer_email: String,
+    reviewer_role: String,
+    assignment_kind: String,
+    state: String,
+    created_unix_seconds: u64,
+    completed_unix_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewDecisionRecordResponse {
+    decision_id: String,
+    reviewer_id: String,
+    reviewer_email: String,
+    decision: String,
+    reason_codes: Vec<String>,
+    note: String,
+    created_unix_seconds: u64,
+    assignment_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewDetailMessageResponse {
+    message_id: String,
+    actor_id: String,
+    actor_kind: String,
+    actor_label: String,
+    body: String,
+    created_unix_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewAuditResponse {
+    sequence: u64,
+    occurred_unix_seconds: u64,
+    actor_id: String,
+    action: String,
+    before_state: Option<String>,
+    after_state: Option<String>,
+    resource_version: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewSubmissionDetailResponse {
+    submission: SubmissionResponse,
+    app: ReviewAppResponse,
+    review_stage: String,
+    assigned_to_caller: bool,
+    risk: RiskAssessment,
+    scan: ReviewScanResponse,
+    assignments: Vec<ReviewAssignmentResponse>,
+    decisions: Vec<ReviewDecisionRecordResponse>,
+    messages: Vec<ReviewDetailMessageResponse>,
+    messages_truncated: bool,
+    audit: Vec<ReviewAuditResponse>,
+    audit_truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -5409,6 +5729,64 @@ fn risk_assessment_from_row(row: &sqlx::postgres::PgRow) -> Result<RiskAssessmen
     .map_err(|_| ApiError::internal())
 }
 
+fn review_app_from_row(row: &sqlx::postgres::PgRow) -> Result<ReviewAppResponse, ApiError> {
+    let category: String = row.get("review_category");
+    Ok(ReviewAppResponse {
+        name: row.get("review_name"),
+        developer_name: row.get("developer_name"),
+        category: serde_json::from_value(json!(category)).map_err(|_| ApiError::internal())?,
+    })
+}
+
+fn review_assignment_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<ReviewAssignmentResponse, ApiError> {
+    Ok(ReviewAssignmentResponse {
+        assignment_id: row.get("assignment_id"),
+        reviewer_id: row.get("reviewer_id"),
+        reviewer_email: row.get("email"),
+        reviewer_role: row.get("role"),
+        assignment_kind: row.get("assignment_kind"),
+        state: row.get("state"),
+        created_unix_seconds: u64::try_from(row.get::<i64, _>("created_unix_seconds"))
+            .map_err(|_| ApiError::internal())?,
+        completed_unix_seconds: row
+            .get::<Option<i64>, _>("completed_unix_seconds")
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| ApiError::internal())?,
+    })
+}
+
+fn review_decision_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<ReviewDecisionRecordResponse, ApiError> {
+    Ok(ReviewDecisionRecordResponse {
+        decision_id: row.get("decision_id"),
+        reviewer_id: row.get("reviewer_id"),
+        reviewer_email: row.get("email"),
+        decision: row.get("decision"),
+        reason_codes: row.get("reason_codes"),
+        note: row.get("note"),
+        created_unix_seconds: u64::try_from(row.get::<i64, _>("created_unix_seconds"))
+            .map_err(|_| ApiError::internal())?,
+        assignment_id: row.get("assignment_id"),
+    })
+}
+
+fn review_audit_from_row(row: &sqlx::postgres::PgRow) -> Result<ReviewAuditResponse, ApiError> {
+    Ok(ReviewAuditResponse {
+        sequence: u64::try_from(row.get::<i64, _>("sequence")).map_err(|_| ApiError::internal())?,
+        occurred_unix_seconds: u64::try_from(row.get::<i64, _>("occurred_unix_seconds"))
+            .map_err(|_| ApiError::internal())?,
+        actor_id: row.get("actor_id"),
+        action: row.get("action"),
+        before_state: row.get("before_state"),
+        after_state: row.get("after_state"),
+        resource_version: row_version(row)?,
+    })
+}
+
 fn parse_submission_state(value: String) -> Result<SubmissionState, ApiError> {
     match value.as_str() {
         "draft" => Ok(SubmissionState::Draft),
@@ -6458,6 +6836,31 @@ async fn list_review_queue(
     };
     match service.list_review_queue(&token, cursor, limit).await {
         Ok(queue) => json_response(StatusCode::OK, queue, request_id),
+        Err(error) => error.response(request_id),
+    }
+}
+
+async fn get_review_submission_detail(
+    State(service): State<StoreControlService>,
+    Path(submission_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = request_id();
+    if !is_valid_submission_id(&submission_id) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    match service
+        .get_review_submission_detail(&token, &submission_id)
+        .await
+    {
+        Ok(detail) => {
+            let version = detail.submission.resource_version;
+            resource_response(StatusCode::OK, detail, version, request_id)
+        }
         Err(error) => error.response(request_id),
     }
 }

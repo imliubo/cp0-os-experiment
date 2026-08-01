@@ -18,12 +18,17 @@
 - Developer Portal、Review Console 和 Store Operations 本地前端 MVP 已完成；Store Operations
   已覆盖 Today 编辑/320x170 预览、已发布 Release 选择、SLA moderation 队列和结构化处置，
   严格客户端复用现有 ETag/幂等控制面；真实 Release discovery 已通过 approved/published/artifact/
-  最新 App 投影门禁、有界 keyset 分页和严格前端适配器接通；fixture 替换和部署尚未实现；
+  最新 App 投影门禁、有界 keyset 分页和严格前端适配器接通；S8J 已移除两个控制台的运行时 fixture，
+  Review Queue/Detail、Today、Release 和 moderation 均使用真实 workforce BFF/Control API，mutation
+  后重新读取权威状态；部署尚未实现；
   S8H 已冻结 Review/Operations audience 分离的 workforce identity OpenAPI，
   并完成外部身份链接、摘要会话、OIDC 事务、最长五分钟 session-bound token、同步撤销级联和
   HTTP 撤销拒绝的 PostgreSQL 纵向验收；S8I 已实现独立双 Origin workforce BFF、严格生产入口、
   幂等 token/注销记录和 Review/Operations 内存令牌适配，并通过跨 BFF/Control API 的全新
   PostgreSQL 17 验收；生产 IdP/JWKS、密钥托管、域名部署和现场撤销演练仍未实现；
+- S8J 已由 Scan Worker 原子生成不可变审核展示元数据，并以数据库触发器绑定 Submission、
+  ready-for-review scan、默认 locale 和创建时间；Review Queue/Detail 重新验证 scan report SHA-256
+  与风险摘要，缺少新投影的旧扫描记录 fail-closed，必须重新扫描后才可进入队列；
 - Submission/Review/Release 事务域核心已完成；App Registry、Submission
   create/upload/finalize/read、独立双审 Review 和 Release 控制的 PostgreSQL/HTTP 纵向切片
   已完成，Submission withdraw 的状态/队列/审核原子取消和 OAuth 开发者 Device Flow 纵向切片

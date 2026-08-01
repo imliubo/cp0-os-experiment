@@ -21,10 +21,13 @@ jq -e '
   .paths["/v1/submissions/{submission_id}:withdraw"].post.operationId == "withdrawSubmission" and
   .paths["/v1/submissions/{submission_id}/messages"].post.operationId == "postReviewMessage" and
   .paths["/v1/review/submissions"].get.operationId == "listReviewQueue" and
+  .paths["/v1/review/submissions/{submission_id}"].get.operationId == "getReviewSubmissionDetail" and
   .paths["/v1/review/submissions/{submission_id}:begin"].post.operationId == "beginReview" and
   .paths["/v1/review/submissions/{submission_id}/decisions"].post.operationId == "decideReview" and
   .paths["/v1/review/submissions"].get.responses["200"].content["application/json"].schema.properties.items.items["$ref"] == "#/components/schemas/ReviewQueueItem" and
   .components.schemas.ReviewQueueItem.properties.risk["$ref"] == "#/components/schemas/RiskAssessment" and
+  .components.schemas.ReviewQueueItem.properties.app["$ref"] == "#/components/schemas/ReviewApp" and
+  .components.schemas.ReviewSubmissionDetail.properties.scan["$ref"] == "#/components/schemas/ReviewScan" and
   .paths["/v1/releases"].post.operationId == "createRelease" and
   .paths["/v1/releases/{release_id}"].get.operationId == "getRelease" and
   .paths["/v1/releases/{release_id}:schedule"].post.operationId == "scheduleRelease" and
@@ -54,7 +57,9 @@ jq -e '
     .components.schemas[
       "Problem", "DeviceCodeRequest", "DeviceCodeResponse",
       "DeviceAuthorizationDecisionRequest", "DeviceTokenRequest", "DeviceTokenResponse",
-      "SetTeamMemberRoleRequest", "TeamMember", "Team", "ReviewQueueItem", "RiskAssessment",
+      "SetTeamMemberRoleRequest", "TeamMember", "Team", "ReviewQueueItem", "ReviewApp",
+      "ReviewScanFinding", "ReviewScan", "ReviewAssignment", "ReviewDecisionRecord",
+      "ReviewDetailMessage", "ReviewAuditEvent", "ReviewSubmissionDetail", "RiskAssessment",
       "CreateAppRequest", "App", "AssetDescriptor",
       "CreateSubmissionRequest", "FinalizeSubmissionRequest", "Submission",
       "ReviewMessageRequest", "ReviewMessage", "ReviewDecisionRequest",

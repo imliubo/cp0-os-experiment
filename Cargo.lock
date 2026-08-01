@@ -520,6 +520,7 @@ dependencies = [
  "cp0-store-metrics",
  "cp0-store-protocol",
  "cp0-store-risk",
+ "cp0-store-scan",
  "semver",
  "serde",
  "serde_json",
