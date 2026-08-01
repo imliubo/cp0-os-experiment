@@ -17,6 +17,9 @@ udev_rules="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/9
 config="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/weston.ini"
 version="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/weston.env"
 policy="$repo_root/compositor-policy/cardputerzero-policy.c"
+esc_gesture="$repo_root/compositor-policy/esc-gesture.c"
+esc_gesture_header="$repo_root/compositor-policy/esc-gesture.h"
+esc_gesture_test="$repo_root/tests/compositor-esc-gesture.c"
 protocol="$repo_root/protocols/cardputerzero-system-shell-v1.xml"
 shell_client="$repo_root/system-shell/src/main.c"
 builder="$repo_root/scripts/build-compositor.sh"
@@ -123,6 +126,11 @@ sh -n "$display_generator"
 mkdir -p "$repo_root/target/test-tmp"
 generator_tmp=$(mktemp -d "$repo_root/target/test-tmp/display-generator.XXXXXX")
 trap 'rm -rf -- "$generator_tmp"' EXIT
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -I"$repo_root/compositor-policy" \
+    "$esc_gesture" "$esc_gesture_test" \
+    -o "$generator_tmp/compositor-esc-gesture-test"
+"$generator_tmp/compositor-esc-gesture-test"
 marker="$generator_tmp/recovery-mode"
 test "$("$display_generator" --select product "$marker")" = \
     cardputerzero-compositor.service
@@ -147,6 +155,10 @@ grep -q 'WESTON_LAYER_POSITION_NORMAL' "$policy"
 grep -q 'WESTON_LAYER_POSITION_HIDDEN' "$policy"
 grep -q 'weston_compositor_add_key_binding' "$policy"
 grep -q 'cp0_system_shell_v1_send_action' "$policy"
+grep -q 'wl_event_loop_add_timer' "$policy"
+grep -q 'keyboard_has_key(keyboard, KEY_ESC)' "$policy"
+grep -q '^#define CP0_ESC_LONG_PRESS_MSEC 800U$' "$esc_gesture_header"
+grep -q 'CP0_ESC_GESTURE_HOME' "$esc_gesture"
 grep -q 'weston_compositor_add_screenshot_authority' "$policy"
 grep -q 'attempt->authorized = true' "$policy"
 grep -q 'attempt->denied = true' "$policy"
@@ -190,6 +202,9 @@ grep -q 'weston_capture_source_v1_capture' "$shell_client"
 grep -q 'CP0_SCREENSHOT_DIRECTORY' "$shell_client"
 grep -q 'weston-output-capture-protocol.c' "$builder"
 grep -q 'screenshot_store.c' "$builder"
+grep -q 'compositor-policy/esc-gesture.c' "$builder"
+grep -q 'compositor-policy/esc-gesture.c' "$repo_root/image/build-image.sh"
+grep -q '/tmp/cardputerzero-policy/esc-gesture.c' "$stage"
 grep -q 'CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS' "$policy"
 grep -q 'weston_compositor_sleep' "$policy"
 grep -q 'compositor->wake_signal' "$policy"

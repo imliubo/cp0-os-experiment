@@ -120,6 +120,8 @@ cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$pi_gen_dir/stage-cardputerzero-os/01-compositor/system-shell/"
 mkdir -p "$pi_gen_dir/stage-cardputerzero-os/01-compositor/policy"
 cp "$repo_root/compositor-policy/cardputerzero-policy.c" \
+    "$repo_root/compositor-policy/esc-gesture.c" \
+    "$repo_root/compositor-policy/esc-gesture.h" \
     "$repo_root/protocols/cardputerzero-system-shell-v1.xml" \
     "$pi_gen_dir/stage-cardputerzero-os/01-compositor/policy/"
 

@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "cardputerzero-system-shell-server-protocol.h"
+#include "esc-gesture.h"
 
 #include <libweston/desktop.h>
 #include <libweston/libweston.h>
@@ -12,11 +13,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <time.h>
 #include <wayland-server-core.h>
 
 #define CP0_SHELL_APP_ID "os.cardputerzero.shell"
 #define CP0_SHELL_USER "cp0-shell"
 #define CP0_APP_ID_MAX 128
+#define CP0_ESC_POLL_MSEC 20
 
 struct cp0_policy;
 
@@ -47,6 +50,8 @@ struct cp0_policy {
     struct wl_listener screenshot_authority_listener;
     struct wl_list surface_watches;
     struct wl_event_source *reassert_idle;
+    struct wl_event_source *esc_timer;
+    struct cp0_esc_gesture esc_gesture;
     uint32_t next_app_token;
     uint32_t overlay_mode;
 };
@@ -334,6 +339,7 @@ surface_destroyed(struct wl_listener *listener, void *data)
 
     withdraw_app(watch);
     if (policy->trusted_surface == watch->surface) {
+        cp0_esc_gesture_cancel(&policy->esc_gesture);
         policy->trusted_surface = NULL;
         policy->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     }
@@ -387,6 +393,7 @@ shell_resource_destroyed(struct wl_resource *resource)
     if (policy == NULL || policy->shell_resource != resource)
         return;
     policy->shell_resource = NULL;
+    cp0_esc_gesture_cancel(&policy->esc_gesture);
     policy->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     wl_list_for_each(watch, &policy->surface_watches, link)
         watch->announced = false;
@@ -592,7 +599,6 @@ action_for_key(uint32_t key)
     case KEY_HOMEPAGE:
     case KEY_F1:
         return CP0_SYSTEM_SHELL_V1_ACTION_HOME;
-    case KEY_ESC:
     case KEY_F2:
         return CP0_SYSTEM_SHELL_V1_ACTION_BACK;
     case KEY_F3:
@@ -626,13 +632,9 @@ action_for_key(uint32_t key)
 }
 
 static void
-system_key_binding(struct weston_keyboard *keyboard,
-                   const struct timespec *time, uint32_t key, void *data)
+dispatch_system_action(struct cp0_policy *policy,
+                       struct weston_keyboard *keyboard, uint32_t action)
 {
-    struct cp0_policy *policy = data;
-    uint32_t action = action_for_key(key);
-    (void)time;
-
     if (action == UINT32_MAX || policy->shell_resource == NULL ||
         policy->trusted_surface == NULL)
         return;
@@ -651,6 +653,96 @@ system_key_binding(struct weston_keyboard *keyboard,
     cp0_system_shell_v1_send_action(policy->shell_resource, action);
 }
 
+static bool
+keyboard_has_key(struct weston_keyboard *keyboard, uint32_t key)
+{
+    uint32_t *pressed;
+
+    if (keyboard == NULL)
+        return false;
+    wl_array_for_each(pressed, &keyboard->keys) {
+        if (*pressed == key)
+            return true;
+    }
+    return false;
+}
+
+static bool
+monotonic_msec(uint64_t *value)
+{
+    struct timespec now;
+
+    if (value == NULL || clock_gettime(CLOCK_MONOTONIC, &now) != 0 ||
+        now.tv_sec < 0)
+        return false;
+    *value = (uint64_t)now.tv_sec * 1000U + (uint64_t)now.tv_nsec / 1000000U;
+    return true;
+}
+
+static int
+esc_gesture_timer(void *data)
+{
+    struct cp0_policy *policy = data;
+    struct weston_keyboard *keyboard = first_keyboard(policy->compositor);
+    enum cp0_esc_gesture_action action;
+    uint64_t now_msec;
+
+    if (keyboard == NULL || policy->shell_resource == NULL ||
+        policy->trusted_surface == NULL || !monotonic_msec(&now_msec)) {
+        cp0_esc_gesture_cancel(&policy->esc_gesture);
+        return 0;
+    }
+    action = cp0_esc_gesture_poll(
+        &policy->esc_gesture, now_msec, keyboard_has_key(keyboard, KEY_ESC));
+    if (action == CP0_ESC_GESTURE_BACK) {
+        dispatch_system_action(policy, keyboard,
+                               CP0_SYSTEM_SHELL_V1_ACTION_BACK);
+    } else if (action == CP0_ESC_GESTURE_HOME) {
+        dispatch_system_action(policy, keyboard,
+                               CP0_SYSTEM_SHELL_V1_ACTION_HOME);
+    } else if (policy->esc_gesture.active &&
+               wl_event_source_timer_update(policy->esc_timer,
+                                            CP0_ESC_POLL_MSEC) < 0) {
+        cp0_esc_gesture_cancel(&policy->esc_gesture);
+    }
+    return 0;
+}
+
+static bool
+begin_esc_gesture(struct cp0_policy *policy)
+{
+    uint64_t now_msec;
+
+    if (!monotonic_msec(&now_msec))
+        return false;
+    cp0_esc_gesture_press(&policy->esc_gesture, now_msec);
+    if (wl_event_source_timer_update(policy->esc_timer,
+                                     CP0_ESC_POLL_MSEC) < 0) {
+        cp0_esc_gesture_cancel(&policy->esc_gesture);
+        return false;
+    }
+    return true;
+}
+
+static void
+system_key_binding(struct weston_keyboard *keyboard,
+                   const struct timespec *time, uint32_t key, void *data)
+{
+    struct cp0_policy *policy = data;
+    (void)time;
+
+    if (policy->shell_resource == NULL || policy->trusted_surface == NULL)
+        return;
+    if (key == KEY_ESC) {
+        if (!begin_esc_gesture(policy)) {
+            dispatch_system_action(policy, keyboard,
+                                   CP0_SYSTEM_SHELL_V1_ACTION_BACK);
+        }
+        return;
+    }
+    dispatch_system_action(policy, keyboard, action_for_key(key));
+}
+
 static void
 add_system_binding(struct cp0_policy *policy, uint32_t key)
 {
@@ -665,6 +757,7 @@ compositor_woke(struct wl_listener *listener, void *data)
         wl_container_of(listener, policy, compositor_wake_listener);
     (void)data;
 
+    cp0_esc_gesture_cancel(&policy->esc_gesture);
     set_overlay_mode(policy, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL,
                      first_keyboard(policy->compositor));
     if (policy->shell_resource != NULL) {
@@ -684,6 +777,8 @@ policy_destroyed(struct wl_listener *listener, void *data)
 
     if (policy->reassert_idle != NULL)
         wl_event_source_remove(policy->reassert_idle);
+    if (policy->esc_timer != NULL)
+        wl_event_source_remove(policy->esc_timer);
     wl_list_for_each_safe(watch, next, &policy->surface_watches, link) {
         wl_list_remove(&watch->commit_listener.link);
         wl_list_remove(&watch->destroy_listener.link);
@@ -707,6 +802,7 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
 {
     struct cp0_policy *policy;
     struct passwd *shell_user;
+    struct wl_event_loop *loop;
     (void)argc;
     (void)argv;
 
@@ -735,6 +831,16 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
     weston_layer_set_position(&policy->hidden_layer,
                               WESTON_LAYER_POSITION_HIDDEN);
 
+    loop = wl_display_get_event_loop(compositor->wl_display);
+    policy->esc_timer = wl_event_loop_add_timer(loop, esc_gesture_timer, policy);
+    if (policy->esc_timer == NULL) {
+        weston_layer_fini(&policy->trusted_layer);
+        weston_layer_fini(&policy->app_layer);
+        weston_layer_fini(&policy->hidden_layer);
+        free(policy);
+        return -1;
+    }
+
     policy->create_surface_listener.notify = surface_created;
     wl_signal_add(&compositor->create_surface_signal,
                   &policy->create_surface_listener);
@@ -752,6 +858,7 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
         compositor->wl_display, &cp0_system_shell_v1_interface, 5, policy,
         bind_system_shell);
     if (policy->global == NULL) {
+        wl_event_source_remove(policy->esc_timer);
         wl_list_remove(&policy->create_surface_listener.link);
         wl_list_remove(&policy->compositor_wake_listener.link);
         wl_list_remove(&policy->screenshot_authority_listener.link);

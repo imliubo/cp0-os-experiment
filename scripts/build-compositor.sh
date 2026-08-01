@@ -56,6 +56,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \
     -I"$weston_source/include" \
     -I"$weston_build" \
     "$repo_root/compositor-policy/cardputerzero-policy.c" \
+    "$repo_root/compositor-policy/esc-gesture.c" \
     "$output/cardputerzero-system-shell-protocol.c" \
     -L"$weston_build/libweston" -lweston-14 \
     $(pkg-config --cflags --libs pixman-1 wayland-server) \

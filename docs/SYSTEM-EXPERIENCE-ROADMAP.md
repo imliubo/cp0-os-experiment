@@ -161,8 +161,10 @@ implemented as an unreliable userspace timer in each application.
   LCD overlays, battery telemetry, I2C diagnostics and uninstall persistence.
 - [ ] Measure idle memory, input latency and SD writes before enabling settings
   persistence by default.
-- [ ] Implement and validate the keyboard driver/compositor ESC long-press Home
-  gesture; `Fn+K` must remain the foreground application's standard Home key.
+- [x] Implement and locally validate the compositor-owned ESC long-press Home
+  gesture; `Fn+K` remains the foreground application's standard Home key.
+- [ ] Physically validate ESC short/long press in Home, standard and immersive
+  application states, including the 800-millisecond threshold and release.
 - [x] Add the trusted screenshot broker with exact-client compositor
   authorization, fixed 320x170 capture, atomic bounded PNG storage and
   completion states. Physical `Fn+J` and SD latency remain device acceptance.
