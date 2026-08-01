@@ -108,6 +108,9 @@ S6A 已新增向后兼容的 Discovery Catalog v2：生产 Publisher 从审核�
 Team 的权威显示名生成
 developer、subtitle、category、keywords、age/privacy 元数据，v1/v2 严格分流；`cp0-stored`
 在签名 Catalog 上增加开发者、分类和关键词本地搜索。富媒体资源缓存和小屏展示仍待实现。
+S6B 已新增 Catalog v3 富媒体资源层：根 Catalog 摘要绑定 icon 和有界 details 清单，details 再
+绑定 320x170 截图；Publisher 将包、图片、details、Catalog 和 transparency 对象写入同一不可变
+generation，并支持 v1/v2/v3 渐进升级。设备原子资源缓存和 System Shell 展示仍待实现。
 
 - [ ] 实现 Identity/Teams、App Registry、Submission 和 Release 服务。
   当前 App Registry、Submission 上传/finalize/read/withdraw、独立双审 Review 和 Release 控制
@@ -132,7 +135,9 @@ developer、subtitle、category、keywords、age/privacy 元数据，v1/v2 严�
 - [x] Catalog v2 增加 developer、subtitle、category、keywords、age/privacy 元数据。
   S6A 的生产 Publisher 已生成严格 v2，设备服务同时验证 v1/v2；当前 System Shell 仍使用有界
   summary 响应，富字段详情展示属于后续切片。
-- [ ] 定义 32x32/48x48 图标和 320x170 截图的格式、尺寸、摘要和缓存上限。
+- [x] 定义 32x32/48x48 图标和 320x170 截图的格式、尺寸、摘要和缓存上限。
+  S6B 已冻结 PNG/descriptor/details 契约、单资源与 CM0 总缓存预算，并由 Publisher 原子发布；
+  `cp0-stored` 缓存实现仍由下方独立任务跟踪。
 - [ ] 增加 Today 专题、精选集合、分类和更新索引。
 - [ ] 规模超过 64 应用时切换为签名根索引和有界 shard。
 - [ ] `cp0-stored` 原子缓存 Catalog/资源，资源解析失败不影响本地应用启动。

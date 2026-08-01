@@ -23,7 +23,8 @@
   恶意样本和生产 HSM/key ceremony 尚未实现；隔离 Scanner、文件 key Publisher/Catalog
   Builder 与完整前缀 transparency log 的 outbox/租约、签名、失败恢复和原子结果纵向切片已完成；
 - 设备端 Today/Apps/Search/Updates 和分页搜索模型已实现，签名 Catalog v2 富字段本地搜索已接入；
-  图标/截图资源缓存、富字段详情展示和更新队列尚未实现；
+  Catalog v3 图标/截图/details 不可变发布契约已完成，设备资源缓存、富字段详情展示和更新队列
+  尚未实现；
 - 后端可从 approved Release 自动发布，`cp0ctl` OAuth 已接入；Portal 的账户、会话和团队管理
   仍未形成完整自助流程；
 - 当前 Store 安全底座可以复用，详细阶段见 `STORE-ROADMAP.md`。

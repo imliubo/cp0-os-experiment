@@ -10,9 +10,11 @@ use cp0_manifest::AppManifest;
 use cp0_package::CApp;
 use cp0_store_metadata::{ImageAsset, StoreListing};
 use cp0_store_protocol::{
-    CATALOG_SCHEMA_VERSION, Catalog, CatalogApp, CatalogDiscovery, MAX_CATALOG_APPS,
-    MAX_CATALOG_LIFETIME_SECONDS, RICH_CATALOG_SCHEMA_VERSION, encode_signed_catalog,
-    is_valid_https_url, lower_hex, sign_catalog,
+    APP_DETAILS_SCHEMA_VERSION, CATALOG_SCHEMA_VERSION, Catalog, CatalogApp, CatalogDiscovery,
+    CatalogImageResource, CatalogObjectResource, CatalogResources, MAX_CATALOG_APPS,
+    MAX_CATALOG_LIFETIME_SECONDS, MEDIA_CATALOG_SCHEMA_VERSION, RICH_CATALOG_SCHEMA_VERSION,
+    StoreAppDetails, encode_app_details, encode_signed_catalog, is_valid_https_url, lower_hex,
+    sign_catalog,
 };
 use cp0_store_transparency::{
     Checkpoint, TRANSPARENCY_SCHEMA_VERSION, TransparencyLeaf, decode_checkpoint, decode_leaf,
@@ -531,7 +533,8 @@ impl StorePublisher {
         .await?;
         let row = sqlx::query(
             "SELECT event_id, release_id, job_kind, source_resource_version, source_state, \
-             lease_token, attempts, catalog_sequence, published_unix_seconds, expires_unix_seconds \
+             developer_name, lease_token, attempts, catalog_sequence, published_unix_seconds, \
+             expires_unix_seconds \
              FROM store_publication_jobs WHERE state = 'running' AND attempts >= 8 AND \
              leased_until_unix_seconds <= EXTRACT(EPOCH FROM clock_timestamp())::BIGINT \
              ORDER BY created_unix_seconds, event_id LIMIT 1",
@@ -600,10 +603,17 @@ impl StorePublisher {
         let claimed = sqlx::query(
             "UPDATE store_publication_jobs SET state = 'running', lease_token = $1, \
              leased_until_unix_seconds = $2, attempts = attempts + 1, catalog_sequence = $3, \
-             published_unix_seconds = $4, expires_unix_seconds = $5, last_error_code = NULL \
+             published_unix_seconds = $4, expires_unix_seconds = $5, last_error_code = NULL, \
+             developer_name = COALESCE(developer_name, ( \
+                 SELECT team.name FROM releases release \
+                 JOIN apps app ON app.app_id = release.app_id \
+                 JOIN teams team ON team.team_id = app.owner_team_id \
+                 WHERE release.release_id = store_publication_jobs.release_id \
+             )) \
              WHERE event_id = $6 AND state = 'queued' \
              RETURNING event_id, release_id, job_kind, source_resource_version, source_state, \
-             lease_token, attempts, catalog_sequence, published_unix_seconds, expires_unix_seconds",
+             developer_name, lease_token, attempts, catalog_sequence, published_unix_seconds, \
+             expires_unix_seconds",
         )
         .bind(&lease_token)
         .bind(now + LEASE_SECONDS)
@@ -781,14 +791,13 @@ impl StorePublisher {
              release.resource_version, submission.state AS submission_state, \
              submission.package_sha256, submission.package_bytes, submission.listing_sha256, \
              submission.listing_bytes, submission.assets, submission.finalized_content_sha256, \
-             app.owner_team_id, app.default_locale, team.name AS developer_name, \
+             app.owner_team_id, app.default_locale, \
              EXISTS (SELECT 1 FROM review_decisions decision \
                      WHERE decision.submission_id = submission.submission_id \
                        AND decision.decision = 'approved') AS approved_decision \
              FROM releases release \
              JOIN submissions submission ON submission.submission_id = release.submission_id \
              JOIN apps app ON app.app_id = release.app_id \
-             JOIN teams team ON team.team_id = app.owner_team_id \
              WHERE release.release_id = $1",
         )
         .bind(&job.release_id)
@@ -827,7 +836,7 @@ impl StorePublisher {
                 ))?,
             owner_team_id: row.get("owner_team_id"),
             default_locale: row.get("default_locale"),
-            developer_name: row.get("developer_name"),
+            developer_name: job.developer_name.clone(),
         }))
     }
 
@@ -867,15 +876,18 @@ impl StorePublisher {
                 release.listing_bytes,
             )
             .await?;
+        let mut asset_encodings = Vec::with_capacity(release.assets.len());
         for (index, descriptor) in release.assets.iter().enumerate() {
-            self.load_part(
-                &release.submission_id,
-                &format!("asset-{index}"),
-                &descriptor.sha256,
-                usize::try_from(descriptor.bytes)
-                    .map_err(|_| PublisherError::InvalidState("asset size is invalid"))?,
-            )
-            .await?;
+            asset_encodings.push(
+                self.load_part(
+                    &release.submission_id,
+                    &format!("asset-{index}"),
+                    &descriptor.sha256,
+                    usize::try_from(descriptor.bytes)
+                        .map_err(|_| PublisherError::InvalidState("asset size is invalid"))?,
+                )
+                .await?,
+            );
         }
 
         let mut package = CApp::decode(&package_encoded)?;
@@ -933,6 +945,56 @@ impl StorePublisher {
             .map(|request| request.name)
             .collect::<Vec<_>>();
         permissions.sort_by_key(|permission| permission.as_str());
+        let icon_path = icon_relative_path(&job.release_id);
+        let icon = image_resource(
+            &self.base_url,
+            job.catalog_sequence,
+            &icon_path,
+            &release.assets[0],
+        )?;
+        let mut resource_files = vec![PreparedResource {
+            relative_path: icon_path,
+            encoded: asset_encodings[0].clone(),
+        }];
+        let mut screenshots = Vec::with_capacity(release.assets.len() - 1);
+        for (index, (descriptor, encoded)) in release
+            .assets
+            .iter()
+            .skip(1)
+            .zip(asset_encodings.iter().skip(1))
+            .enumerate()
+        {
+            let relative_path = screenshot_relative_path(&job.release_id, index);
+            screenshots.push(image_resource(
+                &self.base_url,
+                job.catalog_sequence,
+                &relative_path,
+                descriptor,
+            )?);
+            resource_files.push(PreparedResource {
+                relative_path,
+                encoded: encoded.clone(),
+            });
+        }
+        let details_encoded = encode_app_details(&StoreAppDetails {
+            schema_version: APP_DETAILS_SCHEMA_VERSION,
+            app_id: release.app_id.clone(),
+            version: release.version.clone(),
+            description: localized.description.clone(),
+            release_notes: localized.release_notes.clone(),
+            screenshots,
+        })?;
+        let details_path = details_relative_path(&job.release_id);
+        let details_url = publication_url(&self.base_url, job.catalog_sequence, &details_path)?;
+        let details = CatalogObjectResource {
+            url: details_url,
+            sha256: sha256_hex(&details_encoded),
+            bytes: details_encoded.len() as u64,
+        };
+        resource_files.push(PreparedResource {
+            relative_path: details_path,
+            encoded: details_encoded,
+        });
         let app = CatalogApp {
             app_id: release.app_id.clone(),
             name: manifest.name,
@@ -952,6 +1014,7 @@ impl StorePublisher {
                 privacy_url: listing.privacy_url.clone(),
                 support_url: listing.support_url.clone(),
             }),
+            resources: Some(CatalogResources { icon, details }),
         };
         app.validate()?;
         Ok(PreparedPackage {
@@ -960,6 +1023,7 @@ impl StorePublisher {
             relative_path,
             package_sha256,
             encoded,
+            resources: resource_files,
             app,
         })
     }
@@ -1340,11 +1404,17 @@ impl StorePublisher {
 }
 
 fn catalog_schema_for_projection(apps: &mut [CatalogApp]) -> u32 {
-    if apps.iter().all(|app| app.discovery.is_some()) {
+    if apps.iter().all(|app| app.resources.is_some()) {
+        MEDIA_CATALOG_SCHEMA_VERSION
+    } else if apps.iter().all(|app| app.discovery.is_some()) {
+        for app in apps {
+            app.resources = None;
+        }
         RICH_CATALOG_SCHEMA_VERSION
     } else {
         for app in apps {
             app.discovery = None;
+            app.resources = None;
         }
         CATALOG_SCHEMA_VERSION
     }
@@ -1584,7 +1654,14 @@ struct PreparedPackage {
     relative_path: String,
     package_sha256: String,
     encoded: Vec<u8>,
+    resources: Vec<PreparedResource>,
     app: CatalogApp,
+}
+
+#[derive(Clone)]
+struct PreparedResource {
+    relative_path: String,
+    encoded: Vec<u8>,
 }
 
 enum Preparation {
@@ -1624,6 +1701,7 @@ struct PublicationJob {
     job_kind: String,
     source_resource_version: u64,
     source_state: String,
+    developer_name: String,
     lease_token: String,
     attempts: i16,
     catalog_sequence: u64,
@@ -1695,8 +1773,8 @@ async fn lock_active_job(
     job: &PublicationJob,
 ) -> Result<(), PublisherError> {
     let row = sqlx::query(
-        "SELECT state, lease_token, catalog_sequence, source_resource_version, source_state \
-         FROM store_publication_jobs WHERE event_id = $1 FOR UPDATE",
+        "SELECT state, lease_token, catalog_sequence, source_resource_version, source_state, \
+         developer_name FROM store_publication_jobs WHERE event_id = $1 FOR UPDATE",
     )
     .bind(&job.event_id)
     .fetch_optional(&mut **transaction)
@@ -1709,6 +1787,7 @@ async fn lock_active_job(
         || positive_u64(row.get::<i64, _>("source_resource_version"))?
             != job.source_resource_version
         || row.get::<String, _>("source_state") != job.source_state
+        || row.get::<Option<String>, _>("developer_name").as_deref() != Some(&job.developer_name)
     {
         return Err(PublisherError::InvalidState("publication lease is stale"));
     }
@@ -1910,6 +1989,30 @@ fn write_generation_sync(
             0o444,
         )?;
         sync_directory(&package_directory)?;
+        let assets_directory = temporary.join("assets");
+        let app_assets_directory = assets_directory.join(&package.release_id);
+        let screenshots_directory = app_assets_directory.join("screenshots");
+        for directory in [
+            &assets_directory,
+            &app_assets_directory,
+            &screenshots_directory,
+        ] {
+            fs::create_dir(directory)?;
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755))?;
+        }
+        for resource in &package.resources {
+            let destination = temporary.join(&resource.relative_path);
+            if !destination.starts_with(&temporary) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Store resource escaped publication generation",
+                ));
+            }
+            write_new_synced(&destination, &resource.encoded, 0o444)?;
+        }
+        sync_directory(&screenshots_directory)?;
+        sync_directory(&app_assets_directory)?;
+        sync_directory(&assets_directory)?;
     }
     write_new_synced(
         &temporary.join("catalog.json"),
@@ -1989,6 +2092,15 @@ fn verify_generation_sync(directory: &Path, prepared: &PreparedPublication) -> i
             &package_directory.join(format!("{}.capp", package.release_id)),
             &package.encoded,
         )?;
+        for resource in &package.resources {
+            verify_exact_file(&directory.join(&resource.relative_path), &resource.encoded)?;
+        }
+        let assets_directory = directory.join("assets");
+        let app_assets_directory = assets_directory.join(&package.release_id);
+        let screenshots_directory = app_assets_directory.join("screenshots");
+        fs::set_permissions(&screenshots_directory, fs::Permissions::from_mode(0o555))?;
+        fs::set_permissions(&app_assets_directory, fs::Permissions::from_mode(0o555))?;
+        fs::set_permissions(&assets_directory, fs::Permissions::from_mode(0o555))?;
         fs::set_permissions(package_directory, fs::Permissions::from_mode(0o555))?;
     }
     fs::set_permissions(transparency_directory, fs::Permissions::from_mode(0o555))?;
@@ -2152,12 +2264,18 @@ fn is_retryable_transaction_error(error: &PublisherError) -> bool {
 }
 
 fn publication_job_from_row(row: sqlx::postgres::PgRow) -> Result<PublicationJob, PublisherError> {
+    let developer_name =
+        row.get::<Option<String>, _>("developer_name")
+            .ok_or(PublisherError::InvalidState(
+                "publication developer snapshot is missing",
+            ))?;
     Ok(PublicationJob {
         event_id: row.get("event_id"),
         release_id: row.get("release_id"),
         job_kind: row.get("job_kind"),
         source_resource_version: positive_u64(row.get::<i64, _>("source_resource_version"))?,
         source_state: row.get("source_state"),
+        developer_name,
         lease_token: row.get::<Option<String>, _>("lease_token").ok_or(
             PublisherError::InvalidState("publication lease token is missing"),
         )?,
@@ -2229,6 +2347,47 @@ fn package_relative_path(sequence: u64, release_id: &str) -> String {
     format!("generations/{sequence}/packages/{release_id}.capp")
 }
 
+fn icon_relative_path(release_id: &str) -> String {
+    format!("assets/{release_id}/icon.png")
+}
+
+fn screenshot_relative_path(release_id: &str, index: usize) -> String {
+    format!("assets/{release_id}/screenshots/{index}.png")
+}
+
+fn details_relative_path(release_id: &str) -> String {
+    format!("assets/{release_id}/details.json")
+}
+
+fn publication_url(
+    base_url: &str,
+    sequence: u64,
+    relative_path: &str,
+) -> Result<String, PublisherError> {
+    let url = format!("{base_url}/generations/{sequence}/{relative_path}");
+    if !is_valid_https_url(&url) {
+        return Err(PublisherError::InvalidState(
+            "generated Store resource URL is invalid",
+        ));
+    }
+    Ok(url)
+}
+
+fn image_resource(
+    base_url: &str,
+    sequence: u64,
+    relative_path: &str,
+    descriptor: &ImageAsset,
+) -> Result<CatalogImageResource, PublisherError> {
+    Ok(CatalogImageResource {
+        url: publication_url(base_url, sequence, relative_path)?,
+        sha256: descriptor.sha256.clone(),
+        bytes: descriptor.bytes,
+        width: descriptor.width,
+        height: descriptor.height,
+    })
+}
+
 fn catalog_relative_path(sequence: u64) -> String {
     format!("generations/{sequence}/catalog.json")
 }
@@ -2272,7 +2431,7 @@ mod tests {
     use super::*;
     use cp0_store_metadata::{AgeRating, StoreCategory};
 
-    fn projected_app(discovery: bool) -> CatalogApp {
+    fn projected_app(discovery: bool, resources: bool) -> CatalogApp {
         let summary = "A migration-safe discovery fixture".to_owned();
         CatalogApp {
             app_id: "dev.cardputerzero.publisher".into(),
@@ -2293,6 +2452,20 @@ mod tests {
                 privacy_url: "https://example.com/privacy".into(),
                 support_url: "https://example.com/support".into(),
             }),
+            resources: resources.then_some(CatalogResources {
+                icon: CatalogImageResource {
+                    url: "https://store.example.com/generations/1/assets/app/icon.png".into(),
+                    sha256: "22".repeat(32),
+                    bytes: 1024,
+                    width: 48,
+                    height: 48,
+                },
+                details: CatalogObjectResource {
+                    url: "https://store.example.com/generations/1/assets/app/details.json".into(),
+                    sha256: "33".repeat(32),
+                    bytes: 1024,
+                },
+            }),
         }
     }
 
@@ -2303,18 +2476,34 @@ mod tests {
             package_relative_path(42, "rel_11111111111111111111111111111111"),
             "generations/42/packages/rel_11111111111111111111111111111111.capp"
         );
+        assert_eq!(
+            icon_relative_path("rel_11111111111111111111111111111111"),
+            "assets/rel_11111111111111111111111111111111/icon.png"
+        );
+        assert_eq!(
+            screenshot_relative_path("rel_11111111111111111111111111111111", 2),
+            "assets/rel_11111111111111111111111111111111/screenshots/2.png"
+        );
     }
 
     #[test]
-    fn mixed_legacy_projection_stays_pure_v1_until_every_artifact_is_rich() {
-        let mut rich = vec![projected_app(true)];
+    fn mixed_projection_uses_the_highest_complete_catalog_schema() {
+        let mut media = vec![projected_app(true, true)];
+        assert_eq!(
+            catalog_schema_for_projection(&mut media),
+            MEDIA_CATALOG_SCHEMA_VERSION
+        );
+        assert!(media[0].resources.is_some());
+
+        let mut rich = vec![projected_app(true, true), projected_app(true, false)];
         assert_eq!(
             catalog_schema_for_projection(&mut rich),
             RICH_CATALOG_SCHEMA_VERSION
         );
         assert!(rich[0].discovery.is_some());
+        assert!(rich.iter().all(|app| app.resources.is_none()));
 
-        let mut mixed = vec![projected_app(true), projected_app(false)];
+        let mut mixed = vec![projected_app(true, true), projected_app(false, false)];
         assert_eq!(
             catalog_schema_for_projection(&mut mixed),
             CATALOG_SCHEMA_VERSION

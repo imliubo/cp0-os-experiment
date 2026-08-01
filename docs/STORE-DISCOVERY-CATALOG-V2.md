@@ -51,10 +51,10 @@ match ranks ahead of general metadata containment. Search text remains local and
 is never sent to the Store origin.
 
 Catalog responses to the current System Shell remain the bounded v1 summary
-shape, so this change does not increase the C UI allocation or frame size.
-Exposing rich fields in app details, publishing and caching icon/screenshot
-resources, localized selection, Today collections and signed shards are later
-S6 slices.
+shape, so this change does not increase the C UI allocation or frame size. S6B
+now publishes signed icon/screenshot resources through Catalog v3; caching and
+rendering those resources, localized selection, Today collections and signed
+shards remain later S6 slices.
 
 ## Verification
 

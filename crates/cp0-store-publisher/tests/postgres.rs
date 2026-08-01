@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use cp0_manifest::{AppManifest, DisplayMode, ResourceLimits, Runtime};
 use cp0_package::{CApp, PackageEntry};
 use cp0_store_metadata::{AgeRating, ImageAsset, LocalizedListing, StoreCategory, StoreListing};
-use cp0_store_protocol::{RICH_CATALOG_SCHEMA_VERSION, decode_signed_catalog, verify_catalog};
+use cp0_store_protocol::{
+    MEDIA_CATALOG_SCHEMA_VERSION, decode_app_details, decode_signed_catalog, verify_catalog,
+};
 use cp0_store_publisher::{RunOutcome, StorePublisher, connect, migrate};
 use cp0_store_scan::submission_content_sha256;
 use cp0_store_transparency::{decode_checkpoint, decode_leaf, leaf_hash, lower_hex, verify_log};
@@ -242,7 +244,7 @@ async fn postgres_store_publisher_acceptance() {
         Path::new("generations/7")
     );
 
-    verify_atomic_publication_rollback(&pool, &objects, &recovered).await;
+    verify_atomic_publication_rollback(&pool, &objects, &origin, &recovered).await;
 
     let failed_app = "dev.example.publisher-failed";
     let failed = Fixture::new(failed_app, "1.0.0", [7_u8; 32]);
@@ -285,7 +287,7 @@ async fn postgres_store_publisher_acceptance() {
     assert_eq!(last_catalog_sequence(&pool).await, 9);
     assert_eq!(
         tokio::fs::read_link(&current).await.unwrap(),
-        Path::new("generations/7")
+        Path::new("generations/8")
     );
 
     verify_database_guards(&pool).await;
@@ -333,7 +335,7 @@ async fn verify_snapshot(
     );
     let signed = decode_signed_catalog(&encoded).unwrap();
     verify_catalog(&signed, public_key).unwrap();
-    assert_eq!(signed.catalog.schema_version, RICH_CATALOG_SCHEMA_VERSION);
+    assert_eq!(signed.catalog.schema_version, MEDIA_CATALOG_SCHEMA_VERSION);
     assert_eq!(signed.catalog.sequence, sequence as u64);
     assert_eq!(signed.catalog.apps.len(), expected_apps);
     if expected_apps == 1 {
@@ -347,6 +349,41 @@ async fn verify_snapshot(
         assert_eq!(discovery.age_rating, AgeRating::FourPlus);
         assert_eq!(discovery.privacy_url, "https://example.com/privacy");
         assert_eq!(discovery.support_url, "https://example.com/support");
+        let resources = app.resources.as_ref().unwrap();
+        let icon_relative = resources
+            .icon
+            .url
+            .strip_prefix("https://store.example.invalid/")
+            .unwrap();
+        let icon = tokio::fs::read(origin.join(icon_relative)).await.unwrap();
+        assert_eq!(sha256_hex(&icon), resources.icon.sha256);
+        assert_eq!(resources.icon.width, 48);
+        assert_eq!(resources.icon.height, 48);
+        let details_relative = resources
+            .details
+            .url
+            .strip_prefix("https://store.example.invalid/")
+            .unwrap();
+        let details_encoded = tokio::fs::read(origin.join(details_relative))
+            .await
+            .unwrap();
+        assert_eq!(sha256_hex(&details_encoded), resources.details.sha256);
+        let details = decode_app_details(&details_encoded).unwrap();
+        assert_eq!(details.app_id, APP_ID);
+        assert_eq!(details.version, expected_version);
+        assert_eq!(
+            details.description,
+            "A deterministic fixture for Store publication acceptance."
+        );
+        assert_eq!(details.screenshots.len(), 1);
+        let screenshot_relative = details.screenshots[0]
+            .url
+            .strip_prefix("https://store.example.invalid/")
+            .unwrap();
+        let screenshot = tokio::fs::read(origin.join(screenshot_relative))
+            .await
+            .unwrap();
+        assert_eq!(sha256_hex(&screenshot), details.screenshots[0].sha256);
         let relative = app
             .package_url
             .strip_prefix("https://store.example.invalid/")
@@ -426,6 +463,7 @@ async fn verify_transparency_history(
 async fn verify_atomic_publication_rollback(
     pool: &PgPool,
     objects: &Path,
+    origin: &Path,
     publisher: &StorePublisher,
 ) {
     const APP: &str = "dev.example.publisher-rollback";
@@ -467,6 +505,37 @@ async fn verify_atomic_publication_rollback(
     assert_eq!(publication_atomic_counts(pool).await, before);
     assert_release(pool, RELEASE, "publishing", 2, None).await;
     assert_eq!(count_where_sequence(pool, 8).await, 0);
+    let generation = origin.join("generations/8");
+    let first_catalog = tokio::fs::read(generation.join("catalog.json"))
+        .await
+        .unwrap();
+    let developer_name: Option<String> =
+        sqlx::query_scalar("SELECT developer_name FROM store_publication_jobs WHERE event_id = $1")
+            .bind(EVENT)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(developer_name.as_deref(), Some("Publisher Team"));
+
+    sqlx::query(
+        "UPDATE teams SET name = 'Renamed Publisher Team', \
+         resource_version = resource_version + 1 WHERE team_id = $1",
+    )
+    .bind(TEAM_ID)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE store_publication_jobs SET state = 'queued', lease_token = NULL, \
+             leased_until_unix_seconds = NULL, developer_name = 'Injected Developer' \
+             WHERE event_id = $1",
+        )
+        .bind(EVENT)
+        .execute(pool)
+        .await,
+        "55000",
+    );
 
     sqlx::query("DROP TRIGGER fail_catalog_outbox_for_test ON outbox_events")
         .execute(pool)
@@ -477,14 +546,6 @@ async fn verify_atomic_publication_rollback(
         .await
         .unwrap();
     sqlx::query(
-        "UPDATE releases SET state = 'publish-failed', resource_version = 3 \
-         WHERE release_id = $1",
-    )
-    .bind(RELEASE)
-    .execute(pool)
-    .await
-    .unwrap();
-    sqlx::query(
         "UPDATE store_publication_jobs SET state = 'queued', lease_token = NULL, \
          leased_until_unix_seconds = NULL WHERE event_id = $1",
     )
@@ -494,11 +555,32 @@ async fn verify_atomic_publication_rollback(
     .unwrap();
     assert!(matches!(
         publisher.run_once().await.unwrap(),
-        RunOutcome::Superseded {
+        RunOutcome::Published {
             catalog_sequence: 8,
+            app_count: 1,
             ..
         }
     ));
+    assert_release(pool, RELEASE, "published", 3, Some(8)).await;
+    assert_eq!(
+        tokio::fs::read(generation.join("catalog.json"))
+            .await
+            .unwrap(),
+        first_catalog
+    );
+    let signed = decode_signed_catalog(&first_catalog).unwrap();
+    assert_eq!(
+        signed.catalog.apps[0].discovery.as_ref().unwrap().developer,
+        "Publisher Team"
+    );
+    sqlx::query(
+        "UPDATE teams SET name = 'Publisher Team', resource_version = resource_version + 1 \
+         WHERE team_id = $1",
+    )
+    .bind(TEAM_ID)
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn publication_atomic_counts(pool: &PgPool) -> (i64, i64, i64, i64, i64, i64) {

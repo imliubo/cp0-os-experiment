@@ -1131,6 +1131,7 @@ mod tests {
                 package_bytes: self.package.len() as u64,
                 permissions: Vec::new(),
                 discovery: None,
+                resources: None,
             }
         }
 

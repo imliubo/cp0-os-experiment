@@ -32,6 +32,13 @@ v1/v2 fields cannot be mixed. If an upgraded projection still contains a legacy
 artifact, the complete snapshot remains pure v1 until every included artifact
 has complete signed discovery data. See `STORE-DISCOVERY-CATALOG-V2.md`.
 
+S6B adds Catalog v3 media descriptors. The Publisher writes fixed server-derived
+icon, screenshot and details paths in the same immutable generation as the
+Store-signed package. The root Catalog binds icon/details hashes and the bounded
+details document binds every screenshot. Migration selects pure v1, v2 or v3
+for the complete projection; schema fields are never mixed. See
+`STORE-MEDIA-RESOURCES-V1.md`.
+
 ## Queue and sequence model
 
 `release.publish-requested` and `catalog.rebuild-requested` outbox records are
@@ -41,13 +48,17 @@ advances the singleton Catalog counter by exactly one and permanently reserves:
 
 - a never-reused global Catalog sequence;
 - deterministic publication and expiry timestamps;
-- the source Release state and resource version.
+- the source Release state and resource version;
+- the App owner Team's validated developer display name.
 
-Retries retain that reservation, so identical inputs produce identical signed
-bytes. An expired lease is requeued through attempt seven. Attempt eight, an
-invalid approved source or a revoked developer key ends the job. Initial
-publication atomically advances `publishing` to `published` or `publish-failed`;
-Catalog rebuild failure leaves the already committed Release state unchanged.
+The developer name is frozen atomically on the first claim and cannot be changed
+by later SQL updates. Team renames therefore do not change a generation after it
+has been written but before its database commit. Retries retain every reserved
+input, so they reproduce identical signed bytes. An expired lease is requeued
+through attempt seven. Attempt eight, an invalid approved source or a revoked
+developer key ends the job. Initial publication atomically advances `publishing`
+to `published` or `publish-failed`; Catalog rebuild failure leaves the already
+committed Release state unchanged.
 
 A control event superseded before publication consumes its reserved sequence
 without creating a snapshot. This intentional gap prevents sequence reuse. The
@@ -125,8 +136,8 @@ The PostgreSQL gate covers package, Catalog and checkpoint signatures, exact
 immutable paths, concurrent single claim with bounded serialization retry,
 monotonic non-reused sequences, complete transparency prefixes, latest-version
 projection, pause/resume/remove, stale-event coalescing, permanent failure,
-append-only records, SQL bypass attempts, atomic rollback, tamper rejection and
-crash recovery of `current`.
+append-only records, SQL bypass attempts, atomic rollback, deterministic reuse
+after a Team rename, tamper rejection and crash recovery of `current`.
 
 Production HSM integration, key rotation ceremony, multi-origin/CDN promotion,
 disaster recovery, compact consistency proofs and external witnesses remain

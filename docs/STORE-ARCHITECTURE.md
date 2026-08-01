@@ -204,6 +204,10 @@ S6A 的 Catalog v2 已签名 developer、subtitle、category、keywords 和 age/
 占位，Updates 仅在 Catalog 版本按 SemVer 严格高于 appd 报告的已安装版本时出现。旧版本、
 相同版本和 prerelease 降级都保持 `INSTALLED`，不会伪装成更新。
 
+S6B 的 Catalog v3 在此基础上摘要绑定 icon 和有界 details 清单，details 再绑定截图；Publisher
+已将这些资源放入包所在的不可变 generation。根 Catalog 不内联长 description 或截图数组，避免
+64 应用目录超出 48 KiB。设备端原子资源缓存和 System Shell 富媒体渲染仍由后续切片实现。
+
 #### 下载与更新
 
 - 同一时间只允许一个 Store 下载/安装任务，避免 CM0 内存和 SD 抖动；

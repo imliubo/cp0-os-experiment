@@ -10,8 +10,11 @@ use serde::{Deserialize, Serialize};
 pub const STORE_PROTOCOL_VERSION: u32 = 1;
 pub const CATALOG_SCHEMA_VERSION: u32 = 1;
 pub const RICH_CATALOG_SCHEMA_VERSION: u32 = 2;
+pub const MEDIA_CATALOG_SCHEMA_VERSION: u32 = 3;
+pub const APP_DETAILS_SCHEMA_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_CATALOG_BYTES: usize = 48 * 1024;
+pub const MAX_APP_DETAILS_BYTES: usize = 16 * 1024;
 pub const MAX_CATALOG_APPS: usize = 64;
 pub const MAX_PACKAGE_BYTES: u64 = cp0_package::MAX_PAYLOAD_BYTES as u64 + 4096;
 pub const MAX_PACKAGE_URL_BYTES: usize = 2048;
@@ -48,6 +51,8 @@ pub struct CatalogApp {
     pub permissions: Vec<Permission>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discovery: Option<CatalogDiscovery>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resources: Option<CatalogResources>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +65,42 @@ pub struct CatalogDiscovery {
     pub age_rating: AgeRating,
     pub privacy_url: String,
     pub support_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogResources {
+    pub icon: CatalogImageResource,
+    pub details: CatalogObjectResource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogObjectResource {
+    pub url: String,
+    pub sha256: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogImageResource {
+    pub url: String,
+    pub sha256: String,
+    pub bytes: u64,
+    pub width: u16,
+    pub height: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoreAppDetails {
+    pub schema_version: u32,
+    pub app_id: String,
+    pub version: String,
+    pub description: String,
+    pub release_notes: String,
+    pub screenshots: Vec<CatalogImageResource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,10 +262,10 @@ impl Catalog {
     pub fn validate(&self) -> Result<(), StoreProtocolError> {
         if !matches!(
             self.schema_version,
-            CATALOG_SCHEMA_VERSION | RICH_CATALOG_SCHEMA_VERSION
+            CATALOG_SCHEMA_VERSION | RICH_CATALOG_SCHEMA_VERSION | MEDIA_CATALOG_SCHEMA_VERSION
         ) {
             return Err(StoreProtocolError::Invalid(format!(
-                "catalog schema must be {CATALOG_SCHEMA_VERSION} or {RICH_CATALOG_SCHEMA_VERSION}"
+                "catalog schema must be {CATALOG_SCHEMA_VERSION}, {RICH_CATALOG_SCHEMA_VERSION} or {MEDIA_CATALOG_SCHEMA_VERSION}"
             )));
         }
         if self.sequence == 0 {
@@ -250,16 +291,28 @@ impl Catalog {
         let mut ids = BTreeSet::new();
         for app in &self.apps {
             app.validate()?;
-            match (self.schema_version, app.discovery.is_some()) {
-                (CATALOG_SCHEMA_VERSION, false) | (RICH_CATALOG_SCHEMA_VERSION, true) => {}
-                (CATALOG_SCHEMA_VERSION, true) => {
+            match (
+                self.schema_version,
+                app.discovery.is_some(),
+                app.resources.is_some(),
+            ) {
+                (CATALOG_SCHEMA_VERSION, false, false)
+                | (RICH_CATALOG_SCHEMA_VERSION, true, false)
+                | (MEDIA_CATALOG_SCHEMA_VERSION, true, true) => {}
+                (CATALOG_SCHEMA_VERSION, _, _) => {
                     return Err(StoreProtocolError::Invalid(
-                        "Catalog v1 application contains v2 discovery metadata".into(),
+                        "Catalog v1 application contains newer metadata".into(),
                     ));
                 }
-                (RICH_CATALOG_SCHEMA_VERSION, false) => {
+                (RICH_CATALOG_SCHEMA_VERSION, _, _) => {
                     return Err(StoreProtocolError::Invalid(
-                        "Catalog v2 application is missing discovery metadata".into(),
+                        "Catalog v2 application metadata is incomplete or includes v3 resources"
+                            .into(),
+                    ));
+                }
+                (MEDIA_CATALOG_SCHEMA_VERSION, _, _) => {
+                    return Err(StoreProtocolError::Invalid(
+                        "Catalog v3 application is missing discovery or resource metadata".into(),
                     ));
                 }
                 _ => unreachable!("catalog schema was validated above"),
@@ -337,8 +390,111 @@ impl CatalogApp {
         if let Some(discovery) = &self.discovery {
             discovery.validate(&self.summary)?;
         }
+        if let Some(resources) = &self.resources {
+            resources.validate()?;
+        }
         Ok(())
     }
+}
+
+impl CatalogResources {
+    fn validate(&self) -> Result<(), StoreProtocolError> {
+        self.icon.validate_icon()?;
+        self.details
+            .validate(MAX_APP_DETAILS_BYTES as u64, "details")
+    }
+}
+
+impl CatalogObjectResource {
+    fn validate(&self, max_bytes: u64, kind: &str) -> Result<(), StoreProtocolError> {
+        if !is_valid_https_url(&self.url)
+            || !is_lower_hex(&self.sha256, 32)
+            || !(1..=max_bytes).contains(&self.bytes)
+        {
+            return Err(StoreProtocolError::Invalid(format!(
+                "catalog {kind} resource is invalid"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl CatalogImageResource {
+    fn validate_icon(&self) -> Result<(), StoreProtocolError> {
+        if !matches!((self.width, self.height), (32, 32) | (48, 48)) {
+            return Err(StoreProtocolError::Invalid(
+                "catalog icon dimensions are invalid".into(),
+            ));
+        }
+        self.validate(cp0_store_metadata::MAX_ICON_BYTES, "icon")
+    }
+
+    fn validate_screenshot(&self) -> Result<(), StoreProtocolError> {
+        if (self.width, self.height) != (320, 170) {
+            return Err(StoreProtocolError::Invalid(
+                "catalog screenshot dimensions are invalid".into(),
+            ));
+        }
+        self.validate(cp0_store_metadata::MAX_SCREENSHOT_BYTES, "screenshot")
+    }
+
+    fn validate(&self, max_bytes: u64, kind: &str) -> Result<(), StoreProtocolError> {
+        CatalogObjectResource {
+            url: self.url.clone(),
+            sha256: self.sha256.clone(),
+            bytes: self.bytes,
+        }
+        .validate(max_bytes, kind)
+    }
+}
+
+impl StoreAppDetails {
+    pub fn validate(&self) -> Result<(), StoreProtocolError> {
+        if self.schema_version != APP_DETAILS_SCHEMA_VERSION
+            || !cp0_manifest::is_valid_app_id(&self.app_id)
+            || !cp0_manifest::is_valid_app_version(&self.version)
+        {
+            return Err(StoreProtocolError::Invalid(
+                "Store application details identity is invalid".into(),
+            ));
+        }
+        validate_detail_text(&self.description, 1024, "description")?;
+        validate_detail_text(&self.release_notes, 512, "release notes")?;
+        if !(1..=cp0_store_metadata::MAX_SCREENSHOTS).contains(&self.screenshots.len()) {
+            return Err(StoreProtocolError::Invalid(
+                "Store application screenshot count is outside limits".into(),
+            ));
+        }
+        let mut urls = BTreeSet::new();
+        for screenshot in &self.screenshots {
+            screenshot.validate_screenshot()?;
+            if !urls.insert(screenshot.url.as_str()) {
+                return Err(StoreProtocolError::Invalid(
+                    "Store application screenshot URLs are duplicated".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_detail_text(
+    value: &str,
+    max_chars: usize,
+    kind: &str,
+) -> Result<(), StoreProtocolError> {
+    let chars = value.chars().count();
+    if !(1..=max_chars).contains(&chars)
+        || value.trim() != value
+        || value
+            .chars()
+            .any(|character| character.is_control() && character != '\n')
+    {
+        return Err(StoreProtocolError::Invalid(format!(
+            "Store application {kind} is invalid"
+        )));
+    }
+    Ok(())
 }
 
 impl CatalogDiscovery {
@@ -703,6 +859,24 @@ pub fn decode_signed_catalog(encoded: &[u8]) -> Result<SignedCatalog, StoreProto
     Ok(signed)
 }
 
+pub fn encode_app_details(details: &StoreAppDetails) -> Result<Vec<u8>, StoreProtocolError> {
+    details.validate()?;
+    let encoded = serde_json::to_vec(details)?;
+    if encoded.len() > MAX_APP_DETAILS_BYTES {
+        return Err(StoreProtocolError::FrameTooLarge);
+    }
+    Ok(encoded)
+}
+
+pub fn decode_app_details(encoded: &[u8]) -> Result<StoreAppDetails, StoreProtocolError> {
+    if encoded.len() > MAX_APP_DETAILS_BYTES {
+        return Err(StoreProtocolError::FrameTooLarge);
+    }
+    let details: StoreAppDetails = serde_json::from_slice(encoded)?;
+    details.validate()?;
+    Ok(details)
+}
+
 pub fn read_request(reader: &mut impl BufRead) -> Result<Option<StoreRequest>, StoreProtocolError> {
     read_frame(reader)
 }
@@ -857,6 +1031,7 @@ mod tests {
                 package_bytes: 4096,
                 permissions: vec![Permission::NetworkClient, Permission::NotificationsPost],
                 discovery: None,
+                resources: None,
             }],
         }
     }
@@ -873,7 +1048,46 @@ mod tests {
             privacy_url: "https://example.com/privacy".into(),
             support_url: "https://example.com/support".into(),
         });
+        catalog.apps[0].resources = None;
         catalog
+    }
+
+    fn media_catalog() -> Catalog {
+        let mut catalog = rich_catalog();
+        catalog.schema_version = MEDIA_CATALOG_SCHEMA_VERSION;
+        catalog.apps[0].resources = Some(CatalogResources {
+            icon: CatalogImageResource {
+                url: "https://store.example.com/generations/7/assets/example/icon.png".into(),
+                sha256: "22".repeat(32),
+                bytes: 2048,
+                width: 48,
+                height: 48,
+            },
+            details: CatalogObjectResource {
+                url: "https://store.example.com/generations/7/assets/example/details.json".into(),
+                sha256: "33".repeat(32),
+                bytes: 1024,
+            },
+        });
+        catalog
+    }
+
+    fn app_details() -> StoreAppDetails {
+        StoreAppDetails {
+            schema_version: APP_DETAILS_SCHEMA_VERSION,
+            app_id: "dev.cardputerzero.example".into(),
+            version: "1.2.3".into(),
+            description: "A complete bounded application description.".into(),
+            release_notes: "Adds signed media resources.".into(),
+            screenshots: vec![CatalogImageResource {
+                url: "https://store.example.com/generations/7/assets/example/screenshots/0.png"
+                    .into(),
+                sha256: "44".repeat(32),
+                bytes: 8192,
+                width: 320,
+                height: 170,
+            }],
+        }
     }
 
     fn response_app() -> StoreAppSummary {
@@ -948,6 +1162,37 @@ mod tests {
         let mut mismatched = rich_catalog();
         mismatched.apps[0].summary = "A different summary".into();
         assert!(mismatched.validate().is_err());
+    }
+
+    #[test]
+    fn validates_media_catalogs_and_bounded_app_details() {
+        media_catalog().validate().unwrap();
+        let encoded = encode_app_details(&app_details()).unwrap();
+        assert_eq!(decode_app_details(&encoded).unwrap(), app_details());
+
+        let mut v2_with_resources = media_catalog();
+        v2_with_resources.schema_version = RICH_CATALOG_SCHEMA_VERSION;
+        assert!(v2_with_resources.validate().is_err());
+
+        let mut v3_without_resources = media_catalog();
+        v3_without_resources.apps[0].resources = None;
+        assert!(v3_without_resources.validate().is_err());
+
+        let mut invalid_icon = media_catalog();
+        invalid_icon.apps[0].resources.as_mut().unwrap().icon.width = 47;
+        assert!(invalid_icon.validate().is_err());
+
+        let mut duplicate = app_details();
+        duplicate.screenshots.push(duplicate.screenshots[0].clone());
+        assert!(duplicate.validate().is_err());
+
+        let mut unsafe_details = app_details();
+        unsafe_details.description = "unsafe\tdescription".into();
+        assert!(unsafe_details.validate().is_err());
+
+        let mut multiline = app_details();
+        multiline.description = "First paragraph.\nSecond paragraph.".into();
+        multiline.validate().unwrap();
     }
 
     #[test]
