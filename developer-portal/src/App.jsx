@@ -101,7 +101,7 @@ function Overview({ data, navigate }) {
         </article>
         <article className="metric">
           <div className="metric-icon amber"><Clock3 /></div>
-          <div><span>In review</span><strong>{data.submissions.filter((item) => item.state === "in-review").length}</strong><small>{needsAttention.length} needs attention</small></div>
+          <div><span>In review</span><strong>{data.submissions.filter((item) => ["in-review", "pending-secondary-review"].includes(item.state)).length}</strong><small>{needsAttention.length} needs attention</small></div>
         </article>
         <article className="metric">
           <div className="metric-icon blue"><Gauge /></div>
@@ -325,7 +325,7 @@ function Submissions({ data, setData, toast, focusedId }) {
         <div className="detail-facts"><div><span>Created</span><strong>{selected.created}</strong></div><div><span>Content digest</span><strong className="mono">{selected.digest}</strong></div><div><span>Package</span><strong>Developer signed</strong></div></div>
         <div className="subsection"><div className="section-title"><div><h3>Automated checks</h3><p>Each result is bound to this exact revision.</p></div></div><div className="scan-grid">{checks.map(([label, state]) => <div key={label} className={state}><span>{state === "complete" ? <Check /> : state === "running" ? <Clock3 /> : <span className="pending-dot" />}</span><div><strong>{label}</strong><small>{formatState(state)}</small></div></div>)}</div></div>
         <div className="subsection"><div className="section-title"><div><h3>Review timeline</h3><p>Messages are append-only audit events.</p></div></div><div className="timeline">{selected.messages.length ? selected.messages.map((message, index) => <div key={`${message.time}-${index}`}><span className="timeline-dot" /><div><strong>{message.actor}</strong><time>{message.time}</time><p>{message.body}</p></div></div>) : <p className="muted">No review messages for this revision.</p>}</div></div>
-        {["draft", "uploading", "processing", "ready-for-review", "in-review"].includes(selected.state) && <div className="danger-zone"><div><strong>Withdraw revision</strong><p>Stops review. The immutable files remain in the audit history.</p></div><button className="danger-button" type="button" onClick={() => { setData((current) => ({ ...current, submissions: current.submissions.map((item) => item.id === selected.id ? { ...item, state: "withdrawn" } : item) })); toast("Submission withdrawn. A new revision is required for changes."); }}>Withdraw</button></div>}
+        {["draft", "uploading", "processing", "ready-for-review", "in-review", "pending-secondary-review"].includes(selected.state) && <div className="danger-zone"><div><strong>Withdraw revision</strong><p>Stops review. The immutable files remain in the audit history.</p></div><button className="danger-button" type="button" onClick={() => { setData((current) => ({ ...current, submissions: current.submissions.map((item) => item.id === selected.id ? { ...item, state: "withdrawn" } : item) })); toast("Submission withdrawn. A new revision is required for changes."); }}>Withdraw</button></div>}
       </section>}
     </div>
   );
@@ -426,7 +426,7 @@ export default function App() {
     <div className="app-shell">
       <aside className={navOpen ? "sidebar open" : "sidebar"}>
         <div className="brand"><div className="brand-mark">C0</div><div><strong>CardputerZero</strong><span>Developer</span></div><IconButton label="Close navigation" onClick={() => setNavOpen(false)}><X /></IconButton></div>
-        <nav aria-label="Primary navigation">{NAV_ITEMS.map(({ id, label, icon: Icon }) => <button type="button" className={page === id ? "active" : ""} key={id} onClick={() => navigate(id)}><Icon /><span>{label}</span>{id === "submissions" && <b>{data.submissions.filter((item) => ["in-review", "needs-changes"].includes(item.state)).length}</b>}</button>)}</nav>
+        <nav aria-label="Primary navigation">{NAV_ITEMS.map(({ id, label, icon: Icon }) => <button type="button" className={page === id ? "active" : ""} key={id} onClick={() => navigate(id)}><Icon /><span>{label}</span>{id === "submissions" && <b>{data.submissions.filter((item) => ["in-review", "pending-secondary-review", "needs-changes"].includes(item.state)).length}</b>}</button>)}</nav>
         <div className="sidebar-footer"><div className="avatar">LB</div><div><strong>{data.viewer.name}</strong><span>{data.team.name} · {data.team.role}</span></div><ChevronDown /></div>
       </aside>
       {navOpen && <button className="nav-scrim" aria-label="Close navigation" type="button" onClick={() => setNavOpen(false)} />}

@@ -32,7 +32,7 @@ jq -e '
   .paths["/v1/releases/{release_id}:remove"].post.operationId == "removeRelease" and
   .components.schemas.SubmissionState.enum == [
     "draft", "uploading", "processing", "ready-for-review", "in-review",
-    "needs-changes", "approved", "rejected", "withdrawn"
+    "pending-secondary-review", "needs-changes", "approved", "rejected", "withdrawn"
   ] and
   .components.schemas.ReleaseState.enum == [
     "ready", "scheduled", "publishing", "publish-failed", "published", "paused", "removed"

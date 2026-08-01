@@ -22,7 +22,7 @@ Cross-team lookups return `not-found` instead of disclosing the Submission.
 ## State and atomic effects
 
 Withdrawal is valid from `draft`, `uploading`, `processing`,
-`ready-for-review`, and `in-review`. `needs-changes`, `approved`, `rejected`,
+`ready-for-review`, `in-review`, and `pending-secondary-review`. `needs-changes`, `approved`, `rejected`,
 and `withdrawn` are terminal and return `invalid-transition`.
 
 One PostgreSQL `SERIALIZABLE` transaction:

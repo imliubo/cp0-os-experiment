@@ -1745,10 +1745,15 @@ impl StoreControlService {
             "SELECT submission_id, app_id, version, revision, state, package_sha256, \
              package_bytes, listing_sha256, listing_bytes, assets, resource_version, \
              created_unix_seconds FROM submissions \
-             WHERE state = 'ready-for-review' AND \
-               (created_unix_seconds, submission_id) > ($1, $2) \
-             ORDER BY created_unix_seconds, submission_id LIMIT $3",
+             WHERE (state = 'ready-for-review' OR \
+               (state = 'pending-secondary-review' AND NOT EXISTS ( \
+                 SELECT 1 FROM review_assignments assignment \
+                 WHERE assignment.submission_id = submissions.submission_id \
+                   AND assignment.reviewer_id = $1))) AND \
+               (created_unix_seconds, submission_id) > ($2, $3) \
+             ORDER BY created_unix_seconds, submission_id LIMIT $4",
         )
+        .bind(&identity.reviewer_id)
         .bind(cursor_time)
         .bind(cursor_id)
         .bind(i64::try_from(limit + 1).map_err(|_| ApiError::invalid_request())?)
@@ -1855,20 +1860,38 @@ impl StoreControlService {
         if stored.response.resource_version != expected_version {
             return Err(ApiError::precondition_failed().into());
         }
-        if stored.response.state != SubmissionState::ReadyForReview {
-            return Err(ApiError::invalid_transition().into());
-        }
+        let (assignment_kind, before_state) = match stored.response.state {
+            SubmissionState::ReadyForReview => ("primary", "ready-for-review"),
+            SubmissionState::PendingSecondaryReview => {
+                let primary_reviewer: String = sqlx::query_scalar(
+                    "SELECT reviewer_id FROM review_assignments \
+                     WHERE submission_id = $1 AND assignment_kind = 'primary' \
+                       AND state = 'completed'",
+                )
+                .bind(submission_id)
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(TxError::Sql)?
+                .ok_or_else(ApiError::invalid_transition)?;
+                if primary_reviewer == identity.reviewer_id {
+                    return Err(ApiError::forbidden().into());
+                }
+                ("secondary", "pending-secondary-review")
+            }
+            _ => return Err(ApiError::invalid_transition().into()),
+        };
         let resource_version = expected_version
             .checked_add(1)
             .ok_or_else(ApiError::internal)?;
         sqlx::query(
             "INSERT INTO review_assignments (assignment_id, submission_id, reviewer_id, \
              assignment_kind, state, source_resource_version, created_unix_seconds) \
-             VALUES ($1, $2, $3, 'primary', 'active', $4, $5)",
+             VALUES ($1, $2, $3, $4, 'active', $5, $6)",
         )
         .bind(prefixed_uuid("assignment_"))
         .bind(submission_id)
         .bind(&identity.reviewer_id)
+        .bind(assignment_kind)
         .bind(i64::try_from(expected_version).map_err(|_| ApiError::internal())?)
         .bind(now)
         .execute(&mut *transaction)
@@ -1904,7 +1927,7 @@ impl StoreControlService {
                 topic: "submission.review-begun",
                 object_kind: "submission",
                 object_id: submission_id,
-                before_state: Some("ready-for-review"),
+                before_state: Some(before_state),
                 after_state: Some("in-review"),
                 resource_version,
                 request_id,
@@ -1912,7 +1935,8 @@ impl StoreControlService {
                 key_sha256,
                 payload: json!({
                     "submission_id": submission_id,
-                    "reviewer_id": identity.reviewer_id
+                    "reviewer_id": identity.reviewer_id,
+                    "assignment_kind": assignment_kind
                 }),
             },
         )
@@ -2014,10 +2038,9 @@ impl StoreControlService {
         if stored.response.state != SubmissionState::InReview {
             return Err(ApiError::invalid_transition().into());
         }
-        let assignment_id: String = sqlx::query_scalar(
-            "SELECT assignment_id FROM review_assignments \
-             WHERE submission_id = $1 AND reviewer_id = $2 AND assignment_kind = 'primary' \
-               AND state = 'active' FOR UPDATE",
+        let assignment = sqlx::query(
+            "SELECT assignment_id, assignment_kind FROM review_assignments \
+             WHERE submission_id = $1 AND reviewer_id = $2 AND state = 'active' FOR UPDATE",
         )
         .bind(submission_id)
         .bind(&identity.reviewer_id)
@@ -2025,10 +2048,18 @@ impl StoreControlService {
         .await
         .map_err(TxError::Sql)?
         .ok_or_else(ApiError::forbidden)?;
+        let assignment_id: String = assignment.get("assignment_id");
+        let assignment_kind: String = assignment.get("assignment_kind");
+        let next_state = match (assignment_kind.as_str(), request.decision.as_str()) {
+            ("primary", "approved") => SubmissionState::PendingSecondaryReview,
+            ("secondary", "approved") => SubmissionState::Approved,
+            (_, decision) => review_decision_state(decision)?,
+        };
         let decision_id = prefixed_uuid("decision_");
         sqlx::query(
             "INSERT INTO review_decisions (decision_id, submission_id, reviewer_id, decision, \
-             reason_codes, note, created_unix_seconds) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+             reason_codes, note, created_unix_seconds, assignment_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(&decision_id)
         .bind(submission_id)
@@ -2037,6 +2068,7 @@ impl StoreControlService {
         .bind(&request.reason_codes)
         .bind(&request.note)
         .bind(now)
+        .bind(&assignment_id)
         .execute(&mut *transaction)
         .await
         .map_err(TxError::Sql)?;
@@ -2055,13 +2087,13 @@ impl StoreControlService {
         sqlx::query(
             "UPDATE submissions SET state = $1, resource_version = $2 WHERE submission_id = $3",
         )
-        .bind(&request.decision)
+        .bind(next_state.as_str())
         .bind(i64::try_from(resource_version).map_err(|_| ApiError::internal())?)
         .bind(submission_id)
         .execute(&mut *transaction)
         .await
         .map_err(TxError::Sql)?;
-        stored.response.state = review_decision_state(&request.decision)?;
+        stored.response.state = next_state;
         stored.response.resource_version = resource_version;
         let response_body =
             serde_json::to_value(&stored.response).map_err(|_| ApiError::internal())?;
@@ -2083,7 +2115,7 @@ impl StoreControlService {
                 object_kind: "submission",
                 object_id: submission_id,
                 before_state: Some("in-review"),
-                after_state: Some(&request.decision),
+                after_state: Some(next_state.as_str()),
                 resource_version,
                 request_id,
                 request_sha256: &request_sha256,
@@ -2092,6 +2124,7 @@ impl StoreControlService {
                     "decision_id": decision_id,
                     "submission_id": submission_id,
                     "reviewer_id": identity.reviewer_id,
+                    "assignment_kind": assignment_kind,
                     "decision": request.decision,
                     "reason_codes": request.reason_codes
                 }),
@@ -2572,6 +2605,7 @@ impl StoreControlService {
             stored.response.state,
             SubmissionState::ReadyForReview
                 | SubmissionState::InReview
+                | SubmissionState::PendingSecondaryReview
                 | SubmissionState::NeedsChanges
                 | SubmissionState::Approved
                 | SubmissionState::Rejected
@@ -3748,6 +3782,7 @@ fn parse_submission_state(value: String) -> Result<SubmissionState, ApiError> {
         "processing" => Ok(SubmissionState::Processing),
         "ready-for-review" => Ok(SubmissionState::ReadyForReview),
         "in-review" => Ok(SubmissionState::InReview),
+        "pending-secondary-review" => Ok(SubmissionState::PendingSecondaryReview),
         "needs-changes" => Ok(SubmissionState::NeedsChanges),
         "approved" => Ok(SubmissionState::Approved),
         "rejected" => Ok(SubmissionState::Rejected),

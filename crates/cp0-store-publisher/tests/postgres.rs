@@ -17,6 +17,7 @@ const TEAM_ID: &str = "team_11111111111111111111111111111111";
 const MEMBER_ID: &str = "member_11111111111111111111111111111111";
 const KEY_ID: &str = "key_11111111111111111111111111111111";
 const REVIEWER_ID: &str = "reviewer_11111111111111111111111111111111";
+const SECONDARY_REVIEWER_ID: &str = "reviewer_22222222222222222222222222222222";
 const APP_ID: &str = "dev.example.publisher";
 
 #[tokio::test]
@@ -659,9 +660,12 @@ async fn seed_identity(pool: &PgPool, app_id: &str, developer_key: &[u8; 32]) {
     .unwrap();
     sqlx::query(
         "INSERT INTO reviewers (reviewer_id, email, role, two_factor_enabled, state, \
-         created_unix_seconds) VALUES ($1, 'reviewer@example.com', 'reviewer', TRUE, 'active', 1)",
+         created_unix_seconds) VALUES \
+         ($1, 'reviewer@example.com', 'reviewer', TRUE, 'active', 1), \
+         ($2, 'secondary-reviewer@example.com', 'senior-reviewer', TRUE, 'active', 1)",
     )
     .bind(REVIEWER_ID)
+    .bind(SECONDARY_REVIEWER_ID)
     .execute(pool)
     .await
     .unwrap();
@@ -700,7 +704,7 @@ async fn seed_submission_release(
         "INSERT INTO submissions (submission_id, app_id, version, revision, state, \
          package_sha256, package_bytes, listing_sha256, listing_bytes, assets, resource_version, \
          created_unix_seconds, finalized_content_sha256) VALUES \
-         ($1, $2, $3, $4, 'approved', $5, $6, $7, $8, $9, 2, $10, $11)",
+         ($1, $2, $3, $4, 'ready-for-review', $5, $6, $7, $8, $9, 1, $10, $11)",
     )
     .bind(submission_id)
     .bind(&fixture.app_id)
@@ -716,14 +720,106 @@ async fn seed_submission_release(
     .execute(pool)
     .await
     .unwrap();
+    let primary_assignment = format!("assignment_{}", Uuid::new_v4().simple());
+    let secondary_assignment = format!("assignment_{}", Uuid::new_v4().simple());
+    let secondary_decision = format!("decision_{}", Uuid::new_v4().simple());
+    sqlx::query(
+        "INSERT INTO review_assignments (assignment_id, submission_id, reviewer_id, \
+         assignment_kind, state, source_resource_version, created_unix_seconds) \
+         VALUES ($1, $2, $3, 'primary', 'active', 1, $4)",
+    )
+    .bind(&primary_assignment)
+    .bind(submission_id)
+    .bind(REVIEWER_ID)
+    .bind(created)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'in-review', resource_version = 2 \
+         WHERE submission_id = $1",
+    )
+    .bind(submission_id)
+    .execute(pool)
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO review_decisions (decision_id, submission_id, reviewer_id, decision, \
-         reason_codes, note, created_unix_seconds) VALUES ($1, $2, $3, 'approved', '{}', '', $4)",
+         reason_codes, note, created_unix_seconds, assignment_id) \
+         VALUES ($1, $2, $3, 'approved', '{}', '', $4, $5)",
     )
     .bind(decision_id)
     .bind(submission_id)
     .bind(REVIEWER_ID)
     .bind(created)
+    .bind(&primary_assignment)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE review_assignments SET state = 'completed', completed_unix_seconds = $1 \
+         WHERE assignment_id = $2",
+    )
+    .bind(created)
+    .bind(&primary_assignment)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'pending-secondary-review', resource_version = 3 \
+         WHERE submission_id = $1",
+    )
+    .bind(submission_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO review_assignments (assignment_id, submission_id, reviewer_id, \
+         assignment_kind, state, source_resource_version, created_unix_seconds) \
+         VALUES ($1, $2, $3, 'secondary', 'active', 3, $4)",
+    )
+    .bind(&secondary_assignment)
+    .bind(submission_id)
+    .bind(SECONDARY_REVIEWER_ID)
+    .bind(created)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'in-review', resource_version = 4 \
+         WHERE submission_id = $1",
+    )
+    .bind(submission_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO review_decisions (decision_id, submission_id, reviewer_id, decision, \
+         reason_codes, note, created_unix_seconds, assignment_id) \
+         VALUES ($1, $2, $3, 'approved', '{}', '', $4, $5)",
+    )
+    .bind(&secondary_decision)
+    .bind(submission_id)
+    .bind(SECONDARY_REVIEWER_ID)
+    .bind(created)
+    .bind(&secondary_assignment)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE review_assignments SET state = 'completed', completed_unix_seconds = $1 \
+         WHERE assignment_id = $2",
+    )
+    .bind(created)
+    .bind(&secondary_assignment)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'approved', resource_version = 5 \
+         WHERE submission_id = $1",
+    )
+    .bind(submission_id)
     .execute(pool)
     .await
     .unwrap();

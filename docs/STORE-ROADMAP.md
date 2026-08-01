@@ -94,15 +94,19 @@ S5J 已补齐 Submission 撤回：owner/developer、实时 2FA/scope、强 ETag�
 S5K 已冻结外部 OIDC + Portal BFF 身份边界，并接通 Team 读取和 Owner 角色修改：五分钟 MFA
 step-up、Team ETag、last-owner、成员 token 即时撤销、版本单调、幂等和 audit/outbox 回滚均通过
 PostgreSQL 17 验收。账户链接、邀请/移除、Portal session endpoint 和 reviewer SSO 仍待实现。
+S5L 已将所有 Submission 升级为独立双审：主审批准进入 pending-secondary-review，原主审不可领取
+二审，只有不同审核员的 secondary approval 才进入 approved；decision 强绑定 assignment，Release
+数据库触发器重新验证两位审核员和两次批准。并发领取、精确回放、故障回滚和直接 SQL 绕过均通过
+PostgreSQL 17 验收。风险分级和 Review Console 前端仍待实现。
 
 - [ ] 实现 Identity/Teams、App Registry、Submission 和 Release 服务。
-  当前 App Registry、Submission 上传/finalize/read/withdraw、单审核员 Review 和 Release 控制
+  当前 App Registry、Submission 上传/finalize/read/withdraw、独立双审 Review 和 Release 控制
   纵向切片已完成；OAuth 开发者 Device Flow、Team 读取/角色管理已完成；Identity 账户链接、
   邀请/移除和 Portal 会话未完成；Publisher 通过受约束 outbox 接入。
 - [x] 实现隔离 Scan Worker：包格式、WASM、权限、资源和恶意样本检查。
   当前为无 IP 网络、只读对象根的确定性结构/能力扫描；动态规则、信誉源和运营隔离环境待生产化。
 - [ ] 实现 Review Console、结构化问题、回复、二审和双人审批。
-  当前结构化问题、回复和单审核员事务流程已完成；Console UI、独立二审和双人审批待实现。
+  当前结构化问题、回复、独立二审和双人审批事务流程已完成；风险分级和 Console UI 待实现。
 - [x] 实现不可变发布 generation、事务 outbox、append-only audit 和 transparency log。
   当前 transparency v1 覆盖完整 Catalog snapshot 历史；生产对象存储、compact proof 和
   witness/gossip 属于后续基础设施。

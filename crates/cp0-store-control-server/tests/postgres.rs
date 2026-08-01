@@ -956,6 +956,140 @@ async fn verify_review_backend(application: &Router, pool: &PgPool) {
     .await;
     assert_eq!(approved.status, StatusCode::CREATED);
     assert_eq!(etag_version(&approved), 3);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&approved.body).unwrap()["state"],
+        "pending-secondary-review"
+    );
+    let primary_reviewer_token = assigned_b_token;
+    let secondary_reviewer_token = if assigned_b == REVIEWER_A {
+        REVIEWER_B_TOKEN
+    } else {
+        REVIEWER_A_TOKEN
+    };
+    let same_reviewer_secondary = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/review/submissions/{SUBMISSION_B}:begin"),
+        primary_reviewer_token,
+        "begin-secondary-self1",
+        3,
+        None,
+    )
+    .await;
+    assert_problem(&same_reviewer_secondary, StatusCode::FORBIDDEN, "forbidden");
+    let secondary_queue = call(
+        application.clone(),
+        Method::GET,
+        "/v1/review/submissions",
+        Some(secondary_reviewer_token),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(secondary_queue.status, StatusCode::OK);
+    assert!(
+        serde_json::from_slice::<Value>(&secondary_queue.body).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|submission| submission["submission_id"] == SUBMISSION_B)
+    );
+    let secondary_begun = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/review/submissions/{SUBMISSION_B}:begin"),
+        secondary_reviewer_token,
+        "begin-secondary-b001",
+        3,
+        None,
+    )
+    .await;
+    assert_eq!(secondary_begun.status, StatusCode::OK);
+    assert_eq!(etag_version(&secondary_begun), 4);
+    pool.execute(
+        "CREATE FUNCTION test_reject_secondary_review_audit() RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN IF NEW.action = 'submission.review-decided' AND \
+         NEW.object_id = 'sub_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' AND \
+         NEW.resource_version = 5 THEN \
+         RAISE EXCEPTION 'injected secondary review audit failure'; END IF; RETURN NEW; END; $$",
+    )
+    .await
+    .unwrap();
+    pool.execute(
+        "CREATE TRIGGER test_reject_secondary_review_audit_insert BEFORE INSERT ON audit_events \
+         FOR EACH ROW EXECUTE FUNCTION test_reject_secondary_review_audit()",
+    )
+    .await
+    .unwrap();
+    let rolled_back_secondary = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/review/submissions/{SUBMISSION_B}/decisions"),
+        secondary_reviewer_token,
+        "decide-secondary-b01",
+        4,
+        Some(json!({"decision": "approved", "reason_codes": [], "note": ""})),
+    )
+    .await;
+    assert_problem(
+        &rolled_back_secondary,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "service-unavailable",
+    );
+    let secondary_rollback = sqlx::query(
+        "SELECT submission.state, submission.resource_version, assignment.state AS assignment_state, \
+         (SELECT COUNT(*) FROM review_decisions decision \
+          WHERE decision.assignment_id = assignment.assignment_id) AS decision_count \
+         FROM submissions submission JOIN review_assignments assignment \
+           ON assignment.submission_id = submission.submission_id \
+          AND assignment.assignment_kind = 'secondary' \
+         WHERE submission.submission_id = $1",
+    )
+    .bind(SUBMISSION_B)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(secondary_rollback.get::<String, _>("state"), "in-review");
+    assert_eq!(secondary_rollback.get::<i64, _>("resource_version"), 4);
+    assert_eq!(
+        secondary_rollback.get::<String, _>("assignment_state"),
+        "active"
+    );
+    assert_eq!(secondary_rollback.get::<i64, _>("decision_count"), 0);
+    pool.execute("DROP TRIGGER test_reject_secondary_review_audit_insert ON audit_events")
+        .await
+        .unwrap();
+    pool.execute("DROP FUNCTION test_reject_secondary_review_audit()")
+        .await
+        .unwrap();
+    let double_approved = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/review/submissions/{SUBMISSION_B}/decisions"),
+        secondary_reviewer_token,
+        "decide-secondary-b01",
+        4,
+        Some(json!({"decision": "approved", "reason_codes": [], "note": ""})),
+    )
+    .await;
+    assert_eq!(double_approved.status, StatusCode::CREATED);
+    assert_eq!(etag_version(&double_approved), 5);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&double_approved.body).unwrap()["state"],
+        "approved"
+    );
+    let double_approved_replay = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/review/submissions/{SUBMISSION_B}/decisions"),
+        secondary_reviewer_token,
+        "decide-secondary-b01",
+        4,
+        Some(json!({"decision": "approved", "reason_codes": [], "note": ""})),
+    )
+    .await;
+    assert_eq!(double_approved_replay.status, StatusCode::CREATED);
+    assert_eq!(double_approved_replay.body, double_approved.body);
 
     let unassigned_message = call(
         application.clone(),
@@ -1059,14 +1193,14 @@ async fn verify_review_backend(application: &Router, pool: &PgPool) {
     .await;
     assert_problem(&revoked_live, StatusCode::UNAUTHORIZED, "unauthorized");
 
-    assert_eq!(count(pool, "review_assignments").await, 2);
-    assert_eq!(count(pool, "review_decisions").await, 2);
+    assert_eq!(count(pool, "review_assignments").await, 3);
+    assert_eq!(count(pool, "review_decisions").await, 3);
     assert_eq!(count(pool, "review_messages").await, 2);
-    assert_eq!(count(pool, "audit_events").await, counts_before.0 + 6);
-    assert_eq!(count(pool, "outbox_events").await, counts_before.1 + 6);
+    assert_eq!(count(pool, "audit_events").await, counts_before.0 + 8);
+    assert_eq!(count(pool, "outbox_events").await, counts_before.1 + 8);
     assert_eq!(
         count(pool, "idempotency_records").await,
-        counts_before.2 + 6
+        counts_before.2 + 8
     );
 }
 
@@ -1210,23 +1344,7 @@ async fn verify_release_backend(application: &Router, pool: &PgPool) {
     .await;
     assert_problem(&scope_denied, StatusCode::FORBIDDEN, "forbidden");
 
-    seed_review_submission(pool, CONCURRENT_SUBMISSION, "3.0.3", 103).await;
-    sqlx::query(
-        "UPDATE submissions SET state = 'in-review', resource_version = 2 \
-         WHERE submission_id = $1",
-    )
-    .bind(CONCURRENT_SUBMISSION)
-    .execute(pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "UPDATE submissions SET state = 'approved', resource_version = 3 \
-         WHERE submission_id = $1",
-    )
-    .bind(CONCURRENT_SUBMISSION)
-    .execute(pool)
-    .await
-    .unwrap();
+    seed_double_approved_submission(pool, CONCURRENT_SUBMISSION, "3.0.3", 103).await;
     let concurrent_body = json!({"submission_id": CONCURRENT_SUBMISSION, "rollout_percent": 100});
     let create_a = call(
         application.clone(),
@@ -1933,7 +2051,7 @@ async fn verify_submission_withdrawal(application: &Router, pool: &PgPool) {
     );
 
     const IN_REVIEW: &str = "sub_66666666666666666666666666666666";
-    seed_withdraw_submission(pool, IN_REVIEW, "in-review", 2, "91.0.2").await;
+    seed_withdraw_submission(pool, IN_REVIEW, "ready-for-review", 1, "91.0.2").await;
     sqlx::query(
         "INSERT INTO review_assignments (assignment_id, submission_id, reviewer_id, \
          assignment_kind, state, source_resource_version, created_unix_seconds) VALUES \
@@ -1941,6 +2059,14 @@ async fn verify_submission_withdrawal(application: &Router, pool: &PgPool) {
     )
     .bind(IN_REVIEW)
     .bind(REVIEWER_A)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'in-review', resource_version = 2 \
+         WHERE submission_id = $1",
+    )
+    .bind(IN_REVIEW)
     .execute(pool)
     .await
     .unwrap();
@@ -2467,6 +2593,115 @@ async fn seed_review_submission(
     .unwrap();
 }
 
+async fn seed_double_approved_submission(
+    pool: &PgPool,
+    submission_id: &str,
+    version: &str,
+    created_unix_seconds: i64,
+) {
+    const PRIMARY_ASSIGNMENT: &str = "assignment_dddddddddddddddddddddddddddddddd";
+    const SECONDARY_ASSIGNMENT: &str = "assignment_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    seed_review_submission(pool, submission_id, version, created_unix_seconds).await;
+    sqlx::query(
+        "INSERT INTO review_assignments (assignment_id, submission_id, reviewer_id, \
+         assignment_kind, state, source_resource_version, created_unix_seconds) \
+         VALUES ($1, $2, $3, 'primary', 'active', 1, $4)",
+    )
+    .bind(PRIMARY_ASSIGNMENT)
+    .bind(submission_id)
+    .bind(REVIEWER_A)
+    .bind(created_unix_seconds)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'in-review', resource_version = 2 \
+         WHERE submission_id = $1",
+    )
+    .bind(submission_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO review_decisions (decision_id, submission_id, reviewer_id, decision, \
+         reason_codes, note, created_unix_seconds, assignment_id) VALUES \
+         ('decision_dddddddddddddddddddddddddddddddd', $1, $2, 'approved', '{}', '', $3, $4)",
+    )
+    .bind(submission_id)
+    .bind(REVIEWER_A)
+    .bind(created_unix_seconds + 1)
+    .bind(PRIMARY_ASSIGNMENT)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE review_assignments SET state = 'completed', completed_unix_seconds = $1 \
+         WHERE assignment_id = $2",
+    )
+    .bind(created_unix_seconds + 1)
+    .bind(PRIMARY_ASSIGNMENT)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'pending-secondary-review', resource_version = 3 \
+         WHERE submission_id = $1",
+    )
+    .bind(submission_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO review_assignments (assignment_id, submission_id, reviewer_id, \
+         assignment_kind, state, source_resource_version, created_unix_seconds) \
+         VALUES ($1, $2, $3, 'secondary', 'active', 3, $4)",
+    )
+    .bind(SECONDARY_ASSIGNMENT)
+    .bind(submission_id)
+    .bind(REVIEWER_B)
+    .bind(created_unix_seconds + 2)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'in-review', resource_version = 4 \
+         WHERE submission_id = $1",
+    )
+    .bind(submission_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO review_decisions (decision_id, submission_id, reviewer_id, decision, \
+         reason_codes, note, created_unix_seconds, assignment_id) VALUES \
+         ('decision_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', $1, $2, 'approved', '{}', '', $3, $4)",
+    )
+    .bind(submission_id)
+    .bind(REVIEWER_B)
+    .bind(created_unix_seconds + 3)
+    .bind(SECONDARY_ASSIGNMENT)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE review_assignments SET state = 'completed', completed_unix_seconds = $1 \
+         WHERE assignment_id = $2",
+    )
+    .bind(created_unix_seconds + 3)
+    .bind(SECONDARY_ASSIGNMENT)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'approved', resource_version = 5 \
+         WHERE submission_id = $1",
+    )
+    .bind(submission_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 async fn verify_team_management(application: &Router, pool: &PgPool) {
     let team = call(
         application.clone(),
@@ -2835,10 +3070,27 @@ async fn verify_database_immutability(pool: &PgPool) {
         "INSERT INTO submissions (submission_id, app_id, version, revision, state, package_sha256, \
          package_bytes, listing_sha256, listing_bytes, assets, resource_version, created_unix_seconds) \
          VALUES ('sub_11111111111111111111111111111111', 'dev.cardputerzero.notes', '9.9.9', 1, \
-         'in-review', $1, 100, $2, 100, '[{},{}]'::jsonb, 1, 1)",
+         'ready-for-review', $1, 100, $2, 100, '[{},{}]'::jsonb, 1, 1)",
     )
     .bind("1".repeat(64))
     .bind("2".repeat(64))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO review_assignments (assignment_id, submission_id, reviewer_id, \
+         assignment_kind, state, source_resource_version, created_unix_seconds) VALUES \
+         ('assignment_11111111111111111111111111111111', \
+         'sub_11111111111111111111111111111111', $1, 'primary', 'active', 1, 1)",
+    )
+    .bind(REVIEWER_A)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'in-review', resource_version = 2 \
+         WHERE submission_id = 'sub_11111111111111111111111111111111'",
+    )
     .execute(pool)
     .await
     .unwrap();
@@ -2854,9 +3106,10 @@ async fn verify_database_immutability(pool: &PgPool) {
     .unwrap();
     sqlx::query(
         "INSERT INTO review_decisions (decision_id, submission_id, reviewer_id, decision, \
-         reason_codes, note, created_unix_seconds) VALUES \
+         reason_codes, note, created_unix_seconds, assignment_id) VALUES \
          ('decision_11111111111111111111111111111111', \
-         'sub_11111111111111111111111111111111', $1, 'approved', '{}', '', 1)",
+         'sub_11111111111111111111111111111111', $1, 'approved', '{}', '', 1, \
+         'assignment_11111111111111111111111111111111')",
     )
     .bind(REVIEWER_A)
     .execute(pool)
@@ -2867,6 +3120,29 @@ async fn verify_database_immutability(pool: &PgPool) {
         sqlx::query(
             "UPDATE submissions SET package_bytes = 101 \
              WHERE submission_id = 'sub_11111111111111111111111111111111'",
+        )
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    sqlx::query(
+        "INSERT INTO submissions (submission_id, app_id, version, revision, state, package_sha256, \
+         package_bytes, listing_sha256, listing_bytes, assets, resource_version, created_unix_seconds) \
+         VALUES ('sub_33333333333333333333333333333333', 'dev.cardputerzero.notes', '9.9.8', 1, \
+         'approved', $1, 100, $2, 100, '[{},{}]'::jsonb, 1, 1)",
+    )
+    .bind("1".repeat(64))
+    .bind("2".repeat(64))
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO releases (release_id, submission_id, app_id, version, state, \
+             rollout_percent, resource_version, created_unix_seconds) VALUES \
+             ('rel_33333333333333333333333333333333', \
+              'sub_33333333333333333333333333333333', \
+              'dev.cardputerzero.notes', '9.9.8', 'ready', 100, 1, 1)",
         )
         .execute(pool)
         .await,
@@ -2964,15 +3240,36 @@ async fn verify_database_immutability(pool: &PgPool) {
         .await,
         "55000",
     );
+    sqlx::query(
+        "INSERT INTO review_assignments (assignment_id, submission_id, reviewer_id, \
+         assignment_kind, state, source_resource_version, created_unix_seconds) VALUES \
+         ('assignment_22222222222222222222222222222222', $1, $2, \
+          'primary', 'active', 1, 1)",
+    )
+    .bind("sub_cccccccccccccccccccccccccccccccc")
+    .bind(REVIEWER_A)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'in-review', resource_version = 2 \
+         WHERE submission_id = $1",
+    )
+    .bind("sub_cccccccccccccccccccccccccccccccc")
+    .execute(pool)
+    .await
+    .unwrap();
     assert_sqlstate(
         sqlx::query(
             "INSERT INTO review_decisions (decision_id, submission_id, reviewer_id, decision, \
-             reason_codes, note, created_unix_seconds) VALUES \
+             reason_codes, note, created_unix_seconds, assignment_id) VALUES \
              ('decision_22222222222222222222222222222222', \
-             'sub_11111111111111111111111111111111', $1, 'rejected', \
-             ARRAY['privacy', 'privacy'], 'Duplicate reasons', 1)",
+             $2, $1, 'rejected', \
+             ARRAY['privacy', 'privacy'], 'Duplicate reasons', 1, \
+             'assignment_22222222222222222222222222222222')",
         )
         .bind(REVIEWER_A)
+        .bind("sub_cccccccccccccccccccccccccccccccc")
         .execute(pool)
         .await,
         "23514",
@@ -3006,6 +3303,14 @@ async fn reset_database(pool: &PgPool) {
         .await
         .unwrap();
     pool.execute("DROP FUNCTION IF EXISTS test_reject_team_role_audit()")
+        .await
+        .unwrap();
+    pool.execute(
+        "DROP TRIGGER IF EXISTS test_reject_secondary_review_audit_insert ON audit_events",
+    )
+    .await
+    .unwrap();
+    pool.execute("DROP FUNCTION IF EXISTS test_reject_secondary_review_audit()")
         .await
         .unwrap();
     pool.execute(

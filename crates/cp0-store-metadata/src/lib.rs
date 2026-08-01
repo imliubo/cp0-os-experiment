@@ -126,6 +126,7 @@ pub enum SubmissionState {
     Processing,
     ReadyForReview,
     InReview,
+    PendingSecondaryReview,
     NeedsChanges,
     Approved,
     Rejected,
@@ -133,12 +134,13 @@ pub enum SubmissionState {
 }
 
 impl SubmissionState {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Draft,
         Self::Uploading,
         Self::Processing,
         Self::ReadyForReview,
         Self::InReview,
+        Self::PendingSecondaryReview,
         Self::NeedsChanges,
         Self::Approved,
         Self::Rejected,
@@ -152,6 +154,7 @@ impl SubmissionState {
             Self::Processing => "processing",
             Self::ReadyForReview => "ready-for-review",
             Self::InReview => "in-review",
+            Self::PendingSecondaryReview => "pending-secondary-review",
             Self::NeedsChanges => "needs-changes",
             Self::Approved => "approved",
             Self::Rejected => "rejected",
@@ -171,7 +174,15 @@ impl SubmissionState {
                 | (Self::ReadyForReview, Self::InReview | Self::Withdrawn)
                 | (
                     Self::InReview,
-                    Self::NeedsChanges | Self::Approved | Self::Rejected | Self::Withdrawn
+                    Self::PendingSecondaryReview
+                        | Self::NeedsChanges
+                        | Self::Approved
+                        | Self::Rejected
+                        | Self::Withdrawn
+                )
+                | (
+                    Self::PendingSecondaryReview,
+                    Self::InReview | Self::Withdrawn
                 )
         )
     }
@@ -802,6 +813,12 @@ mod tests {
         assert!(SubmissionState::Draft.can_transition_to(SubmissionState::Uploading));
         assert!(SubmissionState::Processing.can_transition_to(SubmissionState::Withdrawn));
         assert!(SubmissionState::InReview.can_transition_to(SubmissionState::Approved));
+        assert!(
+            SubmissionState::InReview.can_transition_to(SubmissionState::PendingSecondaryReview)
+        );
+        assert!(
+            SubmissionState::PendingSecondaryReview.can_transition_to(SubmissionState::InReview)
+        );
         assert!(!SubmissionState::Approved.can_transition_to(SubmissionState::ReadyForReview));
         assert!(!SubmissionState::NeedsChanges.can_transition_to(SubmissionState::Uploading));
         assert!(!SubmissionState::Draft.can_transition_to(SubmissionState::Draft));

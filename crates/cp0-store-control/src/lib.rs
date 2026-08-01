@@ -551,7 +551,8 @@ impl ControlPlane {
         if !valid_service(actor, ServiceRole::Reviewer)
             || !matches!(
                 decision,
-                SubmissionState::Approved
+                SubmissionState::PendingSecondaryReview
+                    | SubmissionState::Approved
                     | SubmissionState::NeedsChanges
                     | SubmissionState::Rejected
             )
@@ -1358,12 +1359,33 @@ mod tests {
                 ready.resource_version,
             )
             .unwrap();
-        plane
+        let pending_secondary = plane
             .decide_review(
                 &reviewer,
                 &context("decide-review-0001", 105),
                 &created.submission_id,
                 reviewing.resource_version,
+                SubmissionState::PendingSecondaryReview,
+            )
+            .unwrap();
+        let secondary = ServiceIdentity {
+            service_id: "reviewer-secondary".into(),
+            role: ServiceRole::Reviewer,
+        };
+        let secondary_review = plane
+            .begin_review(
+                &secondary,
+                &context("begin-secondary-001", 106),
+                &created.submission_id,
+                pending_secondary.resource_version,
+            )
+            .unwrap();
+        plane
+            .decide_review(
+                &secondary,
+                &context("decide-secondary-01", 107),
+                &created.submission_id,
+                secondary_review.resource_version,
                 SubmissionState::Approved,
             )
             .unwrap()
@@ -1514,12 +1536,33 @@ mod tests {
                     ready.resource_version,
                 )
                 .unwrap();
-            plane
+            let pending_secondary = plane
                 .decide_review(
                     &reviewer,
                     &context("decide-review-0001", 106),
                     &submission.submission_id,
                     reviewing.resource_version,
+                    SubmissionState::PendingSecondaryReview,
+                )
+                .unwrap();
+            let secondary = ServiceIdentity {
+                service_id: "reviewer-secondary".into(),
+                role: ServiceRole::Reviewer,
+            };
+            let secondary_review = plane
+                .begin_review(
+                    &secondary,
+                    &context("begin-secondary-001", 107),
+                    &submission.submission_id,
+                    pending_secondary.resource_version,
+                )
+                .unwrap();
+            plane
+                .decide_review(
+                    &secondary,
+                    &context("decide-secondary-01", 108),
+                    &submission.submission_id,
+                    secondary_review.resource_version,
                     SubmissionState::Approved,
                 )
                 .unwrap()
@@ -1527,7 +1570,7 @@ mod tests {
         let release = plane
             .create_release(
                 &owner(),
-                &context("create-release-0001", 107),
+                &context("create-release-0001", 109),
                 &approved.submission_id,
                 25,
             )
@@ -1538,7 +1581,7 @@ mod tests {
         let second = plane
             .create_submission(
                 &owner(),
-                &context("create-submission-02", 108),
+                &context("create-submission-02", 110),
                 "dev.cardputerzero.notes",
                 spec("1.0.0"),
             )

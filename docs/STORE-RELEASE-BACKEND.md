@@ -28,10 +28,13 @@ Reads and writes require a live team member whose current role is `owner` or
 Release or Submission through its permanent App owner, so a cross-team ID is
 returned as `not-found` rather than exposing its existence.
 
-Creation locks the Submission and accepts only `approved`. The database unique
-constraint allows exactly one Release identity per immutable Submission, even
-under concurrent requests. Rollout percentage and Release identity cannot be
-changed after creation.
+Creation locks the Submission and accepts only final `approved`. A database
+trigger independently requires completed primary and secondary assignments,
+two approval decisions and two distinct reviewer identities. Merely writing an
+`approved` state cannot create a Release. The database unique constraint allows
+exactly one Release identity per immutable Submission, even under concurrent
+requests. Rollout percentage and Release identity cannot be changed after
+creation.
 
 ## State and transaction boundary
 
@@ -72,7 +75,8 @@ cargo clippy -p cp0-store-control-server --all-targets -- -D warnings
 CP0_STORE_TEST_DATABASE_URL=postgres://... make store-control-db-check
 ```
 
-The PostgreSQL gate covers approved-only creation, live role/scope/2FA checks,
+The PostgreSQL gate covers independent double-approved creation, direct-state
+bypass rejection, live role/scope/2FA checks,
 cross-team hiding, exact replay, concurrent uniqueness, future-only schedules,
 stale ETags, publish queue semantics, simulated Publisher completion,
 pause/resume/removal, publish-failed retry, sanitized outbox payloads,

@@ -1,19 +1,23 @@
 # Store Review Backend
 
 S5E adds the first PostgreSQL and HTTP vertical slice for human Store review.
+S5L extends it with mandatory independent secondary review and double approval.
 It runs in the Store control plane and is never installed on a CardputerZero
 device.
 
 ## API slice
 
-- `GET /v1/review/submissions?cursor=&limit=` lists only
-  `ready-for-review` Submissions using a stable, bounded cursor. The default
-  page size is 25 and the hard limit is 50.
+- `GET /v1/review/submissions?cursor=&limit=` lists claimable
+  `ready-for-review` and `pending-secondary-review` Submissions using a stable,
+  bounded cursor. A primary reviewer never sees their own Submission as a
+  secondary-review candidate. The default page size is 25 and the hard limit is
+  50.
 - `POST /v1/review/submissions/{submission_id}:begin` atomically claims a
   Submission and changes it to `in-review`.
 - `POST /v1/review/submissions/{submission_id}/decisions` appends one structured
   `needs-changes`, `approved`, or `rejected` decision and completes the active
-  assignment.
+  assignment. Primary approval moves to `pending-secondary-review`; only an
+  approval from a different secondary reviewer reaches final `approved`.
 - `POST /v1/submissions/{submission_id}/messages` appends a developer or assigned
   reviewer message without changing the immutable Submission content or ETag.
 
@@ -47,18 +51,20 @@ Every write runs in a PostgreSQL `SERIALIZABLE` transaction. Authentication,
 role, 2FA, scope, assignment, current state, ETag, idempotency reservation,
 resource mutation, audit event, and outbox event commit together. A row lock on
 the Submission guarantees that concurrent begin requests produce one active
-primary assignment.
+assignment for each stage.
 
-Review assignments retain immutable reviewer and source-version bindings and
-only transition from `active` to `completed` or `cancelled`. Messages and
-decisions are append-only at the database layer. Non-approval decisions require
-at least one unique structured reason code and a bounded actionable note.
+Review assignments retain immutable reviewer, kind and source-version bindings
+and only transition from `active` to `completed` or `cancelled`. Every append-only
+decision has a unique foreign key to its active assignment. Database triggers
+enforce primary-before-secondary ordering, reviewer independence, legal state
+transitions, and two distinct approvals before final `approved`.
 
-The assignment schema reserves `primary` and `secondary` kinds so a later policy
-slice can add independent second review. S5E deliberately does not claim to
-implement risk classification, reviewer independence, double approval or the
-Review Console frontend. Developer Release control is the separate S5F slice;
-Store signing and Catalog publishing remain later isolated services.
+Release creation independently joins the primary and secondary assignments and
+their approval decisions; directly writing an `approved` Submission cannot
+bypass this gate. Non-approval decisions require at least one unique structured
+reason code and a bounded actionable note. Risk classification and the Review
+Console frontend remain later work; S5L applies the stronger two-review baseline
+to every Submission.
 
 ## Verification
 
@@ -72,6 +78,7 @@ CP0_STORE_TEST_DATABASE_URL=postgres://... make store-control-db-check
 
 The PostgreSQL gate covers bounded pagination, malformed cursors, strict action
 paths, required ETags, live 2FA/expiry/revocation, cross-domain credentials,
-exact replay, concurrent claims, assignment authorization, structured decision
-validation, developer team isolation, append-only records, atomic audit/outbox,
-and database token-domain uniqueness.
+exact replay, concurrent claims, primary-reviewer exclusion from secondary
+review, assignment authorization, structured decision validation, developer
+team isolation, append-only records, injected secondary-decision rollback,
+double-approved Release enforcement, and database token-domain uniqueness.

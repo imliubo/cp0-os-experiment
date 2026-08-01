@@ -118,16 +118,18 @@ CP0_STORE_TEST_DATABASE_URL=postgres://... make store-control-db-check
 The database gate covers exact replay, competing App IDs, concurrent Submission
 revision allocation and review claims, live RBAC/2FA/scope/revocation checks,
 256 KiB chunk boundaries, stale ETags, non-contiguous ranges, digest mismatches,
-finalize replay, reviewer assignment authorization, structured decisions,
+finalize replay, independent primary/secondary assignment authorization,
+structured decisions,
 developer/reviewer messages, approved-only Release creation, concurrent Release
 uniqueness, scheduling, publication queueing, pause/resume/removal, publication
 retry, Submission withdrawal/cleanup/replay, injected transaction rollback and
 append-only database triggers, Team isolation, MFA freshness, last-Owner
-protection, role-change replay and immediate token revocation.
+protection, role-change replay, immediate token revocation, double-approved
+Release enforcement and secondary-decision rollback.
 
 Identity account linking, invitations, Portal sessions, dynamic malware
-intelligence, independent second review, double approval, Review Console UI,
-production object storage, general outbox delivery and garbage collection are
-not implemented by this HTTP slice.
+intelligence, risk classification, Review Console UI, production object storage,
+general outbox delivery and garbage collection are not implemented by this HTTP
+slice.
 Isolated signing/Catalog publication and transparency logging are implemented by
 the S5G/S5H Publisher boundary described in `STORE-PUBLISHER.md`.

@@ -311,7 +311,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Bounded review queue page",
+            "description": "Bounded primary and independent secondary review queue page",
             "content": {
               "application/json": {
                 "schema": {
@@ -345,7 +345,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Review claimed",
+            "description": "Primary or independent secondary review claimed",
             "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/Submission" } }
@@ -374,7 +374,7 @@
         },
         "responses": {
           "201": {
-            "description": "Append-only review decision",
+            "description": "Append-only assignment-bound decision; final approval requires two reviewers",
             "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/Submission" } }
@@ -643,6 +643,7 @@
           "processing",
           "ready-for-review",
           "in-review",
+          "pending-secondary-review",
           "needs-changes",
           "approved",
           "rejected",

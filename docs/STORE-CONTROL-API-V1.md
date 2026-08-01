@@ -42,12 +42,21 @@ Portal 的 OIDC/BFF、cookie、CSRF 和账户恢复边界见 `STORE-IDENTITY-TEA
 ## Submission 状态机
 
 ```text
-DRAFT -> UPLOADING -> PROCESSING -> READY_FOR_REVIEW -> IN_REVIEW
+DRAFT -> UPLOADING -> PROCESSING -> READY_FOR_REVIEW -> IN_REVIEW (primary)
   |          |             |               |              |
-  +------> WITHDRAWN <------+---------------+              +-> APPROVED
-                           +-> NEEDS_CHANGES                +-> NEEDS_CHANGES
-                           +-> REJECTED                     +-> REJECTED
-                                                          +-> WITHDRAWN
+  +------> WITHDRAWN <------+---------------+              +-> NEEDS_CHANGES
+                           +-> NEEDS_CHANGES                +-> REJECTED
+                           +-> REJECTED                     +-> WITHDRAWN
+                                                          |
+                                                          v
+                                              PENDING_SECONDARY_REVIEW
+                                                          |
+                                                          v
+                                               IN_REVIEW (secondary)
+                                                  |       |       |
+                                                  v       v       v
+                                             APPROVED  NEEDS_  REJECTED
+                                                       CHANGES
 ```
 
 `NEEDS_CHANGES`、`APPROVED`、`REJECTED` 和 `WITHDRAWN` 对该 revision 都是终态。开发者修改
@@ -61,8 +70,10 @@ package、Listing 或任一资源时必须创建递增的新 revision，不能�
 完整约束见 `STORE-SUBMISSION-WITHDRAWAL.md`。
 
 只有自动扫描通过的 revision 可以进入 `READY_FOR_REVIEW`；只有 Review Service 可以进入
-`IN_REVIEW/APPROVED/NEEDS_CHANGES/REJECTED`。高风险权限和安全例外由服务端策略要求双人审批，
-不能由请求字段关闭。
+`IN_REVIEW/PENDING_SECONDARY_REVIEW/APPROVED/NEEDS_CHANGES/REJECTED`。主审批准只进入
+`PENDING_SECONDARY_REVIEW`，必须由另一位审核员领取 secondary assignment 并批准才进入
+`APPROVED`。Release 创建会从 assignment/decision 表重新验证双人批准，不能由请求字段关闭。
+风险分级尚未实现，当前对所有 Submission 使用更严格的双审基线。
 
 ## Release 状态机
 

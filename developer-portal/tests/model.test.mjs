@@ -14,6 +14,8 @@ import {
 
 test("matches the frozen submission and release state machines", () => {
   assert.equal(canTransition(SUBMISSION_TRANSITIONS, "uploading", "processing"), true);
+  assert.equal(canTransition(SUBMISSION_TRANSITIONS, "in-review", "pending-secondary-review"), true);
+  assert.equal(canTransition(SUBMISSION_TRANSITIONS, "pending-secondary-review", "in-review"), true);
   assert.equal(canTransition(SUBMISSION_TRANSITIONS, "approved", "in-review"), false);
   assert.equal(canTransition(RELEASE_TRANSITIONS, "published", "paused"), true);
   assert.equal(canTransition(RELEASE_TRANSITIONS, "removed", "published"), false);
