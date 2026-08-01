@@ -112,6 +112,27 @@
         }
       }
     },
+    "/v1/teams/{team_id}/members/{member_id}:remove": {
+      "post": {
+        "operationId": "removeTeamMember",
+        "parameters": [
+          { "$ref": "#/components/parameters/TeamId" },
+          { "$ref": "#/components/parameters/MemberId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Member removed, retained for audit, and existing member tokens revoked",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Team" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/v1/apps": {
       "post": {
         "operationId": "createApp",

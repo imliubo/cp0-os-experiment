@@ -59,6 +59,9 @@ main { min-width: 0; }
 .topbar > .icon-button:nth-last-of-type(1) { margin-left: auto; }
 .icon-button { width: 34px; height: 34px; display: grid; place-items: center; flex: 0 0 auto; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: inherit; }
 .icon-button:hover { background: #ecefeb; }
+.icon-button.danger-icon { color: var(--danger); }
+.icon-button.danger-icon:hover { background: #fff4f3; }
+.icon-button:disabled { cursor: not-allowed; opacity: .42; }
 .page-header { min-height: 115px; display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 24px 32px 20px; border-bottom: 1px solid var(--line); background: #fafbf8; }
 .page-header h1 { margin: 3px 0 5px; font-size: 25px; line-height: 1.1; letter-spacing: 0; }
 .page-header p, .panel-heading p, .section-title p, .detail-title p, .detail-heading-line p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
@@ -219,6 +222,7 @@ textarea { resize: vertical; line-height: 1.45; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(12, 15, 13, .58); }
 .dialog { width: min(500px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; border-radius: 7px; background: #fff; box-shadow: 0 18px 60px rgba(0,0,0,.25); }
+.compact-dialog { width: min(430px, 100%); }
 .dialog-heading { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 15px 18px; border-bottom: 1px solid var(--line); }
 .dialog-heading h2 { margin: 0 0 4px; font-size: 16px; }.dialog-heading p { margin: 0; color: var(--muted); font-size: 10px; }
 .form-stack { display: flex; flex-direction: column; gap: 16px; padding: 18px; }

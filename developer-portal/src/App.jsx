@@ -70,9 +70,9 @@ function Status({ value }) {
   return <span className={`status status-${tone}`}>{formatState(value)}</span>;
 }
 
-function IconButton({ label, children, ...props }) {
+function IconButton({ label, children, className = "", ...props }) {
   return (
-    <button className="icon-button" type="button" aria-label={label} title={label} {...props}>
+    <button className={`icon-button ${className}`.trim()} type="button" aria-label={label} title={label} {...props}>
       {children}
     </button>
   );
@@ -363,12 +363,18 @@ function Team({ data, setData, toast }) {
   const [keyDialog, setKeyDialog] = useState(false);
   const [keyName, setKeyName] = useState("");
   const [publicKey, setPublicKey] = useState("");
+  const [memberToRemove, setMemberToRemove] = useState(null);
+  const ownerCount = data.team.members.filter((member) => member.role === "Owner").length;
   useEffect(() => {
-    if (!keyDialog) return undefined;
-    const closeOnEscape = (event) => { if (event.key === "Escape") setKeyDialog(false); };
+    if (!keyDialog && !memberToRemove) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key !== "Escape") return;
+      setKeyDialog(false);
+      setMemberToRemove(null);
+    };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [keyDialog]);
+  }, [keyDialog, memberToRemove]);
   const addKey = (event) => {
     event.preventDefault();
     const normalized = publicKey.trim();
@@ -377,11 +383,38 @@ function Team({ data, setData, toast }) {
     setData((current) => ({ ...current, team: { ...current.team, developerKeys: [...current.team.developerKeys, key] } }));
     setKeyDialog(false); setKeyName(""); setPublicKey(""); toast("Public developer key registered. No private key was requested.");
   };
+  const removeMember = () => {
+    const removedName = memberToRemove.name;
+    setData((current) => ({
+      ...current,
+      team: {
+        ...current.team,
+        members: current.team.members.filter((member) => member.id !== memberToRemove.id),
+      },
+    }));
+    setMemberToRemove(null);
+    toast(`${removedName} was removed and all active sessions were revoked.`);
+  };
   return (
     <div className="page-stack">
-      <section className="panel"><div className="panel-heading"><div><h2>{data.team.name}</h2><p>Team ID <span className="mono">{data.team.id}</span></p></div><Status value="active" /></div><div className="table-wrap"><table className="team-table"><thead><tr><th>Member</th><th>Role</th><th>Two-factor authentication</th></tr></thead><tbody>{data.team.members.map((member) => <tr key={member.id}><td><strong>{member.name}</strong><small>{member.email}</small></td><td><select className="table-select" aria-label={`${member.name} role`} value={member.role} disabled={member.role === "Owner"} onChange={(event) => setData((current) => ({ ...current, team: { ...current.team, members: current.team.members.map((item) => item.id === member.id ? { ...item, role: event.target.value } : item) } }))}><option>Owner</option><option>Developer</option><option>Release Manager</option><option>Viewer</option></select></td><td>{member.twoFactor ? <span className="verified"><ShieldCheck /> Enabled</span> : <span className="not-verified"><CircleAlert /> Required before release access</span>}</td></tr>)}</tbody></table></div></section>
+      <section className="panel">
+        <div className="panel-heading"><div><h2>{data.team.name}</h2><p>Team ID <span className="mono">{data.team.id}</span></p></div><Status value="active" /></div>
+        <div className="table-wrap"><table className="team-table">
+          <thead><tr><th>Member</th><th>Role</th><th>Two-factor authentication</th><th><span className="visually-hidden">Actions</span></th></tr></thead>
+          <tbody>{data.team.members.map((member) => {
+            const finalOwner = member.role === "Owner" && ownerCount === 1;
+            return <tr key={member.id}>
+              <td><strong>{member.name}</strong><small>{member.email}</small></td>
+              <td><select className="table-select" aria-label={`${member.name} role`} value={member.role} disabled={member.role === "Owner"} onChange={(event) => setData((current) => ({ ...current, team: { ...current.team, members: current.team.members.map((item) => item.id === member.id ? { ...item, role: event.target.value } : item) } }))}><option>Owner</option><option>Developer</option><option>Release Manager</option><option>Viewer</option></select></td>
+              <td>{member.twoFactor ? <span className="verified"><ShieldCheck /> Enabled</span> : <span className="not-verified"><CircleAlert /> Required before release access</span>}</td>
+              <td><IconButton className="danger-icon" label={finalOwner ? "The final Owner cannot be removed" : `Remove ${member.name}`} disabled={finalOwner} onClick={() => setMemberToRemove(member)}><Trash2 /></IconButton></td>
+            </tr>;
+          })}</tbody>
+        </table></div>
+      </section>
       <section className="panel"><div className="panel-heading"><div><h2>Developer public keys</h2><p>Keys verify package authorship. Private keys stay on developer workstations.</p></div><button className="primary" type="button" onClick={() => setKeyDialog(true)}><Plus /> Register public key</button></div><div className="key-list">{data.team.developerKeys.map((key) => <div className="key-row" key={key.id}><div className="key-icon"><KeyRound /></div><div><strong>{key.name}</strong><small>{key.algorithm} · <span className="mono">{key.fingerprint}</span></small><small>Created {key.created} · Last used {key.lastUsed}</small></div><Status value={key.status} /><button className="text-button danger-text" type="button" onClick={() => { setData((current) => ({ ...current, team: { ...current.team, developerKeys: current.team.developerKeys.map((item) => item.id === key.id ? { ...item, status: "revoked" } : item) } })); toast("Public key revoked. Existing audit records are unchanged."); }}>Revoke</button></div>)}</div></section>
       {keyDialog && <div className="modal-backdrop" role="presentation"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="key-title"><div className="dialog-heading"><div><h2 id="key-title">Register public key</h2><p>Only the Ed25519 public key is accepted.</p></div><IconButton label="Close" onClick={() => setKeyDialog(false)}><X /></IconButton></div><form className="form-stack" onSubmit={addKey}><label>Key name<input value={keyName} onChange={(event) => setKeyName(event.target.value)} placeholder="Release workstation" autoFocus /></label><label>SSH Ed25519 public key<textarea rows="4" value={publicKey} onChange={(event) => setPublicKey(event.target.value)} placeholder="ssh-ed25519 AAAA... developer@example" /><small>Never paste a private key, seed, passphrase, or token.</small></label><div className="dialog-actions"><button className="secondary" type="button" onClick={() => setKeyDialog(false)}>Cancel</button><button className="primary" type="submit" disabled={!keyName.trim() || !publicKey.trim()}>Register key</button></div></form></section></div>}
+      {memberToRemove && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setMemberToRemove(null)}><section className="dialog compact-dialog" role="alertdialog" aria-modal="true" aria-labelledby="remove-member-title" aria-describedby="remove-member-description"><div className="dialog-heading"><div><h2 id="remove-member-title">Remove {memberToRemove.name}</h2><p id="remove-member-description">Access and active sessions will be revoked immediately.</p></div><IconButton label="Close" onClick={() => setMemberToRemove(null)}><X /></IconButton></div><div className="form-stack"><div className="notice attention"><CircleAlert /><div><strong>This action cannot be undone</strong><p>The membership remains in the audit history, but it cannot be reactivated.</p></div></div><div className="dialog-actions"><button className="secondary" type="button" autoFocus onClick={() => setMemberToRemove(null)}>Cancel</button><button className="danger-button" type="button" onClick={removeMember}><Trash2 /> Remove member</button></div></div></section></div>}
     </div>
   );
 }

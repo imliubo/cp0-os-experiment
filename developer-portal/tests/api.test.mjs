@@ -36,6 +36,7 @@ test("sends bounded idempotent requests without browser credentials", async () =
 test("requires ETags for existing-resource mutations", () => {
   const api = new StoreApi({ tokenProvider: () => token, fetchImpl: async () => new Response() });
   assert.throws(() => api.setTeamMemberRole("team_0123456789abcdef0123456789abcdef", "member_0123456789abcdef0123456789abcdef", "developer", ""), /ETag/);
+  assert.throws(() => api.removeTeamMember("team_0123456789abcdef0123456789abcdef", "member_0123456789abcdef0123456789abcdef", ""), /ETag/);
   assert.throws(() => api.withdrawSubmission("sub_0123456789abcdef0123456789abcdef", ""), /ETag/);
   assert.throws(() => api.mutateRelease("rel_0123456789abcdef0123456789abcdef", "pause", ""), /ETag/);
 });
@@ -63,6 +64,32 @@ test("sends team role changes with a strong precondition", async () => {
   assert.equal(observed.options.headers["If-Match"], '"1"');
   assert.match(observed.options.headers["Idempotency-Key"], /^portal-/);
   assert.deepEqual(JSON.parse(observed.options.body), { role: "release-manager" });
+});
+
+test("sends member removal with no request body", async () => {
+  let observed;
+  const api = new StoreApi({
+    tokenProvider: () => token,
+    fetchImpl: async (url, options) => {
+      observed = { url, options };
+      return new Response(JSON.stringify({ team_id: "team_0123456789abcdef0123456789abcdef", members: [] }), {
+        status: 200,
+        headers: { etag: '"8"', "content-type": "application/json" },
+      });
+    },
+  });
+  const response = await api.removeTeamMember(
+    "team_0123456789abcdef0123456789abcdef",
+    "member_0123456789abcdef0123456789abcdef",
+    '"7"',
+  );
+  assert.equal(response.etag, '"8"');
+  assert.equal(observed.url, "https://developer.cardputerzero.dev/v1/teams/team_0123456789abcdef0123456789abcdef/members/member_0123456789abcdef0123456789abcdef:remove");
+  assert.equal(observed.options.method, "POST");
+  assert.equal(observed.options.headers["If-Match"], '"7"');
+  assert.match(observed.options.headers["Idempotency-Key"], /^portal-/);
+  assert.equal(observed.options.headers["Content-Type"], undefined);
+  assert.equal(observed.options.body, undefined);
 });
 
 test("rejects oversized and structured error responses", async () => {

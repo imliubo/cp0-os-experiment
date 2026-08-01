@@ -116,6 +116,18 @@ export class StoreApi {
     );
   }
 
+  removeTeamMember(teamId, memberId, etag) {
+    if (!etag) throw new Error("Team member removal requires an ETag");
+    return this.request(
+      `/v1/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}:remove`,
+      {
+        method: "POST",
+        idempotent: true,
+        etag,
+      },
+    );
+  }
+
   getApp(appId) {
     return this.request(`/v1/apps/${encodeURIComponent(appId)}`);
   }

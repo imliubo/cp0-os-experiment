@@ -31,6 +31,7 @@ const REVIEWER_EXPIRED_TOKEN: &str = "reviewer-expired-token-0000000000004";
 const REVIEWER_REVOKED_TOKEN: &str = "reviewer-revoked-token-0000000000004";
 const RELEASE_MANAGER_TOKEN: &str = "release-manager-token-000000000000001";
 const RELEASE_NO_2FA_TOKEN: &str = "release-no2fa-token-00000000000000002";
+const REMOVED_MEMBER_TOKEN: &str = "removed-member-token-000000000000000001";
 const STALE_MFA_TOKEN: &str = "stale-mfa-token-000000000000000000001";
 const EDITOR_TOKEN: &str = "editor-token-000000000000000000000001";
 const EDITOR_NO_2FA_TOKEN: &str = "editor-no2fa-token-000000000000000001";
@@ -91,6 +92,7 @@ async fn postgres_http_transaction_acceptance() {
     verify_submission_withdrawal(&application, &pool).await;
     verify_oauth_device_flow(&application, &pool).await;
     verify_team_management(&application, &pool).await;
+    verify_team_member_removal(&application, &pool).await;
     verify_editorial_backend(&application, &pool).await;
     verify_metrics_backend(&application, &pool).await;
     verify_moderation_backend(&application, &pool).await;
@@ -3735,6 +3737,271 @@ async fn verify_team_management(application: &Router, pool: &PgPool) {
     assert!(revoked_after_commit);
 }
 
+async fn verify_team_member_removal(application: &Router, pool: &PgPool) {
+    let non_empty = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{RELEASE_NO_2FA}:remove"),
+        OWNER_A_TOKEN,
+        "team-remove-body-0001",
+        3,
+        Some(json!({})),
+    )
+    .await;
+    assert_problem(&non_empty, StatusCode::BAD_REQUEST, "invalid-request");
+
+    let stale_mfa = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{RELEASE_NO_2FA}:remove"),
+        STALE_MFA_TOKEN,
+        "team-remove-stale-001",
+        3,
+        None,
+    )
+    .await;
+    assert_problem(&stale_mfa, StatusCode::FORBIDDEN, "step-up-required");
+
+    let cross_team_actor = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{RELEASE_NO_2FA}:remove"),
+        OWNER_B_TOKEN,
+        "team-remove-cross-001",
+        3,
+        None,
+    )
+    .await;
+    assert_problem(&cross_team_actor, StatusCode::NOT_FOUND, "not-found");
+    let cross_team_target = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{OWNER_B}:remove"),
+        OWNER_A_TOKEN,
+        "team-remove-target-01",
+        3,
+        None,
+    )
+    .await;
+    assert_problem(&cross_team_target, StatusCode::NOT_FOUND, "not-found");
+
+    let stale_etag = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{RELEASE_NO_2FA}:remove"),
+        OWNER_A_TOKEN,
+        "team-remove-etag-0001",
+        2,
+        None,
+    )
+    .await;
+    assert_problem(
+        &stale_etag,
+        StatusCode::PRECONDITION_FAILED,
+        "precondition-failed",
+    );
+    let last_owner = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_B}/members/{OWNER_B}:remove"),
+        OWNER_B_TOKEN,
+        "team-remove-owner-001",
+        1,
+        None,
+    )
+    .await;
+    assert_problem(&last_owner, StatusCode::CONFLICT, "conflict");
+
+    let counts_before = (
+        count(pool, "audit_events").await,
+        count(pool, "outbox_events").await,
+        count(pool, "idempotency_records").await,
+    );
+    let removed = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{RELEASE_NO_2FA}:remove"),
+        OWNER_A_TOKEN,
+        "team-remove-commit-01",
+        3,
+        None,
+    )
+    .await;
+    assert_eq!(removed.status, StatusCode::OK);
+    assert_eq!(etag_version(&removed), 4);
+    let removed_body: Value = serde_json::from_slice(&removed.body).unwrap();
+    assert_eq!(removed_body["members"].as_array().unwrap().len(), 4);
+    assert!(
+        removed_body["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|member| member["member_id"] != RELEASE_NO_2FA)
+    );
+    let replay = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{RELEASE_NO_2FA}:remove"),
+        OWNER_A_TOKEN,
+        "team-remove-commit-01",
+        3,
+        None,
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::OK);
+    assert_eq!(replay.body, removed.body);
+    assert_eq!(etag_version(&replay), 4);
+    assert_eq!(count(pool, "audit_events").await, counts_before.0 + 1);
+    assert_eq!(count(pool, "outbox_events").await, counts_before.1 + 1);
+    assert_eq!(
+        count(pool, "idempotency_records").await,
+        counts_before.2 + 1
+    );
+    let removed_row = sqlx::query(
+        "SELECT membership_state, removed_unix_seconds, resource_version \
+         FROM team_members WHERE member_id = $1",
+    )
+    .bind(RELEASE_NO_2FA)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(removed_row.get::<String, _>("membership_state"), "removed");
+    assert!(removed_row.get::<i64, _>("removed_unix_seconds") >= 1);
+    assert_eq!(removed_row.get::<i64, _>("resource_version"), 2);
+    let removed_token_revoked: bool =
+        sqlx::query_scalar("SELECT revoked FROM access_tokens WHERE token_sha256 = $1")
+            .bind(sha256_hex(RELEASE_NO_2FA_TOKEN.as_bytes()))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(removed_token_revoked);
+    let now: i64 = sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO access_tokens (token_sha256, member_id, scopes, expires_unix_seconds, \
+         revoked, created_unix_seconds, mfa_authenticated_unix_seconds) \
+         VALUES ($1, $2, ARRAY['store.teams.read'], $3, FALSE, $4, $4)",
+    )
+    .bind(sha256_hex(REMOVED_MEMBER_TOKEN.as_bytes()))
+    .bind(RELEASE_NO_2FA)
+    .bind(now + 3600)
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+    let removed_identity = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/teams/{TEAM_A}"),
+        Some(REMOVED_MEMBER_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&removed_identity, StatusCode::UNAUTHORIZED, "unauthorized");
+
+    let target_version_before: i64 =
+        sqlx::query_scalar("SELECT resource_version FROM team_members WHERE member_id = $1")
+            .bind(NO_2FA_MEMBER)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    pool.execute(
+        "CREATE FUNCTION test_reject_team_remove_audit() RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN IF NEW.action = 'team.member-removed' AND \
+         NEW.object_id = 'team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' THEN \
+         RAISE EXCEPTION 'injected team removal audit failure'; END IF; RETURN NEW; END; $$",
+    )
+    .await
+    .unwrap();
+    pool.execute(
+        "CREATE TRIGGER test_reject_team_remove_audit_insert BEFORE INSERT ON audit_events \
+         FOR EACH ROW EXECUTE FUNCTION test_reject_team_remove_audit()",
+    )
+    .await
+    .unwrap();
+    let rolled_back = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{NO_2FA_MEMBER}:remove"),
+        OWNER_A_TOKEN,
+        "team-remove-rollback1",
+        4,
+        None,
+    )
+    .await;
+    assert_problem(
+        &rolled_back,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "service-unavailable",
+    );
+    let rollback_team_version: i64 =
+        sqlx::query_scalar("SELECT resource_version FROM teams WHERE team_id = $1")
+            .bind(TEAM_A)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let rollback_target = sqlx::query(
+        "SELECT membership_state, removed_unix_seconds, resource_version \
+         FROM team_members WHERE member_id = $1",
+    )
+    .bind(NO_2FA_MEMBER)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let rollback_token_revoked: bool =
+        sqlx::query_scalar("SELECT revoked FROM access_tokens WHERE token_sha256 = $1")
+            .bind(sha256_hex(NO_2FA_TOKEN.as_bytes()))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(rollback_team_version, 4);
+    assert_eq!(
+        rollback_target.get::<String, _>("membership_state"),
+        "active"
+    );
+    assert!(
+        rollback_target
+            .get::<Option<i64>, _>("removed_unix_seconds")
+            .is_none()
+    );
+    assert_eq!(
+        rollback_target.get::<i64, _>("resource_version"),
+        target_version_before
+    );
+    assert!(!rollback_token_revoked);
+    pool.execute("DROP TRIGGER test_reject_team_remove_audit_insert ON audit_events")
+        .await
+        .unwrap();
+    pool.execute("DROP FUNCTION test_reject_team_remove_audit()")
+        .await
+        .unwrap();
+
+    let retried = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{NO_2FA_MEMBER}:remove"),
+        OWNER_A_TOKEN,
+        "team-remove-rollback1",
+        4,
+        None,
+    )
+    .await;
+    assert_eq!(retried.status, StatusCode::OK);
+    assert_eq!(etag_version(&retried), 5);
+    let retry_body: Value = serde_json::from_slice(&retried.body).unwrap();
+    assert_eq!(retry_body["members"].as_array().unwrap().len(), 3);
+    let revoked_after_commit: bool =
+        sqlx::query_scalar("SELECT revoked FROM access_tokens WHERE token_sha256 = $1")
+            .bind(sha256_hex(NO_2FA_TOKEN.as_bytes()))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(revoked_after_commit);
+}
+
 async fn verify_editorial_backend(application: &Router, pool: &PgPool) {
     const FEATURED: &str = "rel_e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1";
     const COLLECTION_A: &str = "rel_e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2";
@@ -4573,6 +4840,46 @@ async fn verify_database_immutability(pool: &PgPool) {
             .execute(pool)
             .await,
         "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM team_members WHERE member_id = $1")
+            .bind(RELEASE_NO_2FA)
+            .execute(pool)
+            .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE team_members SET membership_state = 'active', \
+             removed_unix_seconds = NULL, resource_version = resource_version + 1 \
+             WHERE member_id = $1",
+        )
+        .bind(RELEASE_NO_2FA)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO team_members (member_id, team_id, email, role, \
+             two_factor_enabled, membership_state, removed_unix_seconds) \
+             VALUES ('member_99999999999999999999999999999999', $1, \
+             'removed@example.com', 'viewer', TRUE, 'removed', 1)",
+        )
+        .bind(TEAM_A)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE team_members SET membership_state = 'removed', removed_unix_seconds = 1, \
+             resource_version = resource_version + 1 WHERE member_id = $1",
+        )
+        .bind(OWNER_B)
+        .execute(pool)
+        .await,
+        "23514",
     );
     assert_sqlstate(
         sqlx::query("UPDATE reviewer_access_tokens SET revoked = FALSE WHERE token_sha256 = $1")

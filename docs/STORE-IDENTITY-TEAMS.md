@@ -9,20 +9,26 @@ or upstream OIDC tokens.
 
 - `GET /v1/teams/{team_id}` returns the caller's team and at most 100 members;
 - `POST /v1/teams/{team_id}/members/{member_id}:set-role` changes one role;
+- `POST /v1/teams/{team_id}/members/{member_id}:remove` irreversibly removes
+  one active membership and accepts an empty body only;
 - roles are exactly `owner`, `developer`, `release-manager`, and `viewer`;
 - cross-team IDs return `not-found` and never disclose membership data.
 
 Team reads require `store.teams.read`, `store.teams.write`, or internal
-`store.control`. A role change requires the current `owner` role,
+`store.control`. A role change or removal requires the current `owner` role,
 `store.teams.write` or `store.control`, enabled 2FA, and an MFA authentication
 time no more than five minutes old. The operation also requires the current
 team ETag and an idempotency key.
 
-One PostgreSQL `SERIALIZABLE` transaction locks the Team and target member,
-advances both resource versions by exactly one, changes the role, revokes every
-existing access token for the target member, and appends audit/outbox records.
-The database and service both prevent removal of the last Owner. Exact replay
-returns the stored Team body and ETag without another mutation.
+One PostgreSQL `SERIALIZABLE` transaction locks the Team and target member and
+advances both resource versions by exactly one. A role change updates the role;
+a removal transitions the membership once from `active` to terminal `removed`
+and records its database time without deleting the identity. Both operations
+revoke every existing access token for the target member and append audit/outbox
+records. Removed members disappear from Team responses and all developer-token
+authentication paths. The database and service both preserve the last active
+Owner. Exact replay returns the stored Team body and ETag without another
+mutation.
 
 ## Production login boundary
 
@@ -54,8 +60,10 @@ role can never grant `store.review` or become a reviewer through this API.
 
 ## Database constraints
 
-- Team and member identities cannot be reassigned or deleted through role
-  mutation paths;
+- Team identities cannot be reassigned or deleted; member identities cannot be
+  reassigned or physically deleted;
+- memberships start active at version one, can transition only once to removed,
+  and become immutable after removal;
 - every Team/member update advances its resource version by exactly one;
 - member email values are bounded, trimmed, and lowercase;
 - MFA authentication time is optional, immutable, positive, and cannot be
@@ -71,10 +79,14 @@ issued.
 
 The PostgreSQL acceptance gate covers bounded ordered reads, missing scope,
 role and team isolation, disabled and stale MFA, last-Owner protection, stale
-ETags, exact replay, immediate target-token revocation, database bypasses, and
-an injected audit failure proving complete rollback. The Portal API tests bind
-role changes to the ETag and idempotency headers.
+ETags, exact replay, immediate target-token revocation, terminal removal,
+database bypasses, and injected role/removal audit failures proving complete
+rollback. The Portal API tests bind role changes and empty-body removal to the
+ETag and idempotency headers; the local Portal UI requires an explicit removal
+confirmation and disables removal of the final Owner.
 
-Account creation/linking, invitations, member suspension/removal, OIDC callback
-and Portal session endpoints, MFA enrollment/recovery, reviewer SSO, and
-production abuse controls are not implemented by S5K.
+Account creation/linking, invitations, member suspension, OIDC callback and
+Portal session endpoints, MFA enrollment/recovery, reviewer SSO, and production
+abuse controls remain unimplemented. Re-inviting a removed external identity
+requires a future, separately versioned membership record design; this endpoint
+never reactivates a removed row.

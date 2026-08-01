@@ -9,6 +9,7 @@ part of the CardputerZero device image.
 - `POST /oauth/device/code`, `/oauth/device/authorize`, and `/oauth/token`;
 - `GET /v1/teams/{team_id}`;
 - `POST /v1/teams/{team_id}/members/{member_id}:set-role`;
+- `POST /v1/teams/{team_id}/members/{member_id}:remove`;
 - `POST /v1/apps` and `GET /v1/apps/{app_id}`;
 - `POST /v1/apps/{app_id}/submissions`;
 - `PUT /v1/submissions/{submission_id}/parts/{part_name}`;
@@ -54,11 +55,13 @@ or Catalog state; production enforcement remains blocked on approved policy,
 dual control, reversible suppression, and operations ownership. See
 `STORE-MODERATION-V1.md`.
 
-Team reads expose only the caller's bounded member list. Role changes require
-an owner with `store.teams.write`, a strong team ETag, and MFA authenticated
-within five minutes. The transaction advances Team/member versions, preserves
-the last Owner, revokes the target member's existing tokens, and emits one
-audit/outbox event. The external OIDC and Portal BFF boundary is frozen in
+Team reads expose only the caller's bounded active-member list. Role changes
+and terminal member removal require an owner with `store.teams.write`, a strong
+team ETag, and MFA authenticated within five minutes. The transaction advances
+Team/member versions, preserves the last active Owner, revokes the target
+member's existing tokens, and emits one audit/outbox event. Removal retains the
+identity row for references and audit while excluding it from authentication.
+The external OIDC and Portal BFF boundary is frozen in
 `STORE-IDENTITY-TEAMS.md`; credentials are outside this service.
 
 The upload endpoint accepts one contiguous chunk of at most 256 KiB and checks
@@ -142,8 +145,9 @@ developer/reviewer messages, approved-only Release creation, concurrent Release
 uniqueness, scheduling, publication queueing, pause/resume/removal, publication
 retry, Submission withdrawal/cleanup/replay, injected transaction rollback and
 append-only database triggers, Team isolation, MFA freshness, last-Owner
-protection, role-change replay, immediate token revocation, double-approved
-Release enforcement and secondary-decision rollback.
+protection, role-change/removal replay, immediate token revocation, terminal
+membership database enforcement, double-approved Release enforcement and
+secondary-decision rollback.
 
 The same database gate covers privacy-field rejection at report intake, exact
 anonymous replay, published identity binding, operator scope/role/2FA checks,
@@ -151,7 +155,7 @@ SLA queue ordering, Team-isolated notices, one-time appeals, atomic appeal
 resolution, revision immutability, and absence of identity/network columns in
 the report table.
 
-Identity account linking, invitations, Portal sessions, dynamic malware
+Identity account linking, invitations, member suspension, Portal sessions, dynamic malware
 intelligence, production reviewer SSO, production object storage, general outbox
 delivery and garbage collection are not implemented by this HTTP slice.
 Isolated signing/Catalog publication and transparency logging are implemented by
