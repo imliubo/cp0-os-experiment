@@ -597,6 +597,144 @@
           "default": { "$ref": "#/components/responses/Problem" }
         }
       }
+    },
+    "/reports/v1/content": {
+      "post": {
+        "operationId": "submitContentReport",
+        "security": [],
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/ContentReportRequest" } }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Privacy-minimized report accepted for an exact published release",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ContentReport" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/moderation/reports": {
+      "get": {
+        "operationId": "listModerationReports",
+        "parameters": [
+          { "name": "cursor", "in": "query", "schema": { "type": "string", "maxLength": 128 } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Open reports ordered by provisional acknowledgement deadline",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ModerationReportQueue" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/moderation/reports/{report_id}:decide": {
+      "post": {
+        "operationId": "decideContentReport",
+        "parameters": [
+          { "$ref": "#/components/parameters/ReportId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/ModerationDecisionRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Structured triage decision committed",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ModerationDecision" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/apps/{app_id}/moderation-notices": {
+      "get": {
+        "operationId": "listDeveloperModerationNotices",
+        "parameters": [
+          { "$ref": "#/components/parameters/AppId" },
+          { "name": "cursor", "in": "query", "schema": { "type": "string", "maxLength": 128 } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Team-scoped developer notices",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/DeveloperNoticeList" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/moderation/notices/{notice_id}:appeal": {
+      "post": {
+        "operationId": "appealDeveloperNotice",
+        "parameters": [
+          { "$ref": "#/components/parameters/NoticeId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/AppealRequest" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "One structured appeal created",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ModerationAppeal" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/moderation/appeals/{appeal_id}:decide": {
+      "post": {
+        "operationId": "decideModerationAppeal",
+        "parameters": [
+          { "$ref": "#/components/parameters/AppealId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/AppealDecisionRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Appeal and related notice/report resolved atomically",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ModerationAppeal" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
     }
   },
   "components": {
@@ -624,6 +762,24 @@
         "in": "path",
         "required": true,
         "schema": { "$ref": "#/components/schemas/ReleaseId" }
+      },
+      "ReportId": {
+        "name": "report_id",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ReportId" }
+      },
+      "NoticeId": {
+        "name": "notice_id",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/NoticeId" }
+      },
+      "AppealId": {
+        "name": "appeal_id",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/AppealId" }
       },
       "TeamId": {
         "name": "team_id",
@@ -692,6 +848,9 @@
       "TeamRole": { "enum": ["owner", "developer", "release-manager", "viewer"] },
       "SubmissionId": { "type": "string", "pattern": "^sub_[0-9a-f]{32}$" },
       "ReleaseId": { "type": "string", "pattern": "^rel_[0-9a-f]{32}$" },
+      "ReportId": { "type": "string", "pattern": "^report_[0-9a-f]{32}$" },
+      "NoticeId": { "type": "string", "pattern": "^notice_[0-9a-f]{32}$" },
+      "AppealId": { "type": "string", "pattern": "^appeal_[0-9a-f]{32}$" },
       "Sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
       "SemanticVersion": {
         "type": "string",
@@ -1090,6 +1249,165 @@
             "items": { "$ref": "#/components/schemas/EditorialCollection" }
           },
           "resource_version": { "type": "integer", "minimum": 1 },
+          "updated_unix_seconds": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ContentReportReason": {
+        "enum": ["malware", "privacy", "fraud", "harmful-content", "age-rating", "other"]
+      },
+      "ModerationDecisionReason": {
+        "enum": [
+          "duplicate", "insufficient-evidence", "policy-violation", "security-review",
+          "identity-confirmed", "remediation-accepted"
+        ]
+      },
+      "ContentReportRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["release_id", "app_id", "version", "reason_code"],
+        "properties": {
+          "release_id": { "$ref": "#/components/schemas/ReleaseId" },
+          "app_id": { "$ref": "#/components/schemas/AppId" },
+          "version": { "$ref": "#/components/schemas/SemanticVersion" },
+          "reason_code": { "$ref": "#/components/schemas/ContentReportReason" }
+        }
+      },
+      "ContentReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "report_id", "release_id", "app_id", "version", "reason_code", "sla_class",
+          "state", "disposition", "decision_reason_codes",
+          "acknowledgement_due_unix_seconds", "resolution_due_unix_seconds",
+          "acknowledged_unix_seconds", "closed_unix_seconds", "resource_version",
+          "created_unix_seconds", "updated_unix_seconds"
+        ],
+        "properties": {
+          "report_id": { "$ref": "#/components/schemas/ReportId" },
+          "release_id": { "$ref": "#/components/schemas/ReleaseId" },
+          "app_id": { "$ref": "#/components/schemas/AppId" },
+          "version": { "$ref": "#/components/schemas/SemanticVersion" },
+          "reason_code": { "$ref": "#/components/schemas/ContentReportReason" },
+          "sla_class": { "enum": ["security", "standard"] },
+          "state": { "enum": ["submitted", "closed-no-action", "notice-issued", "security-escalated", "closed-after-appeal"] },
+          "disposition": { "type": ["string", "null"], "enum": ["no-action", "developer-notice", "security-escalation", null] },
+          "decision_reason_codes": {
+            "type": "array", "maxItems": 4, "uniqueItems": true,
+            "items": { "$ref": "#/components/schemas/ModerationDecisionReason" }
+          },
+          "acknowledgement_due_unix_seconds": { "type": "integer", "minimum": 1 },
+          "resolution_due_unix_seconds": { "type": "integer", "minimum": 1 },
+          "acknowledged_unix_seconds": { "type": ["integer", "null"], "minimum": 1 },
+          "closed_unix_seconds": { "type": ["integer", "null"], "minimum": 1 },
+          "resource_version": { "type": "integer", "minimum": 1 },
+          "created_unix_seconds": { "type": "integer", "minimum": 1 },
+          "updated_unix_seconds": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ModerationDecisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["disposition", "reason_codes"],
+        "properties": {
+          "disposition": { "enum": ["no-action", "developer-notice", "security-escalation"] },
+          "reason_codes": {
+            "type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true,
+            "items": { "$ref": "#/components/schemas/ModerationDecisionReason" }
+          }
+        }
+      },
+      "DeveloperNotice": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "notice_id", "report_id", "release_id", "app_id", "version", "state",
+          "reason_codes", "appeal_deadline_unix_seconds", "appeal_id", "appeal_state",
+          "resource_version", "created_unix_seconds", "updated_unix_seconds"
+        ],
+        "properties": {
+          "notice_id": { "$ref": "#/components/schemas/NoticeId" },
+          "report_id": { "$ref": "#/components/schemas/ReportId" },
+          "release_id": { "$ref": "#/components/schemas/ReleaseId" },
+          "app_id": { "$ref": "#/components/schemas/AppId" },
+          "version": { "$ref": "#/components/schemas/SemanticVersion" },
+          "state": { "enum": ["open", "appealed", "resolved-accepted", "resolved-upheld"] },
+          "reason_codes": {
+            "type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true,
+            "items": { "$ref": "#/components/schemas/ModerationDecisionReason" }
+          },
+          "appeal_deadline_unix_seconds": { "type": "integer", "minimum": 1 },
+          "appeal_id": { "type": ["string", "null"], "pattern": "^appeal_[0-9a-f]{32}$" },
+          "appeal_state": { "type": ["string", "null"], "enum": ["pending", "accepted", "upheld", null] },
+          "resource_version": { "type": "integer", "minimum": 1 },
+          "created_unix_seconds": { "type": "integer", "minimum": 1 },
+          "updated_unix_seconds": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ModerationDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["report", "notice"],
+        "properties": {
+          "report": { "$ref": "#/components/schemas/ContentReport" },
+          "notice": { "oneOf": [{ "$ref": "#/components/schemas/DeveloperNotice" }, { "type": "null" }] }
+        }
+      },
+      "ModerationReportQueue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "next_cursor"],
+        "properties": {
+          "items": { "type": "array", "maxItems": 50, "items": { "$ref": "#/components/schemas/ContentReport" } },
+          "next_cursor": { "type": ["string", "null"], "maxLength": 128 }
+        }
+      },
+      "DeveloperNoticeList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "next_cursor"],
+        "properties": {
+          "items": { "type": "array", "maxItems": 50, "items": { "$ref": "#/components/schemas/DeveloperNotice" } },
+          "next_cursor": { "type": ["string", "null"], "maxLength": 128 }
+        }
+      },
+      "AppealRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ground"],
+        "properties": {
+          "ground": { "enum": ["identity-mismatch", "policy-misapplied", "remediated", "other"] }
+        }
+      },
+      "AppealDecisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision", "reason_codes"],
+        "properties": {
+          "decision": { "enum": ["accepted", "upheld"] },
+          "reason_codes": {
+            "type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true,
+            "items": { "$ref": "#/components/schemas/ModerationDecisionReason" }
+          }
+        }
+      },
+      "ModerationAppeal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "appeal_id", "notice_id", "ground", "state", "decision_reason_codes",
+          "resource_version", "created_unix_seconds", "updated_unix_seconds"
+        ],
+        "properties": {
+          "appeal_id": { "$ref": "#/components/schemas/AppealId" },
+          "notice_id": { "$ref": "#/components/schemas/NoticeId" },
+          "ground": { "enum": ["identity-mismatch", "policy-misapplied", "remediated", "other"] },
+          "state": { "enum": ["pending", "accepted", "upheld"] },
+          "decision_reason_codes": {
+            "type": "array", "maxItems": 4, "uniqueItems": true,
+            "items": { "$ref": "#/components/schemas/ModerationDecisionReason" }
+          },
+          "resource_version": { "type": "integer", "minimum": 1 },
+          "created_unix_seconds": { "type": "integer", "minimum": 1 },
           "updated_unix_seconds": { "type": "integer", "minimum": 1 }
         }
       },

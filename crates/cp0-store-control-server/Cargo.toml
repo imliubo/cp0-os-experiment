@@ -14,6 +14,7 @@ cp0-store-metadata = { path = "../cp0-store-metadata" }
 cp0-store-risk = { path = "../cp0-store-risk" }
 serde.workspace = true
 serde_json.workspace = true
+semver.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
 tokio.workspace = true

@@ -117,14 +117,14 @@ S8A 已新增 Catalog v4 editorial 层：Today 主推荐、1-2 个专题和每�
 且 published 的 Release；运营 revision、Publisher snapshot、设备 `today` IPC 和 320x170 Shell
 导航形成完整纵向链路。引用失效时 Publisher 安全退回 v3，不发布过期推荐。
 
-- [ ] 实现 Identity/Teams、App Registry、Submission 和 Release 服务。
-  当前 App Registry、Submission 上传/finalize/read/withdraw、独立双审 Review 和 Release 控制
-  纵向切片已完成；OAuth 开发者 Device Flow、Team 读取/角色管理已完成；Identity 账户链接、
-  邀请/移除和 Portal 会话未完成；Publisher 通过受约束 outbox 接入。
+- [x] 实现 App Registry、Submission、独立双审 Review 和 Release 服务主体。
+  App Registry、Submission 上传/finalize/read/withdraw、Release 控制、OAuth 开发者 Device Flow、
+  Team 读取/角色管理和受约束 Publisher outbox 均已有 PostgreSQL/HTTP 验收。
+- [ ] 完成 Identity 自助闭环：账户链接、邀请/移除、Portal 会话和生产身份提供方接入。
 - [x] 实现隔离 Scan Worker：包格式、WASM、权限、资源和恶意样本检查。
   当前为无 IP 网络、只读对象根的确定性结构/能力扫描；动态规则、信誉源和运营隔离环境待生产化。
-- [ ] 实现 Review Console、结构化问题、回复、二审和双人审批。
-  当前结构化问题、回复、独立二审、双人审批、风险分级和 Console UI 已完成；生产 SSO 待实现。
+- [x] 实现 Review Console、结构化问题、回复、二审、双人审批和风险分级。
+- [ ] 接入 Review Console 生产 workforce SSO/BFF，并完成访问撤销演练。
 - [x] 实现不可变发布 generation、事务 outbox、append-only audit 和 transparency log。
   当前 transparency v1 覆盖完整 Catalog snapshot 历史；生产对象存储、compact proof 和
   witness/gossip 属于后续基础设施。
@@ -205,10 +205,17 @@ S8B 已完成默认关闭的 Store 周聚合：设备只保留安装、启动和
 策略撤销或关闭同意会原子清空；失败重试复用随机批次，后端仅接受上一完整周和已发布精确版本，
 公开聚合需至少 20 个批次。具体契约见 `STORE-METRICS-V1.md`。
 
+S8C 已实现内容治理的非生产纵向切片：匿名结构化举报不接收自由文本、联系方式、设备身份、
+IP 或 User-Agent；控制面提供有界 SLA 队列、结构化开发者通知和一次性申诉。当前 SLA 常量及
+原因词表仅用于工程验收，生产启用、自动处置和最终政策文本必须通过产品/法务/安全批准。
+具体契约见 `STORE-MODERATION-V1.md`。
+
 - [x] Today/专题运营工具只能引用 approved Release。
 - [x] 建立最小化、可选、去标识化的安装、启动和崩溃聚合指标。
 - [ ] 搜索词默认不上传；任何实验功能需要单独同意和保留期限。
 - [ ] 建立内容举报、下架申诉、开发者通知和安全响应 SLA。
+  S8C 先交付结构化举报、SLA 队列、通知与申诉 API；自动下架、双人处置批准、外部安全值班和
+  生产 SLA 尚未完成，因此本项保持未关闭。
 - [ ] 进行容量、CDN 故障、数据库恢复、队列重放和签名服务演练。
 - [ ] 独立隐私、安全和审核公平性评审。
 

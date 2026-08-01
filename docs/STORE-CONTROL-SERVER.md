@@ -20,7 +20,13 @@ part of the CardputerZero device image.
 - `POST /v1/review/submissions/{submission_id}:begin`;
 - `POST /v1/review/submissions/{submission_id}/decisions`;
 - `POST /v1/releases` and `GET /v1/releases/{release_id}`;
-- `POST /v1/releases/{release_id}:schedule|publish|pause|resume|remove`.
+- `POST /v1/releases/{release_id}:schedule|publish|pause|resume|remove`;
+- `POST /reports/v1/content`;
+- `GET /v1/moderation/reports` and
+  `POST /v1/moderation/reports/{report_id}:decide`;
+- `GET /v1/apps/{app_id}/moderation-notices`;
+- `POST /v1/moderation/notices/{notice_id}:appeal` and
+  `POST /v1/moderation/appeals/{appeal_id}:decide`.
 
 All writes authenticate the hashed bearer token and re-read current team role,
 2FA state and scope inside a PostgreSQL `SERIALIZABLE` transaction. App writes
@@ -35,6 +41,18 @@ live owner/developer identity with the exact scope and enabled 2FA. Poll timing,
 one-time exchange, approval idempotency, state transitions, audit, and outbox
 are enforced transactionally. See `STORE-OAUTH-DEVICE-FLOW.md` for the protocol
 and the remaining production Identity/Teams boundary.
+
+Moderation v1 is a non-production engineering slice. Public intake accepts only
+an exact published Release and one fixed reason; it requires a random
+idempotency key and accepts no free text, account/device identity, contact data,
+request timestamp, IP, User-Agent, log, or attachment. An active 2FA `admin`
+with the exact `store.moderation` scope can triage the bounded SLA queue. Team
+owners/developers can read only their App notices and create one structured
+appeal. All transitions are serializable, versioned, idempotent, audited,
+outboxed, and backed by append-only revisions. The slice does not alter Release
+or Catalog state; production enforcement remains blocked on approved policy,
+dual control, reversible suppression, and operations ownership. See
+`STORE-MODERATION-V1.md`.
 
 Team reads expose only the caller's bounded member list. Role changes require
 an owner with `store.teams.write`, a strong team ETag, and MFA authenticated
@@ -126,6 +144,12 @@ retry, Submission withdrawal/cleanup/replay, injected transaction rollback and
 append-only database triggers, Team isolation, MFA freshness, last-Owner
 protection, role-change replay, immediate token revocation, double-approved
 Release enforcement and secondary-decision rollback.
+
+The same database gate covers privacy-field rejection at report intake, exact
+anonymous replay, published identity binding, operator scope/role/2FA checks,
+SLA queue ordering, Team-isolated notices, one-time appeals, atomic appeal
+resolution, revision immutability, and absence of identity/network columns in
+the report table.
 
 Identity account linking, invitations, Portal sessions, dynamic malware
 intelligence, production reviewer SSO, production object storage, general outbox

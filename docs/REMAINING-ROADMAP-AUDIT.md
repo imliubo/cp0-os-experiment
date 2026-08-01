@@ -26,6 +26,10 @@
 - 设备端 Today/Apps/Search/Updates、分页搜索、Catalog v3 富媒体详情、下载/更新队列、
   中断恢复和默认关闭的自动更新均已实现；Catalog v4 只投影 approved Release 的 Today
   editorial，默认关闭且无设备身份的周聚合指标已完成设备与 PostgreSQL 纵向切片；
+- 内容治理 S8C 已完成非生产 PostgreSQL/HTTP 纵向切片：匿名入口只接受已发布精确版本和固定
+  原因，不保存自由文本、联系方式、设备/账户/网络身份；有界 SLA 队列、Team 隔离通知、一次性
+  申诉、精确重放、审计/outbox 和 append-only revision 已验收。自动下架、双人审批、外部安全
+  值班、生产 SLA/保留期与政策文本仍是外部门禁；
 - 后端可从 approved Release 自动发布，`cp0ctl` OAuth 已接入；Portal 的账户、会话和团队管理
   仍未形成完整自助流程；
 - 当前 Store 安全底座可以复用，详细阶段见 `STORE-ROADMAP.md`。
@@ -84,5 +88,5 @@
 | Phase 2 | 核心窗口/可信 UI/输入及扩展系统体验本地实现已完成 | 24 小时证据和最终真机部署 |
 | Phase 3 | Runtime、sandbox 和能力 broker 已实现 | 音频/GPIO/存储/相机/LoRa 的对应真机门禁 |
 | Phase 4 | SDK 1.0、CLI、模拟器和 DevKit 已实现 | 后续 Store submit CLI 属 Store 产品阶段 |
-| Phase 5 | 双签名、原子安装、Store 设备体验、OAuth、Team 角色管理、隔离扫描、独立双审、Review Console、Catalog v4/Today、自动更新和匿名周聚合纵向切片已实现 | Identity 登录/邀请/会话、Review 生产 SSO、生产 HSM、运营/灾备演练与六步真机证据 |
+| Phase 5 | 双签名、原子安装、Store 设备体验、OAuth、Team 角色管理、隔离扫描、独立双审、Review Console、Catalog v4/Today、自动更新、匿名周聚合和非生产内容治理纵向切片已实现 | Identity 登录/邀请/会话、Review 生产 SSO、生产 HSM、正式治理政策/执行、运营/灾备演练与六步真机证据 |
 | Phase 6 | profile、验证器和安全工具已实现 | 性能/功耗、烧录介质、A/B 硬件和第三方评审 |

@@ -416,6 +416,7 @@ dependencies = [
  "cp0-store-metadata",
  "cp0-store-metrics",
  "cp0-store-risk",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

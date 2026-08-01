@@ -34,6 +34,8 @@ use sqlx::{Postgres, Row, Transaction};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
+mod moderation;
+
 pub const MAX_REQUEST_BYTES: usize = 32 * 1024;
 pub const MAX_UPLOAD_CHUNK_BYTES: usize = 256 * 1024;
 const IDEMPOTENCY_TTL_SECONDS: i64 = 24 * 60 * 60;
@@ -2553,7 +2555,7 @@ impl StoreControlService {
         let identity = authenticate_store_operator(&mut transaction, &token_sha256)
             .await
             .map_err(ApiError::from_transaction)?;
-        require_editorial_access(&identity).map_err(|error| error)?;
+        require_editorial_access(&identity)?;
         let layout = load_editorial_layout(&mut transaction, false)
             .await
             .map_err(ApiError::from_transaction)?;
@@ -3059,6 +3061,10 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
 pub fn router(service: StoreControlService) -> Router {
     Router::new()
         .route(
+            "/reports/v1/content",
+            post(moderation::post_content_report).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
             "/metrics/v1/aggregate",
             post(post_aggregate_metrics).layer(DefaultBodyLimit::max(MAX_METRICS_REPORT_BYTES)),
         )
@@ -3127,6 +3133,26 @@ pub fn router(service: StoreControlService) -> Router {
                 .post(post_today_editorial)
                 .put(put_today_editorial)
                 .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/v1/moderation/reports",
+            get(moderation::list_moderation_reports),
+        )
+        .route(
+            "/v1/moderation/reports/{report_action}",
+            post(moderation::decide_content_report).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/v1/apps/{app_id}/moderation-notices",
+            get(moderation::list_developer_notices),
+        )
+        .route(
+            "/v1/moderation/notices/{notice_action}",
+            post(moderation::appeal_notice).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/v1/moderation/appeals/{appeal_action}",
+            post(moderation::decide_appeal).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
         )
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(fallback)

@@ -37,6 +37,8 @@ const EDITOR_NO_2FA_TOKEN: &str = "editor-no2fa-token-000000000000000001";
 const EDITOR_EXPIRED_TOKEN: &str = "editor-expired-token-00000000000000001";
 const EDITOR_REVOKED_TOKEN: &str = "editor-revoked-token-00000000000000001";
 const EDITOR_SUSPENDED_TOKEN: &str = "editor-suspended-token-000000000000001";
+const MODERATOR_TOKEN: &str = "moderator-token-000000000000000000001";
+const MODERATOR_NO_2FA_TOKEN: &str = "moderator-no2fa-token-00000000000001";
 
 const TEAM_A: &str = "team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TEAM_B: &str = "team_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -52,6 +54,8 @@ const REVIEWER_NO_2FA: &str = "reviewer_cccccccccccccccccccccccccccccccc";
 const EDITOR: &str = "operator_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const EDITOR_NO_2FA: &str = "operator_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const EDITOR_SUSPENDED: &str = "operator_cccccccccccccccccccccccccccccccc";
+const MODERATOR: &str = "operator_dddddddddddddddddddddddddddddddd";
+const MODERATOR_NO_2FA: &str = "operator_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
 struct HttpResult {
     status: StatusCode,
@@ -89,10 +93,358 @@ async fn postgres_http_transaction_acceptance() {
     verify_team_management(&application, &pool).await;
     verify_editorial_backend(&application, &pool).await;
     verify_metrics_backend(&application, &pool).await;
+    verify_moderation_backend(&application, &pool).await;
     verify_database_immutability(&pool).await;
     tokio::fs::remove_dir_all(object_root)
         .await
         .expect("remove repository-local test object store");
+}
+
+async fn verify_moderation_backend(application: &Router, pool: &PgPool) {
+    const APP_ID: &str = "dev.cardputerzero.metrics-test";
+    const VERSION: &str = "1.0.0";
+    const RELEASE_ID: &str = "rel_70707070707070707070707070707070";
+    let report_body = json!({
+        "release_id": RELEASE_ID,
+        "app_id": APP_ID,
+        "version": VERSION,
+        "reason_code": "privacy"
+    });
+
+    let missing_key = call(
+        application.clone(),
+        Method::POST,
+        "/reports/v1/content",
+        None,
+        None,
+        Some(report_body.clone()),
+    )
+    .await;
+    assert_problem(&missing_key, StatusCode::BAD_REQUEST, "invalid-request");
+
+    let mut identity_leak = report_body.clone();
+    identity_leak["device_id"] = json!("forbidden");
+    let rejected_identity = call(
+        application.clone(),
+        Method::POST,
+        "/reports/v1/content",
+        None,
+        Some("moderation-report-bad1"),
+        Some(identity_leak),
+    )
+    .await;
+    assert_problem(
+        &rejected_identity,
+        StatusCode::BAD_REQUEST,
+        "invalid-request",
+    );
+
+    let submitted = call(
+        application.clone(),
+        Method::POST,
+        "/reports/v1/content",
+        None,
+        Some("moderation-report-0001"),
+        Some(report_body.clone()),
+    )
+    .await;
+    assert_eq!(submitted.status, StatusCode::ACCEPTED);
+    assert_eq!(etag_version(&submitted), 1);
+    let submitted_body: Value = serde_json::from_slice(&submitted.body).unwrap();
+    let report_id = submitted_body["report_id"].as_str().unwrap().to_owned();
+    assert_eq!(submitted_body["state"], "submitted");
+    assert_eq!(submitted_body["sla_class"], "security");
+    assert_eq!(
+        submitted_body["acknowledgement_due_unix_seconds"]
+            .as_u64()
+            .unwrap()
+            - submitted_body["created_unix_seconds"].as_u64().unwrap(),
+        4 * 60 * 60
+    );
+    assert_eq!(
+        submitted_body["resolution_due_unix_seconds"]
+            .as_u64()
+            .unwrap()
+            - submitted_body["created_unix_seconds"].as_u64().unwrap(),
+        3 * 24 * 60 * 60
+    );
+    assert!(submitted_body.get("device_id").is_none());
+
+    let replay = call(
+        application.clone(),
+        Method::POST,
+        "/reports/v1/content",
+        None,
+        Some("moderation-report-0001"),
+        Some(report_body.clone()),
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::ACCEPTED);
+    assert_eq!(replay.body, submitted.body);
+
+    let mut conflicting_body = report_body.clone();
+    conflicting_body["reason_code"] = json!("fraud");
+    let conflict = call(
+        application.clone(),
+        Method::POST,
+        "/reports/v1/content",
+        None,
+        Some("moderation-report-0001"),
+        Some(conflicting_body),
+    )
+    .await;
+    assert_problem(&conflict, StatusCode::CONFLICT, "idempotency-conflict");
+
+    let editor_queue = call(
+        application.clone(),
+        Method::GET,
+        "/v1/moderation/reports?limit=25",
+        Some(EDITOR_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&editor_queue, StatusCode::FORBIDDEN, "forbidden");
+    let queue = call(
+        application.clone(),
+        Method::GET,
+        "/v1/moderation/reports?limit=25",
+        Some(MODERATOR_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(queue.status, StatusCode::OK);
+    let queue_body: Value = serde_json::from_slice(&queue.body).unwrap();
+    assert!(
+        queue_body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["report_id"] == report_id)
+    );
+
+    let no_2fa = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/moderation/reports/{report_id}:decide"),
+        MODERATOR_NO_2FA_TOKEN,
+        "moderation-decision-no2fa",
+        1,
+        Some(json!({
+            "disposition": "developer-notice",
+            "reason_codes": ["policy-violation"]
+        })),
+    )
+    .await;
+    assert_problem(&no_2fa, StatusCode::FORBIDDEN, "two-factor-required");
+
+    let decision_body = json!({
+        "disposition": "developer-notice",
+        "reason_codes": ["policy-violation"]
+    });
+    let decided = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/moderation/reports/{report_id}:decide"),
+        MODERATOR_TOKEN,
+        "moderation-decision-0001",
+        1,
+        Some(decision_body.clone()),
+    )
+    .await;
+    assert_eq!(decided.status, StatusCode::OK);
+    assert_eq!(etag_version(&decided), 2);
+    let decided_body: Value = serde_json::from_slice(&decided.body).unwrap();
+    assert_eq!(decided_body["report"]["state"], "notice-issued");
+    assert_eq!(decided_body["notice"]["state"], "open");
+    let notice_id = decided_body["notice"]["notice_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let decision_replay = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/moderation/reports/{report_id}:decide"),
+        MODERATOR_TOKEN,
+        "moderation-decision-0001",
+        1,
+        Some(decision_body),
+    )
+    .await;
+    assert_eq!(decision_replay.status, StatusCode::OK);
+    assert_eq!(decision_replay.body, decided.body);
+
+    let other_team_notices = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/apps/{APP_ID}/moderation-notices"),
+        Some(OWNER_B_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&other_team_notices, StatusCode::NOT_FOUND, "not-found");
+    let notices = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/apps/{APP_ID}/moderation-notices"),
+        Some(OWNER_A_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(notices.status, StatusCode::OK);
+    let notices_body: Value = serde_json::from_slice(&notices.body).unwrap();
+    assert_eq!(notices_body["items"][0]["notice_id"], notice_id);
+
+    let appeal = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/moderation/notices/{notice_id}:appeal"),
+        OWNER_A_TOKEN,
+        "moderation-appeal-0001",
+        1,
+        Some(json!({"ground": "policy-misapplied"})),
+    )
+    .await;
+    assert_eq!(appeal.status, StatusCode::CREATED);
+    assert_eq!(etag_version(&appeal), 1);
+    let appeal_body: Value = serde_json::from_slice(&appeal.body).unwrap();
+    assert_eq!(appeal_body["state"], "pending");
+    let appeal_id = appeal_body["appeal_id"].as_str().unwrap().to_owned();
+
+    let appeal_replay = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/moderation/notices/{notice_id}:appeal"),
+        OWNER_A_TOKEN,
+        "moderation-appeal-0001",
+        1,
+        Some(json!({"ground": "policy-misapplied"})),
+    )
+    .await;
+    assert_eq!(appeal_replay.status, StatusCode::CREATED);
+    assert_eq!(appeal_replay.body, appeal.body);
+
+    let resolved = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/moderation/appeals/{appeal_id}:decide"),
+        MODERATOR_TOKEN,
+        "moderation-appeal-decision1",
+        1,
+        Some(json!({
+            "decision": "accepted",
+            "reason_codes": ["remediation-accepted"]
+        })),
+    )
+    .await;
+    assert_eq!(resolved.status, StatusCode::OK);
+    assert_eq!(etag_version(&resolved), 2);
+    let resolved_body: Value = serde_json::from_slice(&resolved.body).unwrap();
+    assert_eq!(resolved_body["state"], "accepted");
+
+    let report_state: String =
+        sqlx::query_scalar("SELECT state FROM store_content_reports WHERE report_id = $1")
+            .bind(&report_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(report_state, "closed-after-appeal");
+    let notice_state: String =
+        sqlx::query_scalar("SELECT state FROM store_developer_notices WHERE notice_id = $1")
+            .bind(&notice_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(notice_state, "resolved-accepted");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM store_content_report_revisions WHERE report_id = $1",
+        )
+        .bind(&report_id)
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        3
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "WITH clock_value AS (\
+                 SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT AS now\
+             ) INSERT INTO store_content_reports (report_id, release_id, app_id, version, \
+                 reason_code, sla_class, state, disposition, decision_reason_codes, \
+                 acknowledgement_due_unix_seconds, resolution_due_unix_seconds, \
+                 acknowledged_unix_seconds, closed_unix_seconds, resource_version, \
+                 created_unix_seconds, updated_unix_seconds) \
+             SELECT 'report_f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1', $1, $2, $3, 'privacy', \
+                 'security', 'closed-no-action', 'no-action', ARRAY['duplicate'], \
+                 now + 14400, now + 259200, now, now, 1, now, now FROM clock_value",
+        )
+        .bind(RELEASE_ID)
+        .bind(APP_ID)
+        .bind(VERSION)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "WITH clock_value AS (\
+                 SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT AS now\
+             ) INSERT INTO store_content_reports (report_id, release_id, app_id, version, \
+                 reason_code, sla_class, state, disposition, decision_reason_codes, \
+                 acknowledgement_due_unix_seconds, resolution_due_unix_seconds, \
+                 acknowledged_unix_seconds, closed_unix_seconds, resource_version, \
+                 created_unix_seconds, updated_unix_seconds) \
+             SELECT 'report_f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2', $1, $2, $3, 'privacy', \
+                 'security', 'submitted', NULL, '{}', now + 14400, now + 259200, \
+                 NULL, NULL, 1, now, now FROM clock_value",
+        )
+        .bind(RELEASE_ID)
+        .bind(APP_ID)
+        .bind(VERSION)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO store_content_report_revisions (report_id, resource_version, \
+             actor_id, state, disposition, decision_reason_codes, request_sha256, \
+             created_unix_seconds) VALUES ($1, 4, $2, 'closed-after-appeal', \
+             'developer-notice', ARRAY['policy-violation'], $3, \
+             EXTRACT(EPOCH FROM clock_timestamp())::BIGINT)",
+        )
+        .bind(&report_id)
+        .bind(MODERATOR)
+        .bind("f".repeat(64))
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM store_content_report_revisions WHERE report_id = $1")
+            .bind(&report_id)
+            .execute(pool)
+            .await,
+        "55000",
+    );
+    let report_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name FROM information_schema.columns \
+         WHERE table_schema = 'public' AND table_name = 'store_content_reports'",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert!(report_columns.iter().all(|column| {
+        !matches!(
+            column.as_str(),
+            "device_id" | "account_id" | "ip_address" | "user_agent" | "body" | "contact"
+        )
+    }));
 }
 
 async fn verify_metrics_backend(application: &Router, pool: &PgPool) {
@@ -4331,7 +4683,10 @@ async fn reset_database(pool: &PgPool) {
         .await
         .unwrap();
     pool.execute(
-        "TRUNCATE store_metric_batches, store_metric_aggregates, \
+        "TRUNCATE store_moderation_appeal_revisions, store_moderation_appeals, \
+         store_developer_notice_revisions, store_developer_notices, \
+         store_content_report_revisions, store_content_reports, \
+         store_metric_batches, store_metric_aggregates, \
          store_package_artifacts, store_catalog_snapshots, store_publication_jobs, \
          store_editorial_revisions, store_editorial_layouts, \
          store_operator_access_tokens, store_operators, \
@@ -4884,6 +5239,20 @@ async fn seed_identities(pool: &PgPool) {
             true,
             "suspended",
         ),
+        (
+            MODERATOR,
+            "moderator@cardputerzero.dev",
+            "admin",
+            true,
+            "active",
+        ),
+        (
+            MODERATOR_NO_2FA,
+            "moderator-no2fa@cardputerzero.dev",
+            "admin",
+            false,
+            "active",
+        ),
     ] {
         sqlx::query(
             "INSERT INTO store_operators (operator_id, email, role, two_factor_enabled, state, \
@@ -4922,6 +5291,23 @@ async fn seed_identities(pool: &PgPool) {
         .bind(expires)
         .bind(revoked)
         .bind(created)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    for (token, operator_id) in [
+        (MODERATOR_TOKEN, MODERATOR),
+        (MODERATOR_NO_2FA_TOKEN, MODERATOR_NO_2FA),
+    ] {
+        sqlx::query(
+            "INSERT INTO store_operator_access_tokens (token_sha256, operator_id, scopes, \
+             expires_unix_seconds, revoked, created_unix_seconds) \
+             VALUES ($1, $2, ARRAY['store.moderation'], $3, FALSE, $4)",
+        )
+        .bind(sha256_hex(token.as_bytes()))
+        .bind(operator_id)
+        .bind(now + 3600)
+        .bind(now)
         .execute(pool)
         .await
         .unwrap();
@@ -5080,12 +5466,13 @@ fn assert_oauth_headers(result: &HttpResult) {
 
 fn assert_sqlstate<T: std::fmt::Debug>(result: Result<T, sqlx::Error>, expected: &str) {
     let error = result.expect_err("database mutation should be rejected");
+    let code = error
+        .as_database_error()
+        .and_then(|database| database.code());
     assert_eq!(
-        error
-            .as_database_error()
-            .and_then(|database| database.code())
-            .as_deref(),
-        Some(expected)
+        code.as_deref(),
+        Some(expected),
+        "unexpected database rejection: {error:?}"
     );
 }
 

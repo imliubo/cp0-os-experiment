@@ -35,6 +35,13 @@ jq -e '
   .paths["/v1/editorial/today"].get.operationId == "getTodayEditorial" and
   .paths["/v1/editorial/today"].post.operationId == "createTodayEditorial" and
   .paths["/v1/editorial/today"].put.operationId == "updateTodayEditorial" and
+  .paths["/reports/v1/content"].post.operationId == "submitContentReport" and
+  .paths["/reports/v1/content"].post.security == [] and
+  .paths["/v1/moderation/reports"].get.operationId == "listModerationReports" and
+  .paths["/v1/moderation/reports/{report_id}:decide"].post.operationId == "decideContentReport" and
+  .paths["/v1/apps/{app_id}/moderation-notices"].get.operationId == "listDeveloperModerationNotices" and
+  .paths["/v1/moderation/notices/{notice_id}:appeal"].post.operationId == "appealDeveloperNotice" and
+  .paths["/v1/moderation/appeals/{appeal_id}:decide"].post.operationId == "decideModerationAppeal" and
   .components.schemas.SubmissionState.enum == [
     "draft", "uploading", "processing", "ready-for-review", "in-review",
     "pending-secondary-review", "needs-changes", "approved", "rejected", "withdrawn"
@@ -52,12 +59,42 @@ jq -e '
       "ReviewMessageRequest", "ReviewMessage", "ReviewDecisionRequest",
       "CreateReleaseRequest", "ScheduleReleaseRequest", "RemovalRequest", "Release",
       "EditorialLayoutRequest", "EditorialCollectionRequest", "EditorialItem",
-      "EditorialCollection", "EditorialLayout"
+      "EditorialCollection", "EditorialLayout", "ContentReportRequest", "ContentReport",
+      "ModerationDecisionRequest",
+      "DeveloperNotice", "ModerationDecision", "ModerationReportQueue",
+      "DeveloperNoticeList", "AppealRequest", "AppealDecisionRequest", "ModerationAppeal"
     ];
     .additionalProperties == false
   ) and
   ([.. | objects | .operationId? // empty] | length) ==
     ([.. | objects | .operationId? // empty] | unique | length)
+' "$api" >/dev/null
+
+jq -e '
+  def refs($operation): [($operation.parameters // [])[] | .["$ref"]];
+  (refs(.paths["/reports/v1/content"].post) |
+    index("#/components/parameters/IdempotencyKey") != null and
+    index("#/components/parameters/IfMatch") == null) and
+  (.paths["/reports/v1/content"].post.requestBody.content["application/json"].schema["$ref"] ==
+    "#/components/schemas/ContentReportRequest") and
+  (.paths["/reports/v1/content"].post.responses["202"] |
+    .headers.ETag["$ref"] == "#/components/headers/ETag" and
+    .content["application/json"].schema["$ref"] == "#/components/schemas/ContentReport") and
+  all([
+    .paths["/v1/moderation/reports/{report_id}:decide"].post,
+    .paths["/v1/moderation/notices/{notice_id}:appeal"].post,
+    .paths["/v1/moderation/appeals/{appeal_id}:decide"].post
+  ][]; refs(.) |
+    index("#/components/parameters/IdempotencyKey") != null and
+    index("#/components/parameters/IfMatch") != null) and
+  .components.schemas.ContentReportRequest.additionalProperties == false and
+  (.components.schemas.ContentReportRequest.properties | keys) ==
+    ["app_id", "reason_code", "release_id", "version"] and
+  .components.schemas.ModerationDecisionRequest.properties.reason_codes.maxItems == 4 and
+  .components.schemas.ModerationDecisionRequest.properties.reason_codes.uniqueItems == true and
+  .components.schemas.AppealRequest.additionalProperties == false and
+  .components.schemas.ModerationReportQueue.properties.items.maxItems == 50 and
+  .components.schemas.DeveloperNoticeList.properties.items.maxItems == 50
 ' "$api" >/dev/null
 
 jq -e '
