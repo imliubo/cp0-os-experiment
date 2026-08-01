@@ -128,8 +128,7 @@ protection, role-change replay, immediate token revocation, double-approved
 Release enforcement and secondary-decision rollback.
 
 Identity account linking, invitations, Portal sessions, dynamic malware
-intelligence, risk classification, Review Console UI, production object storage,
-general outbox delivery and garbage collection are not implemented by this HTTP
-slice.
+intelligence, production reviewer SSO, production object storage, general outbox
+delivery and garbage collection are not implemented by this HTTP slice.
 Isolated signing/Catalog publication and transparency logging are implemented by
 the S5G/S5H Publisher boundary described in `STORE-PUBLISHER.md`.

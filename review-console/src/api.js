@@ -1,6 +1,16 @@
 import { validateDecision } from "./model.js";
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const RISK_TIERS = new Set(["standard", "elevated", "high"]);
+const RISK_REASONS = new Set([
+  "camera-capture",
+  "hardware-control",
+  "microphone-capture",
+  "multiple-sensitive-capabilities",
+  "network-access",
+  "radio-transmit",
+  "user-documents",
+]);
 
 function strictOrigin(value) {
   const parsed = new URL(value);
@@ -44,6 +54,26 @@ function mutationKey() {
   return `review-${crypto.randomUUID()}`;
 }
 
+function validateQueuePage(value) {
+  if (!value || typeof value !== "object" || !Array.isArray(value.items) || value.items.length > 50) {
+    throw new Error("Review queue response is invalid");
+  }
+  if (value.next_cursor !== null && value.next_cursor !== undefined && (typeof value.next_cursor !== "string" || value.next_cursor.length > 256)) {
+    throw new Error("Review queue cursor is invalid");
+  }
+  for (const item of value.items) {
+    const risk = item?.risk;
+    if (!risk || !Number.isInteger(risk.policy_version) || risk.policy_version < 1 || risk.policy_version > 32767 || !RISK_TIERS.has(risk.tier) || !Array.isArray(risk.reasons) || risk.reasons.length > 7) {
+      throw new Error("Review queue risk assessment is invalid");
+    }
+    const reasons = [...risk.reasons];
+    if (reasons.some((reason) => !RISK_REASONS.has(reason)) || new Set(reasons).size !== reasons.length || reasons.join("\0") !== reasons.sort().join("\0")) {
+      throw new Error("Review queue risk reasons are invalid");
+    }
+  }
+  return value;
+}
+
 export class ReviewApi {
   constructor({ origin = "https://review.cardputerzero.dev", tokenProvider, fetchImpl = fetch }) {
     this.origin = strictOrigin(origin);
@@ -79,7 +109,10 @@ export class ReviewApi {
     if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("Review queue limit is outside 1-50");
     const query = new URLSearchParams({ limit: String(limit) });
     if (cursor) query.set("cursor", cursor);
-    return this.request("/v1/review/submissions", { query });
+    return this.request("/v1/review/submissions", { query }).then((response) => ({
+      ...response,
+      data: validateQueuePage(response.data),
+    }));
   }
 
   beginReview(submissionId, etag) {

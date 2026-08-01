@@ -73,7 +73,8 @@ package、Listing 或任一资源时必须创建递增的新 revision，不能�
 `IN_REVIEW/PENDING_SECONDARY_REVIEW/APPROVED/NEEDS_CHANGES/REJECTED`。主审批准只进入
 `PENDING_SECONDARY_REVIEW`，必须由另一位审核员领取 secondary assignment 并批准才进入
 `APPROVED`。Release 创建会从 assignment/decision 表重新验证双人批准，不能由请求字段关闭。
-风险分级尚未实现，当前对所有 Submission 使用更严格的双审基线。
+隔离 Scanner 会按版本化策略生成 standard/elevated/high 风险分级，assessment 以 append-only
+记录绑定 scan report SHA-256；PostgreSQL 重算策略并拒绝伪造。所有级别仍统一执行独立双审。
 
 ## Release 状态机
 

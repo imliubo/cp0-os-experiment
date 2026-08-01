@@ -41,6 +41,11 @@ function Status({ value }) {
   return <span className={`status ${tone}`}>{formatState(value)}</span>;
 }
 
+function RiskStatus({ risk }) {
+  const tone = risk.tier === "standard" ? "success" : risk.tier === "elevated" ? "warning" : "danger";
+  return <span className={`status ${tone}`}>{formatState(risk.tier)} risk</span>;
+}
+
 function ScreenPreview({ variant }) {
   if (variant === "signal") {
     return <div className="device-screen signal-screen" role="img" aria-label="Signal Lab submitted screenshot"><div className="screen-bar"><span>Signal Lab</span><b>915.0</b></div><div className="signal-plot"><i /><i /><i /><i /><i /><i /></div><div className="screen-footer"><span>RSSI -71</span><span>SF 7</span><span>RX</span></div></div>;
@@ -58,7 +63,7 @@ function QueueList({ items, selectedId, onSelect }) {
   if (!items.length) return <div className="empty"><Inbox /><strong>Queue is clear</strong><span>No submissions match this view.</span></div>;
   return <div className="queue-items">{items.map((item) => (
     <button className={`queue-item ${selectedId === item.id ? "selected" : ""}`} key={item.id} type="button" onClick={() => onSelect(item.id)}>
-      <span className={`risk-dot ${item.risk}`} aria-label={`${item.risk} risk`} />
+      <span className={`risk-dot ${item.risk.tier}`} aria-label={`${item.risk.tier} risk`} />
       <span className="queue-copy"><strong>{item.name}</strong><small>{item.version} · {item.developer}</small><em>{item.stage === "secondary" ? "Independent review" : "Primary review"} · {item.submitted}</em></span>
       {item.assignee && <span className="assigned">You</span>}
       <ChevronRight />
@@ -78,6 +83,7 @@ function SummaryTab({ item }) {
       </dl>
     </section>
     <section className="section-band"><header><div><h3>Automated checks</h3><p>Bound to this immutable revision.</p></div><FileCheck2 /></header><div className="check-grid">{item.checks.map((check) => <div key={check.name}><span className={`check-icon ${check.status}`}>{check.status === "passed" ? <Check /> : <CircleAlert />}</span><span><strong>{check.name}</strong><small>{check.detail}</small></span></div>)}</div></section>
+    <section className="section-band"><header><div><h3>Risk assessment</h3><p>Policy version {item.risk.policyVersion} · bound to the scan result.</p></div><ShieldCheck /></header><div className="risk-summary"><RiskStatus risk={item.risk} /><div>{item.risk.reasons.length ? item.risk.reasons.map((reason) => <code key={reason}>{reason}</code>) : <span>No elevated capability signals</span>}</div></div></section>
     <section className="section-band"><header><div><h3>Capabilities</h3><p>Declared permissions and exact WASM host imports.</p></div><ShieldCheck /></header><div className="capability-grid"><div><h4>Permissions</h4>{item.permissions.map((value) => <code key={value}>{value}</code>)}</div><div><h4>Imports</h4>{item.imports.map((value) => <code key={value}>{value}</code>)}</div></div></section>
   </div>;
 }

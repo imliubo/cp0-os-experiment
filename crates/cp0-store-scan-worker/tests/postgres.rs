@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use cp0_manifest::{AppManifest, DisplayMode, ResourceLimits, Runtime};
+use cp0_manifest::{
+    AppManifest, DisplayMode, Permission, PermissionRequest, ResourceLimits, Runtime,
+};
 use cp0_package::{CApp, PackageEntry};
 use cp0_store_metadata::{AgeRating, ImageAsset, LocalizedListing, StoreCategory, StoreListing};
 use cp0_store_scan::{ScanDisposition, submission_content_sha256};
@@ -54,6 +56,18 @@ async fn postgres_scan_worker_acceptance() {
     );
     assert_submission(&pool, &accepted.submission_id, "ready-for-review", 3).await;
     assert_eq!(count(&pool, "submission_scan_results").await, 1);
+    assert_eq!(count(&pool, "submission_risk_assessments").await, 1);
+    let risk = sqlx::query(
+        "SELECT policy_version, tier, reason_codes FROM submission_risk_assessments \
+         WHERE submission_id = $1",
+    )
+    .bind(&accepted.submission_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(risk.get::<i16, _>("policy_version"), 1);
+    assert_eq!(risk.get::<String, _>("tier"), "standard");
+    assert_eq!(risk.get::<Value, _>("reason_codes"), json!([]));
     assert_eq!(count(&pool, "audit_events").await, 1);
     assert!(matches!(worker.run_once().await.unwrap(), RunOutcome::Idle));
 
@@ -64,6 +78,24 @@ async fn postgres_scan_worker_acceptance() {
     .execute(&pool)
     .await;
     assert_sqlstate(result_mutation, "55000");
+    let risk_mutation = sqlx::query(
+        "UPDATE submission_risk_assessments SET tier = 'high' WHERE submission_id = $1",
+    )
+    .bind(&accepted.submission_id)
+    .execute(&pool)
+    .await;
+    assert_sqlstate(risk_mutation, "55000");
+    let forged_policy = sqlx::query(
+        "INSERT INTO submission_risk_assessments (assessment_id, scan_id, submission_id, \
+         source_report_sha256, policy_version, tier, reason_codes, created_unix_seconds) \
+         SELECT 'risk_99999999999999999999999999999999', scan_id, submission_id, \
+         report_sha256, 2, 'high', '[]'::jsonb, created_unix_seconds \
+         FROM submission_scan_results WHERE submission_id = $1",
+    )
+    .bind(&accepted.submission_id)
+    .execute(&pool)
+    .await;
+    assert_sqlstate(forged_policy, "23514");
 
     sqlx::query(
         "UPDATE developer_keys SET state = 'revoked', revoked_unix_seconds = 200 WHERE key_id = $1",
@@ -144,6 +176,55 @@ async fn postgres_scan_worker_acceptance() {
         1
     );
     assert_submission(&pool, &concurrent.submission_id, "ready-for-review", 3).await;
+    assert_eq!(count(&pool, "submission_risk_assessments").await, 2);
+
+    let high_risk_fixture = Fixture::with_permissions(
+        "1.0.5",
+        [9_u8; 32],
+        vec![
+            PermissionRequest {
+                name: Permission::CameraCapture,
+                reason: "Capture a user-requested device image.".into(),
+            },
+            PermissionRequest {
+                name: Permission::NetworkClient,
+                reason: "Upload the selected image over HTTPS.".into(),
+            },
+        ],
+    );
+    let high_risk = seed_submission(
+        &pool,
+        &object_root,
+        "sub_66666666666666666666666666666666",
+        "evt_66666666666666666666666666666666",
+        6,
+        &high_risk_fixture,
+        SeedMode::Pending,
+    )
+    .await;
+    assert!(matches!(
+        worker.run_once().await.unwrap(),
+        RunOutcome::Completed {
+            disposition: ScanDisposition::ReadyForReview,
+            ..
+        }
+    ));
+    let high_risk_row = sqlx::query(
+        "SELECT tier, reason_codes FROM submission_risk_assessments WHERE submission_id = $1",
+    )
+    .bind(&high_risk.submission_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(high_risk_row.get::<String, _>("tier"), "high");
+    assert_eq!(
+        high_risk_row.get::<Value, _>("reason_codes"),
+        json!([
+            "camera-capture",
+            "multiple-sensitive-capabilities",
+            "network-access"
+        ])
+    );
 
     let missing_fixture = Fixture::with_signing_key("1.0.3", [9_u8; 32]);
     let missing = seed_submission(
@@ -178,7 +259,7 @@ async fn postgres_scan_worker_acceptance() {
         job.get::<Option<String>, _>("last_error_code").as_deref(),
         Some("object-unavailable")
     );
-    assert_eq!(count(&pool, "submission_scan_results").await, 3);
+    assert_eq!(count(&pool, "submission_scan_results").await, 4);
 
     let exhausted_fixture = Fixture::with_signing_key("1.0.4", [9_u8; 32]);
     let exhausted = seed_submission(
@@ -384,6 +465,14 @@ impl Fixture {
     }
 
     fn with_signing_key(version: &str, signing_key: [u8; 32]) -> Self {
+        Self::with_permissions(version, signing_key, Vec::new())
+    }
+
+    fn with_permissions(
+        version: &str,
+        signing_key: [u8; 32],
+        permissions: Vec<PermissionRequest>,
+    ) -> Self {
         let manifest = AppManifest {
             schema_version: 1,
             id: APP_ID.into(),
@@ -397,7 +486,7 @@ impl Fixture {
                 memory_mb: 16,
                 storage_mb: 16,
             },
-            permissions: Vec::new(),
+            permissions,
             intents: Vec::new(),
         };
         let mut package = CApp::new(vec![

@@ -21,6 +21,7 @@ use cp0_store_control::{
     register_app_request_sha256, validate_submission_spec,
 };
 use cp0_store_metadata::{ImageAsset, ReleaseState, SubmissionState};
+use cp0_store_risk::RiskAssessment;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -1742,26 +1743,38 @@ impl StoreControlService {
             .map(|cursor| (cursor.created_unix_seconds, cursor.submission_id))
             .unwrap_or((0, String::new()));
         let rows = sqlx::query(
-            "SELECT submission_id, app_id, version, revision, state, package_sha256, \
-             package_bytes, listing_sha256, listing_bytes, assets, resource_version, \
-             created_unix_seconds, current_assignment.assignment_kind AS current_assignment_kind, \
-             CASE WHEN state = 'ready-for-review' THEN 'primary' \
-                  WHEN state = 'pending-secondary-review' THEN 'secondary' \
-                  ELSE current_assignment.assignment_kind END AS review_stage \
-             FROM submissions \
+            "SELECT submission.submission_id, submission.app_id, submission.version, \
+             submission.revision, submission.state, submission.package_sha256, \
+             submission.package_bytes, submission.listing_sha256, submission.listing_bytes, \
+             submission.assets, submission.resource_version, submission.created_unix_seconds, \
+             current_assignment.assignment_kind AS current_assignment_kind, \
+             CASE WHEN submission.state = 'ready-for-review' THEN 'primary' \
+                  WHEN submission.state = 'pending-secondary-review' THEN 'secondary' \
+                  ELSE current_assignment.assignment_kind END AS review_stage, \
+             current_risk.policy_version AS risk_policy_version, \
+             current_risk.tier AS risk_tier, current_risk.reason_codes AS risk_reason_codes \
+             FROM submissions submission \
+             JOIN submission_scan_results scan_result \
+               ON scan_result.submission_id = submission.submission_id \
+             JOIN LATERAL ( \
+               SELECT policy_version, tier, reason_codes \
+               FROM submission_risk_assessments assessment \
+               WHERE assessment.scan_id = scan_result.scan_id \
+               ORDER BY policy_version DESC LIMIT 1 \
+             ) current_risk ON TRUE \
              LEFT JOIN LATERAL ( \
                SELECT assignment_kind FROM review_assignments assignment \
-               WHERE assignment.submission_id = submissions.submission_id \
+               WHERE assignment.submission_id = submission.submission_id \
                  AND assignment.reviewer_id = $1 AND assignment.state = 'active' \
              ) current_assignment ON TRUE \
-             WHERE (state = 'ready-for-review' OR \
-               (state = 'pending-secondary-review' AND NOT EXISTS ( \
+             WHERE (submission.state = 'ready-for-review' OR \
+               (submission.state = 'pending-secondary-review' AND NOT EXISTS ( \
                  SELECT 1 FROM review_assignments assignment \
-                 WHERE assignment.submission_id = submissions.submission_id \
+                 WHERE assignment.submission_id = submission.submission_id \
                    AND assignment.reviewer_id = $1)) OR \
-               (state = 'in-review' AND current_assignment.assignment_kind IS NOT NULL)) AND \
-               (created_unix_seconds, submission_id) > ($2, $3) \
-             ORDER BY created_unix_seconds, submission_id LIMIT $4",
+               (submission.state = 'in-review' AND current_assignment.assignment_kind IS NOT NULL)) AND \
+               (submission.created_unix_seconds, submission.submission_id) > ($2, $3) \
+             ORDER BY submission.created_unix_seconds, submission.submission_id LIMIT $4",
         )
         .bind(&identity.reviewer_id)
         .bind(cursor_time)
@@ -1787,6 +1800,7 @@ impl StoreControlService {
                     submission: stored_submission_from_row(row)?.response,
                     review_stage: row.get("review_stage"),
                     assigned_to_caller,
+                    risk: risk_assessment_from_row(row)?,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -2956,6 +2970,7 @@ struct ReviewQueueItemResponse {
     submission: SubmissionResponse,
     review_stage: String,
     assigned_to_caller: bool,
+    risk: RiskAssessment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3802,6 +3817,19 @@ fn stored_submission_from_row(row: &sqlx::postgres::PgRow) -> Result<StoredSubmi
         listing_bytes: u64::try_from(row.get::<i64, _>("listing_bytes"))
             .map_err(|_| ApiError::internal())?,
     })
+}
+
+fn risk_assessment_from_row(row: &sqlx::postgres::PgRow) -> Result<RiskAssessment, ApiError> {
+    let policy_version = u16::try_from(row.get::<i16, _>("risk_policy_version"))
+        .map_err(|_| ApiError::internal())?;
+    let tier: String = row.get("risk_tier");
+    let reasons: Value = row.get("risk_reason_codes");
+    serde_json::from_value(json!({
+        "policy_version": policy_version,
+        "tier": tier,
+        "reasons": reasons,
+    }))
+    .map_err(|_| ApiError::internal())
 }
 
 fn parse_submission_state(value: String) -> Result<SubmissionState, ApiError> {

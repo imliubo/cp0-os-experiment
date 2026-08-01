@@ -414,6 +414,7 @@ dependencies = [
  "cp0-manifest",
  "cp0-store-control",
  "cp0-store-metadata",
+ "cp0-store-risk",
  "serde",
  "serde_json",
  "sha2",
@@ -464,12 +465,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp0-store-risk"
+version = "0.1.0"
+dependencies = [
+ "cp0-manifest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cp0-store-scan"
 version = "0.1.0"
 dependencies = [
  "cp0-manifest",
  "cp0-package",
  "cp0-store-metadata",
+ "cp0-store-risk",
  "serde",
  "serde_json",
  "sha2",
@@ -483,6 +494,7 @@ dependencies = [
  "cp0-manifest",
  "cp0-package",
  "cp0-store-metadata",
+ "cp0-store-risk",
  "cp0-store-scan",
  "libc",
  "serde",

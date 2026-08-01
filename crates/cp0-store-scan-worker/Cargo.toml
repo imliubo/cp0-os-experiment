@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 cp0-store-metadata = { path = "../cp0-store-metadata" }
+cp0-store-risk = { path = "../cp0-store-risk" }
 cp0-store-scan = { path = "../cp0-store-scan" }
 libc.workspace = true
 serde.workspace = true

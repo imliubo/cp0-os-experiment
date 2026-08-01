@@ -898,11 +898,37 @@
       "ReviewQueueItem": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["submission", "review_stage", "assigned_to_caller"],
+        "required": ["submission", "review_stage", "assigned_to_caller", "risk"],
         "properties": {
           "submission": { "$ref": "#/components/schemas/Submission" },
           "review_stage": { "enum": ["primary", "secondary"] },
-          "assigned_to_caller": { "type": "boolean" }
+          "assigned_to_caller": { "type": "boolean" },
+          "risk": { "$ref": "#/components/schemas/RiskAssessment" }
+        }
+      },
+      "RiskAssessment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["policy_version", "tier", "reasons"],
+        "properties": {
+          "policy_version": { "type": "integer", "minimum": 1, "maximum": 32767 },
+          "tier": { "enum": ["standard", "elevated", "high"] },
+          "reasons": {
+            "type": "array",
+            "maxItems": 7,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "camera-capture",
+                "hardware-control",
+                "microphone-capture",
+                "multiple-sensitive-capabilities",
+                "network-access",
+                "radio-transmit",
+                "user-documents"
+              ]
+            }
+          }
         }
       },
       "CreateReleaseRequest": {

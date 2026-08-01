@@ -8,6 +8,12 @@ test("filters bounded review stages and search text", () => {
   assert.equal(filterQueue(items).length, 4);
   assert.equal(filterQueue(items, { stage: "secondary" }).length, 2);
   assert.equal(filterQueue(items, { query: "signal" })[0].appId, "dev.cardputerzero.signallab");
+  assert.equal(items[0].risk.tier, "elevated");
+  assert.deepEqual(items[1].risk, {
+    policyVersion: 1,
+    tier: "high",
+    reasons: ["hardware-control", "multiple-sensitive-capabilities", "radio-transmit"],
+  });
 });
 
 test("primary approval cannot become final approval", () => {

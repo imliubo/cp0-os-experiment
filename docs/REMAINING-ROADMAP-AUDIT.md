@@ -19,7 +19,7 @@
   create/upload/finalize/read、独立双审 Review 和 Release 控制的 PostgreSQL/HTTP 纵向切片
   已完成，Submission withdraw 的状态/队列/审核原子取消和 OAuth 开发者 Device Flow 纵向切片
   也已完成；Team 读取/Owner 角色修改和 MFA freshness 纵向切片已完成；Identity 账户链接、
-  邀请/移除、Portal 会话、Review 风险分级/生产 SSO、生产对象存储/GC、动态
+  邀请/移除、Portal 会话、Review 生产 SSO、生产对象存储/GC、动态
   恶意样本和生产 HSM/key ceremony 尚未实现；隔离 Scanner、文件 key Publisher/Catalog
   Builder 与完整前缀 transparency log 的 outbox/租约、签名、失败恢复和原子结果纵向切片已完成；
 - 设备端 Today/Apps/Search/Updates、分页搜索、图标/截图和更新队列尚未实现；

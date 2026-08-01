@@ -3,6 +3,7 @@ use std::collections::{BTreeSet, HashSet};
 use cp0_manifest::{AppManifest, Permission};
 use cp0_package::CApp;
 use cp0_store_metadata::{ImageAsset, StoreListing};
+use cp0_store_risk::{RiskAssessment, classify_permissions};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use wasmparser::{Parser, Payload, TypeRef, Validator};
@@ -69,6 +70,7 @@ pub struct ScanReport {
     pub imports: Vec<String>,
     pub permissions: Vec<String>,
     pub findings: Vec<ScanFinding>,
+    pub risk: Option<RiskAssessment>,
 }
 
 impl ScanReport {
@@ -83,6 +85,7 @@ impl ScanReport {
                 code: code.to_owned(),
                 severity,
             }],
+            risk: None,
         }
     }
 }
@@ -289,6 +292,11 @@ pub fn scan(input: &ScanInput<'_>) -> ScanReport {
         .map(|request| request.name.as_str().to_owned())
         .collect::<Vec<_>>();
     permissions.sort();
+    let declared_permissions = manifest
+        .permissions
+        .iter()
+        .map(|request| request.name)
+        .collect::<Vec<_>>();
     ScanReport {
         scanner_version: SCANNER_VERSION.to_owned(),
         disposition: ScanDisposition::ReadyForReview,
@@ -296,6 +304,7 @@ pub fn scan(input: &ScanInput<'_>) -> ScanReport {
         imports,
         permissions,
         findings: Vec::new(),
+        risk: Some(classify_permissions(&declared_permissions)),
     }
 }
 
@@ -431,6 +440,10 @@ mod tests {
         assert_eq!(report.disposition, ScanDisposition::ReadyForReview);
         assert!(report.findings.is_empty());
         assert_eq!(
+            report.risk.as_ref().map(|risk| risk.tier),
+            Some(cp0_store_risk::RiskTier::Standard)
+        );
+        assert_eq!(
             report.developer_key_sha256.as_deref(),
             Some(fixture.key_sha256.as_str())
         );
@@ -443,6 +456,7 @@ mod tests {
         fixture.trusted_keys.clear();
         let report = fixture.scan();
         assert_eq!(report.disposition, ScanDisposition::Rejected);
+        assert!(report.risk.is_none());
         assert_eq!(report.findings[0].code, "package.developer-key-untrusted");
 
         let fixture = Fixture::with_wasm(&wasi_import_module());

@@ -1,0 +1,13 @@
+[package]
+name = "cp0-store-risk"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+cp0-manifest = { path = "../cp0-manifest" }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

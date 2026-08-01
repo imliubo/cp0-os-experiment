@@ -18,7 +18,8 @@ opens chunk files read-only with `O_NOFOLLOW`, verifies the file type and size,
 rehashes each chunk, reconstructs contiguous parts, and then verifies each whole
 part and the finalized Submission content digest. Scanner findings are stable
 codes and are capped at 16; parser text and filesystem paths are never persisted
-in reports.
+in reports. A successful report also carries the versioned deterministic risk
+assessment defined in `STORE-RISK-POLICY.md`.
 
 ## Delivery and recovery
 
@@ -26,8 +27,9 @@ Finalization writes `submission.scan-requested` to the transaction outbox. A
 worker moves one event into `submission_scan_jobs`, marks the event dispatched,
 and claims the job with a 60-second lease. Scanning occurs without holding a
 database transaction. A short serializable transaction then locks the lease and
-Submission, inserts one append-only result, advances the resource version, and
-atomically writes audit and `submission.scan-completed` outbox records.
+Submission, inserts one append-only result and its risk assessment, advances the
+resource version, and atomically writes audit and `submission.scan-completed`
+outbox records.
 
 Expired leases are returned to the queue unless the eighth claim was exhausted,
 in which case the job becomes `failed`. Object or commit failures are also

@@ -773,6 +773,9 @@ async fn verify_review_backend(application: &Router, pool: &PgPool) {
     );
     assert_eq!(first_page["items"][0]["review_stage"], "primary");
     assert_eq!(first_page["items"][0]["assigned_to_caller"], false);
+    assert_eq!(first_page["items"][0]["risk"]["policy_version"], 1);
+    assert_eq!(first_page["items"][0]["risk"]["tier"], "standard");
+    assert_eq!(first_page["items"][0]["risk"]["reasons"], json!([]));
     assert_eq!(
         first_page["items"][1]["submission"]["submission_id"],
         SUBMISSION_B
@@ -1738,7 +1741,7 @@ async fn verify_release_backend(application: &Router, pool: &PgPool) {
 
     assert_eq!(count(pool, "release_operations").await, 7);
     assert_eq!(count(pool, "audit_events").await, counts_before.0 + 9);
-    assert_eq!(count(pool, "outbox_events").await, counts_before.1 + 9);
+    assert_eq!(count(pool, "outbox_events").await, counts_before.1 + 10);
     assert_eq!(
         count(pool, "idempotency_records").await,
         counts_before.2 + 9
@@ -2586,6 +2589,80 @@ async fn insert_device_authorization(
     .unwrap();
 }
 
+async fn seed_standard_risk_assessment(
+    pool: &PgPool,
+    submission_id: &str,
+    created_unix_seconds: i64,
+) {
+    let suffix = submission_id.strip_prefix("sub_").unwrap();
+    let event_id = format!("evt_{suffix}");
+    let scan_id = format!("scan_{suffix}");
+    let assessment_id = format!("risk_{suffix}");
+    let report = json!({
+        "scanner_version": "cp0-store-scan/1",
+        "disposition": "ready-for-review",
+        "developer_key_sha256": "6".repeat(64),
+        "imports": [],
+        "permissions": [],
+        "findings": [],
+        "risk": {"policy_version": 1, "tier": "standard", "reasons": []}
+    });
+    let report_sha256 = sha256_hex(serde_json::to_vec(&report).unwrap().as_slice());
+    sqlx::query(
+        "INSERT INTO outbox_events (event_id, topic, aggregate_kind, aggregate_id, \
+         aggregate_version, request_sha256, payload, created_unix_seconds, published_unix_seconds) \
+         VALUES ($1, 'submission.scan-requested', 'submission', $2, 1, $3, '{}'::jsonb, $4, $4)",
+    )
+    .bind(&event_id)
+    .bind(submission_id)
+    .bind(&report_sha256)
+    .bind(created_unix_seconds)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO submission_scan_jobs (event_id, submission_id, source_resource_version, \
+         source_content_sha256, state, attempts, created_unix_seconds, completed_unix_seconds) \
+         VALUES ($1, $2, 1, $3, 'completed', 1, $4, $4)",
+    )
+    .bind(&event_id)
+    .bind(submission_id)
+    .bind("5".repeat(64))
+    .bind(created_unix_seconds)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO submission_scan_results (scan_id, event_id, submission_id, \
+         source_resource_version, source_content_sha256, outcome, scanner_version, report, \
+         report_sha256, created_unix_seconds) \
+         VALUES ($1, $2, $3, 1, $4, 'ready-for-review', 'cp0-store-scan/1', $5, $6, $7)",
+    )
+    .bind(&scan_id)
+    .bind(&event_id)
+    .bind(submission_id)
+    .bind("5".repeat(64))
+    .bind(report)
+    .bind(&report_sha256)
+    .bind(created_unix_seconds)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO submission_risk_assessments (assessment_id, scan_id, submission_id, \
+         source_report_sha256, policy_version, tier, reason_codes, created_unix_seconds) \
+         VALUES ($1, $2, $3, $4, 1, 'standard', '[]'::jsonb, $5)",
+    )
+    .bind(assessment_id)
+    .bind(scan_id)
+    .bind(submission_id)
+    .bind(report_sha256)
+    .bind(created_unix_seconds)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 async fn seed_review_submission(
     pool: &PgPool,
     submission_id: &str,
@@ -2624,6 +2701,7 @@ async fn seed_review_submission(
     .execute(pool)
     .await
     .unwrap();
+    seed_standard_risk_assessment(pool, submission_id, created_unix_seconds).await;
 }
 
 async fn seed_double_approved_submission(

@@ -444,6 +444,20 @@ impl ScanWorker {
         let report_sha256 = cp0_store_scan::report_sha256(report)
             .map_err(|_| WorkerError::InvalidState("scan report cannot be hashed"))?;
         let outcome = report.disposition.as_submission_state();
+        let risk = match (report.disposition, report.risk.as_ref()) {
+            (ScanDisposition::ReadyForReview, Some(risk)) => Some(risk),
+            (ScanDisposition::ReadyForReview, None) => {
+                return Err(WorkerError::InvalidState(
+                    "reviewable scan report has no risk assessment",
+                ));
+            }
+            (_, None) => None,
+            (_, Some(_)) => {
+                return Err(WorkerError::InvalidState(
+                    "non-reviewable scan report has a risk assessment",
+                ));
+            }
+        };
         let mut transaction = begin_serializable(&self.pool).await?;
         let job_row = sqlx::query(
             "SELECT state, lease_token, source_resource_version, source_content_sha256 \
@@ -507,6 +521,28 @@ impl ScanWorker {
         .bind(now)
         .execute(&mut *transaction)
         .await?;
+        if let Some(risk) = risk {
+            let reason_codes = serde_json::to_value(&risk.reasons)
+                .map_err(|_| WorkerError::InvalidState("risk assessment cannot be encoded"))?;
+            sqlx::query(
+                "INSERT INTO submission_risk_assessments (assessment_id, scan_id, submission_id, \
+                 source_report_sha256, policy_version, tier, reason_codes, created_unix_seconds) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(prefixed_uuid("risk_"))
+            .bind(&scan_id)
+            .bind(&job.submission_id)
+            .bind(&report_sha256)
+            .bind(
+                i16::try_from(risk.policy_version)
+                    .map_err(|_| WorkerError::InvalidState("risk policy version is invalid"))?,
+            )
+            .bind(risk.tier.as_str())
+            .bind(reason_codes)
+            .bind(now)
+            .execute(&mut *transaction)
+            .await?;
+        }
         let changed = sqlx::query(
             "UPDATE submissions SET state = $1, resource_version = $2 \
              WHERE submission_id = $3 AND state = 'processing' AND resource_version = $4",
@@ -578,7 +614,8 @@ impl ScanWorker {
             "submission_id": job.submission_id,
             "scan_id": scan_id,
             "outcome": outcome,
-            "report_sha256": report_sha256
+            "report_sha256": report_sha256,
+            "risk": risk
         }))
         .bind(now)
         .execute(&mut *transaction)
