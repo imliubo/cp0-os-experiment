@@ -45,7 +45,9 @@
 
 - A/B、verity 和签名启动已有离线策略/模型，但真实 boot chain 集成仍需备用介质；
 - recovery、production access 和三分区 profile 的构建/静态门禁可以继续强化；
-- 量产 runbook、key ceremony、Catalog key rotation 和灾备演练文档仍可本地完成。
+- Catalog key rotation 已补齐设备端交叠/切换/旧钥撤销测试和操作 runbook；生产 HSM
+  ceremony、签名信任根更新、离线设备 cohort 与独立审计仍需真实基础设施。量产 runbook 和
+  其余灾备演练文档仍可本地继续强化。
 
 ## 2. 当前 24 小时运行结束后才能触碰唯一真机
 

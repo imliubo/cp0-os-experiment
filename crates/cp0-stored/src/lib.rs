@@ -3615,7 +3615,8 @@ fn load_trusted_catalog_key(
     let key_file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(&key_path)?;
+        .open(&key_path)
+        .map_err(|_| StoreServiceError::Untrusted("catalog key is not trusted".into()))?;
     let metadata = key_file.metadata()?;
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
@@ -5399,6 +5400,16 @@ mod tests {
             expires_unix_seconds: u64,
             apps: Vec<CatalogApp>,
         ) -> Vec<u8> {
+            self.signed_catalog_with_key(sequence, expires_unix_seconds, apps, &self.secret)
+        }
+
+        fn signed_catalog_with_key(
+            &self,
+            sequence: u64,
+            expires_unix_seconds: u64,
+            apps: Vec<CatalogApp>,
+            secret: &[u8; 32],
+        ) -> Vec<u8> {
             let catalog = Catalog {
                 schema_version: CATALOG_SCHEMA_VERSION,
                 sequence,
@@ -5407,7 +5418,7 @@ mod tests {
                 apps,
                 editorial: None,
             };
-            encode_signed_catalog(&sign_catalog(catalog, &self.secret).unwrap()).unwrap()
+            encode_signed_catalog(&sign_catalog(catalog, secret).unwrap()).unwrap()
         }
     }
 
@@ -5672,6 +5683,84 @@ mod tests {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp")
             )
         );
+    }
+
+    #[test]
+    fn catalog_key_rotation_requires_overlap_and_rejects_a_retired_key() {
+        let fixture = Fixture::new("key-rotation");
+        let old_catalog = fixture.signed_catalog(30);
+        let old_public = cp0_package::public_key(&fixture.secret);
+        let old_key_id = cp0_store_protocol::lower_hex(&cp0_package::key_id(&old_public));
+        let initial = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
+            },
+            Arc::new(MockNetwork {
+                catalog: old_catalog,
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+        initial.refresh_now().unwrap();
+
+        let new_secret = [10_u8; 32];
+        let new_public = cp0_package::public_key(&new_secret);
+        let new_key_id = cp0_store_protocol::lower_hex(&cp0_package::key_id(&new_public));
+        fs::write(
+            fixture.paths.trust_root.join(format!("{new_key_id}.pub")),
+            new_public,
+        )
+        .unwrap();
+        let apps = vec![fixture.catalog_app(
+            "dev.cardputerzero.storetest",
+            "Store Test",
+            "Catalog signed after the trust overlap",
+        )];
+        let new_catalog =
+            fixture.signed_catalog_with_key(31, unix_time() + 3600, apps.clone(), &new_secret);
+        let overlap = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
+            },
+            Arc::new(MockNetwork {
+                catalog: new_catalog.clone(),
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+        overlap.refresh_now().unwrap();
+        assert_eq!(fs::read(&fixture.paths.catalog_cache).unwrap(), new_catalog);
+
+        fs::remove_file(fixture.paths.trust_root.join(format!("{old_key_id}.pub"))).unwrap();
+        let retired_catalog =
+            fixture.signed_catalog_with_key(32, unix_time() + 3600, apps, &fixture.secret);
+        let retired = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
+            },
+            Arc::new(MockNetwork {
+                catalog: retired_catalog,
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+        assert!(matches!(
+            retired.refresh_now(),
+            Err(StoreServiceError::Untrusted(_))
+        ));
+        assert_eq!(fs::read(&fixture.paths.catalog_cache).unwrap(), new_catalog);
     }
 
     #[test]

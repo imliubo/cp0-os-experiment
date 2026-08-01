@@ -149,6 +149,8 @@ S6E 已新增兼容的签名根索引、分类索引和有界 shard：Publisher 
 - [x] 实现确定性 Catalog Builder、sequence 分配、发布和紧急撤回。
   pause/resume/remove 生成更高 sequence，过期控制事件安全合并且 sequence 永不复用。
 - [ ] 灾备、key rotation、权限提升和内部威胁测试。
+  Catalog key rotation 的设备端交叠/切换/旧钥撤销语义和操作 runbook 已完成；生产 HSM 双人
+  ceremony、签名 OS 信任根更新、离线设备 cohort、CDN promotion 与独立审计仍是外部门禁。
 
 完成条件：已审核 submission 才能发布；任意对象变化都会要求新 revision 和新审核。
 
