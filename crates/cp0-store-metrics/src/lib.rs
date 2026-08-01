@@ -186,9 +186,11 @@ mod tests {
         let text = String::from_utf8(encoded).unwrap();
         assert!(!text.contains("device") && !text.contains("occurred") && !text.contains("stack"));
 
-        let mut value = serde_json::to_value(report).unwrap();
-        value["device_id"] = serde_json::Value::String("forbidden".into());
-        assert!(decode_report(&serde_json::to_vec(&value).unwrap()).is_err());
+        for field in ["device_id", "query", "experiment_id"] {
+            let mut value = serde_json::to_value(&report).unwrap();
+            value[field] = serde_json::Value::String("forbidden".into());
+            assert!(decode_report(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
     }
 
     #[test]

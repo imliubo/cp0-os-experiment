@@ -4675,6 +4675,38 @@ mod tests {
     }
 
     #[derive(Debug)]
+    struct SearchPrivacyNetwork;
+
+    impl StoreNetwork for SearchPrivacyNetwork {
+        fn fetch_catalog(&self, _url: &str) -> Result<Vec<u8>, StoreServiceError> {
+            panic!("local search attempted a Catalog network request")
+        }
+
+        fn fetch_resource(
+            &self,
+            _url: &str,
+            _expected_bytes: u64,
+            _max_bytes: u64,
+        ) -> Result<Vec<u8>, StoreServiceError> {
+            panic!("local search attempted a resource network request")
+        }
+
+        fn upload_metrics(&self, _url: &str, _encoded: &[u8]) -> Result<String, StoreServiceError> {
+            panic!("local search attempted a metrics network request")
+        }
+
+        fn download_package(
+            &self,
+            _url: &str,
+            _destination: &Path,
+            _expected_bytes: u64,
+            _control: &mut dyn FnMut(u8) -> DownloadControl,
+        ) -> Result<DownloadOutcome, StoreServiceError> {
+            panic!("local search attempted a package network request")
+        }
+    }
+
+    #[derive(Debug)]
     struct ShardedNetwork {
         root: Vec<u8>,
         shards: BTreeMap<String, Vec<u8>>,
@@ -6815,6 +6847,50 @@ mod tests {
                 ..
             } if apps.iter().map(|app| app.name.as_str()).collect::<Vec<_>>() == ["Utility"]
         ));
+    }
+
+    #[test]
+    fn search_is_local_and_does_not_persist_queries_or_metrics() {
+        let fixture = Fixture::new("search-privacy");
+        let catalog = fixture.signed_catalog_with_apps(
+            9,
+            unix_time() + 3600,
+            vec![fixture.catalog_app(
+                "dev.cardputerzero.local-search",
+                "Local Search",
+                "Searches the verified on-device Catalog",
+            )],
+        );
+        fs::write(&fixture.paths.catalog_cache, catalog).unwrap();
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: Some("https://metrics.example.com/aggregate".into()),
+            },
+            Arc::new(SearchPrivacyNetwork),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+        let metrics_before = service.state.lock().unwrap().metrics.clone();
+        let query = "needle-4831";
+
+        assert!(matches!(
+            service.search_response(query.into(), 0, 8).unwrap(),
+            StoreResponseData::SearchResults {
+                query: returned_query,
+                total: 0,
+                apps,
+                ..
+            } if returned_query == query && apps.is_empty()
+        ));
+        assert_eq!(service.state.lock().unwrap().metrics, metrics_before);
+        assert!(!fixture.paths.metrics_state.exists());
+        assert!(
+            !String::from_utf8_lossy(&fs::read(&fixture.paths.catalog_cache).unwrap())
+                .contains(query)
+        );
     }
 
     #[test]
