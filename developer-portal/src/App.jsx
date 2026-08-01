@@ -42,6 +42,13 @@ import {
   validateAppDraft,
   validateListing,
 } from "./model.js";
+import { PortalApi } from "./api.js";
+
+const PORTAL_PROVIDERS = (import.meta.env.VITE_PORTAL_PROVIDERS ?? "primary")
+  .split(",")
+  .map((value) => value.trim())
+  .filter((value) => /^[a-z][a-z0-9-]{0,31}$/.test(value))
+  .slice(0, 8);
 
 const NAV_ITEMS = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -49,6 +56,7 @@ const NAV_ITEMS = [
   { id: "submissions", label: "Submissions", icon: FileArchive },
   { id: "releases", label: "Releases", icon: Rocket },
   { id: "team", label: "Team & access", icon: UsersRound },
+  { id: "account", label: "Account security", icon: UserRoundCog },
 ];
 
 const PAGE_TITLES = {
@@ -57,6 +65,7 @@ const PAGE_TITLES = {
   submissions: ["Submissions", "Immutable revisions, automated checks, and review messages."],
   releases: ["Releases", "Schedule and control approved versions in the Store catalog."],
   team: ["Team & access", "Roles, two-factor authentication, and public developer keys."],
+  account: ["Account security", "Verified identities, active session assurance, and recovery access."],
 };
 
 function Status({ value }) {
@@ -435,6 +444,133 @@ function Team({ data, setData, toast }) {
   );
 }
 
+function AccountSecurity({ api }) {
+  const [session, setSession] = useState(null);
+  const [sessionEtag, setSessionEtag] = useState(null);
+  const [links, setLinks] = useState([]);
+  const [linksEtag, setLinksEtag] = useState(null);
+  const [provider, setProvider] = useState(PORTAL_PROVIDERS[0] ?? "primary");
+  const [busy, setBusy] = useState(Boolean(api));
+  const [error, setError] = useState("");
+
+  const refresh = async () => {
+    if (!api) return;
+    setBusy(true);
+    setError("");
+    try {
+      const currentSession = await api.getSession();
+      const identityLinks = await api.listIdentityLinks();
+      setSession(currentSession.data);
+      setSessionEtag(currentSession.etag);
+      setLinks(identityLinks.data.items);
+      setLinksEtag(identityLinks.etag);
+    } catch (failure) {
+      setSession(null);
+      setLinks([]);
+      setError(failure.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => { refresh(); }, [api]);
+
+  const redirectToLogin = () => {
+    if (!api) return;
+    const target = new URL("/portal/auth/login", api.origin);
+    target.searchParams.set("provider", provider);
+    window.location.assign(target.href);
+  };
+  const beginLink = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await api.beginIdentityLink(provider, linksEtag);
+      window.location.assign(response.data.authorization_uri);
+    } catch (failure) {
+      setError(failure.message);
+      setBusy(false);
+    }
+  };
+  const beginStepUp = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await api.beginStepUp(sessionEtag);
+      window.location.assign(response.data.authorization_uri);
+    } catch (failure) {
+      setError(failure.message);
+      setBusy(false);
+    }
+  };
+  const removeLink = async (link) => {
+    setBusy(true);
+    setError("");
+    try {
+      await api.removeIdentityLink(link.link_id, linksEtag);
+      if (link.current) {
+        setSession(null);
+        setLinks([]);
+      } else {
+        await refresh();
+      }
+    } catch (failure) {
+      setError(failure.message);
+      setBusy(false);
+    }
+  };
+  const logout = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await api.logout();
+      setSession(null);
+      setLinks([]);
+    } catch (failure) {
+      setError(failure.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!api) {
+    return <section className="panel"><EmptyState icon={UserRoundCog} title="Portal BFF not configured" body="This build has no authentication service origin." /></section>;
+  }
+  if (busy && !session) {
+    return <section className="panel"><EmptyState icon={ShieldCheck} title="Checking session" body="Waiting for the authentication service." /></section>;
+  }
+  if (!session) {
+    return (
+      <section className="panel account-signin">
+        <EmptyState
+          icon={UserRoundCog}
+          title="Sign in required"
+          body={error || "Use a configured identity provider to open the Developer Portal."}
+          action={<div className="identity-action"><select value={provider} onChange={(event) => setProvider(event.target.value)}>{PORTAL_PROVIDERS.map((item) => <option key={item}>{item}</option>)}</select><button className="primary" type="button" onClick={redirectToLogin}>Sign in <ChevronRight /></button></div>}
+        />
+      </section>
+    );
+  }
+  return (
+    <div className="page-stack account-security">
+      {error && <div className="notice attention"><CircleAlert /><div><strong>Security action failed</strong><p>{error}</p></div></div>}
+      <section className="panel">
+        <div className="panel-heading"><div><h2>{session.email}</h2><p className="mono">{session.account_id}</p></div><Status value="active" /></div>
+        <div className="account-facts">
+          <div><span>Provider assurance</span><strong>{session.mfa_step_up_fresh ? "Fresh MFA" : "Verification required"}</strong></div>
+          <div><span>Idle expiry</span><strong>{new Date(session.idle_expires_unix_seconds * 1000).toLocaleString()}</strong></div>
+          <div><span>Teams</span><strong>{session.teams.length}</strong></div>
+        </div>
+        <div className="account-actions"><button className="secondary" type="button" disabled={busy} onClick={beginStepUp}><ShieldCheck /> Verify identity</button><button className="text-button danger-text" type="button" disabled={busy} onClick={logout}>Sign out</button></div>
+      </section>
+      <section className="panel">
+        <div className="panel-heading"><div><h2>Verified identities</h2><p>Up to eight providers can recover this Account.</p></div><div className="identity-action"><select aria-label="Identity provider" value={provider} onChange={(event) => setProvider(event.target.value)}>{PORTAL_PROVIDERS.map((item) => <option key={item}>{item}</option>)}</select><button className="primary" type="button" disabled={busy || links.length >= 8} onClick={beginLink}><Plus /> Link identity</button></div></div>
+        <div className="identity-list">{links.map((link) => <div className="identity-row" key={link.link_id}><div className="key-icon"><KeyRound /></div><div><strong>{formatState(link.provider)}</strong><small>Linked {new Date(link.linked_unix_seconds * 1000).toLocaleString()}</small><small className="mono">{link.link_id}</small></div>{link.current && <Status value="active" />}<IconButton className="danger-icon" label={`Remove ${link.provider} identity`} disabled={busy || links.length === 1 || !session.mfa_step_up_fresh} onClick={() => removeLink(link)}><Trash2 /></IconButton></div>)}</div>
+      </section>
+    </div>
+  );
+}
+
 export default function App() {
   const [data, setData] = useState(createDemoState);
   const [page, setPage] = useState("overview");
@@ -443,6 +579,15 @@ export default function App() {
   const [globalQuery, setGlobalQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [focusedTarget, setFocusedTarget] = useState(null);
+  const portalApi = useMemo(() => {
+    const origin = import.meta.env.VITE_PORTAL_BFF_ORIGIN;
+    if (!origin) return null;
+    try {
+      return new PortalApi({ origin });
+    } catch {
+      return null;
+    }
+  }, []);
   const title = PAGE_TITLES[page];
   const toastMessage = useMemo(() => toast, [toast]);
   const globalResults = useMemo(() => {
@@ -488,6 +633,7 @@ export default function App() {
           {page === "submissions" && <Submissions data={data} setData={setData} toast={setToast} focusedId={focusedTarget?.page === "submissions" ? focusedTarget.id : null} />}
           {page === "releases" && <Releases data={data} setData={setData} toast={setToast} focusedId={focusedTarget?.page === "releases" ? focusedTarget.id : null} />}
           {page === "team" && <Team data={data} setData={setData} toast={setToast} />}
+          {page === "account" && <AccountSecurity api={portalApi} />}
         </div>
       </main>
       {toastMessage && <div className="toast" role="status"><Check />{toastMessage}</div>}

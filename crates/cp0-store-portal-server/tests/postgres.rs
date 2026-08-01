@@ -21,20 +21,47 @@ use url::Url;
 const PROVIDER_KEY: &str = "primary";
 const ISSUER: &str = "https://identity.example.com";
 const CONFIG_SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const SECONDARY_PROVIDER_KEY: &str = "secondary";
+const SECONDARY_ISSUER: &str = "https://identity-backup.example.net";
+const SECONDARY_CONFIG_SHA256: &str =
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-struct FakeProvider;
+#[derive(Clone, Copy)]
+struct FakeProvider {
+    key: &'static str,
+    issuer: &'static str,
+    config_sha256: &'static str,
+    email: &'static str,
+    subject: &'static str,
+}
+
+const PRIMARY_PROVIDER: FakeProvider = FakeProvider {
+    key: PROVIDER_KEY,
+    issuer: ISSUER,
+    config_sha256: CONFIG_SHA256,
+    email: "developer@example.com",
+    subject: "provider-subject-must-never-be-returned",
+};
+
+const SECONDARY_PROVIDER: FakeProvider = FakeProvider {
+    key: SECONDARY_PROVIDER_KEY,
+    issuer: SECONDARY_ISSUER,
+    config_sha256: SECONDARY_CONFIG_SHA256,
+    email: "backup-contact@example.net",
+    subject: "backup-subject-must-never-be-returned",
+};
 
 impl OidcProvider for FakeProvider {
     fn key(&self) -> &str {
-        PROVIDER_KEY
+        self.key
     }
 
     fn issuer(&self) -> &str {
-        ISSUER
+        self.issuer
     }
 
     fn config_sha256(&self) -> &str {
-        CONFIG_SHA256
+        self.config_sha256
     }
 
     fn authorization_uri(
@@ -50,7 +77,8 @@ impl OidcProvider for FakeProvider {
             AuthIntent::Link => "link",
         };
         Ok(format!(
-            "{ISSUER}/authorize?state={state}&nonce={nonce}&code_challenge={}&intent={intent}",
+            "{}/authorize?state={state}&nonce={nonce}&code_challenge={}&intent={intent}",
+            self.issuer,
             pkce_challenge(pkce_verifier)
         ))
     }
@@ -69,17 +97,17 @@ impl OidcProvider for FakeProvider {
             }
             let invitee = code.contains("invitee");
             Ok(VerifiedIdentity {
-                issuer: ISSUER.to_owned(),
+                issuer: self.issuer.to_owned(),
                 subject: if invitee {
                     "provider-invitee-subject-must-never-be-returned"
                 } else {
-                    "provider-subject-must-never-be-returned"
+                    self.subject
                 }
                 .to_owned(),
                 email: if invitee {
                     "invitee@example.com"
                 } else {
-                    "developer@example.com"
+                    self.email
                 }
                 .to_owned(),
                 email_verified: true,
@@ -115,7 +143,7 @@ async fn portal_oidc_session_acceptance() {
         PortalService::new(
             pool.clone(),
             secrets,
-            vec![Arc::new(FakeProvider)],
+            vec![Arc::new(PRIMARY_PROVIDER), Arc::new(SECONDARY_PROVIDER)],
             "https://developer.cardputerzero.dev".to_owned(),
             "https://developer.cardputerzero.dev/portal".to_owned(),
         )
@@ -901,9 +929,376 @@ async fn portal_oidc_session_acceptance() {
         "55000",
     );
 
-    let logout_headers = [
+    sqlx::query(
+        "UPDATE team_members SET membership_state = 'suspended', \
+         resource_version = resource_version + 1 \
+         WHERE account_id = (SELECT account_id FROM portal_accounts \
+             WHERE email = 'invitee@example.com') AND membership_state = 'active'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        call(
+            &application,
+            Method::GET,
+            "/portal/v1/session",
+            &[(COOKIE.as_str(), &rotated_invitee_cookie)],
+        )
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let initial_links = call(
+        &application,
+        Method::GET,
+        "/portal/v1/identity-links",
+        &[(COOKIE.as_str(), &second_cookie)],
+    )
+    .await;
+    assert_eq!(initial_links.status, StatusCode::OK);
+    assert_eq!(header(&initial_links, ETAG.as_str()), "\"1\"");
+    let initial_links_body: Value = serde_json::from_slice(&initial_links.body).unwrap();
+    assert_eq!(initial_links_body["items"].as_array().unwrap().len(), 1);
+    let primary_link_id = initial_links_body["items"][0]["link_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(initial_links_body["items"][0]["provider"], "primary");
+    assert_eq!(initial_links_body["items"][0]["current"], true);
+    assert!(!String::from_utf8_lossy(&initial_links.body).contains("subject"));
+
+    let link_body = serde_json::to_vec(&serde_json::json!({"provider": "secondary"})).unwrap();
+    let link_headers = [
         (COOKIE.as_str(), second_cookie.as_str()),
         ("x-csrf-token", stepped_csrf),
+        ("idempotency-key", "portal-identity-link-begin-0001"),
+        ("if-match", "\"1\""),
+        ("origin", "https://developer.cardputerzero.dev"),
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/json"),
+    ];
+    let link_begin = call_with_body(
+        &application,
+        Method::POST,
+        "/portal/v1/identity-links",
+        &link_headers,
+        &link_body,
+    )
+    .await;
+    assert_eq!(link_begin.status, StatusCode::OK);
+    let link_replay = call_with_body(
+        &application,
+        Method::POST,
+        "/portal/v1/identity-links",
+        &link_headers,
+        &link_body,
+    )
+    .await;
+    assert_eq!(link_replay.status, StatusCode::OK);
+    assert_eq!(link_replay.body, link_begin.body);
+    let link_begin_body: Value = serde_json::from_slice(&link_begin.body).unwrap();
+    let link_uri = Url::parse(link_begin_body["authorization_uri"].as_str().unwrap()).unwrap();
+    assert_eq!(link_uri.host_str(), Some("identity-backup.example.net"));
+    let link_state = link_uri
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let linked_callback = call(
+        &application,
+        Method::GET,
+        &format!("/portal/auth/callback?code=valid-secondary-link-code-0001&state={link_state}"),
+        &[],
+    )
+    .await;
+    assert_eq!(linked_callback.status, StatusCode::SEE_OTHER);
+    let linked_cookie = session_cookie(&linked_callback);
+    assert_ne!(linked_cookie, second_cookie);
+    assert_eq!(
+        call(
+            &application,
+            Method::GET,
+            "/portal/v1/session",
+            &[(COOKIE.as_str(), &second_cookie)],
+        )
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let linked_session = call(
+        &application,
+        Method::GET,
+        "/portal/v1/session",
+        &[(COOKIE.as_str(), &linked_cookie)],
+    )
+    .await;
+    let linked_session_body: Value = serde_json::from_slice(&linked_session.body).unwrap();
+    assert_eq!(linked_session_body["email"], "developer@example.com");
+    assert_eq!(linked_session_body["mfa_step_up_fresh"], false);
+    let linked_csrf = linked_session_body["csrf_token"].as_str().unwrap();
+    let linked_session_etag = header(&linked_session, ETAG.as_str());
+    let linked_links = call(
+        &application,
+        Method::GET,
+        "/portal/v1/identity-links",
+        &[(COOKIE.as_str(), &linked_cookie)],
+    )
+    .await;
+    assert_eq!(header(&linked_links, ETAG.as_str()), "\"2\"");
+    let linked_links_body: Value = serde_json::from_slice(&linked_links.body).unwrap();
+    assert_eq!(linked_links_body["items"].as_array().unwrap().len(), 2);
+    assert!(
+        linked_links_body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|link| link["provider"] == "secondary" && link["current"] == true)
+    );
+    assert!(!String::from_utf8_lossy(&linked_links.body).contains("backup-subject"));
+
+    let secondary_step_headers = [
+        (COOKIE.as_str(), linked_cookie.as_str()),
+        ("x-csrf-token", linked_csrf),
+        ("idempotency-key", "portal-secondary-step-up-0001"),
+        ("if-match", linked_session_etag),
+        ("origin", "https://developer.cardputerzero.dev"),
+        ("sec-fetch-site", "same-origin"),
+        ("content-length", "0"),
+    ];
+    let secondary_step = call(
+        &application,
+        Method::POST,
+        "/portal/v1/session:step-up",
+        &secondary_step_headers,
+    )
+    .await;
+    assert_eq!(secondary_step.status, StatusCode::OK);
+    let secondary_step_body: Value = serde_json::from_slice(&secondary_step.body).unwrap();
+    let secondary_step_uri =
+        Url::parse(secondary_step_body["authorization_uri"].as_str().unwrap()).unwrap();
+    let secondary_step_state = secondary_step_uri
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let secondary_step_callback = call(
+        &application,
+        Method::GET,
+        &format!(
+            "/portal/auth/callback?code=valid-secondary-step-up-code-0001&state={secondary_step_state}"
+        ),
+        &[],
+    )
+    .await;
+    assert_eq!(secondary_step_callback.status, StatusCode::SEE_OTHER);
+    let secondary_cookie = session_cookie(&secondary_step_callback);
+    let secondary_session = call(
+        &application,
+        Method::GET,
+        "/portal/v1/session",
+        &[(COOKIE.as_str(), &secondary_cookie)],
+    )
+    .await;
+    let secondary_session_body: Value = serde_json::from_slice(&secondary_session.body).unwrap();
+    assert_eq!(secondary_session_body["mfa_step_up_fresh"], true);
+    let secondary_csrf = secondary_session_body["csrf_token"].as_str().unwrap();
+
+    let parallel_primary_login = call(
+        &application,
+        Method::GET,
+        "/portal/auth/login?provider=primary",
+        &[],
+    )
+    .await;
+    let parallel_primary_uri =
+        Url::parse(header(&parallel_primary_login, LOCATION.as_str())).unwrap();
+    let parallel_primary_state = parallel_primary_uri
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let parallel_primary_callback = call(
+        &application,
+        Method::GET,
+        &format!(
+            "/portal/auth/callback?code=valid-parallel-primary-code-0001&state={parallel_primary_state}"
+        ),
+        &[],
+    )
+    .await;
+    assert_eq!(parallel_primary_callback.status, StatusCode::SEE_OTHER);
+    let parallel_primary_cookie = session_cookie(&parallel_primary_callback);
+
+    let remove_headers = [
+        (COOKIE.as_str(), secondary_cookie.as_str()),
+        ("x-csrf-token", secondary_csrf),
+        ("idempotency-key", "portal-identity-link-remove-0001"),
+        ("if-match", "\"2\""),
+        ("origin", "https://developer.cardputerzero.dev"),
+        ("sec-fetch-site", "same-origin"),
+        ("content-length", "0"),
+    ];
+    let removed = call(
+        &application,
+        Method::POST,
+        &format!("/portal/v1/identity-links/{primary_link_id}:remove"),
+        &remove_headers,
+    )
+    .await;
+    assert_eq!(removed.status, StatusCode::OK);
+    assert_eq!(header(&removed, ETAG.as_str()), "\"3\"");
+    let removed_body: Value = serde_json::from_slice(&removed.body).unwrap();
+    assert_eq!(removed_body["items"].as_array().unwrap().len(), 1);
+    assert_eq!(removed_body["items"][0]["provider"], "secondary");
+    assert_eq!(removed_body["items"][0]["current"], true);
+    let remove_replay = call(
+        &application,
+        Method::POST,
+        &format!("/portal/v1/identity-links/{primary_link_id}:remove"),
+        &remove_headers,
+    )
+    .await;
+    assert_eq!(remove_replay.status, StatusCode::OK);
+    assert_eq!(remove_replay.body, removed.body);
+    assert_eq!(
+        call(
+            &application,
+            Method::GET,
+            "/portal/v1/session",
+            &[(COOKIE.as_str(), &parallel_primary_cookie)],
+        )
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let secondary_link_id = removed_body["items"][0]["link_id"].as_str().unwrap();
+    let last_remove_headers = [
+        (COOKIE.as_str(), secondary_cookie.as_str()),
+        ("x-csrf-token", secondary_csrf),
+        ("idempotency-key", "portal-identity-link-remove-last-0001"),
+        ("if-match", "\"3\""),
+        ("origin", "https://developer.cardputerzero.dev"),
+        ("sec-fetch-site", "same-origin"),
+        ("content-length", "0"),
+    ];
+    assert_eq!(
+        call(
+            &application,
+            Method::POST,
+            &format!("/portal/v1/identity-links/{secondary_link_id}:remove"),
+            &last_remove_headers,
+        )
+        .await
+        .status,
+        StatusCode::CONFLICT
+    );
+
+    let linked_session_secret = linked_cookie.split_once('=').unwrap().1;
+    let secondary_session_secret = secondary_cookie.split_once('=').unwrap().1;
+    for raw_identity_secret in [
+        PRIMARY_PROVIDER.subject,
+        PRIMARY_PROVIDER.issuer,
+        SECONDARY_PROVIDER.subject,
+        SECONDARY_PROVIDER.issuer,
+        "valid-secondary-link-code-0001",
+        link_state.as_str(),
+        linked_session_secret,
+        secondary_session_secret,
+        linked_csrf,
+        secondary_csrf,
+        "portal-identity-link-begin-0001",
+        "portal-identity-link-remove-0001",
+    ] {
+        let exposed_count: i64 = sqlx::query_scalar(
+            "SELECT \
+             (SELECT COUNT(*) FROM audit_events event \
+              WHERE to_jsonb(event)::text LIKE $1) + \
+             (SELECT COUNT(*) FROM outbox_events event \
+              WHERE to_jsonb(event)::text LIKE $1) + \
+             (SELECT COUNT(*) FROM idempotency_records record \
+              WHERE to_jsonb(record)::text LIKE $1)",
+        )
+        .bind(format!("%{raw_identity_secret}%"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            exposed_count, 0,
+            "raw identity or session material reached an audit, outbox, or idempotency record"
+        );
+    }
+
+    let revoked_login = call(
+        &application,
+        Method::GET,
+        "/portal/auth/login?provider=primary",
+        &[],
+    )
+    .await;
+    let revoked_login_uri = Url::parse(header(&revoked_login, LOCATION.as_str())).unwrap();
+    let revoked_login_state = revoked_login_uri
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    assert_eq!(
+        call(
+            &application,
+            Method::GET,
+            &format!(
+                "/portal/auth/callback?code=valid-revoked-primary-code-0001&state={revoked_login_state}"
+            ),
+            &[],
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    let recovery_login = call(
+        &application,
+        Method::GET,
+        "/portal/auth/login?provider=secondary",
+        &[],
+    )
+    .await;
+    let recovery_login_uri = Url::parse(header(&recovery_login, LOCATION.as_str())).unwrap();
+    let recovery_login_state = recovery_login_uri
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let recovery_callback = call(
+        &application,
+        Method::GET,
+        &format!(
+            "/portal/auth/callback?code=valid-secondary-recovery-code-0001&state={recovery_login_state}"
+        ),
+        &[],
+    )
+    .await;
+    assert_eq!(recovery_callback.status, StatusCode::SEE_OTHER);
+    let recovery_cookie = session_cookie(&recovery_callback);
+    let recovery_session = call(
+        &application,
+        Method::GET,
+        "/portal/v1/session",
+        &[(COOKIE.as_str(), &recovery_cookie)],
+    )
+    .await;
+    assert_eq!(recovery_session.status, StatusCode::OK);
+    let recovery_session_body: Value = serde_json::from_slice(&recovery_session.body).unwrap();
+    assert_eq!(recovery_session_body["email"], "developer@example.com");
+
+    let logout_headers = [
+        (COOKIE.as_str(), secondary_cookie.as_str()),
+        ("x-csrf-token", secondary_csrf),
         ("idempotency-key", "portal-logout-0001"),
         ("origin", "https://developer.cardputerzero.dev"),
         ("sec-fetch-site", "same-origin"),
@@ -931,7 +1326,7 @@ async fn portal_oidc_session_acceptance() {
             &application,
             Method::GET,
             "/portal/v1/session",
-            &[(COOKIE.as_str(), &second_cookie)],
+            &[(COOKIE.as_str(), &secondary_cookie)],
         )
         .await
         .status,

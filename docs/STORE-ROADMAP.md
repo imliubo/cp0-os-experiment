@@ -99,7 +99,8 @@ token 不复活、终态身份保留、版本单调、幂等和 audit/outbox 回
 Portal BFF 已接通严格外部 OIDC Authorization Code + PKCE、登录/回调、摘要会话、CSRF、空闲/绝对
 超时、幂等 MFA step-up、会话轮换和注销；邀请 create/list/inspect/cancel/accept、Team 聚合 ETag、
 邮件密文租约/退避/终态清除、七天过期和接受后会话轮换也已通过 PostgreSQL 17 端到端验收。
-账户链接、Portal 前端真实接入、生产邮件/IdP 接入和 reviewer SSO 仍待实现。
+账户链接 list/begin/remove、双提供方恢复、依赖会话撤销、Membership 状态传播和 Portal 浏览器
+适配器也已完成；生产邮件/IdP 一致性接入和 reviewer SSO 仍待实现。
 S5L 已将所有 Submission 升级为独立双审：主审批准进入 pending-secondary-review，原主审不可领取
 二审，只有不同审核员的 secondary approval 才进入 approved；decision 强绑定 assignment，Release
 数据库触发器重新验证两位审核员和两次批准。并发领取、精确回放、故障回滚和直接 SQL 绕过均通过
@@ -135,8 +136,8 @@ S6E 已新增兼容的签名根索引、分类索引和有界 shard：Publisher 
   生产复制、跨区域恢复和正式保留策略不由本地文件后端替代。
 - [ ] 完成 Identity 自助闭环：成员暂停/恢复/移除已完成；Portal BFF、外部身份链接、
   邀请和会话的 v1 安全边界与 OpenAPI 已冻结，PostgreSQL 状态机与绕过验收已完成；
-  Portal BFF 的 OIDC 登录/会话/MFA step-up/注销及邀请 HTTP/邮件 worker 纵向切片已完成；
-  外部身份链接、Portal 前端真实接入、生产邮件供应商及身份提供方接入仍待完成。
+  Portal BFF 的 OIDC 登录/会话/MFA step-up/注销、邀请 HTTP/邮件 worker、外部身份链接及 Portal
+  账户安全页真实 BFF 适配器纵向切片已完成；生产邮件供应商及身份提供方一致性接入仍待完成。
 - [x] 实现隔离 Scan Worker：包格式、WASM、权限、资源和恶意样本检查。
   当前为无 IP 网络、只读对象根的确定性结构/能力扫描；动态规则、信誉源和运营隔离环境待生产化。
 - [x] 实现 Review Console、结构化问题、回复、二审、双人审批和风险分级。

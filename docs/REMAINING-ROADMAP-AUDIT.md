@@ -21,8 +21,9 @@
   已完成，Submission withdraw 的状态/队列/审核原子取消和 OAuth 开发者 Device Flow 纵向切片
   也已完成；Team 读取/Owner 角色修改、成员暂停/恢复/终态移除和 MFA freshness 纵向切片已完成；Identity 账户链接、
   邀请和 Portal 会话的安全边界/OpenAPI 及 PostgreSQL 状态机已完成，Portal BFF 的 OIDC 登录、
-  摘要会话、CSRF、MFA step-up、注销及邀请 HTTP/加密邮件 worker 纵向切片也已通过 PostgreSQL
-  验收；账户链接 HTTP、Portal 前端真实接入、生产邮件/IdP、Review 生产 SSO、生产对象存储、动态
+  摘要会话、CSRF、MFA step-up、注销、邀请 HTTP/加密邮件 worker、双提供方账户链接和 Membership
+  会话传播纵向切片也已通过 PostgreSQL 验收，Portal 账户安全页已接真实 BFF 适配器；生产邮件/IdP、
+  Review 生产 SSO、生产对象存储、动态
   恶意样本和生产 HSM/key ceremony 尚未实现；隔离 Scanner、文件 key Publisher/Catalog
   Builder 与完整前缀 transparency log 的 outbox/租约、签名、失败恢复和原子结果纵向切片已完成；
 - 本地内容寻址后端的对象 GC 已实现默认 dry-run、24 小时宽限、上传互锁、严格路径验证和
@@ -94,5 +95,5 @@
 | Phase 2 | 核心窗口/可信 UI/输入及扩展系统体验本地实现已完成 | 24 小时证据和最终真机部署 |
 | Phase 3 | Runtime、sandbox 和能力 broker 已实现 | 音频/GPIO/存储/相机/LoRa 的对应真机门禁 |
 | Phase 4 | SDK 1.0、CLI、模拟器和 DevKit 已实现 | 后续 Store submit CLI 属 Store 产品阶段 |
-| Phase 5 | 双签名、原子安装、Store 设备体验、1024 项 Apps/Search 分页、OAuth、Portal OIDC/会话/邀请、Team 角色管理/成员暂停与移除、隔离扫描、独立双审、Review Console、Catalog v4/Today、自动更新、匿名周聚合和非生产内容治理纵向切片已实现 | Identity 账户链接、Portal 真实前端与生产邮件/IdP 接入、Review 生产 SSO、生产 HSM、正式治理政策/执行、生产运营演练与六步真机证据 |
+| Phase 5 | 双签名、原子安装、Store 设备体验、1024 项 Apps/Search 分页、OAuth、Portal OIDC/会话/邀请/账户链接、Portal BFF 前端适配、Team 角色管理/成员暂停与移除、隔离扫描、独立双审、Review Console、Catalog v4/Today、自动更新、匿名周聚合和非生产内容治理纵向切片已实现 | 生产邮件/IdP 接入、Review 生产 SSO、生产 HSM、正式治理政策/执行、生产运营演练与六步真机证据 |
 | Phase 6 | profile、验证器和安全工具已实现 | 性能/功耗、烧录介质、A/B 硬件和第三方评审 |

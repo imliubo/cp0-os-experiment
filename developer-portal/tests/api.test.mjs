@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { StoreApi } from "../src/api.js";
+import { PortalApi, StoreApi } from "../src/api.js";
 
 const token = "t".repeat(64);
 
@@ -144,4 +144,41 @@ test("rejects normalized paths that escape the v1 control plane", async () => {
   const api = new StoreApi({ tokenProvider: () => token, fetchImpl: async () => new Response() });
   await assert.rejects(api.request("/v1/../admin"), /outside v1/);
   await assert.rejects(api.request("//attacker.example/v1/apps"), /outside v1/);
+});
+
+test("uses cookie, CSRF, idempotency, and ETag for Portal identity mutations", async () => {
+  const observed = [];
+  const api = new PortalApi({
+    fetchImpl: async (url, options) => {
+      observed.push({ url, options });
+      if (url.endsWith("/portal/v1/session")) {
+        return new Response(JSON.stringify({ csrf_token: "c".repeat(43) }), {
+          status: 200,
+          headers: { etag: '"4"' },
+        });
+      }
+      return new Response(JSON.stringify({ authorization_uri: "https://identity.example/authorize" }), {
+        status: 200,
+      });
+    },
+  });
+  await api.getSession();
+  await api.beginIdentityLink("secondary", '"2"');
+  assert.equal(observed[0].options.credentials, "include");
+  assert.equal(observed[0].options.headers.Authorization, undefined);
+  assert.equal(observed[1].url, "https://developer.cardputerzero.dev/portal/v1/identity-links");
+  assert.equal(observed[1].options.credentials, "include");
+  assert.equal(observed[1].options.headers["X-CSRF-Token"], "c".repeat(43));
+  assert.equal(observed[1].options.headers["If-Match"], '"2"');
+  assert.match(observed[1].options.headers["Idempotency-Key"], /^portal-/);
+  assert.equal(observed[1].options.headers.Authorization, undefined);
+  assert.deepEqual(JSON.parse(observed[1].options.body), { provider: "secondary" });
+});
+
+test("fails closed before Portal mutations and rejects escaped BFF paths", async () => {
+  const api = new PortalApi({ fetchImpl: async () => new Response() });
+  await assert.rejects(api.beginIdentityLink("secondary", '"1"'), /session is unavailable/);
+  await assert.rejects(api.request("/portal/v1/../admin"), /outside portal v1/);
+  await assert.rejects(api.request("//attacker.example/portal/v1/session"), /outside portal v1/);
+  assert.throws(() => api.removeIdentityLink("link_0123456789abcdef0123456789abcdef", ""), /ETag/);
 });

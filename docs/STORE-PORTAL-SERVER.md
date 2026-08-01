@@ -7,9 +7,8 @@ tables. It is a separate process from `cp0-store-control-server`: browsers do
 not receive Store control tokens, upstream tokens, refresh tokens, OIDC
 subjects, or signing material.
 
-This slice implements login, callback, session read, MFA step-up, logout, and
-the Team invitation lifecycle. Identity-link routes remain disabled until their
-transactional acceptance slice is complete.
+This slice implements login, callback, session read, MFA step-up, logout,
+external identity links, and the Team invitation lifecycle.
 
 ## HTTP boundary
 
@@ -22,6 +21,8 @@ The implemented routes are:
 | `GET /portal/v1/session` | returns bounded Account, Team, expiry, MFA freshness, CSRF, and session-version data |
 | `POST /portal/v1/session:step-up` | starts an idempotent same-provider MFA challenge |
 | `POST /portal/v1/session:logout` | terminally revokes the current session and expires the cookie |
+| `GET/POST /portal/v1/identity-links` | lists subject-free metadata or starts an idempotent target-provider link challenge |
+| `POST /portal/v1/identity-links/{link_id}:remove` | removes one non-final link after fresh MFA and revokes sessions authenticated by it |
 | `GET/POST /portal/v1/teams/{team_id}/invitations` | lists the latest 100 invitations or creates one Owner/MFA-authorized invitation |
 | `POST /portal/v1/invitations/{invitation_id}:cancel` | terminally cancels one pending invitation and clears undelivered secret material |
 | `POST /portal/v1/invitations:inspect` | returns only Team name, masked email, role, and expiry for a valid pending token |
@@ -30,10 +31,11 @@ The implemented routes are:
 The session cookie is `__Host-cp0_portal` with `Secure`, `HttpOnly`,
 `SameSite=Strict`, `Path=/`, and no `Domain`. Mutation routes require the exact
 configured `Origin`, `Sec-Fetch-Site: same-origin`, the session CSRF value, and
-an `Idempotency-Key`. Step-up, invitation creation, and cancellation also
-require the relevant strong `ETag` in `If-Match`. Step-up, logout, and
-cancellation accept an empty body only; invitation JSON is strictly bounded to
-1 KiB with unknown fields rejected.
+an `Idempotency-Key`. Step-up, identity-link mutations, invitation creation, and
+cancellation also require the relevant strong `ETag` in `If-Match`. Identity
+links use the Account collection ETag. Step-up, logout, identity removal, and
+cancellation accept an empty body only; JSON is strictly bounded to 1 KiB with
+unknown fields rejected.
 
 All responses are `no-store`, use a no-referrer policy and return a bounded,
 closed Problem body on failure. Provider tokens, raw external subjects,
@@ -124,8 +126,27 @@ The database stores only SHA-256 session/state/nonce/invitation digests, an HMAC
 of the issuer and subject, and purpose-separated authenticated encryption of
 short-lived PKCE verifiers and pending email-delivery tokens. Sessions expire
 after 30 minutes idle or eight hours absolute. Callback consumption,
-Account/link creation, session rotation, invitation mutation, revocation,
-audit, and outbox work use `SERIALIZABLE` transactions and the database clock.
+Account/link creation, identity removal, session rotation, invitation mutation,
+revocation, audit, and outbox work use `SERIALIZABLE` transactions and the
+database clock.
+
+## External identity links
+
+The identity-link collection is versioned by Account `resource_version` and
+returned as a strong `ETag`. Initiation binds provider, Account, current
+session, request/idempotency digests, PKCE, state, nonce, and provider
+configuration in one ten-minute transaction. Callback accepts a new exact
+`(issuer, subject HMAC)` only. An identity already active or terminally revoked,
+including one owned by another Account, fails closed. Success advances the
+Account version, appends subject-free audit/outbox evidence, consumes the
+transaction, revokes the old session, and creates a rotated session authenticated
+by the new link.
+
+Removal requires a provider MFA proof no older than five minutes and the current
+Account ETag. At least one of at most eight links must remain. The database
+terminally revokes every session whose `current_link_id` matches the removed
+identity. Active-to-suspended/removed Membership changes also revoke all Portal
+sessions for the bound Account and expire pending step-up/link transactions.
 
 ## Invitation delivery
 
@@ -181,7 +202,9 @@ CP0_STORE_TEST_DATABASE_URL='postgresql://...' \
 
 That gate covers PKCE confidentiality, subject HMAC storage, login/session
 creation, CSRF and origin rejection, idle refresh, idempotent step-up, verified
-MFA rotation, stale-cookie rejection, logout, invitation create/list/inspect/
-cancel/accept and exact replay, email success/retry/failure, token secrecy,
-acceptance session rotation, expiry, SQL bypass rejection, injected transaction
-rollback, and provider-side terminal failure.
+MFA rotation, stale-cookie rejection, logout, two-provider link/list/remove and
+recovery login, link-dependent session containment, Membership suspension
+propagation, invitation create/list/inspect/cancel/accept and exact replay,
+email success/retry/failure, token secrecy, acceptance session rotation, expiry,
+SQL bypass rejection, injected transaction rollback, and provider-side terminal
+failure.

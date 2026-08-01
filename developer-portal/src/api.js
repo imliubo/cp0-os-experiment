@@ -182,3 +182,157 @@ export class StoreApi {
     });
   }
 }
+
+export class PortalApi {
+  constructor({ origin = "https://developer.cardputerzero.dev", fetchImpl = fetch }) {
+    this.origin = strictOrigin(origin);
+    this.fetchImpl = fetchImpl;
+    this.csrfToken = null;
+  }
+
+  async request(
+    path,
+    { method = "GET", body, etag, protectedMutation = false, idempotent = false } = {},
+  ) {
+    const target = new URL(path, this.origin);
+    if (
+      target.origin !== this.origin ||
+      !path.startsWith("/portal/v1/") ||
+      target.pathname !== path ||
+      target.search ||
+      target.hash
+    ) {
+      throw new Error("Portal API path is outside portal v1");
+    }
+    const headers = { Accept: "application/json" };
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    if (protectedMutation) {
+      if (!this.csrfToken) throw new Error("Portal session is unavailable");
+      headers["X-CSRF-Token"] = this.csrfToken;
+    }
+    if (idempotent) headers["Idempotency-Key"] = idempotencyKey();
+    if (etag) headers["If-Match"] = etag;
+    const response = await this.fetchImpl(target.href, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      credentials: "include",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    const encoded = await boundedResponseText(response);
+    let decoded = null;
+    try {
+      decoded = encoded ? JSON.parse(encoded) : null;
+    } catch {
+      throw new Error("Portal API returned invalid JSON");
+    }
+    if (!response.ok) {
+      const code = decoded?.code ?? "unknown-error";
+      throw new Error(`Portal API returned ${response.status} (${code})`);
+    }
+    return { data: decoded, etag: response.headers.get("etag") };
+  }
+
+  async getSession() {
+    const response = await this.request("/portal/v1/session");
+    const csrf = response.data?.csrf_token;
+    if (typeof csrf !== "string" || csrf.length < 43 || /[\r\n]/.test(csrf)) {
+      throw new Error("Portal API returned an invalid CSRF token");
+    }
+    this.csrfToken = csrf;
+    return response;
+  }
+
+  listIdentityLinks() {
+    return this.request("/portal/v1/identity-links");
+  }
+
+  beginIdentityLink(provider, etag) {
+    if (!etag) throw new Error("Identity linking requires an ETag");
+    return this.request("/portal/v1/identity-links", {
+      method: "POST",
+      body: { provider },
+      etag,
+      protectedMutation: true,
+      idempotent: true,
+    });
+  }
+
+  removeIdentityLink(linkId, etag) {
+    if (!etag) throw new Error("Identity removal requires an ETag");
+    return this.request(
+      `/portal/v1/identity-links/${encodeURIComponent(linkId)}:remove`,
+      {
+        method: "POST",
+        etag,
+        protectedMutation: true,
+        idempotent: true,
+      },
+    );
+  }
+
+  beginStepUp(etag) {
+    if (!etag) throw new Error("MFA step-up requires a session ETag");
+    return this.request("/portal/v1/session:step-up", {
+      method: "POST",
+      etag,
+      protectedMutation: true,
+      idempotent: true,
+    });
+  }
+
+  async logout() {
+    const response = await this.request("/portal/v1/session:logout", {
+      method: "POST",
+      protectedMutation: true,
+      idempotent: true,
+    });
+    this.csrfToken = null;
+    return response;
+  }
+
+  listInvitations(teamId) {
+    return this.request(`/portal/v1/teams/${encodeURIComponent(teamId)}/invitations`);
+  }
+
+  createInvitation(teamId, email, role, etag) {
+    if (!etag) throw new Error("Invitation creation requires a Team ETag");
+    return this.request(`/portal/v1/teams/${encodeURIComponent(teamId)}/invitations`, {
+      method: "POST",
+      body: { email, role },
+      etag,
+      protectedMutation: true,
+      idempotent: true,
+    });
+  }
+
+  cancelInvitation(invitationId, etag) {
+    if (!etag) throw new Error("Invitation cancellation requires a Team ETag");
+    return this.request(
+      `/portal/v1/invitations/${encodeURIComponent(invitationId)}:cancel`,
+      {
+        method: "POST",
+        etag,
+        protectedMutation: true,
+        idempotent: true,
+      },
+    );
+  }
+
+  inspectInvitation(invitationToken) {
+    return this.request("/portal/v1/invitations:inspect", {
+      method: "POST",
+      body: { invitation_token: invitationToken },
+    });
+  }
+
+  acceptInvitation(invitationToken) {
+    return this.request("/portal/v1/invitations:accept", {
+      method: "POST",
+      body: { invitation_token: invitationToken },
+      protectedMutation: true,
+      idempotent: true,
+    });
+  }
+}

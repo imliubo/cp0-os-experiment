@@ -100,8 +100,10 @@ the external OIDC login, callback, digest-only session, CSRF, idle/absolute
 expiry, MFA step-up rotation, and logout slice with PostgreSQL end-to-end
 acceptance. The invitation create/list/inspect/cancel/accept flow, encrypted
 email-worker handoff, exact replay, expiry, acceptance session rotation, and
-transaction rollback are also implemented. Identity-link HTTP, the production
-email adapter, provider MFA enrollment/recovery, reviewer SSO, and production
-abuse controls remain unimplemented. Re-inviting a removed external identity requires a future,
-separately versioned membership record design; this endpoint never reactivates
-a removed row.
+transaction rollback are also implemented. Identity-link list/begin/remove,
+two-provider recovery, dependent-session revocation, Membership-loss session
+propagation, and the real Portal browser adapter are implemented. The production
+email adapter, provider MFA enrollment/recovery, IdP conformance, reviewer SSO,
+and production abuse controls remain unimplemented. Re-inviting a removed
+external identity requires a future, separately versioned membership record
+design; this endpoint never reactivates a removed row.

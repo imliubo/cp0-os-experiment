@@ -146,9 +146,9 @@ Implementation proceeds in four acceptance slices:
    enforcement, rotation, idle/absolute expiry and logout;
 3. [complete] invitation create/list/inspect/cancel/accept with email-worker
    handoff, exact replay, Team limits and transaction rollback tests;
-4. Portal integration, two-provider link/unlink recovery tests, session theft
-   containment, membership suspension/removal propagation and production IdP
-   conformance.
+4. [in progress] Portal BFF/browser integration, two-provider link/unlink
+   recovery tests, session theft containment, and Membership suspension/removal
+   propagation are complete; production IdP conformance remains external.
 
 Production login remains disabled until the configured issuer, accepted MFA
 assurance, email delivery, account recovery, abuse response and privacy

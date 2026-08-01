@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::{AuthIntent, OidcError, OidcProvider, PortalSecrets, sha256_hex};
 
+mod identity_link;
 mod invitation;
 
 const SESSION_COOKIE: &str = "__Host-cp0_portal";
@@ -125,6 +126,8 @@ struct OidcTransactionRow {
     session_sha256: Option<String>,
     nonce_sha256: String,
     pkce_verifier_ciphertext: Vec<u8>,
+    request_sha256: Option<String>,
+    idempotency_key_sha256: Option<String>,
     state: String,
     expires_unix_seconds: i64,
 }
@@ -354,6 +357,7 @@ impl PortalService {
         &self,
         code: &str,
         state: &str,
+        callback_request_id: &str,
     ) -> Result<CreatedSession, PortalError> {
         if !valid_secret(state)
             || !(16..=4096).contains(&code.len())
@@ -507,7 +511,18 @@ impl PortalService {
                     .ok_or(PortalError::Unauthorized)?;
                 (old.account_id, old.current_link_id, Some(mfa_time))
             }
-            AuthIntent::Link => return Err(PortalError::InvalidRequest),
+            AuthIntent::Link => {
+                self.complete_identity_link_callback(
+                    &mut transaction,
+                    &locked,
+                    &provider,
+                    &identity,
+                    &subject_hmac,
+                    commit_now,
+                    callback_request_id,
+                )
+                .await?
+            }
         };
         sqlx::query(
             "UPDATE oidc_login_transactions SET state = 'consumed', consumed_unix_seconds = $1 \
@@ -704,6 +719,17 @@ pub fn router(service: PortalService) -> Router {
             post(begin_step_up).layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
         )
         .route(
+            "/portal/v1/identity-links",
+            get(identity_link::list_identity_links)
+                .post(identity_link::begin_identity_link)
+                .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/portal/v1/identity-links/{link_action}",
+            post(identity_link::remove_identity_link)
+                .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
+        .route(
             "/portal/v1/teams/{team_id}/invitations",
             get(invitation::list_invitations).post(invitation::create_invitation),
         )
@@ -749,7 +775,10 @@ async fn complete_callback(
         Ok(query) => query,
         Err(_) => return PortalError::InvalidRequest.response(request_id),
     };
-    match service.complete_callback(&query.code, &query.state).await {
+    match service
+        .complete_callback(&query.code, &query.state, &request_id)
+        .await
+    {
         Ok(session) => redirect_response(
             StatusCode::SEE_OTHER,
             &service.inner.post_login_uri,
@@ -948,8 +977,8 @@ async fn load_oidc_transaction_pool(
 ) -> Result<OidcTransactionRow, PortalError> {
     let row = sqlx::query(
         "SELECT transaction_id, provider_key, provider_config_sha256, intent, account_id, \
-         session_sha256, nonce_sha256, pkce_verifier_ciphertext, state, \
-         expires_unix_seconds FROM oidc_login_transactions \
+         session_sha256, nonce_sha256, pkce_verifier_ciphertext, request_sha256, \
+         idempotency_key_sha256, state, expires_unix_seconds FROM oidc_login_transactions \
          WHERE state_sha256 = $1",
     )
     .bind(state_sha256)
@@ -968,8 +997,8 @@ async fn load_oidc_transaction(
     let suffix = if lock { " FOR UPDATE" } else { "" };
     let query = format!(
         "SELECT transaction_id, provider_key, provider_config_sha256, intent, account_id, \
-         session_sha256, nonce_sha256, pkce_verifier_ciphertext, state, \
-         expires_unix_seconds FROM oidc_login_transactions \
+         session_sha256, nonce_sha256, pkce_verifier_ciphertext, request_sha256, \
+         idempotency_key_sha256, state, expires_unix_seconds FROM oidc_login_transactions \
          WHERE state_sha256 = $1{suffix}"
     );
     let row = sqlx::query(&query)
@@ -996,6 +1025,8 @@ fn oidc_row(row: sqlx::postgres::PgRow) -> Result<OidcTransactionRow, PortalErro
         session_sha256: row.get("session_sha256"),
         nonce_sha256: row.get("nonce_sha256"),
         pkce_verifier_ciphertext: row.get("pkce_verifier_ciphertext"),
+        request_sha256: row.get("request_sha256"),
+        idempotency_key_sha256: row.get("idempotency_key_sha256"),
         state: row.get("state"),
         expires_unix_seconds: row.get("expires_unix_seconds"),
     })
