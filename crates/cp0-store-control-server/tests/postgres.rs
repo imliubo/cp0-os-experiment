@@ -1,5 +1,7 @@
 use std::env;
+use std::fs::FileTimes;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -7,7 +9,8 @@ use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, IF_MATCH};
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use cp0_store_control::register_app_request_sha256;
 use cp0_store_control_server::{
-    MAX_UPLOAD_CHUNK_BYTES, StoreControlService, connect, migrate, router,
+    MAX_UPLOAD_CHUNK_BYTES, ObjectGcMode, StoreControlService, collect_content_objects, connect,
+    migrate, router,
 };
 use cp0_store_metrics::{WEEK_SECONDS, week_start};
 use serde_json::{Value, json};
@@ -101,6 +104,7 @@ async fn postgres_http_transaction_acceptance() {
     verify_editorial_backend(&application, &pool).await;
     verify_metrics_backend(&application, &pool).await;
     verify_moderation_backend(&application, &pool).await;
+    verify_object_gc(&pool, &object_root).await;
     verify_database_immutability(&pool).await;
     tokio::fs::remove_dir_all(object_root)
         .await
@@ -5650,6 +5654,124 @@ async fn public_metric_rows(pool: &PgPool, week: u64, app_id: &str, version: &st
     .fetch_one(pool)
     .await
     .unwrap()
+}
+
+async fn verify_object_gc(pool: &PgPool, object_root: &Path) {
+    let mut upload_transaction = pool.begin().await.unwrap();
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock_shared(\
+         hashtextextended('cp0.store-object-gc.v1', 0))",
+    )
+    .execute(&mut *upload_transaction)
+    .await
+    .unwrap();
+    let gc_pool = pool.clone();
+    let gc_root = object_root.to_owned();
+    let mut blocked_gc = tokio::spawn(async move {
+        collect_content_objects(&gc_pool, gc_root, ObjectGcMode::DryRun, 0).await
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut blocked_gc)
+            .await
+            .is_err(),
+        "GC must wait while an upload-compatible shared lock is held"
+    );
+    upload_transaction.commit().await.unwrap();
+    let unblocked = tokio::time::timeout(Duration::from_secs(5), blocked_gc)
+        .await
+        .expect("GC must resume after the upload lock commits")
+        .unwrap()
+        .unwrap();
+    assert_eq!(unblocked.mode, "dry-run");
+
+    let referenced_digest: String = sqlx::query_scalar(
+        "SELECT chunk_sha256::TEXT FROM submission_upload_chunks ORDER BY chunk_sha256 LIMIT 1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let referenced_digest = referenced_digest.trim().to_owned();
+    let referenced_path = object_root
+        .join("chunks")
+        .join(&referenced_digest[..2])
+        .join(format!("{referenced_digest}.chunk"));
+    assert!(referenced_path.is_file());
+
+    let orphan_path =
+        write_gc_chunk(object_root, b"unreachable object from rolled back upload").await;
+    let temporary_path = object_root
+        .join("temporary")
+        .join("11111111111111111111111111111111.part");
+    tokio::fs::write(&temporary_path, b"interrupted temporary object")
+        .await
+        .unwrap();
+
+    let dry_run = collect_content_objects(pool, object_root, ObjectGcMode::DryRun, 0)
+        .await
+        .unwrap();
+    assert_eq!(dry_run.mode, "dry-run");
+    assert!(dry_run.orphan_chunks >= 1);
+    assert!(dry_run.stale_temporary_files >= 1);
+    assert_eq!(dry_run.deleted_chunks, 0);
+    assert_eq!(dry_run.deleted_temporary_files, 0);
+    assert!(orphan_path.is_file());
+    assert!(temporary_path.is_file());
+
+    let young = collect_content_objects(pool, object_root, ObjectGcMode::Apply, 24 * 60 * 60)
+        .await
+        .unwrap();
+    assert!(young.retained_young_chunks >= 1);
+    assert!(young.retained_young_temporary_files >= 1);
+    assert_eq!(young.deleted_chunks, 0);
+    assert_eq!(young.deleted_temporary_files, 0);
+
+    let unsafe_apply = collect_content_objects(pool, object_root, ObjectGcMode::Apply, 86_399)
+        .await
+        .expect_err("the core collector must enforce the apply grace period");
+    assert!(unsafe_apply.to_string().contains("at least 86400 seconds"));
+    age_gc_file(&orphan_path);
+    age_gc_file(&temporary_path);
+    let applied = collect_content_objects(pool, object_root, ObjectGcMode::Apply, 24 * 60 * 60)
+        .await
+        .unwrap();
+    assert!(applied.deleted_chunks >= 1);
+    assert!(applied.deleted_temporary_files >= 1);
+    assert!(!orphan_path.exists());
+    assert!(!temporary_path.exists());
+    assert!(referenced_path.is_file());
+
+    let retained_on_failure = write_gc_chunk(object_root, b"retain when layout is unsafe").await;
+    let link_digest = sha256_hex(b"malicious symbolic link");
+    let link_directory = object_root.join("chunks").join(&link_digest[..2]);
+    tokio::fs::create_dir_all(&link_directory).await.unwrap();
+    let link_path = link_directory.join(format!("{link_digest}.chunk"));
+    std::os::unix::fs::symlink(&retained_on_failure, &link_path).unwrap();
+    let error = collect_content_objects(pool, object_root, ObjectGcMode::Apply, 24 * 60 * 60)
+        .await
+        .expect_err("symbolic links must fail the complete collection");
+    assert!(error.to_string().contains("unsafe object layout"));
+    assert!(retained_on_failure.is_file());
+    std::fs::remove_file(link_path).unwrap();
+    std::fs::remove_file(retained_on_failure).unwrap();
+}
+
+async fn write_gc_chunk(object_root: &Path, bytes: &[u8]) -> PathBuf {
+    let digest = sha256_hex(bytes);
+    let directory = object_root.join("chunks").join(&digest[..2]);
+    tokio::fs::create_dir_all(&directory).await.unwrap();
+    let path = directory.join(format!("{digest}.chunk"));
+    tokio::fs::write(&path, bytes).await.unwrap();
+    path
+}
+
+fn age_gc_file(path: &Path) {
+    let modified = SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(modified))
+        .unwrap();
 }
 
 fn test_object_root() -> PathBuf {

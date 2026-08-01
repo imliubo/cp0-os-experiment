@@ -20,9 +20,11 @@
   create/upload/finalize/read、独立双审 Review 和 Release 控制的 PostgreSQL/HTTP 纵向切片
   已完成，Submission withdraw 的状态/队列/审核原子取消和 OAuth 开发者 Device Flow 纵向切片
   也已完成；Team 读取/Owner 角色修改、成员暂停/恢复/终态移除和 MFA freshness 纵向切片已完成；Identity 账户链接、
-  邀请、Portal 会话、Review 生产 SSO、生产对象存储/GC、动态
+  邀请、Portal 会话、Review 生产 SSO、生产对象存储、动态
   恶意样本和生产 HSM/key ceremony 尚未实现；隔离 Scanner、文件 key Publisher/Catalog
   Builder 与完整前缀 transparency log 的 outbox/租约、签名、失败恢复和原子结果纵向切片已完成；
+- 本地内容寻址后端的对象 GC 已实现默认 dry-run、24 小时宽限、上传互锁、严格路径验证和
+  PostgreSQL 17 验收；生产复制、保留政策及多区域恢复仍是外部门禁；
 - 设备端 Today/Apps/Search/Updates、Apps/Search 1024 项有界分页、Catalog v3 富媒体详情、下载/更新队列、
   中断恢复和默认关闭的自动更新均已实现；Catalog v4 只投影 approved Release 的 Today
   editorial，默认关闭且无设备身份的周聚合指标已完成设备与 PostgreSQL 纵向切片；

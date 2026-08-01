@@ -1,11 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error;
+use std::fmt;
 use std::io;
 use std::path::{Path as FilePath, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
@@ -51,6 +53,10 @@ const DEVICE_VERIFICATION_URI: &str = "https://developer.cardputerzero.dev/activ
 const DEVICE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 const DEVICE_CLIENT_ID: &str = "cp0ctl";
 const DEVICE_SCOPE: &str = "store.submit";
+const OBJECT_GC_LOCK_DOMAIN: &str = "cp0.store-object-gc.v1";
+const MAX_GC_FILES: usize = 1_000_000;
+const GC_REFERENCE_BATCH_SIZE: usize = 512;
+pub const DEFAULT_OBJECT_GC_MINIMUM_AGE_SECONDS: u64 = 24 * 60 * 60;
 
 #[derive(Clone, Debug)]
 struct ContentObjectStore {
@@ -77,6 +83,22 @@ impl ContentObjectStore {
         restrict_directory(&temporary).await?;
         let chunks = checked_directory(&chunks).await?;
         let temporary = checked_directory(&temporary).await?;
+        if !chunks.starts_with(&root) || !temporary.starts_with(&root) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Store object directories escape the configured root",
+            ));
+        }
+        Ok(Self {
+            chunks: Arc::new(chunks),
+            temporary: Arc::new(temporary),
+        })
+    }
+
+    async fn open_existing(root: &FilePath) -> Result<Self, io::Error> {
+        let root = checked_private_directory(root).await?;
+        let chunks = checked_private_directory(&root.join("chunks")).await?;
+        let temporary = checked_private_directory(&root.join("temporary")).await?;
         if !chunks.starts_with(&root) || !temporary.starts_with(&root) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -194,6 +216,410 @@ async fn checked_directory(path: &FilePath) -> Result<PathBuf, io::Error> {
         ));
     }
     tokio::fs::canonicalize(path).await
+}
+
+#[cfg(unix)]
+async fn checked_private_directory(path: &FilePath) -> Result<PathBuf, io::Error> {
+    let path = checked_directory(path).await?;
+    let metadata = tokio::fs::symlink_metadata(&path).await?;
+    if metadata.mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Store object directory must not grant group or other access",
+        ));
+    }
+    Ok(path)
+}
+
+#[cfg(not(unix))]
+async fn checked_private_directory(_path: &FilePath) -> Result<PathBuf, io::Error> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Store content object storage requires Unix permission semantics",
+    ))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectGcMode {
+    DryRun,
+    Apply,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ObjectGcReport {
+    pub mode: &'static str,
+    pub observed_unix_seconds: u64,
+    pub minimum_age_seconds: u64,
+    pub scanned_chunks: u64,
+    pub referenced_chunks: u64,
+    pub retained_young_chunks: u64,
+    pub orphan_chunks: u64,
+    pub orphan_chunk_bytes: u64,
+    pub deleted_chunks: u64,
+    pub deleted_chunk_bytes: u64,
+    pub scanned_temporary_files: u64,
+    pub retained_young_temporary_files: u64,
+    pub stale_temporary_files: u64,
+    pub deleted_temporary_files: u64,
+}
+
+#[derive(Debug)]
+pub enum ObjectGcError {
+    Database(sqlx::Error),
+    Io(io::Error),
+    UnsafeLayout(String),
+}
+
+impl fmt::Display for ObjectGcError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Database(error) => write!(formatter, "object GC database failure: {error}"),
+            Self::Io(error) => write!(formatter, "object GC filesystem failure: {error}"),
+            Self::UnsafeLayout(reason) => write!(formatter, "unsafe object layout: {reason}"),
+        }
+    }
+}
+
+impl Error for ObjectGcError {}
+
+impl From<sqlx::Error> for ObjectGcError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Database(error)
+    }
+}
+
+impl From<io::Error> for ObjectGcError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct GcFile {
+    path: PathBuf,
+    digest: Option<String>,
+    bytes: u64,
+    modified_unix_seconds: u64,
+    device: u64,
+    inode: u64,
+    links: u64,
+}
+
+pub async fn collect_content_objects(
+    pool: &PgPool,
+    root: impl AsRef<FilePath>,
+    mode: ObjectGcMode,
+    minimum_age_seconds: u64,
+) -> Result<ObjectGcReport, ObjectGcError> {
+    if mode == ObjectGcMode::Apply && minimum_age_seconds < DEFAULT_OBJECT_GC_MINIMUM_AGE_SECONDS {
+        return Err(ObjectGcError::UnsafeLayout(
+            "apply mode requires a minimum age of at least 86400 seconds".to_owned(),
+        ));
+    }
+    if !root.as_ref().is_absolute() {
+        return Err(ObjectGcError::UnsafeLayout(
+            "Store object root must be absolute".to_owned(),
+        ));
+    }
+    let store = ContentObjectStore::open_existing(root.as_ref()).await?;
+    let chunks = inventory_chunks(store.chunks.as_ref()).await?;
+    let temporary = inventory_temporary(store.temporary.as_ref()).await?;
+    if chunks.len().saturating_add(temporary.len()) > MAX_GC_FILES {
+        return Err(ObjectGcError::UnsafeLayout(
+            "object inventory exceeds the fixed maintenance bound".to_owned(),
+        ));
+    }
+
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(OBJECT_GC_LOCK_DOMAIN)
+        .execute(&mut *transaction)
+        .await?;
+    let now = database_now(&mut transaction)
+        .await
+        .map_err(|error| match error {
+            TxError::Sql(error) => ObjectGcError::Database(error),
+            TxError::Api(_) => {
+                ObjectGcError::UnsafeLayout("database clock returned an invalid value".to_owned())
+            }
+        })?;
+    let now = u64::try_from(now).map_err(|_| {
+        ObjectGcError::UnsafeLayout("database clock returned an invalid value".to_owned())
+    })?;
+    let cutoff = now.saturating_sub(minimum_age_seconds);
+
+    let mut referenced = BTreeSet::new();
+    for batch in chunks.chunks(GC_REFERENCE_BATCH_SIZE) {
+        let digests = batch
+            .iter()
+            .map(|file| file.digest.clone().expect("chunk inventory has digests"))
+            .collect::<Vec<_>>();
+        let rows = sqlx::query(
+            "SELECT DISTINCT chunk_sha256::TEXT AS chunk_sha256 \
+             FROM submission_upload_chunks WHERE chunk_sha256 = ANY($1::CHAR(64)[])",
+        )
+        .bind(&digests)
+        .fetch_all(&mut *transaction)
+        .await?;
+        referenced.extend(
+            rows.into_iter()
+                .map(|row| row.get::<String, _>("chunk_sha256")),
+        );
+    }
+
+    let mut report = ObjectGcReport {
+        mode: match mode {
+            ObjectGcMode::DryRun => "dry-run",
+            ObjectGcMode::Apply => "apply",
+        },
+        observed_unix_seconds: now,
+        minimum_age_seconds,
+        scanned_chunks: u64::try_from(chunks.len()).unwrap_or(u64::MAX),
+        referenced_chunks: 0,
+        retained_young_chunks: 0,
+        orphan_chunks: 0,
+        orphan_chunk_bytes: 0,
+        deleted_chunks: 0,
+        deleted_chunk_bytes: 0,
+        scanned_temporary_files: u64::try_from(temporary.len()).unwrap_or(u64::MAX),
+        retained_young_temporary_files: 0,
+        stale_temporary_files: 0,
+        deleted_temporary_files: 0,
+    };
+    let mut orphan_chunks = Vec::new();
+    for file in chunks {
+        let digest = file.digest.as_deref().expect("chunk inventory has digests");
+        if referenced.contains(digest) {
+            report.referenced_chunks += 1;
+        } else if file.modified_unix_seconds > cutoff {
+            report.retained_young_chunks += 1;
+        } else {
+            report.orphan_chunks += 1;
+            report.orphan_chunk_bytes = report.orphan_chunk_bytes.saturating_add(file.bytes);
+            orphan_chunks.push(file);
+        }
+    }
+    let mut stale_temporary = Vec::new();
+    for file in temporary {
+        if file.modified_unix_seconds > cutoff {
+            report.retained_young_temporary_files += 1;
+        } else {
+            report.stale_temporary_files += 1;
+            stale_temporary.push(file);
+        }
+    }
+
+    revalidate_gc_files(&orphan_chunks).await?;
+    revalidate_gc_files(&stale_temporary).await?;
+    if mode == ObjectGcMode::Apply {
+        let mut changed_directories = BTreeSet::new();
+        for file in &orphan_chunks {
+            if let Err(error) = tokio::fs::remove_file(&file.path).await {
+                sync_changed_directories(&changed_directories).await;
+                return Err(error.into());
+            }
+            if let Some(parent) = file.path.parent() {
+                changed_directories.insert(parent.to_owned());
+            }
+            report.deleted_chunks += 1;
+            report.deleted_chunk_bytes = report.deleted_chunk_bytes.saturating_add(file.bytes);
+        }
+        for file in &stale_temporary {
+            if let Err(error) = tokio::fs::remove_file(&file.path).await {
+                sync_changed_directories(&changed_directories).await;
+                return Err(error.into());
+            }
+            if let Some(parent) = file.path.parent() {
+                changed_directories.insert(parent.to_owned());
+            }
+            report.deleted_temporary_files += 1;
+        }
+        for directory in changed_directories {
+            sync_directory(&directory).await?;
+        }
+    }
+    transaction.commit().await?;
+    Ok(report)
+}
+
+async fn inventory_chunks(root: &FilePath) -> Result<Vec<GcFile>, ObjectGcError> {
+    let mut inventory = Vec::new();
+    let mut directories = tokio::fs::read_dir(root).await?;
+    while let Some(entry) = directories.next_entry().await? {
+        let name = entry.file_name();
+        let name = name
+            .to_str()
+            .ok_or_else(|| ObjectGcError::UnsafeLayout("non-UTF-8 chunk prefix".to_owned()))?;
+        let metadata = tokio::fs::symlink_metadata(entry.path()).await?;
+        if name.len() != 2
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            || metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+        {
+            return Err(ObjectGcError::UnsafeLayout(format!(
+                "invalid chunk prefix {name:?}"
+            )));
+        }
+        let directory = checked_directory(&entry.path()).await?;
+        if !directory.starts_with(root) {
+            return Err(ObjectGcError::UnsafeLayout(
+                "chunk prefix escapes the object root".to_owned(),
+            ));
+        }
+        let mut files = tokio::fs::read_dir(&directory).await?;
+        while let Some(file) = files.next_entry().await? {
+            let file_name = file.file_name();
+            let file_name = file_name.to_str().ok_or_else(|| {
+                ObjectGcError::UnsafeLayout("non-UTF-8 chunk filename".to_owned())
+            })?;
+            let digest = file_name.strip_suffix(".chunk").ok_or_else(|| {
+                ObjectGcError::UnsafeLayout(format!("invalid chunk filename {file_name:?}"))
+            })?;
+            if !is_valid_sha256(digest) || &digest[..2] != name {
+                return Err(ObjectGcError::UnsafeLayout(format!(
+                    "chunk filename does not match prefix {file_name:?}"
+                )));
+            }
+            inventory.push(gc_file(file.path(), Some(digest.to_owned())).await?);
+            if inventory.len() > MAX_GC_FILES {
+                return Err(ObjectGcError::UnsafeLayout(
+                    "chunk inventory exceeds the fixed maintenance bound".to_owned(),
+                ));
+            }
+        }
+    }
+    inventory.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(inventory)
+}
+
+async fn inventory_temporary(root: &FilePath) -> Result<Vec<GcFile>, ObjectGcError> {
+    let mut inventory = Vec::new();
+    let mut files = tokio::fs::read_dir(root).await?;
+    while let Some(file) = files.next_entry().await? {
+        let file_name = file.file_name();
+        let file_name = file_name.to_str().ok_or_else(|| {
+            ObjectGcError::UnsafeLayout("non-UTF-8 temporary filename".to_owned())
+        })?;
+        let identifier = file_name.strip_suffix(".part").ok_or_else(|| {
+            ObjectGcError::UnsafeLayout(format!("invalid temporary filename {file_name:?}"))
+        })?;
+        if identifier.len() != 32
+            || !identifier
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(ObjectGcError::UnsafeLayout(format!(
+                "invalid temporary filename {file_name:?}"
+            )));
+        }
+        inventory.push(gc_file(file.path(), None).await?);
+        if inventory.len() > MAX_GC_FILES {
+            return Err(ObjectGcError::UnsafeLayout(
+                "temporary inventory exceeds the fixed maintenance bound".to_owned(),
+            ));
+        }
+    }
+    inventory.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(inventory)
+}
+
+#[cfg(unix)]
+async fn gc_file(path: PathBuf, digest: Option<String>) -> Result<GcFile, ObjectGcError> {
+    let metadata = tokio::fs::symlink_metadata(&path).await?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(ObjectGcError::UnsafeLayout(format!(
+            "object is not a regular file: {}",
+            path.display()
+        )));
+    }
+    let modified = modified_unix_seconds(&metadata, &path)?;
+    Ok(GcFile {
+        path,
+        digest,
+        bytes: metadata.len(),
+        modified_unix_seconds: modified,
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        links: metadata.nlink(),
+    })
+}
+
+#[cfg(not(unix))]
+async fn gc_file(_path: PathBuf, _digest: Option<String>) -> Result<GcFile, ObjectGcError> {
+    Err(ObjectGcError::UnsafeLayout(
+        "object GC requires Unix inode semantics".to_owned(),
+    ))
+}
+
+fn modified_unix_seconds(
+    metadata: &std::fs::Metadata,
+    path: &FilePath,
+) -> Result<u64, ObjectGcError> {
+    metadata
+        .modified()
+        .map_err(ObjectGcError::Io)?
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| {
+            ObjectGcError::UnsafeLayout(format!(
+                "object modification time predates the Unix epoch: {}",
+                path.display()
+            ))
+        })
+}
+
+#[cfg(unix)]
+async fn revalidate_gc_files(files: &[GcFile]) -> Result<(), ObjectGcError> {
+    for file in files {
+        let metadata = tokio::fs::symlink_metadata(&file.path).await?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.dev() != file.device
+            || metadata.ino() != file.inode
+            || metadata.nlink() != file.links
+            || metadata.len() != file.bytes
+            || modified_unix_seconds(&metadata, &file.path)? != file.modified_unix_seconds
+        {
+            return Err(ObjectGcError::UnsafeLayout(format!(
+                "object changed during collection: {}",
+                file.path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn revalidate_gc_files(_files: &[GcFile]) -> Result<(), ObjectGcError> {
+    Err(ObjectGcError::UnsafeLayout(
+        "object GC requires Unix inode semantics".to_owned(),
+    ))
+}
+
+async fn sync_directory(path: &FilePath) -> Result<(), io::Error> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || std::fs::File::open(path)?.sync_all())
+        .await
+        .map_err(io::Error::other)?
+}
+
+async fn sync_changed_directories(directories: &BTreeSet<PathBuf>) {
+    for directory in directories {
+        let _ = sync_directory(directory).await;
+    }
+}
+
+async fn acquire_object_gc_upload_lock(
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<(), TxError> {
+    sqlx::query("SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))")
+        .bind(OBJECT_GC_LOCK_DOMAIN)
+        .execute(&mut **transaction)
+        .await
+        .map_err(TxError::Sql)?;
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -1688,6 +2114,7 @@ impl StoreControlService {
         if sha256_hex(upload.body) != upload.chunk_sha256 {
             return Err(ApiError::digest_mismatch().into());
         }
+        acquire_object_gc_upload_lock(&mut transaction).await?;
         object_store
             .store_chunk(upload.chunk_sha256, upload.body)
             .await

@@ -106,9 +106,12 @@ Catalog sequence. S5G implements that boundary in `cp0-store-publisher`; see
 `STORE-RELEASE-BACKEND.md` and `STORE-PUBLISHER.md`.
 
 A database rollback after an object write can leave an unreachable
-content-addressed chunk. It grants no Submission state and can be removed by a
-future mark-and-sweep maintenance worker. Production replication and garbage
-collection remain separate from this local filesystem reference backend.
+content-addressed chunk. It grants no Submission state. The separate
+`cp0-store-object-gc` maintenance binary now provides a default-dry-run,
+24-hour-grace mark-and-sweep pass coordinated with uploads by PostgreSQL advisory
+locks; see `STORE-OBJECT-GC.md`. Production replication, retention approval and
+multi-region object lifecycle remain separate from this local filesystem
+reference backend.
 
 ## Run
 
@@ -159,7 +162,8 @@ resolution, revision immutability, and absence of identity/network columns in
 the report table.
 
 Identity account linking, invitations, Portal sessions, dynamic malware
-intelligence, production reviewer SSO, production object storage, general outbox
-delivery and garbage collection are not implemented by this HTTP slice.
+intelligence, production reviewer SSO, production object storage and general
+outbox delivery are not implemented by this HTTP slice. Local reference-backend
+garbage collection is implemented by the separate maintenance binary.
 Isolated signing/Catalog publication and transparency logging are implemented by
 the S5G/S5H Publisher boundary described in `STORE-PUBLISHER.md`.
