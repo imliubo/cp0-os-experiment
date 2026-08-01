@@ -11,6 +11,7 @@ part of the CardputerZero device image.
 - `POST /v1/apps/{app_id}/submissions`;
 - `PUT /v1/submissions/{submission_id}/parts/{part_name}`;
 - `POST /v1/submissions/{submission_id}:finalize`;
+- `POST /v1/submissions/{submission_id}:withdraw`;
 - `GET /v1/submissions/{submission_id}`;
 - `POST /v1/submissions/{submission_id}/messages`;
 - `GET /v1/review/submissions`;
@@ -40,6 +41,13 @@ only immutable chunk descriptors. Finalize locks the Submission, reopens every
 chunk, recomputes every declared object digest and the frozen Submission content
 digest, then atomically changes `uploading` to `processing` and emits the scan
 request through the transaction outbox.
+
+Withdraw accepts an empty body and allows an owner/developer to close a
+`draft`, `uploading`, `processing`, `ready-for-review`, or `in-review`
+Submission. The same transaction advances its ETag, cancels any queued/running
+scan job and active review assignment, suppresses an unconsumed scan-requested
+event, and appends `submission.withdrawn` to audit/outbox. Files and prior
+events remain immutable. See `STORE-SUBMISSION-WITHDRAWAL.md`.
 
 `cp0-store-scan-worker` consumes that event through an expiring database lease.
 It independently reopens the read-only objects, binds the package key to an
@@ -104,11 +112,12 @@ revision allocation and review claims, live RBAC/2FA/scope/revocation checks,
 finalize replay, reviewer assignment authorization, structured decisions,
 developer/reviewer messages, approved-only Release creation, concurrent Release
 uniqueness, scheduling, publication queueing, pause/resume/removal, publication
-retry, injected transaction rollback and append-only database triggers.
+retry, Submission withdrawal/cleanup/replay, injected transaction rollback and
+append-only database triggers.
 
-Identity/Teams account and session management, withdraw, dynamic malware
-intelligence, independent second review, double approval, Review Console UI,
-production object storage, general outbox delivery and garbage collection are
-not implemented by this HTTP slice.
+Identity/Teams account and session management, dynamic malware intelligence,
+independent second review, double approval, Review Console UI, production
+object storage, general outbox delivery and garbage collection are not
+implemented by this HTTP slice.
 Isolated signing/Catalog publication and transparency logging are implemented by
 the S5G/S5H Publisher boundary described in `STORE-PUBLISHER.md`.

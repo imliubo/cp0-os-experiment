@@ -166,7 +166,7 @@ impl SubmissionState {
                 | (Self::Uploading, Self::Processing | Self::Withdrawn)
                 | (
                     Self::Processing,
-                    Self::ReadyForReview | Self::NeedsChanges | Self::Rejected
+                    Self::ReadyForReview | Self::NeedsChanges | Self::Rejected | Self::Withdrawn
                 )
                 | (Self::ReadyForReview, Self::InReview | Self::Withdrawn)
                 | (
@@ -800,6 +800,7 @@ mod tests {
     #[test]
     fn submission_and_release_transitions_are_closed() {
         assert!(SubmissionState::Draft.can_transition_to(SubmissionState::Uploading));
+        assert!(SubmissionState::Processing.can_transition_to(SubmissionState::Withdrawn));
         assert!(SubmissionState::InReview.can_transition_to(SubmissionState::Approved));
         assert!(!SubmissionState::Approved.can_transition_to(SubmissionState::ReadyForReview));
         assert!(!SubmissionState::NeedsChanges.can_transition_to(SubmissionState::Uploading));

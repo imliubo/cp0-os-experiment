@@ -16,6 +16,7 @@ jq -e '
   (.paths["/oauth/token"].post.responses | has("428") | not) and
   .paths["/v1/apps/{app_id}/submissions"].post.operationId == "createSubmission" and
   .paths["/v1/submissions/{submission_id}:finalize"].post.operationId == "finalizeSubmission" and
+  .paths["/v1/submissions/{submission_id}:withdraw"].post.operationId == "withdrawSubmission" and
   .paths["/v1/submissions/{submission_id}/messages"].post.operationId == "postReviewMessage" and
   .paths["/v1/review/submissions"].get.operationId == "listReviewQueue" and
   .paths["/v1/review/submissions/{submission_id}:begin"].post.operationId == "beginReview" and
@@ -62,6 +63,13 @@ jq -e '
   (refs(.paths["/v1/submissions/{submission_id}/messages"].post) |
     index("#/components/parameters/IdempotencyKey") != null and
     index("#/components/parameters/IfMatch") == null) and
+  (refs(.paths["/v1/submissions/{submission_id}:withdraw"].post) |
+    index("#/components/parameters/IdempotencyKey") != null and
+    index("#/components/parameters/IfMatch") != null) and
+  (.paths["/v1/submissions/{submission_id}:withdraw"].post | has("requestBody") | not) and
+  (.paths["/v1/submissions/{submission_id}:withdraw"].post.responses["200"] |
+    .headers.ETag["$ref"] == "#/components/headers/ETag" and
+    .content["application/json"].schema["$ref"] == "#/components/schemas/Submission") and
   all([
     .paths["/v1/releases/{release_id}:schedule"].post,
     .paths["/v1/releases/{release_id}:publish"].post,

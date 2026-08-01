@@ -17,8 +17,8 @@
 - Developer Portal 本地前端 MVP 已完成；Review Console、Store Operations 和真实控制面接入尚未实现；
 - Submission/Review/Release 事务域核心已完成；App Registry、Submission
   create/upload/finalize/read、单审核员 Review 和 Release 控制的 PostgreSQL/HTTP 纵向切片
-  已完成，OAuth 开发者 Device Flow 纵向切片也已完成；Identity/Teams 管理、Portal 会话、
-  其余 Submission、二审/双人审批、生产对象存储/GC、动态
+  已完成，Submission withdraw 的状态/队列/审核原子取消和 OAuth 开发者 Device Flow 纵向切片
+  也已完成；Identity/Teams 管理、Portal 会话、二审/双人审批、生产对象存储/GC、动态
   恶意样本和生产 HSM/key ceremony 尚未实现；隔离 Scanner、文件 key Publisher/Catalog
   Builder 与完整前缀 transparency log 的 outbox/租约、签名、失败恢复和原子结果纵向切片已完成；
 - 设备端 Today/Apps/Search/Updates、分页搜索、图标/截图和更新队列尚未实现；

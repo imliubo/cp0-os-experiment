@@ -1338,6 +1338,180 @@ impl StoreControlService {
         Ok(stored.response)
     }
 
+    async fn withdraw_submission(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+        request_id: &str,
+        submission_id: &str,
+        expected_version: u64,
+    ) -> Result<SubmissionResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let key_sha256 = sha256_hex(idempotency_key.as_bytes());
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self
+                .withdraw_submission_once(
+                    &token_sha256,
+                    &key_sha256,
+                    request_id,
+                    submission_id,
+                    expected_version,
+                )
+                .await
+            {
+                Err(TxError::Sql(error)) if is_retryable_transaction_error(&error) => {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(error) => return Err(ApiError::from_transaction(error)),
+                Ok(submission) => return Ok(submission),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    async fn withdraw_submission_once(
+        &self,
+        token_sha256: &str,
+        key_sha256: &str,
+        request_id: &str,
+        submission_id: &str,
+        expected_version: u64,
+    ) -> Result<SubmissionResponse, TxError> {
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let identity = authenticate(&mut transaction, token_sha256).await?;
+        require_developer_write(&identity)?;
+        let expected_version_text = expected_version.to_string();
+        let request_sha256 = mutation_request_sha256(
+            "submission.withdraw.v1",
+            &[submission_id, &expected_version_text],
+        );
+        let now = database_now(&mut transaction).await?;
+        match reserve_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            &request_sha256,
+            now,
+        )
+        .await?
+        {
+            IdempotencyReservation::Fresh => {}
+            IdempotencyReservation::Replay { status, body }
+                if status == StatusCode::OK.as_u16() as i16 =>
+            {
+                let submission = serde_json::from_value(body).map_err(|_| ApiError::internal())?;
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(submission);
+            }
+            IdempotencyReservation::Replay { .. } => {
+                return Err(ApiError::internal().into());
+            }
+        }
+
+        let mut stored =
+            load_submission(&mut transaction, submission_id, &identity.team_id, true).await?;
+        if stored.response.resource_version != expected_version {
+            return Err(ApiError::precondition_failed().into());
+        }
+        if !stored
+            .response
+            .state
+            .can_transition_to(SubmissionState::Withdrawn)
+        {
+            return Err(ApiError::invalid_transition().into());
+        }
+        let before_state = stored.response.state.as_str();
+        let resource_version = expected_version
+            .checked_add(1)
+            .ok_or_else(ApiError::internal)?;
+        let changed = sqlx::query(
+            "UPDATE submissions SET state = 'withdrawn', resource_version = $1 \
+             WHERE submission_id = $2 AND resource_version = $3",
+        )
+        .bind(i64::try_from(resource_version).map_err(|_| ApiError::internal())?)
+        .bind(submission_id)
+        .bind(i64::try_from(expected_version).map_err(|_| ApiError::internal())?)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .rows_affected();
+        if changed != 1 {
+            return Err(ApiError::precondition_failed().into());
+        }
+
+        sqlx::query(
+            "UPDATE submission_scan_jobs SET state = 'cancelled', lease_token = NULL, \
+             leased_until_unix_seconds = NULL, last_error_code = 'submission-withdrawn', \
+             completed_unix_seconds = $1 WHERE submission_id = $2 AND state IN ('queued', 'running')",
+        )
+        .bind(now)
+        .bind(submission_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+        sqlx::query(
+            "UPDATE review_assignments SET state = 'cancelled', completed_unix_seconds = $1 \
+             WHERE submission_id = $2 AND state = 'active'",
+        )
+        .bind(now)
+        .bind(submission_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+        sqlx::query(
+            "UPDATE outbox_events SET published_unix_seconds = $1, attempts = attempts + 1 \
+             WHERE topic = 'submission.scan-requested' AND aggregate_kind = 'submission' \
+               AND aggregate_id = $2 AND published_unix_seconds IS NULL",
+        )
+        .bind(now)
+        .bind(submission_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+
+        stored.response.state = SubmissionState::Withdrawn;
+        stored.response.resource_version = resource_version;
+        let response_body =
+            serde_json::to_value(&stored.response).map_err(|_| ApiError::internal())?;
+        complete_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            StatusCode::OK,
+            &response_body,
+        )
+        .await?;
+        append_mutation(
+            &mut transaction,
+            MutationEvent {
+                now,
+                actor_id: &identity.member_id,
+                action: "submission.withdrawn",
+                topic: "submission.withdrawn",
+                object_kind: "submission",
+                object_id: submission_id,
+                before_state: Some(before_state),
+                after_state: Some("withdrawn"),
+                resource_version,
+                request_id,
+                request_sha256: &request_sha256,
+                key_sha256,
+                payload: json!({
+                    "submission_id": submission_id,
+                    "app_id": stored.response.app_id,
+                    "version": stored.response.version,
+                    "revision": stored.response.revision
+                }),
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)?;
+        Ok(stored.response)
+    }
+
     async fn list_review_queue(
         &self,
         token: &str,
@@ -2291,7 +2465,7 @@ pub fn router(service: StoreControlService) -> Router {
         .route(
             "/v1/submissions/{submission_action}",
             get(get_submission)
-                .post(finalize_submission)
+                .post(mutate_submission)
                 .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
         )
         .route(
@@ -3923,17 +4097,17 @@ async fn put_submission_part(
     }
 }
 
-async fn finalize_submission(
+async fn mutate_submission(
     State(service): State<StoreControlService>,
     Path(submission_action): Path<String>,
     headers: HeaderMap,
-    payload: Result<Json<FinalizeSubmissionRequest>, JsonRejection>,
+    payload: Result<Bytes, BytesRejection>,
 ) -> Response {
     let request_id = request_id();
-    let Some(submission_id) = submission_action.strip_suffix(":finalize") else {
+    let Some((submission_id, action)) = submission_action.split_once(':') else {
         return ApiError::invalid_request().response(request_id);
     };
-    if !is_valid_submission_id(submission_id) {
+    if !is_valid_submission_id(submission_id) || action.contains(':') {
         return ApiError::invalid_request().response(request_id);
     }
     let token = match bearer_token(&headers) {
@@ -3948,27 +4122,57 @@ async fn finalize_submission(
         Ok(value) => value,
         Err(error) => return error.response(request_id),
     };
-    let Json(request) = match payload {
-        Ok(payload) => payload,
-        Err(rejection) => return json_rejection(rejection).response(request_id),
+    let body = match payload {
+        Ok(body) => body,
+        Err(rejection) => {
+            let error = if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                ApiError::payload_too_large()
+            } else {
+                ApiError::invalid_request()
+            };
+            return error.response(request_id);
+        }
     };
-    if !is_valid_sha256(&request.content_sha256) {
-        return ApiError::invalid_request().response(request_id);
-    }
-    match service
-        .finalize_submission(
-            &token,
-            &idempotency_key,
-            &request_id,
-            submission_id,
-            expected_version,
-            &request.content_sha256,
-        )
-        .await
-    {
-        Ok(submission) => {
+    let result = match action {
+        "finalize" => {
+            if require_json_content_type(&headers).is_err() {
+                return ApiError::invalid_request().response(request_id);
+            }
+            let request: FinalizeSubmissionRequest = match serde_json::from_slice(&body) {
+                Ok(request) => request,
+                Err(_) => return ApiError::invalid_request().response(request_id),
+            };
+            if !is_valid_sha256(&request.content_sha256) {
+                return ApiError::invalid_request().response(request_id);
+            }
+            service
+                .finalize_submission(
+                    &token,
+                    &idempotency_key,
+                    &request_id,
+                    submission_id,
+                    expected_version,
+                    &request.content_sha256,
+                )
+                .await
+                .map(|submission| (StatusCode::ACCEPTED, submission))
+        }
+        "withdraw" if body.is_empty() => service
+            .withdraw_submission(
+                &token,
+                &idempotency_key,
+                &request_id,
+                submission_id,
+                expected_version,
+            )
+            .await
+            .map(|submission| (StatusCode::OK, submission)),
+        _ => return ApiError::invalid_request().response(request_id),
+    };
+    match result {
+        Ok((status, submission)) => {
             let version = submission.resource_version;
-            resource_response(StatusCode::ACCEPTED, submission, version, request_id)
+            resource_response(status, submission, version, request_id)
         }
         Err(error) => error.response(request_id),
     }

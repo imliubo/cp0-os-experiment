@@ -70,7 +70,7 @@ S5C 已接通 `cp0ctl` 所需的 Submission 创建、256 KiB 连续分片、读�
 寻址保存，finalize 独立重读并复算全部对象和 content digest，并发 revision、断点 ETag、错误
 摘要和事务回滚已有真实 PostgreSQL 验收。S5D 已接通隔离 Scanner：outbox 租约、只读对象重组、
 团队有效开发者密钥、WASM host imports/权限、Listing/PNG、重试恢复和原子 scan result 均有
-真实 PostgreSQL 验收。Withdraw、动态恶意样本和生产对象存储/GC 仍按下列门禁推进。
+真实 PostgreSQL 验收。动态恶意样本和生产对象存储/GC 仍按下列门禁推进。
 S5E 已新增独立 reviewer 身份域和审核后端纵向切片：有界队列、并发唯一领取、结构化决定、
 开发者/审核员追加消息、即时 2FA/撤销、ETag、幂等、审计和 outbox 均通过真实 PostgreSQL
 验收；风险分级、独立二审、双人审批和 Review Console 前端仍未完成。
@@ -88,11 +88,14 @@ S5I 已接通 `cp0ctl` 开发者 OAuth Device Flow：10 分钟设备码、慢轮
 role/scope/2FA、15 分钟最小 scope token、并发一次性兑换、撤销、摘要存储及原子 audit/outbox
 均通过 PostgreSQL 17 验收。账户注册、团队管理、Portal 会话与 reviewer SSO 仍属 Identity/
 Teams 后续工作。
+S5J 已补齐 Submission 撤回：owner/developer、实时 2FA/scope、强 ETag、精确幂等、合法状态图，
+以及扫描任务、未消费扫描事件和活动审核分配的原子取消均通过 PostgreSQL 17 验收；历史对象、
+扫描结果、审核消息和审计事件保持不可变。
 
 - [ ] 实现 Identity/Teams、App Registry、Submission 和 Release 服务。
-  当前 App Registry、Submission 上传/finalize、单审核员 Review 和 Release 控制纵向切片已完成；
-  OAuth 开发者 Device Flow 已完成；Identity/Teams 管理、Portal 会话和 Submission 其余操作
-  未完成；Publisher 通过受约束 outbox 接入。
+  当前 App Registry、Submission 上传/finalize/read/withdraw、单审核员 Review 和 Release 控制
+  纵向切片已完成；OAuth 开发者 Device Flow 已完成；Identity/Teams 管理和 Portal 会话未完成；
+  Publisher 通过受约束 outbox 接入。
 - [x] 实现隔离 Scan Worker：包格式、WASM、权限、资源和恶意样本检查。
   当前为无 IP 网络、只读对象根的确定性结构/能力扫描；动态规则、信誉源和运营隔离环境待生产化。
 - [ ] 实现 Review Console、结构化问题、回复、二审和双人审批。

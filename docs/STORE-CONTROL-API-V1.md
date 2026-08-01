@@ -18,6 +18,8 @@ Console 和 Release Service 的首版控制面契约。设备上的 System Shell
   发送最多 256 KiB 的连续分片，`Content-SHA256` 是该分片摘要。相同 part/range 只允许相同
   摘要的幂等重放，不能覆盖成不同内容。
 - `finalize` 重新读取所有对象，验证长度和摘要，计算 submission content digest 后冻结 revision。
+- `withdraw` 请求体必须为空，并同时要求 `Idempotency-Key` 和当前 `If-Match`；成功返回 `200`、
+  更新后的 Submission 和新 ETag。
 
 content digest 固定为 SHA-256：先写入 ASCII domain `CardputerZero Store submission content
 v1\0`，再按 package SHA、Listing SHA 分别写入 `u64 big-endian length + UTF-8 bytes`；随后按
@@ -41,6 +43,12 @@ DRAFT -> UPLOADING -> PROCESSING -> READY_FOR_REVIEW -> IN_REVIEW
 `NEEDS_CHANGES`、`APPROVED`、`REJECTED` 和 `WITHDRAWN` 对该 revision 都是终态。开发者修改
 package、Listing 或任一资源时必须创建递增的新 revision，不能把旧 revision 重新变回
 `READY_FOR_REVIEW`。Review 消息和决定是 append-only 事件，不能改写 submission 内容。
+
+撤回会在同一个 `SERIALIZABLE` 事务内把 revision 置为 `WITHDRAWN`、取消活动扫描任务和审核
+分配，并消费尚未交付的 `submission.scan-requested` outbox 事件。已完成的扫描、消息、决定、
+上传对象和审计记录都不会删除。`APPROVED`、`REJECTED`、`NEEDS_CHANGES` 或已经 `WITHDRAWN`
+的 revision 不能撤回；并发扫描/审核提交必须通过行锁和 resource version 与撤回事务决出唯一结果。
+完整约束见 `STORE-SUBMISSION-WITHDRAWAL.md`。
 
 只有自动扫描通过的 revision 可以进入 `READY_FOR_REVIEW`；只有 Review Service 可以进入
 `IN_REVIEW/APPROVED/NEEDS_CHANGES/REJECTED`。高风险权限和安全例外由服务端策略要求双人审批，

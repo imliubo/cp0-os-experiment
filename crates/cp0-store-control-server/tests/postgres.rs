@@ -74,6 +74,7 @@ async fn postgres_http_transaction_acceptance() {
     verify_concurrent_submission_revisions(&application, &pool).await;
     verify_review_backend(&application, &pool).await;
     verify_release_backend(&application, &pool).await;
+    verify_submission_withdrawal(&application, &pool).await;
     verify_oauth_device_flow(&application, &pool).await;
     verify_database_immutability(&pool).await;
     tokio::fs::remove_dir_all(object_root)
@@ -1203,7 +1204,15 @@ async fn verify_release_backend(application: &Router, pool: &PgPool) {
 
     seed_review_submission(pool, CONCURRENT_SUBMISSION, "3.0.3", 103).await;
     sqlx::query(
-        "UPDATE submissions SET state = 'approved', resource_version = 2 \
+        "UPDATE submissions SET state = 'in-review', resource_version = 2 \
+         WHERE submission_id = $1",
+    )
+    .bind(CONCURRENT_SUBMISSION)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE submissions SET state = 'approved', resource_version = 3 \
          WHERE submission_id = $1",
     )
     .bind(CONCURRENT_SUBMISSION)
@@ -1575,6 +1584,428 @@ async fn verify_release_backend(application: &Router, pool: &PgPool) {
         count(pool, "idempotency_records").await,
         counts_before.2 + 9
     );
+}
+
+async fn verify_submission_withdrawal(application: &Router, pool: &PgPool) {
+    let created = call(
+        application.clone(),
+        Method::POST,
+        "/v1/apps/dev.cardputerzero.notes/submissions",
+        Some(OWNER_A_TOKEN),
+        Some("withdraw-create-upload-01"),
+        Some(json!({
+            "version": "91.0.0",
+            "package_sha256": "1".repeat(64),
+            "package_bytes": 100,
+            "listing_sha256": "2".repeat(64),
+            "listing_bytes": 100,
+            "assets": [
+                {"path": "icon.png", "sha256": "3".repeat(64), "bytes": 100,
+                 "width": 48, "height": 48},
+                {"path": "screens/main.png", "sha256": "4".repeat(64), "bytes": 100,
+                 "width": 320, "height": 170}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let created_body: Value = serde_json::from_slice(&created.body).unwrap();
+    let uploading_id = created_body["submission_id"].as_str().unwrap();
+
+    let body_rejected = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/submissions/{uploading_id}:withdraw"),
+        OWNER_A_TOKEN,
+        "withdraw-body-reject1",
+        1,
+        Some(json!({})),
+    )
+    .await;
+    assert_problem(&body_rejected, StatusCode::BAD_REQUEST, "invalid-request");
+    for (token, key, status, code) in [
+        (
+            NO_2FA_TOKEN,
+            "withdraw-no-twofa-01",
+            StatusCode::FORBIDDEN,
+            "two-factor-required",
+        ),
+        (
+            VIEWER_TOKEN,
+            "withdraw-viewer-0001",
+            StatusCode::FORBIDDEN,
+            "forbidden",
+        ),
+        (
+            OWNER_B_TOKEN,
+            "withdraw-cross-team1",
+            StatusCode::NOT_FOUND,
+            "not-found",
+        ),
+    ] {
+        let result = call_with_etag(
+            application.clone(),
+            Method::POST,
+            &format!("/v1/submissions/{uploading_id}:withdraw"),
+            token,
+            key,
+            1,
+            None,
+        )
+        .await;
+        assert_problem(&result, status, code);
+    }
+    let stale = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/submissions/{uploading_id}:withdraw"),
+        OWNER_A_TOKEN,
+        "withdraw-stale-etag1",
+        2,
+        None,
+    )
+    .await;
+    assert_problem(
+        &stale,
+        StatusCode::PRECONDITION_FAILED,
+        "precondition-failed",
+    );
+
+    let counts_before = (
+        count(pool, "audit_events").await,
+        count(pool, "outbox_events").await,
+        count(pool, "idempotency_records").await,
+    );
+    let withdrawn = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/submissions/{uploading_id}:withdraw"),
+        OWNER_A_TOKEN,
+        "withdraw-uploading-01",
+        1,
+        None,
+    )
+    .await;
+    assert_eq!(withdrawn.status, StatusCode::OK);
+    assert_eq!(etag_version(&withdrawn), 2);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&withdrawn.body).unwrap()["state"],
+        "withdrawn"
+    );
+    let replay = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/submissions/{uploading_id}:withdraw"),
+        OWNER_A_TOKEN,
+        "withdraw-uploading-01",
+        1,
+        None,
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::OK);
+    assert_eq!(replay.body, withdrawn.body);
+    let terminal = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/submissions/{uploading_id}:withdraw"),
+        OWNER_A_TOKEN,
+        "withdraw-terminal-001",
+        2,
+        None,
+    )
+    .await;
+    assert_problem(&terminal, StatusCode::CONFLICT, "invalid-transition");
+    assert_eq!(count(pool, "audit_events").await, counts_before.0 + 1);
+    assert_eq!(count(pool, "outbox_events").await, counts_before.1 + 1);
+    assert_eq!(
+        count(pool, "idempotency_records").await,
+        counts_before.2 + 1
+    );
+
+    const PROCESSING: &str = "sub_55555555555555555555555555555555";
+    seed_withdraw_submission(pool, PROCESSING, "processing", 7, "91.0.1").await;
+    sqlx::query(
+        "INSERT INTO outbox_events (event_id, topic, aggregate_kind, aggregate_id, \
+         aggregate_version, request_sha256, payload, created_unix_seconds) VALUES \
+         ('evt_55555555555555555555555555555555', 'submission.scan-requested', 'submission', \
+          $1, 7, $2, $3, 1)",
+    )
+    .bind(PROCESSING)
+    .bind("5".repeat(64))
+    .bind(json!({
+        "submission_id": PROCESSING,
+        "content_sha256": "f".repeat(64)
+    }))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO submission_scan_jobs (event_id, submission_id, source_resource_version, \
+         source_content_sha256, state, created_unix_seconds) VALUES \
+         ('evt_55555555555555555555555555555555', $1, 7, $2, 'queued', 1)",
+    )
+    .bind(PROCESSING)
+    .bind("f".repeat(64))
+    .execute(pool)
+    .await
+    .unwrap();
+    pool.execute(
+        "CREATE FUNCTION test_reject_withdraw_audit() RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN IF NEW.action = 'submission.withdrawn' AND \
+         NEW.object_id = 'sub_55555555555555555555555555555555' THEN \
+         RAISE EXCEPTION 'injected withdraw audit failure'; END IF; RETURN NEW; END; $$",
+    )
+    .await
+    .unwrap();
+    pool.execute(
+        "CREATE TRIGGER test_reject_withdraw_audit_insert BEFORE INSERT ON audit_events \
+         FOR EACH ROW EXECUTE FUNCTION test_reject_withdraw_audit()",
+    )
+    .await
+    .unwrap();
+    let rolled_back = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/submissions/{PROCESSING}:withdraw"),
+        OWNER_A_TOKEN,
+        "withdraw-processing-1",
+        7,
+        None,
+    )
+    .await;
+    assert_problem(
+        &rolled_back,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "service-unavailable",
+    );
+    let rollback_state: String =
+        sqlx::query_scalar("SELECT state FROM submissions WHERE submission_id = $1")
+            .bind(PROCESSING)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let rollback_job: String =
+        sqlx::query_scalar("SELECT state FROM submission_scan_jobs WHERE submission_id = $1")
+            .bind(PROCESSING)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let rollback_published: Option<i64> = sqlx::query_scalar(
+        "SELECT published_unix_seconds FROM outbox_events \
+         WHERE event_id = 'evt_55555555555555555555555555555555'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(rollback_state, "processing");
+    assert_eq!(rollback_job, "queued");
+    assert_eq!(rollback_published, None);
+    pool.execute("DROP TRIGGER test_reject_withdraw_audit_insert ON audit_events")
+        .await
+        .unwrap();
+    pool.execute("DROP FUNCTION test_reject_withdraw_audit()")
+        .await
+        .unwrap();
+    let processing_withdrawn = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/submissions/{PROCESSING}:withdraw"),
+        OWNER_A_TOKEN,
+        "withdraw-processing-1",
+        7,
+        None,
+    )
+    .await;
+    assert_eq!(processing_withdrawn.status, StatusCode::OK);
+    assert_eq!(etag_version(&processing_withdrawn), 8);
+    let cancelled_job = sqlx::query(
+        "SELECT state, lease_token, leased_until_unix_seconds, last_error_code, \
+         completed_unix_seconds FROM submission_scan_jobs WHERE submission_id = $1",
+    )
+    .bind(PROCESSING)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(cancelled_job.get::<String, _>("state"), "cancelled");
+    assert_eq!(
+        cancelled_job
+            .get::<Option<String>, _>("last_error_code")
+            .as_deref(),
+        Some("submission-withdrawn")
+    );
+    assert!(
+        cancelled_job
+            .get::<Option<String>, _>("lease_token")
+            .is_none()
+    );
+    assert!(
+        cancelled_job
+            .get::<Option<i64>, _>("leased_until_unix_seconds")
+            .is_none()
+    );
+    assert!(
+        cancelled_job
+            .get::<Option<i64>, _>("completed_unix_seconds")
+            .is_some()
+    );
+    let scan_event_published: Option<i64> = sqlx::query_scalar(
+        "SELECT published_unix_seconds FROM outbox_events \
+         WHERE event_id = 'evt_55555555555555555555555555555555'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(scan_event_published.is_some());
+
+    const RUNNING: &str = "sub_88888888888888888888888888888888";
+    seed_withdraw_submission(pool, RUNNING, "processing", 11, "91.0.4").await;
+    sqlx::query(
+        "INSERT INTO outbox_events (event_id, topic, aggregate_kind, aggregate_id, \
+         aggregate_version, request_sha256, payload, created_unix_seconds, \
+         published_unix_seconds, attempts) VALUES \
+         ('evt_88888888888888888888888888888888', 'submission.scan-requested', 'submission', \
+          $1, 11, $2, $3, 1, 2, 1)",
+    )
+    .bind(RUNNING)
+    .bind("8".repeat(64))
+    .bind(json!({
+        "submission_id": RUNNING,
+        "content_sha256": "e".repeat(64)
+    }))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO submission_scan_jobs (event_id, submission_id, source_resource_version, \
+         source_content_sha256, state, lease_token, leased_until_unix_seconds, attempts, \
+         created_unix_seconds) VALUES \
+         ('evt_88888888888888888888888888888888', $1, 11, $2, 'running', \
+          'lease_88888888888888888888888888888888', 9999999999, 1, 1)",
+    )
+    .bind(RUNNING)
+    .bind("e".repeat(64))
+    .execute(pool)
+    .await
+    .unwrap();
+    let running_withdrawn = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/submissions/{RUNNING}:withdraw"),
+        OWNER_A_TOKEN,
+        "withdraw-running-001",
+        11,
+        None,
+    )
+    .await;
+    assert_eq!(running_withdrawn.status, StatusCode::OK);
+    assert_eq!(etag_version(&running_withdrawn), 12);
+    let cancelled_running = sqlx::query(
+        "SELECT state, lease_token, leased_until_unix_seconds, completed_unix_seconds \
+         FROM submission_scan_jobs WHERE submission_id = $1",
+    )
+    .bind(RUNNING)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(cancelled_running.get::<String, _>("state"), "cancelled");
+    assert!(
+        cancelled_running
+            .get::<Option<String>, _>("lease_token")
+            .is_none()
+    );
+    assert!(
+        cancelled_running
+            .get::<Option<i64>, _>("leased_until_unix_seconds")
+            .is_none()
+    );
+    assert!(
+        cancelled_running
+            .get::<Option<i64>, _>("completed_unix_seconds")
+            .is_some()
+    );
+
+    const IN_REVIEW: &str = "sub_66666666666666666666666666666666";
+    seed_withdraw_submission(pool, IN_REVIEW, "in-review", 2, "91.0.2").await;
+    sqlx::query(
+        "INSERT INTO review_assignments (assignment_id, submission_id, reviewer_id, \
+         assignment_kind, state, source_resource_version, created_unix_seconds) VALUES \
+         ('assignment_66666666666666666666666666666666', $1, $2, 'primary', 'active', 1, 1)",
+    )
+    .bind(IN_REVIEW)
+    .bind(REVIEWER_A)
+    .execute(pool)
+    .await
+    .unwrap();
+    let review_withdrawn = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/submissions/{IN_REVIEW}:withdraw"),
+        OWNER_A_TOKEN,
+        "withdraw-in-review-1",
+        2,
+        None,
+    )
+    .await;
+    assert_eq!(review_withdrawn.status, StatusCode::OK);
+    assert_eq!(etag_version(&review_withdrawn), 3);
+    let assignment = sqlx::query(
+        "SELECT state, completed_unix_seconds FROM review_assignments WHERE submission_id = $1",
+    )
+    .bind(IN_REVIEW)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(assignment.get::<String, _>("state"), "cancelled");
+    assert!(
+        assignment
+            .get::<Option<i64>, _>("completed_unix_seconds")
+            .is_some()
+    );
+
+    const APPROVED: &str = "sub_77777777777777777777777777777777";
+    seed_withdraw_submission(pool, APPROVED, "approved", 3, "91.0.3").await;
+    let approved = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/submissions/{APPROVED}:withdraw"),
+        OWNER_A_TOKEN,
+        "withdraw-approved-001",
+        3,
+        None,
+    )
+    .await;
+    assert_problem(&approved, StatusCode::CONFLICT, "invalid-transition");
+}
+
+async fn seed_withdraw_submission(
+    pool: &PgPool,
+    submission_id: &str,
+    state: &str,
+    resource_version: i64,
+    version: &str,
+) {
+    sqlx::query(
+        "INSERT INTO submissions (submission_id, app_id, version, revision, state, package_sha256, \
+         package_bytes, listing_sha256, listing_bytes, assets, resource_version, \
+         created_unix_seconds, finalized_content_sha256) VALUES \
+         ($1, 'dev.cardputerzero.notes', $2, 1, $3, $4, 100, $5, 100, $6, $7, 1, $8)",
+    )
+    .bind(submission_id)
+    .bind(version)
+    .bind(state)
+    .bind("a".repeat(64))
+    .bind("b".repeat(64))
+    .bind(json!([
+        {"path": "icon.png", "sha256": "c".repeat(64), "bytes": 100,
+         "width": 48, "height": 48},
+        {"path": "screens/main.png", "sha256": "d".repeat(64), "bytes": 100,
+         "width": 320, "height": 170}
+    ]))
+    .bind(resource_version)
+    .bind("f".repeat(64))
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn verify_oauth_device_flow(application: &Router, pool: &PgPool) {
