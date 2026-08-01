@@ -110,7 +110,8 @@ developer、subtitle、category、keywords、age/privacy 元数据，v1/v2 严�
 在签名 Catalog 上增加开发者、分类和关键词本地搜索。富媒体资源缓存和小屏展示仍待实现。
 S6B 已新增 Catalog v3 富媒体资源层：根 Catalog 摘要绑定 icon 和有界 details 清单，details 再
 绑定 320x170 截图；Publisher 将包、图片、details、Catalog 和 transparency 对象写入同一不可变
-generation，并支持 v1/v2/v3 渐进升级。设备原子资源缓存和 System Shell 展示仍待实现。
+generation，并支持 v1/v2/v3 渐进升级。S6C 已在 `cp0-stored` 实现内容寻址的 icon/details/
+screenshot 缓存、精确摘要与 PNG/details 身份复验、独立预算和截图 LRU；System Shell 展示仍待实现。
 
 - [ ] 实现 Identity/Teams、App Registry、Submission 和 Release 服务。
   当前 App Registry、Submission 上传/finalize/read/withdraw、独立双审 Review 和 Release 控制
@@ -140,7 +141,9 @@ generation，并支持 v1/v2/v3 渐进升级。设备原子资源缓存和 Syste
   `cp0-stored` 缓存实现仍由下方独立任务跟踪。
 - [ ] 增加 Today 专题、精选集合、分类和更新索引。
 - [ ] 规模超过 64 应用时切换为签名根索引和有界 shard。
-- [ ] `cp0-stored` 原子缓存 Catalog/资源，资源解析失败不影响本地应用启动。
+- [x] `cp0-stored` 原子缓存 Catalog/资源，资源解析失败不影响本地应用启动。
+  S6C 在 Catalog 提交后尽力预取图标，details/截图按需缓存；截断、替换、错误尺寸、错误身份和
+  不安全缓存 inode 均不会生成最终对象，且不回滚 Catalog 或阻断已验证包安装。
 - [ ] System Shell 增加图标、截图单页查看和权限差异展示。
 
 完成条件：CDN 修改、截断或替换任一资源都会在设备端被拒绝。

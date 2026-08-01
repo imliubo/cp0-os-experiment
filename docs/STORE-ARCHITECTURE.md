@@ -206,7 +206,9 @@ S6A 的 Catalog v2 已签名 developer、subtitle、category、keywords 和 age/
 
 S6B 的 Catalog v3 在此基础上摘要绑定 icon 和有界 details 清单，details 再绑定截图；Publisher
 已将这些资源放入包所在的不可变 generation。根 Catalog 不内联长 description 或截图数组，避免
-64 应用目录超出 48 KiB。设备端原子资源缓存和 System Shell 富媒体渲染仍由后续切片实现。
+64 应用目录超出 48 KiB。S6C 已在 `cp0-stored` 加入 4 MiB icon、1 MiB details 和 8 MiB
+screenshot 独立缓存；所有对象按摘要命名、单任务下载、结构复验后原子提交，截图使用稳定 LRU。
+媒体失败与 Catalog/应用安装解耦。System Shell 富媒体渲染仍由后续切片实现。
 
 #### 下载与更新
 

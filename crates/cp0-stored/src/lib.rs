@@ -4,7 +4,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,9 +17,11 @@ use cp0_appd::{
     read_response as read_appd_response, write_request as write_appd_request,
 };
 use cp0_networkd::PublicResolver;
+use cp0_store_metadata::validate_png_structure;
 use cp0_store_protocol::{
-    CatalogApp, SignedCatalog, StoreAppState, StoreAppSummary, StoreCommand, StoreErrorCode,
-    StoreRequest, StoreResponse, StoreResponseData, decode_signed_catalog, is_valid_https_url,
+    CatalogApp, CatalogImageResource, CatalogObjectResource, SignedCatalog, StoreAppDetails,
+    StoreAppState, StoreAppSummary, StoreCommand, StoreErrorCode, StoreRequest, StoreResponse,
+    StoreResponseData, decode_app_details, decode_signed_catalog, is_lower_hex, is_valid_https_url,
     read_request, verify_catalog, write_response,
 };
 use sha2::{Digest, Sha256};
@@ -38,6 +40,9 @@ const APPD_TIMEOUT: Duration = Duration::from_secs(60);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(45);
 const MAX_REDIRECTS: u32 = 2;
 const CLOCK_SKEW_SECONDS: u64 = 5 * 60;
+pub const ICON_CACHE_BUDGET_BYTES: u64 = 4 * 1024 * 1024;
+pub const DETAILS_CACHE_BUDGET_BYTES: u64 = 1024 * 1024;
+pub const SCREENSHOT_CACHE_BUDGET_BYTES: u64 = 8 * 1024 * 1024;
 
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -106,6 +111,17 @@ impl From<io::Error> for StoreServiceError {
 pub trait StoreNetwork: fmt::Debug + Send + Sync + 'static {
     fn fetch_catalog(&self, url: &str) -> Result<Vec<u8>, StoreServiceError>;
 
+    fn fetch_resource(
+        &self,
+        _url: &str,
+        _expected_bytes: u64,
+        _max_bytes: u64,
+    ) -> Result<Vec<u8>, StoreServiceError> {
+        Err(StoreServiceError::Unavailable(
+            "store media download is unavailable",
+        ))
+    }
+
     fn download_package(
         &self,
         url: &str,
@@ -165,6 +181,43 @@ impl StoreNetwork for UreqStoreNetwork {
         if encoded.len() > cp0_store_protocol::MAX_CATALOG_BYTES {
             return Err(StoreServiceError::Invalid(
                 "catalog response exceeds the size limit".into(),
+            ));
+        }
+        Ok(encoded)
+    }
+
+    fn fetch_resource(
+        &self,
+        url: &str,
+        expected_bytes: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, StoreServiceError> {
+        require_https(url)?;
+        if !(1..=max_bytes).contains(&expected_bytes) {
+            return Err(StoreServiceError::Invalid(
+                "media size is outside its cache class limit".into(),
+            ));
+        }
+        let mut response = self
+            .agent
+            .get(url)
+            .header("Accept-Encoding", "identity")
+            .call()
+            .map_err(map_network_error)?;
+        if response.status().as_u16() != 200 {
+            return Err(StoreServiceError::Unavailable(
+                "media server returned a non-success status",
+            ));
+        }
+        let encoded = response
+            .body_mut()
+            .with_config()
+            .limit(expected_bytes + 1)
+            .read_to_vec()
+            .map_err(map_network_error)?;
+        if encoded.len() as u64 != expected_bytes {
+            return Err(StoreServiceError::Untrusted(
+                "media response length does not match the signed descriptor".into(),
             ));
         }
         Ok(encoded)
@@ -325,6 +378,38 @@ struct MutableState {
     active_job: bool,
 }
 
+#[derive(Clone, Copy)]
+enum MediaKind {
+    Icon,
+    Details,
+    Screenshot,
+}
+
+impl MediaKind {
+    fn directory(self) -> &'static str {
+        match self {
+            Self::Icon => "icons",
+            Self::Details => "details",
+            Self::Screenshot => "screenshots",
+        }
+    }
+
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Details => "json",
+            Self::Icon | Self::Screenshot => "png",
+        }
+    }
+
+    fn budget(self) -> u64 {
+        match self {
+            Self::Icon => ICON_CACHE_BUDGET_BYTES,
+            Self::Details => DETAILS_CACHE_BUDGET_BYTES,
+            Self::Screenshot => SCREENSHOT_CACHE_BUDGET_BYTES,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct StoreService {
     paths: StorePaths,
@@ -379,12 +464,13 @@ impl StoreService {
         trusted_uids: impl IntoIterator<Item = u32>,
     ) -> Result<Arc<Self>, StoreServiceError> {
         fs::create_dir_all(paths.cache_root.join("packages"))?;
+        prepare_media_directories(&paths)?;
         let catalog = match fs::read(&paths.catalog_cache) {
             Ok(encoded) => Some(load_trusted_catalog(&encoded, &paths)?),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };
-        Ok(Arc::new(Self {
+        let service = Arc::new(Self {
             paths,
             config,
             network,
@@ -394,7 +480,11 @@ impl StoreService {
                 catalog,
                 ..MutableState::default()
             }),
-        }))
+        });
+        if let Err(error) = service.reconcile_cached_media() {
+            eprintln!("cp0-stored: discarded invalid cached media: {error}");
+        }
+        Ok(service)
     }
 
     pub fn serve(self: Arc<Self>, listener: UnixListener) -> io::Result<()> {
@@ -604,6 +694,33 @@ impl StoreService {
         Ok(version)
     }
 
+    pub fn cache_app_details(&self, app_id: &str) -> Result<StoreAppDetails, StoreServiceError> {
+        self.reserve_job()?;
+        let result = self.cache_app_details_inner(app_id);
+        self.release_job();
+        result
+    }
+
+    pub fn cache_screenshot(&self, app_id: &str, index: usize) -> Result<(), StoreServiceError> {
+        self.reserve_job()?;
+        let result = (|| {
+            let details = self.cache_app_details_inner(app_id)?;
+            let screenshot = details
+                .screenshots
+                .get(index)
+                .ok_or(StoreServiceError::NotFound)?;
+            cache_image_resource(
+                &self.paths,
+                self.network.as_ref(),
+                MediaKind::Screenshot,
+                screenshot,
+            )?;
+            Ok(())
+        })();
+        self.release_job();
+        result
+    }
+
     fn reserve_job(&self) -> Result<(), StoreServiceError> {
         let mut state = self
             .state
@@ -669,21 +786,84 @@ impl StoreService {
             }
         }
         atomic_write(&self.paths.catalog_cache, &encoded)?;
-        let mut state = self
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+            let catalog_app_ids = signed
+                .catalog
+                .apps
+                .iter()
+                .map(|app| app.app_id.clone())
+                .collect::<BTreeSet<_>>();
+            state.catalog = Some(signed.clone());
+            state
+                .operations
+                .retain(|app_id, _| catalog_app_ids.contains(app_id));
+        }
+        if let Err(error) = self.prefetch_catalog_icons(&signed) {
+            eprintln!("cp0-stored: Catalog accepted without complete icon cache: {error}");
+        }
+        Ok(())
+    }
+
+    fn reconcile_cached_media(&self) -> Result<(), StoreServiceError> {
+        let catalog = self
             .state
             .lock()
-            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
-        let catalog_app_ids = signed
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?
+            .catalog
+            .clone();
+        let Some(catalog) = catalog else {
+            return Ok(());
+        };
+        reconcile_media_for_catalog(&self.paths, &catalog)
+    }
+
+    fn prefetch_catalog_icons(&self, catalog: &SignedCatalog) -> Result<(), StoreServiceError> {
+        reconcile_media_for_catalog(&self.paths, catalog)?;
+        let icons = catalog
             .catalog
             .apps
             .iter()
-            .map(|app| app.app_id.clone())
-            .collect::<BTreeSet<_>>();
-        state.catalog = Some(signed);
-        state
-            .operations
-            .retain(|app_id, _| catalog_app_ids.contains(app_id));
+            .filter_map(|app| app.resources.as_ref().map(|resources| &resources.icon))
+            .collect::<Vec<_>>();
+        validate_resource_budget(
+            icons
+                .iter()
+                .map(|resource| (resource.sha256.as_str(), resource.bytes)),
+            MediaKind::Icon.budget(),
+        )?;
+        for icon in icons {
+            cache_image_resource(&self.paths, self.network.as_ref(), MediaKind::Icon, icon)?;
+        }
         Ok(())
+    }
+
+    fn cache_app_details_inner(&self, app_id: &str) -> Result<StoreAppDetails, StoreServiceError> {
+        let app = self
+            .state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.catalog.apps.iter().find(|app| app.app_id == app_id))
+            .cloned()
+            .ok_or(StoreServiceError::NotFound)?;
+        let resource = &app
+            .resources
+            .as_ref()
+            .ok_or(StoreServiceError::NotFound)?
+            .details;
+        let encoded = cache_object_resource(
+            &self.paths,
+            self.network.as_ref(),
+            MediaKind::Details,
+            resource,
+            |encoded| validate_details_for_app(encoded, &app).map(|_| ()),
+        )?;
+        validate_details_for_app(&encoded, &app)
     }
 
     fn install_now(&self, app: &CatalogApp) -> Result<(), StoreServiceError> {
@@ -761,6 +941,439 @@ fn search_rank(app: &CatalogApp, normalized_query: &str) -> Option<u8> {
     } else {
         None
     }
+}
+
+fn prepare_media_directories(paths: &StorePaths) -> Result<(), StoreServiceError> {
+    let media = paths.cache_root.join("media");
+    prepare_private_cache_directory(&media)?;
+    for kind in [MediaKind::Icon, MediaKind::Details, MediaKind::Screenshot] {
+        prepare_private_cache_directory(&media.join(kind.directory()))?;
+    }
+    Ok(())
+}
+
+fn prepare_private_cache_directory(directory: &Path) -> Result<(), StoreServiceError> {
+    fs::create_dir_all(directory)?;
+    let metadata = fs::symlink_metadata(directory)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(StoreServiceError::Untrusted(
+            "media cache directory is not a real directory".into(),
+        ));
+    }
+    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+fn media_directory(paths: &StorePaths, kind: MediaKind) -> PathBuf {
+    paths.cache_root.join("media").join(kind.directory())
+}
+
+fn media_path(
+    paths: &StorePaths,
+    kind: MediaKind,
+    sha256: &str,
+) -> Result<PathBuf, StoreServiceError> {
+    if !is_lower_hex(sha256, 32) {
+        return Err(StoreServiceError::Invalid(
+            "media cache digest is invalid".into(),
+        ));
+    }
+    Ok(media_directory(paths, kind).join(format!("{sha256}.{}", kind.extension())))
+}
+
+fn reconcile_media_for_catalog(
+    paths: &StorePaths,
+    catalog: &SignedCatalog,
+) -> Result<(), StoreServiceError> {
+    let mut icon_files = BTreeSet::new();
+    let mut detail_files = BTreeSet::new();
+    let mut icons = Vec::new();
+    let mut details = Vec::new();
+    for app in &catalog.catalog.apps {
+        let Some(resources) = &app.resources else {
+            continue;
+        };
+        icon_files.insert(format!("{}.png", resources.icon.sha256));
+        detail_files.insert(format!("{}.json", resources.details.sha256));
+        icons.push((&resources.icon, app));
+        details.push((&resources.details, app));
+    }
+    validate_resource_budget(
+        icons
+            .iter()
+            .map(|(resource, _)| (resource.sha256.as_str(), resource.bytes)),
+        MediaKind::Icon.budget(),
+    )?;
+    validate_resource_budget(
+        details
+            .iter()
+            .map(|(resource, _)| (resource.sha256.as_str(), resource.bytes)),
+        MediaKind::Details.budget(),
+    )?;
+    prune_cache_directory(&media_directory(paths, MediaKind::Icon), &icon_files)?;
+    prune_cache_directory(&media_directory(paths, MediaKind::Details), &detail_files)?;
+    prune_unrecognized_cache_files(
+        &media_directory(paths, MediaKind::Screenshot),
+        MediaKind::Screenshot,
+    )?;
+    enforce_cache_capacity(
+        &media_directory(paths, MediaKind::Screenshot),
+        MediaKind::Screenshot.budget(),
+        0,
+        None,
+    )?;
+
+    for (resource, _) in icons {
+        discard_invalid_cached_resource(
+            &media_path(paths, MediaKind::Icon, &resource.sha256)?,
+            &resource.sha256,
+            resource.bytes,
+            |encoded| validate_image_bytes(encoded, resource),
+        )?;
+    }
+    for (resource, app) in details {
+        discard_invalid_cached_resource(
+            &media_path(paths, MediaKind::Details, &resource.sha256)?,
+            &resource.sha256,
+            resource.bytes,
+            |encoded| validate_details_for_app(encoded, app).map(|_| ()),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_resource_budget<'a>(
+    resources: impl IntoIterator<Item = (&'a str, u64)>,
+    budget: u64,
+) -> Result<(), StoreServiceError> {
+    let mut unique = BTreeMap::<&str, u64>::new();
+    for (digest, bytes) in resources {
+        match unique.insert(digest, bytes) {
+            Some(previous) if previous != bytes => {
+                return Err(StoreServiceError::Untrusted(
+                    "one media digest has conflicting signed sizes".into(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    let total = unique
+        .into_values()
+        .try_fold(0_u64, u64::checked_add)
+        .ok_or_else(|| StoreServiceError::Invalid("media cache budget overflow".into()))?;
+    if total > budget {
+        return Err(StoreServiceError::Invalid(
+            "signed media set exceeds its cache budget".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn prune_cache_directory(
+    directory: &Path,
+    retained: &BTreeSet<String>,
+) -> Result<(), StoreServiceError> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| StoreServiceError::Invalid("media cache filename is invalid".into()))?;
+        if metadata.is_dir() {
+            return Err(StoreServiceError::Invalid(
+                "media cache contains an unexpected directory".into(),
+            ));
+        }
+        if !retained.contains(&name) {
+            fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
+fn prune_unrecognized_cache_files(
+    directory: &Path,
+    kind: MediaKind,
+) -> Result<(), StoreServiceError> {
+    let suffix = format!(".{}", kind.extension());
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.is_dir() {
+            return Err(StoreServiceError::Invalid(
+                "media cache contains an unexpected directory".into(),
+            ));
+        }
+        let recognized = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.strip_suffix(&suffix))
+            .is_some_and(|digest| is_lower_hex(digest, 32));
+        if !recognized {
+            fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
+fn discard_invalid_cached_resource(
+    path: &Path,
+    expected_sha256: &str,
+    expected_bytes: u64,
+    validate: impl Fn(&[u8]) -> Result<(), StoreServiceError>,
+) -> Result<(), StoreServiceError> {
+    match read_cached_resource(path, expected_sha256, expected_bytes, false, validate) {
+        Ok(_) => Ok(()),
+        Err(StoreServiceError::Io(error)) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(_) => match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        },
+    }
+}
+
+fn cache_image_resource(
+    paths: &StorePaths,
+    network: &dyn StoreNetwork,
+    kind: MediaKind,
+    resource: &CatalogImageResource,
+) -> Result<Vec<u8>, StoreServiceError> {
+    let max_bytes = match kind {
+        MediaKind::Icon => cp0_store_metadata::MAX_ICON_BYTES,
+        MediaKind::Screenshot => cp0_store_metadata::MAX_SCREENSHOT_BYTES,
+        MediaKind::Details => {
+            return Err(StoreServiceError::Invalid(
+                "details resource was passed to the image cache".into(),
+            ));
+        }
+    };
+    cache_resource(
+        paths,
+        network,
+        kind,
+        &resource.url,
+        &resource.sha256,
+        resource.bytes,
+        max_bytes,
+        |encoded| validate_image_bytes(encoded, resource),
+    )
+}
+
+fn cache_object_resource(
+    paths: &StorePaths,
+    network: &dyn StoreNetwork,
+    kind: MediaKind,
+    resource: &CatalogObjectResource,
+    validate: impl Fn(&[u8]) -> Result<(), StoreServiceError>,
+) -> Result<Vec<u8>, StoreServiceError> {
+    if !matches!(kind, MediaKind::Details) {
+        return Err(StoreServiceError::Invalid(
+            "object resource was passed to an image cache".into(),
+        ));
+    }
+    cache_resource(
+        paths,
+        network,
+        kind,
+        &resource.url,
+        &resource.sha256,
+        resource.bytes,
+        cp0_store_protocol::MAX_APP_DETAILS_BYTES as u64,
+        validate,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cache_resource(
+    paths: &StorePaths,
+    network: &dyn StoreNetwork,
+    kind: MediaKind,
+    url: &str,
+    expected_sha256: &str,
+    expected_bytes: u64,
+    max_bytes: u64,
+    validate: impl Fn(&[u8]) -> Result<(), StoreServiceError>,
+) -> Result<Vec<u8>, StoreServiceError> {
+    if !(1..=max_bytes).contains(&expected_bytes) {
+        return Err(StoreServiceError::Invalid(
+            "signed media size is outside its per-file limit".into(),
+        ));
+    }
+    let path = media_path(paths, kind, expected_sha256)?;
+    match read_cached_resource(
+        &path,
+        expected_sha256,
+        expected_bytes,
+        matches!(kind, MediaKind::Screenshot),
+        &validate,
+    ) {
+        Ok(encoded) => return Ok(encoded),
+        Err(StoreServiceError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        },
+    }
+    enforce_cache_capacity(
+        &media_directory(paths, kind),
+        kind.budget(),
+        expected_bytes,
+        Some(&path),
+    )?;
+    let encoded = network.fetch_resource(url, expected_bytes, max_bytes)?;
+    verify_resource_bytes(&encoded, expected_sha256, expected_bytes)?;
+    validate(&encoded)?;
+    atomic_write_media(&path, &encoded)?;
+    Ok(encoded)
+}
+
+fn read_cached_resource(
+    path: &Path,
+    expected_sha256: &str,
+    expected_bytes: u64,
+    touch: bool,
+    validate: impl Fn(&[u8]) -> Result<(), StoreServiceError>,
+) -> Result<Vec<u8>, StoreServiceError> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.mode() & 0o077 != 0 || metadata.len() != expected_bytes {
+        return Err(StoreServiceError::Untrusted(
+            "cached media metadata does not match its signed descriptor".into(),
+        ));
+    }
+    let capacity = usize::try_from(expected_bytes)
+        .map_err(|_| StoreServiceError::Invalid("media size cannot be represented".into()))?;
+    let mut encoded = Vec::with_capacity(capacity);
+    file.read_to_end(&mut encoded)?;
+    verify_resource_bytes(&encoded, expected_sha256, expected_bytes)?;
+    validate(&encoded)?;
+    if touch {
+        file.set_modified(SystemTime::now())?;
+    }
+    Ok(encoded)
+}
+
+fn verify_resource_bytes(
+    encoded: &[u8],
+    expected_sha256: &str,
+    expected_bytes: u64,
+) -> Result<(), StoreServiceError> {
+    if encoded.len() as u64 != expected_bytes
+        || cp0_store_protocol::lower_hex(&Sha256::digest(encoded)) != expected_sha256
+    {
+        return Err(StoreServiceError::Untrusted(
+            "media bytes do not match their signed descriptor".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_image_bytes(
+    encoded: &[u8],
+    resource: &CatalogImageResource,
+) -> Result<(), StoreServiceError> {
+    validate_png_structure(encoded, resource.width, resource.height)
+        .map_err(StoreServiceError::Untrusted)
+}
+
+fn validate_details_for_app(
+    encoded: &[u8],
+    app: &CatalogApp,
+) -> Result<StoreAppDetails, StoreServiceError> {
+    let details = decode_app_details(encoded)
+        .map_err(|error| StoreServiceError::Untrusted(error.to_string()))?;
+    if details.app_id != app.app_id || details.version != app.version {
+        return Err(StoreServiceError::Untrusted(
+            "Store details identity differs from the signed Catalog app".into(),
+        ));
+    }
+    Ok(details)
+}
+
+fn enforce_cache_capacity(
+    directory: &Path,
+    budget: u64,
+    required: u64,
+    protected: Option<&Path>,
+) -> Result<(), StoreServiceError> {
+    if required > budget {
+        return Err(StoreServiceError::Invalid(
+            "media resource exceeds its cache budget".into(),
+        ));
+    }
+    loop {
+        let mut used = 0_u64;
+        let mut candidates = Vec::new();
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                fs::remove_file(path)?;
+                continue;
+            }
+            if !metadata.is_file() {
+                return Err(StoreServiceError::Invalid(
+                    "media cache contains a non-file entry".into(),
+                ));
+            }
+            used = used
+                .checked_add(metadata.len())
+                .ok_or_else(|| StoreServiceError::Invalid("media cache size overflow".into()))?;
+            if protected != Some(path.as_path()) {
+                candidates.push((
+                    metadata.modified().unwrap_or(UNIX_EPOCH),
+                    entry.file_name(),
+                    path,
+                ));
+            }
+        }
+        if used
+            .checked_add(required)
+            .is_some_and(|projected| projected <= budget)
+        {
+            return Ok(());
+        }
+        candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        let Some((_, _, oldest)) = candidates.into_iter().next() else {
+            return Err(StoreServiceError::Unavailable(
+                "media cache cannot free enough bounded storage",
+            ));
+        };
+        fs::remove_file(oldest)?;
+    }
+}
+
+fn atomic_write_media(path: &Path, contents: &[u8]) -> Result<(), StoreServiceError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| StoreServiceError::Invalid("media cache has no parent".into()))?;
+    let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(".media-{}-{sequence}.tmp", std::process::id()));
+    let result = (|| -> io::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)?;
+        file.write_all(contents)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result.map_err(StoreServiceError::Io)
 }
 
 fn load_trusted_catalog(
@@ -1018,10 +1631,12 @@ mod tests {
     use super::*;
     use cp0_store_metadata::{AgeRating, StoreCategory};
     use cp0_store_protocol::{
-        CATALOG_SCHEMA_VERSION, Catalog, CatalogDiscovery, RICH_CATALOG_SCHEMA_VERSION,
-        encode_signed_catalog, sign_catalog,
+        APP_DETAILS_SCHEMA_VERSION, CATALOG_SCHEMA_VERSION, Catalog, CatalogDiscovery,
+        CatalogImageResource, CatalogObjectResource, CatalogResources,
+        MEDIA_CATALOG_SCHEMA_VERSION, RICH_CATALOG_SCHEMA_VERSION, StoreAppDetails,
+        encode_app_details, encode_signed_catalog, sign_catalog,
     };
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     #[derive(Debug)]
     struct MockNetwork {
@@ -1032,6 +1647,51 @@ mod tests {
     impl StoreNetwork for MockNetwork {
         fn fetch_catalog(&self, _url: &str) -> Result<Vec<u8>, StoreServiceError> {
             Ok(self.catalog.clone())
+        }
+
+        fn download_package(
+            &self,
+            _url: &str,
+            destination: &Path,
+            expected_bytes: u64,
+            progress: &mut dyn FnMut(u8),
+        ) -> Result<(), StoreServiceError> {
+            let mut file = open_resume_file(destination)?;
+            let offset = file.metadata()?.len() as usize;
+            file.seek(SeekFrom::End(0))?;
+            file.write_all(&self.package[offset..])?;
+            file.sync_all()?;
+            assert_eq!(self.package.len() as u64, expected_bytes);
+            progress(100);
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct MediaNetwork {
+        catalog: Vec<u8>,
+        package: Vec<u8>,
+        resources: BTreeMap<String, Vec<u8>>,
+    }
+
+    impl StoreNetwork for MediaNetwork {
+        fn fetch_catalog(&self, _url: &str) -> Result<Vec<u8>, StoreServiceError> {
+            Ok(self.catalog.clone())
+        }
+
+        fn fetch_resource(
+            &self,
+            url: &str,
+            expected_bytes: u64,
+            max_bytes: u64,
+        ) -> Result<Vec<u8>, StoreServiceError> {
+            let encoded = self
+                .resources
+                .get(url)
+                .cloned()
+                .ok_or(StoreServiceError::Unavailable("mock media is unavailable"))?;
+            assert!(expected_bytes <= max_bytes);
+            Ok(encoded)
         }
 
         fn download_package(
@@ -1152,6 +1812,113 @@ mod tests {
         }
     }
 
+    fn media_catalog(
+        fixture: &Fixture,
+        sequence: u64,
+    ) -> (Vec<u8>, BTreeMap<String, Vec<u8>>, CatalogApp) {
+        let icon_url = "https://store.example.com/generations/1/assets/app/icon.png";
+        let details_url = "https://store.example.com/generations/1/assets/app/details.json";
+        let screenshot_url = "https://store.example.com/generations/1/assets/app/screenshots/0.png";
+        let icon = png_fixture(48, 48);
+        let screenshot = png_fixture(320, 170);
+        let screenshot_resource = CatalogImageResource {
+            url: screenshot_url.into(),
+            sha256: cp0_store_protocol::lower_hex(&Sha256::digest(&screenshot)),
+            bytes: screenshot.len() as u64,
+            width: 320,
+            height: 170,
+        };
+        let mut app = fixture.catalog_app(
+            "dev.cardputerzero.storetest",
+            "Store Test",
+            "Tests trusted media caching",
+        );
+        app.discovery = Some(CatalogDiscovery {
+            developer: "CardputerZero Labs".into(),
+            subtitle: app.summary.clone(),
+            category: StoreCategory::Utilities,
+            keywords: vec!["media".into()],
+            age_rating: AgeRating::FourPlus,
+            privacy_url: "https://example.com/privacy".into(),
+            support_url: "https://example.com/support".into(),
+        });
+        let details = encode_app_details(&StoreAppDetails {
+            schema_version: APP_DETAILS_SCHEMA_VERSION,
+            app_id: app.app_id.clone(),
+            version: app.version.clone(),
+            description: "Verified application details.".into(),
+            release_notes: "Adds immutable media.".into(),
+            screenshots: vec![screenshot_resource],
+        })
+        .unwrap();
+        app.resources = Some(CatalogResources {
+            icon: CatalogImageResource {
+                url: icon_url.into(),
+                sha256: cp0_store_protocol::lower_hex(&Sha256::digest(&icon)),
+                bytes: icon.len() as u64,
+                width: 48,
+                height: 48,
+            },
+            details: CatalogObjectResource {
+                url: details_url.into(),
+                sha256: cp0_store_protocol::lower_hex(&Sha256::digest(&details)),
+                bytes: details.len() as u64,
+            },
+        });
+        let now = unix_time();
+        let catalog = Catalog {
+            schema_version: MEDIA_CATALOG_SCHEMA_VERSION,
+            sequence,
+            published_unix_seconds: now,
+            expires_unix_seconds: now + 3600,
+            apps: vec![app.clone()],
+        };
+        let catalog =
+            encode_signed_catalog(&sign_catalog(catalog, &fixture.secret).unwrap()).unwrap();
+        let resources = BTreeMap::from([
+            (icon_url.into(), icon),
+            (details_url.into(), details),
+            (screenshot_url.into(), screenshot),
+        ]);
+        (catalog, resources, app)
+    }
+
+    fn png_fixture(width: u16, height: u16) -> Vec<u8> {
+        let mut encoded = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut header = Vec::with_capacity(13);
+        header.extend_from_slice(&u32::from(width).to_be_bytes());
+        header.extend_from_slice(&u32::from(height).to_be_bytes());
+        header.extend_from_slice(&[8, 6, 0, 0, 0]);
+        append_png_chunk(&mut encoded, b"IHDR", &header);
+        append_png_chunk(&mut encoded, b"IDAT", &[0]);
+        append_png_chunk(&mut encoded, b"IEND", &[]);
+        encoded
+    }
+
+    fn append_png_chunk(encoded: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        encoded.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        encoded.extend_from_slice(kind);
+        encoded.extend_from_slice(data);
+        let mut crc_input = kind.to_vec();
+        crc_input.extend_from_slice(data);
+        encoded.extend_from_slice(&test_crc32(&crc_input).to_be_bytes());
+    }
+
+    fn test_crc32(bytes: &[u8]) -> u32 {
+        let mut crc = u32::MAX;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
     #[test]
     fn refresh_rejects_sequence_rollback_and_persists_verified_catalog() {
         let fixture = Fixture::new("refresh");
@@ -1215,6 +1982,169 @@ mod tests {
             fixture.root.starts_with(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp")
             )
+        );
+    }
+
+    #[test]
+    fn atomically_caches_catalog_bound_icons_details_and_screenshots() {
+        let fixture = Fixture::new("media-cache");
+        let (catalog, resources, app) = media_catalog(&fixture, 1);
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: Some("https://store.example.com/catalog.json".into()),
+            },
+            Arc::new(MediaNetwork {
+                catalog: catalog.clone(),
+                package: fixture.package.clone(),
+                resources,
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+
+        service.refresh_now().unwrap();
+        assert_eq!(fs::read(&fixture.paths.catalog_cache).unwrap(), catalog);
+        let app_resources = app.resources.as_ref().unwrap();
+        let icon_path =
+            media_path(&fixture.paths, MediaKind::Icon, &app_resources.icon.sha256).unwrap();
+        assert_eq!(fs::read(&icon_path).unwrap(), png_fixture(48, 48));
+        assert_eq!(
+            fs::metadata(&icon_path).unwrap().permissions().mode() & 0o077,
+            0
+        );
+
+        let details = service.cache_app_details(&app.app_id).unwrap();
+        assert_eq!(details.app_id, app.app_id);
+        let details_path = media_path(
+            &fixture.paths,
+            MediaKind::Details,
+            &app_resources.details.sha256,
+        )
+        .unwrap();
+        assert!(details_path.is_file());
+        assert_eq!(
+            fs::metadata(&details_path).unwrap().permissions().mode() & 0o077,
+            0
+        );
+
+        service.cache_screenshot(&app.app_id, 0).unwrap();
+        let screenshot_path = media_path(
+            &fixture.paths,
+            MediaKind::Screenshot,
+            &details.screenshots[0].sha256,
+        )
+        .unwrap();
+        assert_eq!(fs::read(&screenshot_path).unwrap(), png_fixture(320, 170));
+        assert_eq!(
+            fs::metadata(&screenshot_path).unwrap().permissions().mode() & 0o077,
+            0
+        );
+    }
+
+    #[test]
+    fn media_tampering_never_replaces_catalog_or_blocks_package_installation() {
+        let fixture = Fixture::new("media-tamper");
+        let (catalog, mut resources, app) = media_catalog(&fixture, 1);
+        let app_resources = app.resources.as_ref().unwrap();
+        resources.insert(app_resources.icon.url.clone(), b"truncated icon".to_vec());
+        resources.insert(
+            app_resources.details.url.clone(),
+            b"substituted details".to_vec(),
+        );
+        let installer = Arc::new(MockInstaller::default());
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: Some("https://store.example.com/catalog.json".into()),
+            },
+            Arc::new(MediaNetwork {
+                catalog: catalog.clone(),
+                package: fixture.package.clone(),
+                resources,
+            }),
+            installer.clone(),
+            [0],
+        )
+        .unwrap();
+
+        service.refresh_now().unwrap();
+        assert_eq!(fs::read(&fixture.paths.catalog_cache).unwrap(), catalog);
+        assert!(
+            !media_path(&fixture.paths, MediaKind::Icon, &app_resources.icon.sha256)
+                .unwrap()
+                .exists()
+        );
+        assert!(matches!(
+            service.cache_app_details(&app.app_id),
+            Err(StoreServiceError::Untrusted(_))
+        ));
+        assert!(
+            !media_path(
+                &fixture.paths,
+                MediaKind::Details,
+                &app_resources.details.sha256
+            )
+            .unwrap()
+            .exists()
+        );
+
+        service.install_now(&app).unwrap();
+        assert_eq!(installer.installed.lock().unwrap().as_slice(), [app.app_id]);
+    }
+
+    #[test]
+    fn screenshot_cache_evicts_the_oldest_file_before_crossing_its_budget() {
+        let fixture = Fixture::new("media-lru");
+        prepare_media_directories(&fixture.paths).unwrap();
+        let directory = media_directory(&fixture.paths, MediaKind::Screenshot);
+        let oldest = directory.join(format!("{}.png", "11".repeat(32)));
+        let newest = directory.join(format!("{}.png", "22".repeat(32)));
+        for path in [&oldest, &newest] {
+            fs::write(path, [0_u8; 4]).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        File::open(&oldest)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(1))
+            .unwrap();
+        File::open(&newest)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(2))
+            .unwrap();
+
+        enforce_cache_capacity(&directory, 8, 4, None).unwrap();
+        assert!(!oldest.exists());
+        assert!(newest.exists());
+        let used = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().metadata().unwrap().len())
+            .sum::<u64>();
+        assert!(used + 4 <= 8);
+    }
+
+    #[test]
+    fn rejects_a_symbolic_link_media_cache_root_before_changing_permissions() {
+        let fixture = Fixture::new("media-root-link");
+        let target = fixture.root.join("media-target");
+        fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        symlink(&target, fixture.paths.cache_root.join("media")).unwrap();
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        );
+        assert!(matches!(service, Err(StoreServiceError::Untrusted(_))));
+        assert_ne!(
+            fs::metadata(target).unwrap().permissions().mode() & 0o077,
+            0
         );
     }
 

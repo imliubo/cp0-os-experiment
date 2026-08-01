@@ -71,13 +71,31 @@ The device cache implementation must enforce these independent disk budgets:
 Resources are stored by SHA-256, written with owner-only permissions and renamed
 only after exact length and digest verification. A missing or corrupt resource
 may remove media from Store browsing, but must never block launching an already
-installed application. Implementing this atomic `cp0-stored` cache and exposing
-media to the System Shell are subsequent S6 slices.
+installed application.
+
+S6C implements this contract in `cp0-stored` under:
+
+```text
+/var/lib/cardputerzero/store/media/icons/<sha256>.png
+/var/lib/cardputerzero/store/media/details/<sha256>.json
+/var/lib/cardputerzero/store/media/screenshots/<sha256>.png
+```
+
+Catalog refresh commits the verified Catalog before best-effort sequential icon
+prefetch, so a CDN media failure cannot roll back discovery or block package
+installation. Details are decoded again and must match the Catalog `app_id` and
+version. Screenshots are fetched on demand and use file modification time for a
+stable oldest-first LRU. Startup removes unreferenced icon/details objects,
+rejects symlinks and invalid file modes, rechecks retained icon/details objects,
+cleans interrupted temporary files without following them, and rechecks each
+screenshot when accessed. Exposing verified media to the System Shell remains
+the next S6 slice.
 
 ## Verification
 
 ```sh
 cargo test -p cp0-store-protocol -p cp0-store-publisher --lib
+cargo test -p cp0-stored --lib
 
 CP0_STORE_TEST_DATABASE_URL=postgres://... \
   cargo test -p cp0-store-publisher --test postgres -- --ignored --nocapture
@@ -85,7 +103,9 @@ CP0_STORE_TEST_DATABASE_URL=postgres://... \
 
 Protocol coverage rejects schema mixing, missing resource descriptors, unsafe
 URLs, bad digests, wrong dimensions, duplicated screenshots, unbounded details
-and unsafe prose. Publisher unit tests cover v1/v2/v3 projection migration. The
-PostgreSQL gate reads every generated object back from the immutable origin,
-recomputes hashes, decodes details and proves byte-identical generation reuse
-after a database rollback and owner Team rename.
+and unsafe prose. Publisher unit tests cover v1/v2/v3 projection migration.
+Device tests cover exact media caching, owner-only modes, tampered CDN bytes,
+Catalog/install independence and bounded screenshot LRU. The PostgreSQL gate
+reads every generated object back from the immutable origin, recomputes hashes,
+decodes details and proves byte-identical generation reuse after a database
+rollback and owner Team rename.
