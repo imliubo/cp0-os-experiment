@@ -599,6 +599,24 @@
         }
       }
     },
+    "/v1/editorial/releases": {
+      "get": {
+        "operationId": "listPublishedEditorialReleases",
+        "parameters": [
+          { "name": "cursor", "in": "query", "schema": { "type": "string", "maxLength": 53 } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current approved published Release candidates ordered by Catalog sequence",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/EditorialReleaseList" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/v1/editorial/today": {
       "get": {
         "operationId": "getTodayEditorial",
@@ -1256,6 +1274,35 @@
             "maxItems": 2,
             "items": { "$ref": "#/components/schemas/EditorialCollectionRequest" }
           }
+        }
+      },
+      "EditorialRelease": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["release_id", "app_id", "name", "version", "category", "catalog_sequence"],
+        "properties": {
+          "release_id": { "$ref": "#/components/schemas/ReleaseId" },
+          "app_id": { "$ref": "#/components/schemas/AppId" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "version": { "$ref": "#/components/schemas/SemanticVersion" },
+          "category": {
+            "type": ["string", "null"],
+            "enum": ["developer-tools", "education", "entertainment", "games", "hardware", "media", "productivity", "utilities", null]
+          },
+          "catalog_sequence": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "EditorialReleaseList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "next_cursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 50,
+            "items": { "$ref": "#/components/schemas/EditorialRelease" }
+          },
+          "next_cursor": { "type": ["string", "null"], "maxLength": 53 }
         }
       },
       "EditorialCollectionRequest": {

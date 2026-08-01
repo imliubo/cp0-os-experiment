@@ -41,6 +41,50 @@ test("Today update omits cookies and binds ETag and idempotency", async () => {
   assert.equal(response.etag, '"8"');
 });
 
+test("published Release discovery validates canonical current projections", async () => {
+  const data = createOperationsData();
+  const items = data.releases.slice(0, 2).map((release, index) => ({
+    release_id: release.releaseId,
+    app_id: release.appId,
+    name: release.name,
+    version: release.version,
+    category: release.category.toLowerCase().replaceAll(" ", "-"),
+    catalog_sequence: index + 41,
+  }));
+  const next_cursor = `000000000000002a.${items[1].release_id}`;
+  let captured;
+  const api = new OperationsApi({
+    tokenProvider: async () => token,
+    fetchImpl: async (url, init) => {
+      captured = { url, init };
+      return jsonResponse({ items, next_cursor });
+    },
+  });
+  const response = await api.listPublishedReleases({ limit: 2 });
+  assert.equal(captured.url, "https://operations.cardputerzero.dev/v1/editorial/releases?limit=2");
+  assert.equal(captured.init.credentials, "omit");
+  assert.deepEqual(response.data, { items, next_cursor });
+
+  const duplicate = structuredClone(items);
+  duplicate[1].app_id = duplicate[0].app_id;
+  const invalid = new OperationsApi({
+    tokenProvider: async () => token,
+    fetchImpl: async () => jsonResponse({ items: duplicate, next_cursor }),
+  });
+  await assert.rejects(() => invalid.listPublishedReleases({ limit: 2 }), /response is invalid/);
+  const invalidVersion = structuredClone(items);
+  invalidVersion[1].version = "1.0.0-01";
+  const invalidVersionApi = new OperationsApi({
+    tokenProvider: async () => token,
+    fetchImpl: async () => jsonResponse({ items: invalidVersion, next_cursor }),
+  });
+  await assert.rejects(() => invalidVersionApi.listPublishedReleases({ limit: 2 }), /response is invalid/);
+  assert.throws(
+    () => api.listPublishedReleases({ cursor: `000000000000002a.release_${"f".repeat(32)}` }),
+    /cursor is invalid/,
+  );
+});
+
 test("moderation request uses a bounded query and exact mutation path", async () => {
   const calls = [];
   const api = new OperationsApi({

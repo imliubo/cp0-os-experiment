@@ -17,7 +17,9 @@
 
 - Developer Portal、Review Console 和 Store Operations 本地前端 MVP 已完成；Store Operations
   已覆盖 Today 编辑/320x170 预览、已发布 Release 选择、SLA moderation 队列和结构化处置，
-  严格客户端复用现有 ETag/幂等控制面；生产 workforce SSO/BFF、真实 Release discovery 和部署尚未实现；
+  严格客户端复用现有 ETag/幂等控制面；真实 Release discovery 已通过 approved/published/artifact/
+  最新 App 投影门禁、有界 keyset 分页和严格前端适配器接通；生产 workforce SSO/BFF、fixture
+  替换和部署尚未实现；
 - Submission/Review/Release 事务域核心已完成；App Registry、Submission
   create/upload/finalize/read、独立双审 Review 和 Release 控制的 PostgreSQL/HTTP 纵向切片
   已完成，Submission withdraw 的状态/队列/审核原子取消和 OAuth 开发者 Device Flow 纵向切片

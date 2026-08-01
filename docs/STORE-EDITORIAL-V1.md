@@ -29,10 +29,20 @@ do not submit App IDs, so they cannot create a Release/App mismatch.
 The canonical schema is `schemas/store-control-v1.openapi.json`:
 
 ```text
+GET  /v1/editorial/releases
 GET  /v1/editorial/today
 POST /v1/editorial/today
 PUT  /v1/editorial/today
 ```
+
+Release discovery is a 1-50 item keyset-paginated view over immutable Store
+artifacts. It includes only approved Submissions whose Release is still
+`published`, whose artifact matches the Release Catalog sequence and identity,
+and whose sequence is the newest currently published projection for that App.
+The server validates the stored Catalog application before returning its
+authoritative name, version, and optional category. Paused, removed,
+superseded, corrupt, or artifact-free rows cannot become operator candidates.
+The same operator, 2FA, token, and `store.editorial` checks protect this read.
 
 GET returns the current layout and ETag. POST creates resource version 1,
 requires `Idempotency-Key`, and explicitly rejects `If-Match`; it returns 409
@@ -134,9 +144,10 @@ collection, before leaving Store navigation.
 
 ## Verification
 
-PostgreSQL acceptance tests cover operator authentication, create/replay/update,
-stale ETags, invalid or duplicate references, immutable revisions, direct SQL
-tampering, audit/outbox rollback, exact Publisher revision replay, Release
+PostgreSQL acceptance tests cover bounded current-Release discovery and cursor
+validation, operator authentication, create/replay/update, stale ETags, invalid
+or duplicate references, immutable revisions, direct SQL tampering,
+audit/outbox rollback, exact Publisher revision replay, Release
 pause/resume/remove fallback, job supersession, and snapshot provenance.
 Protocol and daemon tests cover Catalog v1-v4 compatibility and strict Today
 projection. System Shell tests cover parsing, navigation, refresh continuity,

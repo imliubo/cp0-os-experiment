@@ -249,8 +249,10 @@ S8E 已完成工程环境韧性演练：1024 项/16 shard 容量、CDN Range/离
 S8F 已新增独立 Store Operations React/Vite MVP：Today 有界编辑、320x170 设备预览、published
 Release 候选、SLA moderation 队列和结构化处置均可操作；严格客户端只访问现有 editorial/
 moderation v1 API，使用短期 operator bearer token、`credentials: omit`、强 ETag、随机幂等键和
-64 KiB 响应上限。生产 workforce SSO/BFF、真实 published-Release discovery、双人处置和正式
-政策执行仍保持关闭。
+64 KiB 响应上限。S8G 已补齐真实 published-Release discovery：控制面只列出 approved、当前
+published、具有匹配不可变 artifact 且为每个 App 最新投影的 Release，使用 50 项上限的严格
+keyset cursor；前端同时修正为后端规范的 `rel_` ID 并严格验证响应。生产 workforce SSO/BFF、
+fixture 替换、双人处置和正式政策执行仍保持关闭。
 
 - [x] Today/专题运营工具只能引用 approved Release。
 - [x] 建立最小化、可选、去标识化的安装、启动和崩溃聚合指标。

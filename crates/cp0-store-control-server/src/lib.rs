@@ -23,10 +23,11 @@ use cp0_store_control::{
     AppRecord, SubmissionSpec, create_submission_request_sha256, is_valid_locale,
     register_app_request_sha256, validate_submission_spec,
 };
-use cp0_store_metadata::{ImageAsset, ReleaseState, SubmissionState};
+use cp0_store_metadata::{ImageAsset, ReleaseState, StoreCategory, SubmissionState};
 use cp0_store_metrics::{
     AggregateMetricsReport, MAX_METRICS_REPORT_BYTES, WEEK_SECONDS, encode_report, week_start,
 };
+use cp0_store_protocol::CatalogApp;
 use cp0_store_risk::RiskAssessment;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -3370,6 +3371,95 @@ impl StoreControlService {
         Ok(layout)
     }
 
+    async fn list_editorial_releases(
+        &self,
+        token: &str,
+        cursor: Option<EditorialReleaseCursor>,
+        limit: usize,
+    ) -> Result<EditorialReleaseListResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        let identity = authenticate_store_operator(&mut transaction, &token_sha256)
+            .await
+            .map_err(ApiError::from_transaction)?;
+        require_editorial_access(&identity)?;
+        let (after_sequence, after_release_id) = cursor
+            .map(|cursor| (cursor.catalog_sequence, cursor.release_id))
+            .unwrap_or((0, String::new()));
+        let rows = sqlx::query(
+            "SELECT release.release_id, release.app_id, release.version, \
+             artifact.catalog_sequence, artifact.catalog_app \
+             FROM releases release \
+             JOIN submissions submission ON submission.submission_id = release.submission_id \
+             JOIN store_package_artifacts artifact ON artifact.release_id = release.release_id \
+             WHERE release.state = 'published' AND submission.state = 'approved' \
+               AND submission.app_id = release.app_id AND submission.version = release.version \
+               AND release.catalog_sequence = artifact.catalog_sequence \
+               AND (artifact.catalog_sequence, release.release_id) > ($1, $2) \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM store_package_artifacts newer_artifact \
+                 JOIN releases newer_release \
+                   ON newer_release.release_id = newer_artifact.release_id \
+                 JOIN submissions newer_submission \
+                   ON newer_submission.submission_id = newer_release.submission_id \
+                 WHERE newer_release.app_id = release.app_id \
+                   AND newer_release.state = 'published' \
+                   AND newer_submission.state = 'approved' \
+                   AND newer_submission.app_id = newer_release.app_id \
+                   AND newer_submission.version = newer_release.version \
+                   AND newer_release.catalog_sequence = newer_artifact.catalog_sequence \
+                   AND newer_artifact.catalog_sequence > artifact.catalog_sequence \
+               ) \
+             ORDER BY artifact.catalog_sequence, release.release_id LIMIT $3",
+        )
+        .bind(after_sequence)
+        .bind(after_release_id)
+        .bind(i64::try_from(limit + 1).map_err(|_| ApiError::invalid_request())?)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| ApiError::unavailable())?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+
+        let has_more = rows.len() > limit;
+        let mut items = rows
+            .iter()
+            .take(limit)
+            .map(|row| {
+                let release_id: String = row.get("release_id");
+                let app_id: String = row.get("app_id");
+                let version: String = row.get("version");
+                let catalog_sequence = u64::try_from(row.get::<i64, _>("catalog_sequence"))
+                    .map_err(|_| ApiError::internal())?;
+                let catalog: CatalogApp = serde_json::from_value(row.get("catalog_app"))
+                    .map_err(|_| ApiError::internal())?;
+                catalog.validate().map_err(|_| ApiError::internal())?;
+                if catalog.app_id != app_id || catalog.version != version {
+                    return Err(ApiError::internal());
+                }
+                Ok(EditorialReleaseResponse {
+                    release_id,
+                    app_id,
+                    name: catalog.name,
+                    version,
+                    category: catalog.discovery.map(|discovery| discovery.category),
+                    catalog_sequence,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = has_more.then(|| items.last()).flatten().map(|release| {
+            encode_editorial_release_cursor(release.catalog_sequence, &release.release_id)
+        });
+        items.shrink_to_fit();
+        Ok(EditorialReleaseListResponse { items, next_cursor })
+    }
+
     async fn replace_today_editorial(
         &self,
         token: &str,
@@ -3931,6 +4021,7 @@ pub fn router(service: StoreControlService) -> Router {
                 .post(mutate_release)
                 .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
         )
+        .route("/v1/editorial/releases", get(list_editorial_releases))
         .route(
             "/v1/editorial/today",
             get(get_today_editorial)
@@ -4133,6 +4224,13 @@ struct ReviewQueueQuery {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct EditorialReleaseQuery {
+    cursor: Option<String>,
+    limit: Option<u16>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateReleaseRequest {
     submission_id: String,
     rollout_percent: u8,
@@ -4169,6 +4267,11 @@ struct EditorialLayoutRequest {
 struct ReviewCursor {
     created_unix_seconds: i64,
     submission_id: String,
+}
+
+struct EditorialReleaseCursor {
+    catalog_sequence: i64,
+    release_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4248,6 +4351,24 @@ struct EditorialLayoutResponse {
     collections: Vec<EditorialCollectionResponse>,
     resource_version: u64,
     updated_unix_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EditorialReleaseResponse {
+    release_id: String,
+    app_id: String,
+    name: String,
+    version: String,
+    category: Option<StoreCategory>,
+    catalog_sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EditorialReleaseListResponse {
+    items: Vec<EditorialReleaseResponse>,
+    next_cursor: Option<String>,
 }
 
 struct ResolvedEditorialLayout {
@@ -6494,6 +6615,39 @@ async fn get_today_editorial(
     }
 }
 
+async fn list_editorial_releases(
+    State(service): State<StoreControlService>,
+    headers: HeaderMap,
+    query: Result<Query<EditorialReleaseQuery>, QueryRejection>,
+) -> Response {
+    let request_id = request_id();
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(_) => return ApiError::invalid_request().response(request_id),
+    };
+    let limit = usize::from(query.limit.unwrap_or(25));
+    if !(1..=50).contains(&limit) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let cursor = match query
+        .cursor
+        .as_deref()
+        .map(parse_editorial_release_cursor)
+        .transpose()
+    {
+        Ok(cursor) => cursor,
+        Err(error) => return error.response(request_id),
+    };
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    match service.list_editorial_releases(&token, cursor, limit).await {
+        Ok(releases) => json_response(StatusCode::OK, releases, request_id),
+        Err(error) => error.response(request_id),
+    }
+}
+
 async fn post_today_editorial(
     State(service): State<StoreControlService>,
     headers: HeaderMap,
@@ -7042,6 +7196,35 @@ fn parse_review_cursor(value: &str) -> Result<ReviewCursor, ApiError> {
     })
 }
 
+fn encode_editorial_release_cursor(catalog_sequence: u64, release_id: &str) -> String {
+    format!("{catalog_sequence:016x}.{release_id}")
+}
+
+fn parse_editorial_release_cursor(value: &str) -> Result<EditorialReleaseCursor, ApiError> {
+    if value.len() != 53 {
+        return Err(ApiError::invalid_request());
+    }
+    let (sequence, release_id) = value
+        .split_once('.')
+        .ok_or_else(ApiError::invalid_request)?;
+    let catalog_sequence = u64::from_str_radix(sequence, 16)
+        .ok()
+        .filter(|value| *value > 0 && *value <= i64::MAX as u64)
+        .ok_or_else(ApiError::invalid_request)?;
+    if !sequence
+        .bytes()
+        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || !is_valid_release_id(release_id)
+        || encode_editorial_release_cursor(catalog_sequence, release_id) != value
+    {
+        return Err(ApiError::invalid_request());
+    }
+    Ok(EditorialReleaseCursor {
+        catalog_sequence: catalog_sequence as i64,
+        release_id: release_id.to_owned(),
+    })
+}
+
 fn valid_part_name(value: &str) -> bool {
     matches!(value, "package" | "listing")
         || value
@@ -7190,6 +7373,26 @@ mod tests {
         assert!(parse_release_action("schedule", &headers, b"{}").is_err());
         assert!(is_valid_release_id("rel_0123456789abcdef0123456789abcdef"));
         assert!(!is_valid_release_id("rel_0123456789ABCDEF0123456789ABCDEF"));
+    }
+
+    #[test]
+    fn editorial_release_cursor_is_canonical_and_bounded() {
+        let release_id = "rel_0123456789abcdef0123456789abcdef";
+        let cursor = encode_editorial_release_cursor(901, release_id);
+        let parsed = parse_editorial_release_cursor(&cursor).unwrap();
+        assert_eq!(parsed.catalog_sequence, 901);
+        assert_eq!(parsed.release_id, release_id);
+        assert!(parse_editorial_release_cursor(&cursor.to_uppercase()).is_err());
+        assert!(
+            parse_editorial_release_cursor("0000000000000000.rel_0123456789abcdef0123456789abcdef")
+                .is_err()
+        );
+        assert!(
+            parse_editorial_release_cursor(
+                "0000000000000385.release_0123456789abcdef0123456789abcdef"
+            )
+            .is_err()
+        );
     }
 
     #[test]

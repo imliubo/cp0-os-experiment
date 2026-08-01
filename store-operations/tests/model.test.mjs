@@ -25,7 +25,7 @@ test("editorial validation rejects duplicate Releases and Apps", () => {
   assert.match(validateEditorial(duplicateApp, data.releases)["collection.0.release_ids"], /repeat/);
 
   const unpublished = structuredClone(data.editorial);
-  unpublished.featured_release_id = `release_${"f".repeat(32)}`;
+  unpublished.featured_release_id = `rel_${"f".repeat(32)}`;
   assert.match(validateEditorial(unpublished, data.releases).featured_release_id, /published/);
 });
 

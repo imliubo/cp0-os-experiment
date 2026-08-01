@@ -1,4 +1,4 @@
-export const RELEASE_ID = /^release_[0-9a-f]{32}$/;
+export const RELEASE_ID = /^rel_[0-9a-f]{32}$/;
 
 export const DECISION_REASONS = [
   "duplicate",
@@ -85,7 +85,7 @@ export function applyDecision(reports, reportId, request) {
 }
 
 const release = (suffix, appId, name, version, category, accent) => ({
-  releaseId: `release_${suffix.repeat(32)}`,
+  releaseId: `rel_${suffix.repeat(32)}`,
   appId,
   name,
   version,

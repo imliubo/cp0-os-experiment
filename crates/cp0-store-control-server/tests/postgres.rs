@@ -4431,6 +4431,106 @@ async fn verify_editorial_backend(application: &Router, pool: &PgPool) {
     )
     .await;
 
+    let denied_release_discovery = call(
+        application.clone(),
+        Method::GET,
+        "/v1/editorial/releases?limit=2",
+        Some(OWNER_A_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(
+        &denied_release_discovery,
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+    );
+    let no_2fa_release_discovery = call(
+        application.clone(),
+        Method::GET,
+        "/v1/editorial/releases?limit=2",
+        Some(EDITOR_NO_2FA_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(
+        &no_2fa_release_discovery,
+        StatusCode::FORBIDDEN,
+        "two-factor-required",
+    );
+    let invalid_release_limit = call(
+        application.clone(),
+        Method::GET,
+        "/v1/editorial/releases?limit=51",
+        Some(EDITOR_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(
+        &invalid_release_limit,
+        StatusCode::BAD_REQUEST,
+        "invalid-request",
+    );
+    let first_release_page = call(
+        application.clone(),
+        Method::GET,
+        "/v1/editorial/releases?limit=2",
+        Some(EDITOR_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(first_release_page.status, StatusCode::OK);
+    let first_release_page_body: Value = serde_json::from_slice(&first_release_page.body).unwrap();
+    assert_eq!(first_release_page_body["items"][0]["release_id"], FEATURED);
+    assert_eq!(
+        first_release_page_body["items"][1]["release_id"],
+        COLLECTION_B
+    );
+    assert_eq!(first_release_page_body["items"][0]["name"], "Editorial 901");
+    assert_eq!(first_release_page_body["items"][0]["category"], "utilities");
+    let release_cursor = first_release_page_body["next_cursor"].as_str().unwrap();
+    let second_release_page = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/editorial/releases?limit=2&cursor={release_cursor}"),
+        Some(EDITOR_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(second_release_page.status, StatusCode::OK);
+    let second_release_page_body: Value =
+        serde_json::from_slice(&second_release_page.body).unwrap();
+    assert_eq!(
+        second_release_page_body["items"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        second_release_page_body["items"][0]["release_id"],
+        DUPLICATE_APP
+    );
+    assert_eq!(second_release_page_body["next_cursor"], Value::Null);
+    let invalid_release_cursor = call(
+        application.clone(),
+        Method::GET,
+        &format!(
+            "/v1/editorial/releases?cursor={}",
+            release_cursor.to_ascii_uppercase()
+        ),
+        Some(EDITOR_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(
+        &invalid_release_cursor,
+        StatusCode::BAD_REQUEST,
+        "invalid-request",
+    );
+
     let request = json!({
         "headline": "Reviewed for 320 x 170",
         "featured_release_id": FEATURED,
@@ -4879,6 +4979,63 @@ async fn seed_editorial_release(
     .execute(pool)
     .await
     .unwrap();
+
+    let mut artifact_seed = pool.begin().await.unwrap();
+    artifact_seed
+        .execute(
+            "ALTER TABLE store_package_artifacts DISABLE TRIGGER \
+             store_package_artifacts_authorized_insert",
+        )
+        .await
+        .unwrap();
+    let package_sha256 = "f".repeat(64);
+    sqlx::query(
+        "INSERT INTO store_package_artifacts (release_id, submission_id, catalog_sequence, \
+         package_sha256, package_bytes, relative_path, store_key_id, catalog_app, \
+         created_unix_seconds) VALUES ($1, $2, $3, $4, 4096, $5, $6, $7, $8)",
+    )
+    .bind(release_id)
+    .bind(submission_id)
+    .bind(catalog_sequence)
+    .bind(&package_sha256)
+    .bind(format!(
+        "generations/{catalog_sequence}/packages/{release_id}.capp"
+    ))
+    .bind("e".repeat(64))
+    .bind(json!({
+        "app_id": app_id,
+        "name": format!("Editorial {catalog_sequence}"),
+        "version": version,
+        "sdk_version": "1.0",
+        "summary": "A published Store Operations fixture",
+        "package_url": format!(
+            "https://store.example.com/generations/{catalog_sequence}/packages/{release_id}.capp"
+        ),
+        "package_sha256": package_sha256,
+        "package_bytes": 4096,
+        "permissions": [],
+        "discovery": {
+            "developer": "Team A",
+            "subtitle": "A published Store Operations fixture",
+            "category": "utilities",
+            "keywords": ["operations"],
+            "age_rating": "4+",
+            "privacy_url": "https://store.example.com/privacy",
+            "support_url": "https://store.example.com/support"
+        }
+    }))
+    .bind(now)
+    .execute(&mut *artifact_seed)
+    .await
+    .unwrap();
+    artifact_seed
+        .execute(
+            "ALTER TABLE store_package_artifacts ENABLE TRIGGER \
+             store_package_artifacts_authorized_insert",
+        )
+        .await
+        .unwrap();
+    artifact_seed.commit().await.unwrap();
 }
 
 async fn seed_unapproved_editorial_release(pool: &PgPool, release_id: &str) {

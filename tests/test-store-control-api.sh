@@ -32,6 +32,7 @@ jq -e '
   .paths["/v1/releases/{release_id}:pause"].post.operationId == "pauseRelease" and
   .paths["/v1/releases/{release_id}:resume"].post.operationId == "resumeRelease" and
   .paths["/v1/releases/{release_id}:remove"].post.operationId == "removeRelease" and
+  .paths["/v1/editorial/releases"].get.operationId == "listPublishedEditorialReleases" and
   .paths["/v1/editorial/today"].get.operationId == "getTodayEditorial" and
   .paths["/v1/editorial/today"].post.operationId == "createTodayEditorial" and
   .paths["/v1/editorial/today"].put.operationId == "updateTodayEditorial" and
@@ -58,7 +59,8 @@ jq -e '
       "CreateSubmissionRequest", "FinalizeSubmissionRequest", "Submission",
       "ReviewMessageRequest", "ReviewMessage", "ReviewDecisionRequest",
       "CreateReleaseRequest", "ScheduleReleaseRequest", "RemovalRequest", "Release",
-      "EditorialLayoutRequest", "EditorialCollectionRequest", "EditorialItem",
+      "EditorialLayoutRequest", "EditorialRelease", "EditorialReleaseList",
+      "EditorialCollectionRequest", "EditorialItem",
       "EditorialCollection", "EditorialLayout", "ContentReportRequest", "ContentReport",
       "ModerationDecisionRequest",
       "DeveloperNotice", "ModerationDecision", "ModerationReportQueue",
@@ -167,6 +169,10 @@ jq -e '
   .components.schemas.EditorialCollectionRequest.properties.release_ids.minItems == 1 and
   .components.schemas.EditorialCollectionRequest.properties.release_ids.maxItems == 4 and
   .components.schemas.EditorialCollectionRequest.properties.release_ids.uniqueItems == true and
+  .components.schemas.EditorialReleaseList.properties.items.maxItems == 50 and
+  .components.schemas.EditorialReleaseList.properties.next_cursor.maxLength == 53 and
+  .paths["/v1/editorial/releases"].get.responses["200"].content["application/json"].schema["$ref"] ==
+    "#/components/schemas/EditorialReleaseList" and
   .components.schemas.EditorialLayout.properties.layout_id.const == "today"
 ' "$api" >/dev/null
 
