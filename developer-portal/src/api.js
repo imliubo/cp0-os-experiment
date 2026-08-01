@@ -96,6 +96,26 @@ export class StoreApi {
     });
   }
 
+  getTeam(teamId) {
+    return this.request(`/v1/teams/${encodeURIComponent(teamId)}`);
+  }
+
+  setTeamMemberRole(teamId, memberId, role, etag) {
+    if (!etag) throw new Error("Team role changes require an ETag");
+    if (!["owner", "developer", "release-manager", "viewer"].includes(role)) {
+      throw new Error("Unknown team role");
+    }
+    return this.request(
+      `/v1/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}:set-role`,
+      {
+        method: "POST",
+        idempotent: true,
+        etag,
+        body: { role },
+      },
+    );
+  }
+
   getApp(appId) {
     return this.request(`/v1/apps/${encodeURIComponent(appId)}`);
   }

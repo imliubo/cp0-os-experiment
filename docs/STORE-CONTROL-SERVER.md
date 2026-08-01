@@ -7,6 +7,8 @@ part of the CardputerZero device image.
 ## Implemented API slice
 
 - `POST /oauth/device/code`, `/oauth/device/authorize`, and `/oauth/token`;
+- `GET /v1/teams/{team_id}`;
+- `POST /v1/teams/{team_id}/members/{member_id}:set-role`;
 - `POST /v1/apps` and `GET /v1/apps/{app_id}`;
 - `POST /v1/apps/{app_id}/submissions`;
 - `PUT /v1/submissions/{submission_id}/parts/{part_name}`;
@@ -33,6 +35,13 @@ live owner/developer identity with the exact scope and enabled 2FA. Poll timing,
 one-time exchange, approval idempotency, state transitions, audit, and outbox
 are enforced transactionally. See `STORE-OAUTH-DEVICE-FLOW.md` for the protocol
 and the remaining production Identity/Teams boundary.
+
+Team reads expose only the caller's bounded member list. Role changes require
+an owner with `store.teams.write`, a strong team ETag, and MFA authenticated
+within five minutes. The transaction advances Team/member versions, preserves
+the last Owner, revokes the target member's existing tokens, and emits one
+audit/outbox event. The external OIDC and Portal BFF boundary is frozen in
+`STORE-IDENTITY-TEAMS.md`; credentials are outside this service.
 
 The upload endpoint accepts one contiguous chunk of at most 256 KiB and checks
 `If-Match`, `Content-Range` and `Content-SHA256`. Chunks are hashed again and
@@ -113,11 +122,12 @@ finalize replay, reviewer assignment authorization, structured decisions,
 developer/reviewer messages, approved-only Release creation, concurrent Release
 uniqueness, scheduling, publication queueing, pause/resume/removal, publication
 retry, Submission withdrawal/cleanup/replay, injected transaction rollback and
-append-only database triggers.
+append-only database triggers, Team isolation, MFA freshness, last-Owner
+protection, role-change replay and immediate token revocation.
 
-Identity/Teams account and session management, dynamic malware intelligence,
-independent second review, double approval, Review Console UI, production
-object storage, general outbox delivery and garbage collection are not
-implemented by this HTTP slice.
+Identity account linking, invitations, Portal sessions, dynamic malware
+intelligence, independent second review, double approval, Review Console UI,
+production object storage, general outbox delivery and garbage collection are
+not implemented by this HTTP slice.
 Isolated signing/Catalog publication and transparency logging are implemented by
 the S5G/S5H Publisher boundary described in `STORE-PUBLISHER.md`.

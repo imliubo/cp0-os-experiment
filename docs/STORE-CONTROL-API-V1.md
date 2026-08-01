@@ -29,6 +29,16 @@ Listing 顺序写 icon 和截图的 path、SHA（同样使用长度前缀）、`
 错误使用有界的 `application/problem+json`，稳定 `code` 供 CLI 处理；内部路径、SQL、对象存储
 key、token 和扫描器输出不能进入 `detail`。
 
+## Team 与认证上下文
+
+Team 读取只返回 access token 当前成员所属的 Team，跨 Team ID 统一返回 `not-found`。成员角色
+修改要求 Owner、`store.teams.write`、当前 Team ETag、幂等键、已启用 2FA，以及五分钟内由
+受信 IdP 证明的 MFA 时间；仅凭 token 创建时间不能满足 step-up。成功修改会同时递增 Team 和
+成员版本、撤销目标成员的全部旧 token，并原子写 audit/outbox。最后一个 Owner 不能被降级。
+
+Portal 的 OIDC/BFF、cookie、CSRF 和账户恢复边界见 `STORE-IDENTITY-TEAMS.md`。Store API 不接收
+密码、WebAuthn credential 或 OIDC refresh token。
+
 ## Submission 状态机
 
 ```text

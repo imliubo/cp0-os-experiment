@@ -67,6 +67,51 @@
         }
       }
     },
+    "/v1/teams/{team_id}": {
+      "get": {
+        "operationId": "getTeam",
+        "parameters": [{ "$ref": "#/components/parameters/TeamId" }],
+        "responses": {
+          "200": {
+            "description": "Current developer team and bounded member list",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Team" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/teams/{team_id}/members/{member_id}:set-role": {
+      "post": {
+        "operationId": "setTeamMemberRole",
+        "parameters": [
+          { "$ref": "#/components/parameters/TeamId" },
+          { "$ref": "#/components/parameters/MemberId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SetTeamMemberRoleRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Member role changed and existing member tokens revoked",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Team" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/v1/apps": {
       "post": {
         "operationId": "createApp",
@@ -518,6 +563,18 @@
         "required": true,
         "schema": { "$ref": "#/components/schemas/ReleaseId" }
       },
+      "TeamId": {
+        "name": "team_id",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/TeamId" }
+      },
+      "MemberId": {
+        "name": "member_id",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/MemberId" }
+      },
       "PartName": {
         "name": "part_name",
         "in": "path",
@@ -568,6 +625,9 @@
         "maxLength": 128,
         "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*){2,}$"
       },
+      "TeamId": { "type": "string", "pattern": "^team_[0-9a-f]{32}$" },
+      "MemberId": { "type": "string", "pattern": "^member_[0-9a-f]{32}$" },
+      "TeamRole": { "enum": ["owner", "developer", "release-manager", "viewer"] },
       "SubmissionId": { "type": "string", "pattern": "^sub_[0-9a-f]{32}$" },
       "ReleaseId": { "type": "string", "pattern": "^rel_[0-9a-f]{32}$" },
       "Sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
@@ -662,6 +722,42 @@
           "token_type": { "const": "Bearer" },
           "expires_in": { "type": "integer", "minimum": 60, "maximum": 3600 },
           "scope": { "const": "store.submit" }
+        }
+      },
+      "SetTeamMemberRoleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role"],
+        "properties": {
+          "role": { "$ref": "#/components/schemas/TeamRole" }
+        }
+      },
+      "TeamMember": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["member_id", "email", "role", "two_factor_enabled", "resource_version"],
+        "properties": {
+          "member_id": { "$ref": "#/components/schemas/MemberId" },
+          "email": { "type": "string", "format": "email", "minLength": 3, "maxLength": 254 },
+          "role": { "$ref": "#/components/schemas/TeamRole" },
+          "two_factor_enabled": { "type": "boolean" },
+          "resource_version": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "Team": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["team_id", "name", "members", "resource_version"],
+        "properties": {
+          "team_id": { "$ref": "#/components/schemas/TeamId" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "members": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": { "$ref": "#/components/schemas/TeamMember" }
+          },
+          "resource_version": { "type": "integer", "minimum": 1 }
         }
       },
       "CreateAppRequest": {

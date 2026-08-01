@@ -14,6 +14,8 @@ jq -e '
   .paths["/oauth/token"].post.security == [] and
   (.paths["/oauth/device/authorize"].post | has("security") | not) and
   (.paths["/oauth/token"].post.responses | has("428") | not) and
+  .paths["/v1/teams/{team_id}"].get.operationId == "getTeam" and
+  .paths["/v1/teams/{team_id}/members/{member_id}:set-role"].post.operationId == "setTeamMemberRole" and
   .paths["/v1/apps/{app_id}/submissions"].post.operationId == "createSubmission" and
   .paths["/v1/submissions/{submission_id}:finalize"].post.operationId == "finalizeSubmission" and
   .paths["/v1/submissions/{submission_id}:withdraw"].post.operationId == "withdrawSubmission" and
@@ -39,6 +41,7 @@ jq -e '
     .components.schemas[
       "Problem", "DeviceCodeRequest", "DeviceCodeResponse",
       "DeviceAuthorizationDecisionRequest", "DeviceTokenRequest", "DeviceTokenResponse",
+      "SetTeamMemberRoleRequest", "TeamMember", "Team",
       "CreateAppRequest", "App", "AssetDescriptor",
       "CreateSubmissionRequest", "FinalizeSubmissionRequest", "Submission",
       "ReviewMessageRequest", "ReviewMessage", "ReviewDecisionRequest",
@@ -54,6 +57,13 @@ jq -e '
   def refs($operation): [($operation.parameters // [])[] | .["$ref"]];
   (refs(.paths["/oauth/device/authorize"].post) |
     index("#/components/parameters/IdempotencyKey") != null) and
+  (refs(.paths["/v1/teams/{team_id}/members/{member_id}:set-role"].post) |
+    index("#/components/parameters/IdempotencyKey") != null and
+    index("#/components/parameters/IfMatch") != null) and
+  .paths["/v1/teams/{team_id}/members/{member_id}:set-role"].post.requestBody.required == true and
+  (.paths["/v1/teams/{team_id}/members/{member_id}:set-role"].post.responses["200"] |
+    .headers.ETag["$ref"] == "#/components/headers/ETag" and
+    .content["application/json"].schema["$ref"] == "#/components/schemas/Team") and
   (refs(.paths["/v1/review/submissions/{submission_id}:begin"].post) |
     index("#/components/parameters/IdempotencyKey") != null and
     index("#/components/parameters/IfMatch") != null) and

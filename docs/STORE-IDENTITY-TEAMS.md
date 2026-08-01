@@ -1,0 +1,80 @@
+# Store Identity and Teams
+
+S5K freezes the production authentication boundary and implements the first
+team-administration slice. The Store control server remains an OAuth resource
+server; it does not store passwords, passkey private material, recovery codes,
+or upstream OIDC tokens.
+
+## Implemented API slice
+
+- `GET /v1/teams/{team_id}` returns the caller's team and at most 100 members;
+- `POST /v1/teams/{team_id}/members/{member_id}:set-role` changes one role;
+- roles are exactly `owner`, `developer`, `release-manager`, and `viewer`;
+- cross-team IDs return `not-found` and never disclose membership data.
+
+Team reads require `store.teams.read`, `store.teams.write`, or internal
+`store.control`. A role change requires the current `owner` role,
+`store.teams.write` or `store.control`, enabled 2FA, and an MFA authentication
+time no more than five minutes old. The operation also requires the current
+team ETag and an idempotency key.
+
+One PostgreSQL `SERIALIZABLE` transaction locks the Team and target member,
+advances both resource versions by exactly one, changes the role, revokes every
+existing access token for the target member, and appends audit/outbox records.
+The database and service both prevent removal of the last Owner. Exact replay
+returns the stored Team body and ETag without another mutation.
+
+## Production login boundary
+
+The production Portal uses a server-side BFF and an external OpenID Connect
+provider:
+
+1. the BFF uses Authorization Code with PKCE, exact redirect URIs, issuer and
+   audience allowlists, state, nonce, and bounded clock skew;
+2. the provider owns account proofing, passkeys/WebAuthn, MFA enrollment,
+   recovery, abuse controls, and credential notifications;
+3. the BFF maps the immutable `(issuer, subject)` pair to a Store member and
+   creates only a hashed, short-lived opaque control token;
+4. `mfa_authenticated_unix_seconds` is populated only after a configured,
+   verified MFA assurance claim; token creation time alone is not MFA proof;
+5. the browser receives only an opaque `Secure`, `HttpOnly`, `SameSite=Strict`
+   Portal session cookie. Control tokens and OIDC refresh tokens remain in the
+   BFF; writes also require same-origin CSRF protection;
+6. the Portal session has a 30-minute idle and eight-hour absolute lifetime.
+   Sensitive operations force a fresh provider challenge when the five-minute
+   step-up window has elapsed.
+
+The IdP vendor, accepted ACR values, enterprise federation, account-linking
+policy, and recovery escalation must be configured and reviewed before login
+is enabled. An email address is display/contact data, never a stable login key;
+the external issuer and subject form the identity.
+
+Reviewer identities remain a separate workforce SSO domain. A developer Team
+role can never grant `store.review` or become a reviewer through this API.
+
+## Database constraints
+
+- Team and member identities cannot be reassigned or deleted through role
+  mutation paths;
+- every Team/member update advances its resource version by exactly one;
+- member email values are bounded, trimmed, and lowercase;
+- MFA authentication time is optional, immutable, positive, and cannot be
+  later than token creation;
+- access tokens can only transition to revoked and cannot be deleted;
+- the deferred last-Owner constraint remains the final database backstop.
+
+Existing tokens migrated from pre-S5K data receive no MFA authentication time,
+so they fail closed for sensitive team writes until a real step-up token is
+issued.
+
+## Verification
+
+The PostgreSQL acceptance gate covers bounded ordered reads, missing scope,
+role and team isolation, disabled and stale MFA, last-Owner protection, stale
+ETags, exact replay, immediate target-token revocation, database bypasses, and
+an injected audit failure proving complete rollback. The Portal API tests bind
+role changes to the ETag and idempotency headers.
+
+Account creation/linking, invitations, member suspension/removal, OIDC callback
+and Portal session endpoints, MFA enrollment/recovery, reviewer SSO, and
+production abuse controls are not implemented by S5K.

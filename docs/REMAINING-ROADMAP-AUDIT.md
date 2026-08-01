@@ -18,7 +18,8 @@
 - Submission/Review/Release 事务域核心已完成；App Registry、Submission
   create/upload/finalize/read、单审核员 Review 和 Release 控制的 PostgreSQL/HTTP 纵向切片
   已完成，Submission withdraw 的状态/队列/审核原子取消和 OAuth 开发者 Device Flow 纵向切片
-  也已完成；Identity/Teams 管理、Portal 会话、二审/双人审批、生产对象存储/GC、动态
+  也已完成；Team 读取/Owner 角色修改和 MFA freshness 纵向切片已完成；Identity 账户链接、
+  邀请/移除、Portal 会话、二审/双人审批、生产对象存储/GC、动态
   恶意样本和生产 HSM/key ceremony 尚未实现；隔离 Scanner、文件 key Publisher/Catalog
   Builder 与完整前缀 transparency log 的 outbox/租约、签名、失败恢复和原子结果纵向切片已完成；
 - 设备端 Today/Apps/Search/Updates、分页搜索、图标/截图和更新队列尚未实现；
@@ -78,5 +79,5 @@
 | Phase 2 | 核心窗口/可信 UI/输入已实现 | 24 小时证据、扩展系统体验和最终真机部署 |
 | Phase 3 | Runtime、sandbox 和能力 broker 已实现 | 音频/GPIO/存储/相机/LoRa 的对应真机门禁 |
 | Phase 4 | SDK 1.0、CLI、模拟器和 DevKit 已实现 | 后续 Store submit CLI 属 Store 产品阶段 |
-| Phase 5 | 双签名、原子安装、静态 Store、OAuth、隔离扫描、单审核和 Release/Publisher 控制纵向切片已实现 | Identity/Teams、二审、生产 HSM、搜索发现和六步真机证据 |
+| Phase 5 | 双签名、原子安装、静态 Store、OAuth、Team 角色管理、隔离扫描、单审核和 Release/Publisher 控制纵向切片已实现 | Identity 登录/邀请/会话、二审、生产 HSM、搜索发现和六步真机证据 |
 | Phase 6 | profile、验证器和安全工具已实现 | 性能/功耗、烧录介质、A/B 硬件和第三方评审 |

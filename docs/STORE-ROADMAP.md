@@ -91,11 +91,14 @@ Teams 后续工作。
 S5J 已补齐 Submission 撤回：owner/developer、实时 2FA/scope、强 ETag、精确幂等、合法状态图，
 以及扫描任务、未消费扫描事件和活动审核分配的原子取消均通过 PostgreSQL 17 验收；历史对象、
 扫描结果、审核消息和审计事件保持不可变。
+S5K 已冻结外部 OIDC + Portal BFF 身份边界，并接通 Team 读取和 Owner 角色修改：五分钟 MFA
+step-up、Team ETag、last-owner、成员 token 即时撤销、版本单调、幂等和 audit/outbox 回滚均通过
+PostgreSQL 17 验收。账户链接、邀请/移除、Portal session endpoint 和 reviewer SSO 仍待实现。
 
 - [ ] 实现 Identity/Teams、App Registry、Submission 和 Release 服务。
   当前 App Registry、Submission 上传/finalize/read/withdraw、单审核员 Review 和 Release 控制
-  纵向切片已完成；OAuth 开发者 Device Flow 已完成；Identity/Teams 管理和 Portal 会话未完成；
-  Publisher 通过受约束 outbox 接入。
+  纵向切片已完成；OAuth 开发者 Device Flow、Team 读取/角色管理已完成；Identity 账户链接、
+  邀请/移除和 Portal 会话未完成；Publisher 通过受约束 outbox 接入。
 - [x] 实现隔离 Scan Worker：包格式、WASM、权限、资源和恶意样本检查。
   当前为无 IP 网络、只读对象根的确定性结构/能力扫描；动态规则、信誉源和运营隔离环境待生产化。
 - [ ] 实现 Review Console、结构化问题、回复、二审和双人审批。

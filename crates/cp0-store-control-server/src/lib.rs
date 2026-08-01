@@ -37,6 +37,8 @@ const DEVICE_CODE_TTL_SECONDS: i64 = 10 * 60;
 const DEVICE_POLL_INTERVAL_SECONDS: i16 = 5;
 const ACCESS_TOKEN_TTL_SECONDS: i64 = 15 * 60;
 const MAX_ACTIVE_DEVICE_AUTHORIZATIONS: i64 = 10_000;
+const MFA_STEP_UP_MAX_AGE_SECONDS: i64 = 5 * 60;
+const MAX_TEAM_MEMBERS: usize = 100;
 const DEVICE_VERIFICATION_URI: &str = "https://developer.cardputerzero.dev/activate";
 const DEVICE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 const DEVICE_CLIENT_ID: &str = "cp0ctl";
@@ -576,6 +578,214 @@ impl StoreControlService {
             expires_in: ACCESS_TOKEN_TTL_SECONDS as u64,
             scope: DEVICE_SCOPE,
         })
+    }
+
+    async fn get_team(&self, token: &str, team_id: &str) -> Result<TeamResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        let identity = authenticate(&mut transaction, &token_sha256)
+            .await
+            .map_err(ApiError::from_transaction)?;
+        require_team_read(&identity)?;
+        if identity.team_id != team_id {
+            return Err(ApiError::not_found());
+        }
+        let team = load_team(&mut transaction, team_id, false)
+            .await
+            .map_err(ApiError::from_transaction)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        Ok(team)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn set_team_member_role(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+        request_id: &str,
+        team_id: &str,
+        member_id: &str,
+        expected_version: u64,
+        request: &SetTeamMemberRoleRequest,
+    ) -> Result<TeamResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let key_sha256 = sha256_hex(idempotency_key.as_bytes());
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self
+                .set_team_member_role_once(
+                    &token_sha256,
+                    &key_sha256,
+                    request_id,
+                    team_id,
+                    member_id,
+                    expected_version,
+                    request,
+                )
+                .await
+            {
+                Err(TxError::Sql(error)) if is_retryable_transaction_error(&error) => {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(error) => return Err(ApiError::from_transaction(error)),
+                Ok(team) => return Ok(team),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn set_team_member_role_once(
+        &self,
+        token_sha256: &str,
+        key_sha256: &str,
+        request_id: &str,
+        team_id: &str,
+        member_id: &str,
+        expected_version: u64,
+        request: &SetTeamMemberRoleRequest,
+    ) -> Result<TeamResponse, TxError> {
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let identity = authenticate(&mut transaction, token_sha256).await?;
+        let now = database_now(&mut transaction).await?;
+        require_team_write(&identity, now)?;
+        let expected_version_text = expected_version.to_string();
+        let request_sha256 = mutation_request_sha256(
+            "team.member-role.v1",
+            &[team_id, member_id, &expected_version_text, &request.role],
+        );
+        match reserve_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            &request_sha256,
+            now,
+        )
+        .await?
+        {
+            IdempotencyReservation::Fresh => {}
+            IdempotencyReservation::Replay { status, body }
+                if status == StatusCode::OK.as_u16() as i16 =>
+            {
+                let team = serde_json::from_value(body).map_err(|_| ApiError::internal())?;
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(team);
+            }
+            IdempotencyReservation::Replay { .. } => {
+                return Err(ApiError::internal().into());
+            }
+        }
+        if identity.team_id != team_id {
+            return Err(ApiError::not_found().into());
+        }
+        let current_team = load_team(&mut transaction, team_id, true).await?;
+        if current_team.resource_version != expected_version {
+            return Err(ApiError::precondition_failed().into());
+        }
+        let target = sqlx::query(
+            "SELECT role, resource_version FROM team_members \
+             WHERE member_id = $1 AND team_id = $2 FOR UPDATE",
+        )
+        .bind(member_id)
+        .bind(team_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .ok_or_else(ApiError::not_found)?;
+        let before_role: String = target.get("role");
+        if before_role == request.role {
+            return Err(ApiError::invalid_transition().into());
+        }
+        if before_role == "owner" && request.role != "owner" {
+            let owner_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM team_members WHERE team_id = $1 AND role = 'owner'",
+            )
+            .bind(team_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(TxError::Sql)?;
+            if owner_count <= 1 {
+                return Err(ApiError::conflict().into());
+            }
+        }
+        let member_version = u64::try_from(target.get::<i64, _>("resource_version"))
+            .map_err(|_| ApiError::internal())?
+            .checked_add(1)
+            .ok_or_else(ApiError::internal)?;
+        sqlx::query(
+            "UPDATE team_members SET role = $1, resource_version = $2 WHERE member_id = $3",
+        )
+        .bind(&request.role)
+        .bind(i64::try_from(member_version).map_err(|_| ApiError::internal())?)
+        .bind(member_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+        let team_version = expected_version
+            .checked_add(1)
+            .ok_or_else(ApiError::internal)?;
+        sqlx::query("UPDATE teams SET resource_version = $1 WHERE team_id = $2")
+            .bind(i64::try_from(team_version).map_err(|_| ApiError::internal())?)
+            .bind(team_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(TxError::Sql)?;
+        sqlx::query("UPDATE access_tokens SET revoked = TRUE WHERE member_id = $1 AND NOT revoked")
+            .bind(member_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(TxError::Sql)?;
+
+        let team = load_team(&mut transaction, team_id, false).await?;
+        let response_body = serde_json::to_value(&team).map_err(|_| ApiError::internal())?;
+        complete_idempotency(
+            &mut transaction,
+            &identity.member_id,
+            key_sha256,
+            StatusCode::OK,
+            &response_body,
+        )
+        .await?;
+        append_mutation(
+            &mut transaction,
+            MutationEvent {
+                now,
+                actor_id: &identity.member_id,
+                action: "team.member-role-changed",
+                topic: "team.member-role-changed",
+                object_kind: "team",
+                object_id: team_id,
+                before_state: None,
+                after_state: None,
+                resource_version: team_version,
+                request_id,
+                request_sha256: &request_sha256,
+                key_sha256,
+                payload: json!({
+                    "team_id": team_id,
+                    "member_id": member_id,
+                    "before_role": before_role,
+                    "after_role": request.role,
+                    "member_resource_version": member_version
+                }),
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)?;
+        Ok(team)
     }
 
     async fn create_app(
@@ -2453,6 +2663,11 @@ pub fn router(service: StoreControlService) -> Router {
             "/oauth/token",
             post(post_device_token).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
         )
+        .route("/v1/teams/{team_id}", get(get_team))
+        .route(
+            "/v1/teams/{team_id}/members/{member_action}",
+            post(set_team_member_role).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
         .route(
             "/v1/apps",
             post(post_app).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
@@ -2539,6 +2754,31 @@ struct DeviceTokenResponse {
     token_type: &'static str,
     expires_in: u64,
     scope: &'static str,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetTeamMemberRoleRequest {
+    role: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TeamMemberResponse {
+    member_id: String,
+    email: String,
+    role: String,
+    two_factor_enabled: bool,
+    resource_version: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TeamResponse {
+    team_id: String,
+    name: String,
+    members: Vec<TeamMemberResponse>,
+    resource_version: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2753,6 +2993,7 @@ enum ApiErrorKind {
     Unauthorized,
     Forbidden,
     TwoFactorRequired,
+    StepUpRequired,
     NotFound,
     Conflict,
     IdempotencyConflict,
@@ -2817,6 +3058,12 @@ impl ApiError {
     const fn two_factor_required() -> Self {
         Self {
             kind: ApiErrorKind::TwoFactorRequired,
+        }
+    }
+
+    const fn step_up_required() -> Self {
+        Self {
+            kind: ApiErrorKind::StepUpRequired,
         }
     }
 
@@ -2945,6 +3192,12 @@ impl ApiError {
                 "Two-factor authentication required",
                 Some("Enable two-factor authentication before changing Store resources."),
             ),
+            ApiErrorKind::StepUpRequired => (
+                StatusCode::FORBIDDEN,
+                "step-up-required",
+                "Recent authentication required",
+                Some("Complete a fresh multi-factor authentication challenge before retrying."),
+            ),
             ApiErrorKind::NotFound => (
                 StatusCode::NOT_FOUND,
                 "not-found",
@@ -3063,6 +3316,7 @@ struct Identity {
     team_id: String,
     role: String,
     two_factor_enabled: bool,
+    mfa_authenticated_unix_seconds: Option<i64>,
     scopes: Vec<String>,
 }
 
@@ -3158,6 +3412,32 @@ fn require_device_authorization(identity: &Identity) -> Result<(), ApiError> {
     }
     if !identity.two_factor_enabled {
         return Err(ApiError::two_factor_required());
+    }
+    Ok(())
+}
+
+fn require_team_read(identity: &Identity) -> Result<(), ApiError> {
+    if !identity.has_any_scope(&["store.teams.read", "store.teams.write", "store.control"]) {
+        return Err(ApiError::forbidden());
+    }
+    Ok(())
+}
+
+fn require_team_write(identity: &Identity, now: i64) -> Result<(), ApiError> {
+    if identity.role != "owner" || !identity.has_any_scope(&["store.teams.write", "store.control"])
+    {
+        return Err(ApiError::forbidden());
+    }
+    if !identity.two_factor_enabled {
+        return Err(ApiError::two_factor_required());
+    }
+    if !identity
+        .mfa_authenticated_unix_seconds
+        .is_some_and(|authenticated| {
+            authenticated <= now && authenticated >= now - MFA_STEP_UP_MAX_AGE_SECONDS
+        })
+    {
+        return Err(ApiError::step_up_required());
     }
     Ok(())
 }
@@ -3364,6 +3644,53 @@ async fn load_release(
         .map_err(TxError::Sql)?
         .ok_or_else(ApiError::not_found)?;
     release_from_row(&row).map_err(Into::into)
+}
+
+async fn load_team(
+    transaction: &mut Transaction<'_, Postgres>,
+    team_id: &str,
+    lock: bool,
+) -> Result<TeamResponse, TxError> {
+    let sql = if lock {
+        "SELECT team_id, name, resource_version FROM teams WHERE team_id = $1 FOR UPDATE"
+    } else {
+        "SELECT team_id, name, resource_version FROM teams WHERE team_id = $1"
+    };
+    let team = sqlx::query(sql)
+        .bind(team_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .ok_or_else(ApiError::not_found)?;
+    let rows = sqlx::query(
+        "SELECT member_id, email, role, two_factor_enabled, resource_version \
+         FROM team_members WHERE team_id = $1 ORDER BY member_id LIMIT 101",
+    )
+    .bind(team_id)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(TxError::Sql)?;
+    if rows.len() > MAX_TEAM_MEMBERS {
+        return Err(ApiError::internal().into());
+    }
+    let members = rows
+        .into_iter()
+        .map(|row| {
+            Ok(TeamMemberResponse {
+                member_id: row.get("member_id"),
+                email: row.get("email"),
+                role: row.get("role"),
+                two_factor_enabled: row.get("two_factor_enabled"),
+                resource_version: row_version(&row)?,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    Ok(TeamResponse {
+        team_id: team.get("team_id"),
+        name: team.get("name"),
+        members,
+        resource_version: row_version(&team)?,
+    })
 }
 
 fn release_from_row(row: &sqlx::postgres::PgRow) -> Result<ReleaseResponse, ApiError> {
@@ -3692,7 +4019,8 @@ async fn lookup_developer_identity(
     token_sha256: &str,
 ) -> Result<Option<Identity>, TxError> {
     let row = sqlx::query(
-        "SELECT member.member_id, member.team_id, member.role, member.two_factor_enabled, token.scopes \
+        "SELECT member.member_id, member.team_id, member.role, member.two_factor_enabled, \
+         token.mfa_authenticated_unix_seconds, token.scopes \
          FROM access_tokens token \
          JOIN team_members member ON member.member_id = token.member_id \
          WHERE token.token_sha256 = $1 AND NOT token.revoked \
@@ -3708,6 +4036,7 @@ async fn lookup_developer_identity(
         team_id: row.get("team_id"),
         role: row.get("role"),
         two_factor_enabled: row.get("two_factor_enabled"),
+        mfa_authenticated_unix_seconds: row.get("mfa_authenticated_unix_seconds"),
         scopes: row.get("scopes"),
     }))
 }
@@ -3900,6 +4229,80 @@ async fn post_device_token(
     match service.exchange_device_authorization(&request).await {
         Ok(response) => oauth_json_response(StatusCode::OK, response, response_request_id),
         Err(error) => oauth_error_response(error, response_request_id),
+    }
+}
+
+async fn get_team(
+    State(service): State<StoreControlService>,
+    Path(team_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = request_id();
+    if !is_valid_team_id(&team_id) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    match service.get_team(&token, &team_id).await {
+        Ok(team) => {
+            let version = team.resource_version;
+            resource_response(StatusCode::OK, team, version, request_id)
+        }
+        Err(error) => error.response(request_id),
+    }
+}
+
+async fn set_team_member_role(
+    State(service): State<StoreControlService>,
+    Path((team_id, member_action)): Path<(String, String)>,
+    headers: HeaderMap,
+    payload: Result<Json<SetTeamMemberRoleRequest>, JsonRejection>,
+) -> Response {
+    let request_id = request_id();
+    let Some(member_id) = member_action.strip_suffix(":set-role") else {
+        return ApiError::invalid_request().response(request_id);
+    };
+    if !is_valid_team_id(&team_id) || !is_valid_member_id(member_id) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    let idempotency_key = match idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(error) => return error.response(request_id),
+    };
+    let expected_version = match expected_version(&headers) {
+        Ok(value) => value,
+        Err(error) => return error.response(request_id),
+    };
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => return json_rejection(rejection).response(request_id),
+    };
+    if !is_valid_team_role(&request.role) {
+        return ApiError::invalid_request().response(request_id);
+    }
+    match service
+        .set_team_member_role(
+            &token,
+            &idempotency_key,
+            &request_id,
+            &team_id,
+            member_id,
+            expected_version,
+            &request,
+        )
+        .await
+    {
+        Ok(team) => {
+            let version = team.resource_version;
+            resource_response(StatusCode::OK, team, version, request_id)
+        }
+        Err(error) => error.response(request_id),
     }
 }
 
@@ -4711,6 +5114,18 @@ fn is_valid_user_code(value: &str) -> bool {
 
 fn is_valid_submission_id(value: &str) -> bool {
     valid_prefixed_hex_id(value, "sub_")
+}
+
+fn is_valid_team_id(value: &str) -> bool {
+    valid_prefixed_hex_id(value, "team_")
+}
+
+fn is_valid_member_id(value: &str) -> bool {
+    valid_prefixed_hex_id(value, "member_")
+}
+
+fn is_valid_team_role(value: &str) -> bool {
+    matches!(value, "owner" | "developer" | "release-manager" | "viewer")
 }
 
 fn is_valid_release_id(value: &str) -> bool {

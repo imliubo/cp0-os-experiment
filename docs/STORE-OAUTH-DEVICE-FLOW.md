@@ -61,8 +61,9 @@ plaintext-secret exclusion, and direct SQL state-machine bypass attempts.
 CP0_STORE_TEST_DATABASE_URL=postgres://... make store-control-db-check
 ```
 
-Account registration, password/passkey login, 2FA enrollment and challenge
-freshness, team/member administration, Portal session management, reviewer SSO,
-abuse controls, and production identity recovery remain separate Identity/Teams
-work. The current approval route assumes that such a system has already issued
-the short-lived developer bearer used to authorize the device.
+S5K now implements bounded Team reads and Owner role changes with a five-minute
+MFA freshness requirement. Account registration/linking, passkey login, 2FA
+enrollment and recovery, invitations, member removal, Portal session endpoints,
+reviewer SSO, abuse controls, and production identity recovery remain separate
+Identity/Teams work. The current approval route assumes that such a system has
+already issued the short-lived developer bearer used to authorize the device.

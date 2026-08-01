@@ -30,6 +30,7 @@ const REVIEWER_EXPIRED_TOKEN: &str = "reviewer-expired-token-0000000000004";
 const REVIEWER_REVOKED_TOKEN: &str = "reviewer-revoked-token-0000000000004";
 const RELEASE_MANAGER_TOKEN: &str = "release-manager-token-000000000000001";
 const RELEASE_NO_2FA_TOKEN: &str = "release-no2fa-token-00000000000000002";
+const STALE_MFA_TOKEN: &str = "stale-mfa-token-000000000000000000001";
 
 const TEAM_A: &str = "team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TEAM_B: &str = "team_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -76,6 +77,7 @@ async fn postgres_http_transaction_acceptance() {
     verify_release_backend(&application, &pool).await;
     verify_submission_withdrawal(&application, &pool).await;
     verify_oauth_device_flow(&application, &pool).await;
+    verify_team_management(&application, &pool).await;
     verify_database_immutability(&pool).await;
     tokio::fs::remove_dir_all(object_root)
         .await
@@ -997,11 +999,14 @@ async fn verify_review_backend(application: &Router, pool: &PgPool) {
     )
     .await;
     assert_eq!(developer_message_replay.body, developer_message.body);
-    sqlx::query("UPDATE team_members SET two_factor_enabled = FALSE WHERE member_id = $1")
-        .bind(OWNER_A)
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE team_members SET two_factor_enabled = FALSE, \
+         resource_version = resource_version + 1 WHERE member_id = $1",
+    )
+    .bind(OWNER_A)
+    .execute(pool)
+    .await
+    .unwrap();
     let replay_after_downgrade = call(
         application.clone(),
         Method::POST,
@@ -1016,11 +1021,14 @@ async fn verify_review_backend(application: &Router, pool: &PgPool) {
         StatusCode::FORBIDDEN,
         "two-factor-required",
     );
-    sqlx::query("UPDATE team_members SET two_factor_enabled = TRUE WHERE member_id = $1")
-        .bind(OWNER_A)
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE team_members SET two_factor_enabled = TRUE, \
+         resource_version = resource_version + 1 WHERE member_id = $1",
+    )
+    .bind(OWNER_A)
+    .execute(pool)
+    .await
+    .unwrap();
 
     let reviewer_message = call(
         application.clone(),
@@ -2233,11 +2241,14 @@ async fn verify_oauth_device_flow(application: &Router, pool: &PgPool) {
     assert_problem(&denied_exchange, StatusCode::BAD_REQUEST, "access-denied");
 
     let role_authorization = create_device_code(application).await;
-    sqlx::query("UPDATE team_members SET role = 'developer' WHERE member_id = $1")
-        .bind(VIEWER_MEMBER)
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE team_members SET role = 'developer', \
+         resource_version = resource_version + 1 WHERE member_id = $1",
+    )
+    .bind(VIEWER_MEMBER)
+    .execute(pool)
+    .await
+    .unwrap();
     let role_approved = authorize_device_code(
         application,
         Some(VIEWER_TOKEN),
@@ -2247,11 +2258,14 @@ async fn verify_oauth_device_flow(application: &Router, pool: &PgPool) {
     )
     .await;
     assert_eq!(role_approved.status, StatusCode::NO_CONTENT);
-    sqlx::query("UPDATE team_members SET role = 'viewer' WHERE member_id = $1")
-        .bind(VIEWER_MEMBER)
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE team_members SET role = 'viewer', \
+         resource_version = resource_version + 1 WHERE member_id = $1",
+    )
+    .bind(VIEWER_MEMBER)
+    .execute(pool)
+    .await
+    .unwrap();
     let role_changed = exchange_device_code(
         application,
         role_authorization["device_code"].as_str().unwrap(),
@@ -2260,11 +2274,14 @@ async fn verify_oauth_device_flow(application: &Router, pool: &PgPool) {
     assert_problem(&role_changed, StatusCode::BAD_REQUEST, "access-denied");
 
     let factor_authorization = create_device_code(application).await;
-    sqlx::query("UPDATE team_members SET two_factor_enabled = TRUE WHERE member_id = $1")
-        .bind(NO_2FA_MEMBER)
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE team_members SET two_factor_enabled = TRUE, \
+         resource_version = resource_version + 1 WHERE member_id = $1",
+    )
+    .bind(NO_2FA_MEMBER)
+    .execute(pool)
+    .await
+    .unwrap();
     let factor_approved = authorize_device_code(
         application,
         Some(NO_2FA_TOKEN),
@@ -2274,11 +2291,14 @@ async fn verify_oauth_device_flow(application: &Router, pool: &PgPool) {
     )
     .await;
     assert_eq!(factor_approved.status, StatusCode::NO_CONTENT);
-    sqlx::query("UPDATE team_members SET two_factor_enabled = FALSE WHERE member_id = $1")
-        .bind(NO_2FA_MEMBER)
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE team_members SET two_factor_enabled = FALSE, \
+         resource_version = resource_version + 1 WHERE member_id = $1",
+    )
+    .bind(NO_2FA_MEMBER)
+    .execute(pool)
+    .await
+    .unwrap();
     let factor_changed = exchange_device_code(
         application,
         factor_authorization["device_code"].as_str().unwrap(),
@@ -2447,6 +2467,300 @@ async fn seed_review_submission(
     .unwrap();
 }
 
+async fn verify_team_management(application: &Router, pool: &PgPool) {
+    let team = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/teams/{TEAM_A}"),
+        Some(OWNER_A_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(team.status, StatusCode::OK);
+    assert_eq!(etag_version(&team), 1);
+    let team_body: Value = serde_json::from_slice(&team.body).unwrap();
+    assert_eq!(team_body["team_id"], TEAM_A);
+    assert_eq!(team_body["members"].as_array().unwrap().len(), 5);
+    assert!(
+        team_body["members"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .all(|members| members[0]["member_id"].as_str() < members[1]["member_id"].as_str())
+    );
+
+    let missing_scope = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/teams/{TEAM_A}"),
+        Some(READ_ONLY_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&missing_scope, StatusCode::FORBIDDEN, "forbidden");
+    let cross_team_read = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/teams/{TEAM_A}"),
+        Some(OWNER_B_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&cross_team_read, StatusCode::NOT_FOUND, "not-found");
+
+    let invalid_role = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{RELEASE_MANAGER}:set-role"),
+        OWNER_A_TOKEN,
+        "team-role-invalid-01",
+        1,
+        Some(json!({"role": "admin"})),
+    )
+    .await;
+    assert_problem(&invalid_role, StatusCode::BAD_REQUEST, "invalid-request");
+    for (token, key, status, code) in [
+        (
+            NO_2FA_TOKEN,
+            "team-role-no2fa-001",
+            StatusCode::FORBIDDEN,
+            "forbidden",
+        ),
+        (
+            VIEWER_TOKEN,
+            "team-role-viewer-001",
+            StatusCode::FORBIDDEN,
+            "forbidden",
+        ),
+        (
+            STALE_MFA_TOKEN,
+            "team-role-stale-0001",
+            StatusCode::FORBIDDEN,
+            "step-up-required",
+        ),
+        (
+            OWNER_B_TOKEN,
+            "team-role-cross-0001",
+            StatusCode::NOT_FOUND,
+            "not-found",
+        ),
+    ] {
+        let response = call_with_etag(
+            application.clone(),
+            Method::POST,
+            &format!("/v1/teams/{TEAM_A}/members/{RELEASE_MANAGER}:set-role"),
+            token,
+            key,
+            1,
+            Some(json!({"role": "developer"})),
+        )
+        .await;
+        assert_problem(&response, status, code);
+    }
+    sqlx::query(
+        "UPDATE team_members SET two_factor_enabled = FALSE, \
+         resource_version = resource_version + 1 WHERE member_id = $1",
+    )
+    .bind(OWNER_B)
+    .execute(pool)
+    .await
+    .unwrap();
+    let owner_without_factor = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_B}/members/{OWNER_B}:set-role"),
+        OWNER_B_TOKEN,
+        "team-role-owner2fa1",
+        1,
+        Some(json!({"role": "developer"})),
+    )
+    .await;
+    assert_problem(
+        &owner_without_factor,
+        StatusCode::FORBIDDEN,
+        "two-factor-required",
+    );
+    sqlx::query(
+        "UPDATE team_members SET two_factor_enabled = TRUE, \
+         resource_version = resource_version + 1 WHERE member_id = $1",
+    )
+    .bind(OWNER_B)
+    .execute(pool)
+    .await
+    .unwrap();
+    let stale = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{RELEASE_MANAGER}:set-role"),
+        OWNER_A_TOKEN,
+        "team-role-etag-00001",
+        2,
+        Some(json!({"role": "developer"})),
+    )
+    .await;
+    assert_problem(
+        &stale,
+        StatusCode::PRECONDITION_FAILED,
+        "precondition-failed",
+    );
+    let last_owner = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_B}/members/{OWNER_B}:set-role"),
+        OWNER_B_TOKEN,
+        "team-role-lastowner1",
+        1,
+        Some(json!({"role": "developer"})),
+    )
+    .await;
+    assert_problem(&last_owner, StatusCode::CONFLICT, "conflict");
+
+    let counts_before = (
+        count(pool, "audit_events").await,
+        count(pool, "outbox_events").await,
+        count(pool, "idempotency_records").await,
+    );
+    let changed = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{RELEASE_MANAGER}:set-role"),
+        OWNER_A_TOKEN,
+        "team-role-change-001",
+        1,
+        Some(json!({"role": "developer"})),
+    )
+    .await;
+    assert_eq!(changed.status, StatusCode::OK);
+    assert_eq!(etag_version(&changed), 2);
+    let changed_body: Value = serde_json::from_slice(&changed.body).unwrap();
+    let changed_member = changed_body["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|member| member["member_id"] == RELEASE_MANAGER)
+        .unwrap();
+    assert_eq!(changed_member["role"], "developer");
+    assert_eq!(changed_member["resource_version"], 2);
+    let replay = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{RELEASE_MANAGER}:set-role"),
+        OWNER_A_TOKEN,
+        "team-role-change-001",
+        1,
+        Some(json!({"role": "developer"})),
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::OK);
+    assert_eq!(replay.body, changed.body);
+    assert_eq!(etag_version(&replay), 2);
+    assert_eq!(count(pool, "audit_events").await, counts_before.0 + 1);
+    assert_eq!(count(pool, "outbox_events").await, counts_before.1 + 1);
+    assert_eq!(
+        count(pool, "idempotency_records").await,
+        counts_before.2 + 1
+    );
+    let revoked_target = call(
+        application.clone(),
+        Method::GET,
+        &format!("/v1/teams/{TEAM_A}"),
+        Some(RELEASE_MANAGER_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&revoked_target, StatusCode::UNAUTHORIZED, "unauthorized");
+    let viewer_version_before: i64 =
+        sqlx::query_scalar("SELECT resource_version FROM team_members WHERE member_id = $1")
+            .bind(VIEWER_MEMBER)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+
+    pool.execute(
+        "CREATE FUNCTION test_reject_team_role_audit() RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN IF NEW.action = 'team.member-role-changed' AND \
+         NEW.object_id = 'team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' THEN \
+         RAISE EXCEPTION 'injected team role audit failure'; END IF; RETURN NEW; END; $$",
+    )
+    .await
+    .unwrap();
+    pool.execute(
+        "CREATE TRIGGER test_reject_team_role_audit_insert BEFORE INSERT ON audit_events \
+         FOR EACH ROW EXECUTE FUNCTION test_reject_team_role_audit()",
+    )
+    .await
+    .unwrap();
+    let rolled_back = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{VIEWER_MEMBER}:set-role"),
+        OWNER_A_TOKEN,
+        "team-role-rollback01",
+        2,
+        Some(json!({"role": "developer"})),
+    )
+    .await;
+    assert_problem(
+        &rolled_back,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "service-unavailable",
+    );
+    let rollback_team_version: i64 =
+        sqlx::query_scalar("SELECT resource_version FROM teams WHERE team_id = $1")
+            .bind(TEAM_A)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let rollback_member =
+        sqlx::query("SELECT role, resource_version FROM team_members WHERE member_id = $1")
+            .bind(VIEWER_MEMBER)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let rollback_revoked: bool =
+        sqlx::query_scalar("SELECT revoked FROM access_tokens WHERE token_sha256 = $1")
+            .bind(sha256_hex(VIEWER_TOKEN.as_bytes()))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(rollback_team_version, 2);
+    assert_eq!(rollback_member.get::<String, _>("role"), "viewer");
+    assert_eq!(
+        rollback_member.get::<i64, _>("resource_version"),
+        viewer_version_before
+    );
+    assert!(!rollback_revoked);
+    pool.execute("DROP TRIGGER test_reject_team_role_audit_insert ON audit_events")
+        .await
+        .unwrap();
+    pool.execute("DROP FUNCTION test_reject_team_role_audit()")
+        .await
+        .unwrap();
+    let retried = call_with_etag(
+        application.clone(),
+        Method::POST,
+        &format!("/v1/teams/{TEAM_A}/members/{VIEWER_MEMBER}:set-role"),
+        OWNER_A_TOKEN,
+        "team-role-rollback01",
+        2,
+        Some(json!({"role": "developer"})),
+    )
+    .await;
+    assert_eq!(retried.status, StatusCode::OK);
+    assert_eq!(etag_version(&retried), 3);
+    let revoked_after_commit: bool =
+        sqlx::query_scalar("SELECT revoked FROM access_tokens WHERE token_sha256 = $1")
+            .bind(sha256_hex(VIEWER_TOKEN.as_bytes()))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(revoked_after_commit);
+}
+
 async fn verify_database_immutability(pool: &PgPool) {
     assert_sqlstate(
         sqlx::query(
@@ -2592,6 +2906,30 @@ async fn verify_database_immutability(pool: &PgPool) {
         "55000",
     );
     assert_sqlstate(
+        sqlx::query(
+            "UPDATE access_tokens SET mfa_authenticated_unix_seconds = created_unix_seconds \
+             WHERE token_sha256 = $1",
+        )
+        .bind(sha256_hex(STALE_MFA_TOKEN.as_bytes()))
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("UPDATE teams SET resource_version = resource_version + 2 WHERE team_id = $1")
+            .bind(TEAM_A)
+            .execute(pool)
+            .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("UPDATE team_members SET role = 'viewer' WHERE member_id = $1")
+            .bind(RELEASE_MANAGER)
+            .execute(pool)
+            .await,
+        "55000",
+    );
+    assert_sqlstate(
         sqlx::query("UPDATE reviewer_access_tokens SET revoked = FALSE WHERE token_sha256 = $1")
             .bind(sha256_hex(REVIEWER_REVOKED_TOKEN.as_bytes()))
             .execute(pool)
@@ -2640,15 +2978,36 @@ async fn verify_database_immutability(pool: &PgPool) {
         "23514",
     );
     assert_sqlstate(
-        sqlx::query("UPDATE team_members SET role = 'developer' WHERE member_id = $1")
-            .bind(OWNER_B)
-            .execute(pool)
-            .await,
+        sqlx::query(
+            "UPDATE team_members SET role = 'developer', \
+             resource_version = resource_version + 1 WHERE member_id = $1",
+        )
+        .bind(OWNER_B)
+        .execute(pool)
+        .await,
         "23514",
     );
 }
 
 async fn reset_database(pool: &PgPool) {
+    pool.execute("DROP TRIGGER IF EXISTS test_reject_audit_insert ON audit_events")
+        .await
+        .unwrap();
+    pool.execute("DROP FUNCTION IF EXISTS test_reject_audit()")
+        .await
+        .unwrap();
+    pool.execute("DROP TRIGGER IF EXISTS test_reject_withdraw_audit_insert ON audit_events")
+        .await
+        .unwrap();
+    pool.execute("DROP FUNCTION IF EXISTS test_reject_withdraw_audit()")
+        .await
+        .unwrap();
+    pool.execute("DROP TRIGGER IF EXISTS test_reject_team_role_audit_insert ON audit_events")
+        .await
+        .unwrap();
+    pool.execute("DROP FUNCTION IF EXISTS test_reject_team_role_audit()")
+        .await
+        .unwrap();
     pool.execute(
         "TRUNCATE outbox_events, audit_events, idempotency_records, oauth_device_authorizations, \
          release_operations, \
@@ -2721,38 +3080,59 @@ async fn seed_identities(pool: &PgPool) {
         .fetch_one(pool)
         .await
         .unwrap();
-    for (token, member_id, scopes, created, expires, revoked) in [
+    for (token, member_id, scopes, created, expires, revoked, mfa_authenticated) in [
         (
             OWNER_A_TOKEN,
             OWNER_A,
-            vec!["store.apps.write", "store.submit", "store.release"],
+            vec![
+                "store.apps.write",
+                "store.submit",
+                "store.release",
+                "store.teams.read",
+                "store.teams.write",
+            ],
             now,
             now + 3600,
             false,
+            Some(now),
         ),
         (
             OWNER_B_TOKEN,
             OWNER_B,
-            vec!["store.apps.write", "store.submit", "store.release"],
+            vec![
+                "store.apps.write",
+                "store.submit",
+                "store.release",
+                "store.teams.read",
+                "store.teams.write",
+            ],
             now,
             now + 3600,
             false,
+            Some(now),
         ),
         (
             NO_2FA_TOKEN,
             NO_2FA_MEMBER,
-            vec!["store.apps.write", "store.submit"],
+            vec!["store.apps.write", "store.submit", "store.teams.write"],
             now,
             now + 3600,
             false,
+            None,
         ),
         (
             VIEWER_TOKEN,
             VIEWER_MEMBER,
-            vec!["store.apps.write", "store.submit"],
+            vec![
+                "store.apps.write",
+                "store.submit",
+                "store.teams.read",
+                "store.teams.write",
+            ],
             now,
             now + 3600,
             false,
+            Some(now),
         ),
         (
             READ_ONLY_TOKEN,
@@ -2761,6 +3141,7 @@ async fn seed_identities(pool: &PgPool) {
             now,
             now + 3600,
             false,
+            Some(now),
         ),
         (
             EXPIRED_TOKEN,
@@ -2769,6 +3150,7 @@ async fn seed_identities(pool: &PgPool) {
             now - 3601,
             now - 1,
             false,
+            None,
         ),
         (
             REVOKED_TOKEN,
@@ -2777,6 +3159,7 @@ async fn seed_identities(pool: &PgPool) {
             now,
             now + 3600,
             true,
+            Some(now),
         ),
         (
             RELEASE_MANAGER_TOKEN,
@@ -2785,6 +3168,7 @@ async fn seed_identities(pool: &PgPool) {
             now,
             now + 3600,
             false,
+            Some(now),
         ),
         (
             RELEASE_NO_2FA_TOKEN,
@@ -2793,12 +3177,23 @@ async fn seed_identities(pool: &PgPool) {
             now,
             now + 3600,
             false,
+            None,
+        ),
+        (
+            STALE_MFA_TOKEN,
+            OWNER_A,
+            vec!["store.teams.read", "store.teams.write"],
+            now,
+            now + 3600,
+            false,
+            Some(now - 301),
         ),
     ] {
         let scopes = scopes.into_iter().map(str::to_owned).collect::<Vec<_>>();
         sqlx::query(
             "INSERT INTO access_tokens (token_sha256, member_id, scopes, expires_unix_seconds, \
-             revoked, created_unix_seconds) VALUES ($1, $2, $3, $4, $5, $6)",
+             revoked, created_unix_seconds, mfa_authenticated_unix_seconds) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(sha256_hex(token.as_bytes()))
         .bind(member_id)
@@ -2806,6 +3201,7 @@ async fn seed_identities(pool: &PgPool) {
         .bind(expires)
         .bind(revoked)
         .bind(created)
+        .bind(mfa_authenticated)
         .execute(pool)
         .await
         .unwrap();
