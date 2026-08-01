@@ -2992,6 +2992,32 @@ mod tests {
         }
     }
 
+    fn projected_apps(count: usize, resources: bool) -> Vec<CatalogApp> {
+        (0..count)
+            .map(|index| {
+                let mut app = projected_app(true, resources);
+                app.app_id = format!("dev.cardputerzero.publisher{index:04}");
+                app.name = format!("Publisher {index:04}");
+                app.package_url = format!("https://store.example.com/app{index:04}.capp");
+                app.package_sha256 = format!("{index:064x}");
+                app.discovery.as_mut().unwrap().category = if index % 2 == 0 {
+                    StoreCategory::Utilities
+                } else {
+                    StoreCategory::Productivity
+                };
+                if let Some(resources) = &mut app.resources {
+                    resources.icon.url = format!(
+                        "https://store.example.com/generations/1/assets/{index:04}/icon.png"
+                    );
+                    resources.details.url = format!(
+                        "https://store.example.com/generations/1/assets/{index:04}/details.json"
+                    );
+                }
+                app
+            })
+            .collect()
+    }
+
     #[test]
     fn publication_paths_are_stable() {
         assert_eq!(catalog_relative_path(42), "generations/42/catalog.json");
@@ -3038,21 +3064,7 @@ mod tests {
     fn publisher_switches_to_a_complete_signed_index_above_sixty_four_apps() {
         let secret = [31; 32];
         let public = cp0_package::public_key(&secret);
-        let apps = (0..65)
-            .map(|index| {
-                let mut app = projected_app(true, false);
-                app.app_id = format!("dev.cardputerzero.publisher{index:03}");
-                app.name = format!("Publisher {index:03}");
-                app.package_url = format!("https://store.example.com/app{index:03}.capp");
-                app.package_sha256 = format!("{index:064x}");
-                app.discovery.as_mut().unwrap().category = if index % 2 == 0 {
-                    StoreCategory::Utilities
-                } else {
-                    StoreCategory::Productivity
-                };
-                app
-            })
-            .collect::<Vec<_>>();
+        let apps = projected_apps(65, false);
         let legacy = prepare_catalog_objects(
             "https://store.example.com",
             &secret,
@@ -3102,6 +3114,79 @@ mod tests {
                 .sum::<usize>(),
             65
         );
+    }
+
+    #[test]
+    fn publisher_verifies_the_maximum_rich_catalog_capacity() {
+        let secret = [32; 32];
+        let public = cp0_package::public_key(&secret);
+        let indexed = prepare_catalog_objects(
+            "https://store.example.com",
+            &secret,
+            12,
+            1_800_000_000,
+            1_800_086_400,
+            RICH_CATALOG_SCHEMA_VERSION,
+            projected_apps(MAX_SHARDED_CATALOG_APPS, false),
+            None,
+        )
+        .unwrap();
+        assert_eq!(indexed.document_kind, "index");
+        assert_eq!(indexed.app_count, MAX_SHARDED_CATALOG_APPS);
+        assert_eq!(indexed.shards.len(), cp0_store_protocol::MAX_CATALOG_SHARDS);
+        assert!(indexed.shards.iter().all(|shard| {
+            shard.app_count == MAX_CATALOG_APPS
+                && shard.encoded.len() <= cp0_store_protocol::MAX_CATALOG_BYTES
+        }));
+        let SignedCatalogDocument::Index(root) =
+            decode_signed_catalog_document(&indexed.catalog_encoded).unwrap()
+        else {
+            panic!("maximum rich Catalog must use a signed index");
+        };
+        let encoded_shards = indexed
+            .shards
+            .iter()
+            .map(|shard| shard.encoded.clone())
+            .collect::<Vec<_>>();
+        let verified = verify_catalog_shard_set(&root, &encoded_shards, &public).unwrap();
+        assert_eq!(
+            verified
+                .iter()
+                .map(|shard| shard.catalog_shard.apps.len())
+                .sum::<usize>(),
+            MAX_SHARDED_CATALOG_APPS
+        );
+    }
+
+    #[test]
+    fn signing_key_loader_fails_closed_on_unsafe_or_unavailable_keys() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp")
+            .join(prefixed_uuid("publisher-signer"));
+        fs::create_dir_all(&root).unwrap();
+
+        let valid = root.join("valid.key");
+        fs::write(&valid, [7_u8; 32]).unwrap();
+        fs::set_permissions(&valid, fs::Permissions::from_mode(0o600)).unwrap();
+        let signer = StoreSigner::open(&valid).unwrap();
+        assert_eq!(signer.public_key, cp0_package::public_key(&[7_u8; 32]));
+        drop(signer);
+
+        let exposed = root.join("exposed.key");
+        fs::write(&exposed, [8_u8; 32]).unwrap();
+        fs::set_permissions(&exposed, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(StoreSigner::open(&exposed).is_err());
+
+        let oversized = root.join("oversized.key");
+        fs::write(&oversized, [9_u8; 33]).unwrap();
+        fs::set_permissions(&oversized, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(StoreSigner::open(&oversized).is_err());
+
+        let linked = root.join("linked.key");
+        std::os::unix::fs::symlink(&valid, &linked).unwrap();
+        assert!(StoreSigner::open(&linked).is_err());
+        assert!(StoreSigner::open(Path::new("relative.key")).is_err());
+        assert!(StoreSigner::open(&root.join("missing.key")).is_err());
     }
 
     #[test]

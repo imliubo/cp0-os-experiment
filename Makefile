@@ -26,6 +26,7 @@ check: fmt
 	./tests/test-store-control-api.sh
 	./tests/test-store-scan-profile.sh
 	./tests/test-store-publisher-profile.sh
+	./tests/test-store-resilience-profile.sh
 	./tests/test-image-profile.sh
 	./tests/test-overlay-root-profile.sh
 	./tests/test-recovery-image-profile.sh
