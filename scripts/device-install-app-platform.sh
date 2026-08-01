@@ -31,6 +31,7 @@ for file in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-gpiod cp0-networkd
     device-policy.json \
     cardputerzero-trust.conf \
     device-capability-acceptance.sh device-core-recovery.sh \
+    device-factory-acceptance.sh \
     device-performance-acceptance.sh device-stability-monitor.sh \
     device-store-acceptance.sh; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
@@ -237,6 +238,8 @@ install -o root -g root -m 0755 "$staging/device-core-recovery.sh" \
     /usr/libexec/cardputerzero/device-core-recovery
 install -o root -g root -m 0755 "$staging/device-capability-acceptance.sh" \
     /usr/libexec/cardputerzero/device-capability-acceptance
+install -o root -g root -m 0755 "$staging/device-factory-acceptance.sh" \
+    /usr/libexec/cardputerzero/device-factory-acceptance
 install -o root -g root -m 0755 "$staging/device-performance-acceptance.sh" \
     /usr/libexec/cardputerzero/device-performance-acceptance
 install -o root -g root -m 0755 "$staging/device-stability-monitor.sh" \
