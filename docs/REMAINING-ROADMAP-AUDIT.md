@@ -19,7 +19,10 @@
   已覆盖 Today 编辑/320x170 预览、已发布 Release 选择、SLA moderation 队列和结构化处置，
   严格客户端复用现有 ETag/幂等控制面；真实 Release discovery 已通过 approved/published/artifact/
   最新 App 投影门禁、有界 keyset 分页和严格前端适配器接通；生产 workforce SSO/BFF、fixture
-  替换和部署尚未实现；
+  替换和部署尚未实现；S8H 已冻结 Review/Operations audience 分离的 workforce identity OpenAPI，
+  并完成外部身份链接、摘要会话、OIDC 事务、最长五分钟 session-bound token、同步撤销级联和
+  HTTP 撤销拒绝的 PostgreSQL 纵向验收；生产 BFF/IdP/JWKS、密钥托管、前端适配和现场撤销演练
+  仍未实现；
 - Submission/Review/Release 事务域核心已完成；App Registry、Submission
   create/upload/finalize/read、独立双审 Review 和 Release 控制的 PostgreSQL/HTTP 纵向切片
   已完成，Submission withdraw 的状态/队列/审核原子取消和 OAuth 开发者 Device Flow 纵向切片
@@ -102,5 +105,5 @@
 | Phase 2 | 核心窗口/可信 UI/输入及扩展系统体验本地实现已完成 | 24 小时证据和最终真机部署 |
 | Phase 3 | Runtime、sandbox 和能力 broker 已实现 | 音频/GPIO/存储/相机/LoRa 的对应真机门禁 |
 | Phase 4 | SDK 1.0、CLI、模拟器和 DevKit 已实现 | 后续 Store submit CLI 属 Store 产品阶段 |
-| Phase 5 | 双签名、原子安装、Store 设备体验、1024 项 Apps/Search 分页、OAuth、Portal OIDC/会话/邀请/账户链接、Portal BFF 前端适配、Team 角色管理/成员暂停与移除、隔离扫描、独立双审、Review Console、Catalog v4/Today、自动更新、匿名周聚合和非生产内容治理纵向切片已实现 | 生产邮件/IdP 接入、Review 生产 SSO、生产 HSM、正式治理政策/执行、生产运营演练与六步真机证据 |
+| Phase 5 | 双签名、原子安装、Store 设备体验、1024 项 Apps/Search 分页、OAuth、Portal OIDC/会话/邀请/账户链接、Portal BFF 前端适配、Team 角色管理/成员暂停与移除、隔离扫描、独立双审、Review Console、Catalog v4/Today、自动更新、匿名周聚合、非生产内容治理及 workforce identity 状态机/OpenAPI 纵向切片已实现 | 生产邮件/IdP/JWKS 接入、workforce BFF/前端适配与现场撤销演练、生产 HSM、正式治理政策/执行、生产运营演练与六步真机证据 |
 | Phase 6 | profile、验证器和安全工具已实现 | 性能/功耗、烧录介质、A/B 硬件和第三方评审 |

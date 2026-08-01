@@ -10,6 +10,7 @@ check: fmt
 		schemas/store-key-ceremony-v1.schema.json \
 		schemas/store-control-v1.openapi.json \
 		schemas/store-portal-identity-v1.openapi.json \
+		schemas/store-workforce-identity-v1.openapi.json \
 		schemas/device-policy-v1.schema.json appd/device-policy.json \
 		appd/device-policy-production.json \
 		examples/hello-card/app.json \
@@ -27,6 +28,7 @@ check: fmt
 	node --check scripts/test-store-origin.mjs
 	./tests/test-store-control-api.sh
 	./tests/test-store-portal-identity-api.sh
+	./tests/test-store-workforce-identity-api.sh
 	./tests/test-store-scan-profile.sh
 	./tests/test-store-publisher-profile.sh
 	./tests/test-store-resilience-profile.sh

@@ -107,6 +107,7 @@ async fn postgres_http_transaction_acceptance() {
     verify_object_gc(&pool, &object_root).await;
     verify_database_immutability(&pool).await;
     verify_portal_identity_foundation(&pool).await;
+    verify_workforce_identity_foundation(&application, &pool).await;
     tokio::fs::remove_dir_all(object_root)
         .await
         .expect("remove repository-local test object store");
@@ -6003,6 +6004,436 @@ async fn verify_portal_identity_foundation(pool: &PgPool) {
     assert_eq!(disabled_session_state, "revoked");
 }
 
+async fn verify_workforce_identity_foundation(application: &Router, pool: &PgPool) {
+    const REVIEWER: &str = "reviewer_dddddddddddddddddddddddddddddddd";
+    const SUSPEND_REVIEWER: &str = "reviewer_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const OPERATOR: &str = "operator_ffffffffffffffffffffffffffffffff";
+    const REVIEW_LINK: &str = "wflink_dddddddddddddddddddddddddddddddd";
+    const SUSPEND_LINK: &str = "wflink_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const OPERATIONS_LINK: &str = "wflink_ffffffffffffffffffffffffffffffff";
+    const REVIEW_TOKEN: &str = "workforce-review-token-000000000000000001";
+    const SUSPEND_TOKEN: &str = "workforce-suspend-token-000000000000001";
+    const OPERATIONS_TOKEN: &str = "workforce-operations-token-0000000000001";
+
+    let now: i64 = sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO reviewers (reviewer_id, email, role, two_factor_enabled, state, \
+         created_unix_seconds) VALUES \
+         ($1, 'workforce-review@cardputerzero.dev', 'reviewer', TRUE, 'active', $3), \
+         ($2, 'workforce-suspend@cardputerzero.dev', 'reviewer', TRUE, 'active', $3)",
+    )
+    .bind(REVIEWER)
+    .bind(SUSPEND_REVIEWER)
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO store_operators (operator_id, email, role, two_factor_enabled, state, \
+         created_unix_seconds) VALUES \
+         ($1, 'workforce-operations@cardputerzero.dev', 'editor', TRUE, 'active', $2)",
+    )
+    .bind(OPERATOR)
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO workforce_identity_links (link_id, provider_key, issuer, \
+         subject_hmac_sha256, reviewer_id, operator_id, state, linked_unix_seconds) VALUES \
+         ($1, 'test-oidc', 'https://idp.example.test', $4, $7, NULL, 'active', $10), \
+         ($2, 'test-oidc', 'https://idp.example.test', $5, $8, NULL, 'active', $10), \
+         ($3, 'test-oidc', 'https://idp.example.test', $6, NULL, $9, 'active', $10)",
+    )
+    .bind(REVIEW_LINK)
+    .bind(SUSPEND_LINK)
+    .bind(OPERATIONS_LINK)
+    .bind("d".repeat(64))
+    .bind("e".repeat(64))
+    .bind("f".repeat(64))
+    .bind(REVIEWER)
+    .bind(SUSPEND_REVIEWER)
+    .bind(OPERATOR)
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let review_session = sha256_hex(b"workforce-review-session");
+    let suspend_session = sha256_hex(b"workforce-suspend-session");
+    let operations_session = sha256_hex(b"workforce-operations-session");
+    for (session, link, audience) in [
+        (review_session.as_str(), REVIEW_LINK, "review"),
+        (suspend_session.as_str(), SUSPEND_LINK, "review"),
+        (operations_session.as_str(), OPERATIONS_LINK, "operations"),
+    ] {
+        insert_workforce_session(pool, session, link, audience, now).await;
+    }
+    for (token, reviewer_id, session) in [
+        (REVIEW_TOKEN, REVIEWER, review_session.as_str()),
+        (SUSPEND_TOKEN, SUSPEND_REVIEWER, suspend_session.as_str()),
+    ] {
+        sqlx::query(
+            "INSERT INTO reviewer_access_tokens (token_sha256, reviewer_id, scopes, \
+             expires_unix_seconds, revoked, created_unix_seconds, workforce_session_sha256) \
+             VALUES ($1, $2, ARRAY['store.review'], $3, FALSE, $4, $5)",
+        )
+        .bind(sha256_hex(token.as_bytes()))
+        .bind(reviewer_id)
+        .bind(now + 300)
+        .bind(now)
+        .bind(session)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO store_operator_access_tokens (token_sha256, operator_id, scopes, \
+         expires_unix_seconds, revoked, created_unix_seconds, workforce_session_sha256) \
+         VALUES ($1, $2, ARRAY['store.editorial'], $3, FALSE, $4, $5)",
+    )
+    .bind(sha256_hex(OPERATIONS_TOKEN.as_bytes()))
+    .bind(OPERATOR)
+    .bind(now + 300)
+    .bind(now)
+    .bind(&operations_session)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    for (uri, token) in [
+        ("/v1/review/submissions?limit=1", REVIEW_TOKEN),
+        ("/v1/editorial/releases?limit=1", OPERATIONS_TOKEN),
+    ] {
+        let authenticated = call(
+            application.clone(),
+            Method::GET,
+            uri,
+            Some(token),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(authenticated.status, StatusCode::OK);
+    }
+
+    let mismatched_session = sha256_hex(b"workforce-mismatched-session");
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO workforce_sessions (session_sha256, csrf_sha256, link_id, audience, \
+             state, created_unix_seconds, last_seen_unix_seconds, idle_expires_unix_seconds, \
+             absolute_expires_unix_seconds, mfa_authenticated_unix_seconds) \
+             VALUES ($1, $2, $3, 'operations', 'active', $4, $4, $5, $6, $4)",
+        )
+        .bind(&mismatched_session)
+        .bind(sha256_hex(b"workforce-mismatched-csrf"))
+        .bind(REVIEW_LINK)
+        .bind(now)
+        .bind(now + 900)
+        .bind(now + 28_800)
+        .execute(pool)
+        .await,
+        "23514",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO reviewer_access_tokens (token_sha256, reviewer_id, scopes, \
+             expires_unix_seconds, revoked, created_unix_seconds, workforce_session_sha256) \
+             VALUES ($1, $2, ARRAY['store.review'], $3, FALSE, $4, $5)",
+        )
+        .bind(sha256_hex(b"workforce-wrong-audience-token"))
+        .bind(REVIEWER)
+        .bind(now + 300)
+        .bind(now)
+        .bind(&operations_session)
+        .execute(pool)
+        .await,
+        "23514",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO reviewer_access_tokens (token_sha256, reviewer_id, scopes, \
+             expires_unix_seconds, revoked, created_unix_seconds, workforce_session_sha256) \
+             VALUES ($1, $2, ARRAY['store.review'], $3, FALSE, $4, $5)",
+        )
+        .bind(sha256_hex(b"workforce-overlong-token"))
+        .bind(REVIEWER)
+        .bind(now + 301)
+        .bind(now)
+        .bind(&review_session)
+        .execute(pool)
+        .await,
+        "23514",
+    );
+
+    assert_sqlstate(
+        sqlx::query(
+            "INSERT INTO workforce_oidc_transactions (transaction_id, state_sha256, \
+             nonce_sha256, pkce_verifier_ciphertext, provider_key, provider_config_sha256, \
+             audience, intent, session_sha256, state, requested_unix_seconds, \
+             expires_unix_seconds) VALUES \
+             ('wfoidc_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', $1, $2, $3, 'test-oidc', $4, \
+              'operations', 'step-up', $5, 'pending', $6, $7)",
+        )
+        .bind("5".repeat(64))
+        .bind("6".repeat(64))
+        .bind(vec![7_u8; 32])
+        .bind("8".repeat(64))
+        .bind(&review_session)
+        .bind(now)
+        .bind(now + 600)
+        .execute(pool)
+        .await,
+        "23514",
+    );
+    const STEP_UP_TRANSACTION: &str = "wfoidc_cccccccccccccccccccccccccccccccc";
+    sqlx::query(
+        "INSERT INTO workforce_oidc_transactions (transaction_id, state_sha256, nonce_sha256, \
+         pkce_verifier_ciphertext, provider_key, provider_config_sha256, audience, intent, \
+         session_sha256, state, requested_unix_seconds, expires_unix_seconds) VALUES \
+         ($1, $2, $3, $4, 'test-oidc', $5, 'review', 'step-up', $6, 'pending', $7, $8)",
+    )
+    .bind(STEP_UP_TRANSACTION)
+    .bind("9".repeat(64))
+    .bind("a".repeat(64))
+    .bind(vec![11_u8; 32])
+    .bind("b".repeat(64))
+    .bind(&review_session)
+    .bind(now)
+    .bind(now + 600)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let oidc_transaction = "wfoidc_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    sqlx::query(
+        "INSERT INTO workforce_oidc_transactions (transaction_id, state_sha256, nonce_sha256, \
+         pkce_verifier_ciphertext, provider_key, provider_config_sha256, audience, intent, \
+         state, requested_unix_seconds, expires_unix_seconds) VALUES \
+         ($1, $2, $3, $4, 'test-oidc', $5, 'review', 'login', 'pending', $6, $7)",
+    )
+    .bind(oidc_transaction)
+    .bind("1".repeat(64))
+    .bind("2".repeat(64))
+    .bind(vec![3_u8; 32])
+    .bind("4".repeat(64))
+    .bind(now)
+    .bind(now + 600)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE workforce_oidc_transactions SET state = 'consumed', \
+         consumed_unix_seconds = $1 WHERE transaction_id = $2",
+    )
+    .bind(now)
+    .bind(oidc_transaction)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE workforce_oidc_transactions SET state = 'pending', \
+             consumed_unix_seconds = NULL WHERE transaction_id = $1",
+        )
+        .bind(oidc_transaction)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM workforce_oidc_transactions WHERE transaction_id = $1")
+            .bind(oidc_transaction)
+            .execute(pool)
+            .await,
+        "55000",
+    );
+
+    sqlx::query(
+        "UPDATE workforce_sessions SET state = 'revoked', ended_unix_seconds = $1, \
+         resource_version = resource_version + 1 WHERE session_sha256 = $2",
+    )
+    .bind(now)
+    .bind(&review_session)
+    .execute(pool)
+    .await
+    .unwrap();
+    let step_up_state: String = sqlx::query_scalar(
+        "SELECT state FROM workforce_oidc_transactions WHERE transaction_id = $1",
+    )
+    .bind(STEP_UP_TRANSACTION)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(step_up_state, "expired");
+    assert!(
+        sqlx::query_scalar::<_, bool>(
+            "SELECT revoked FROM reviewer_access_tokens WHERE token_sha256 = $1",
+        )
+        .bind(sha256_hex(REVIEW_TOKEN.as_bytes()))
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    );
+    let revoked_session = call(
+        application.clone(),
+        Method::GET,
+        "/v1/review/submissions?limit=1",
+        Some(REVIEW_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&revoked_session, StatusCode::UNAUTHORIZED, "unauthorized");
+    assert_sqlstate(
+        sqlx::query("UPDATE reviewer_access_tokens SET revoked = FALSE WHERE token_sha256 = $1")
+            .bind(sha256_hex(REVIEW_TOKEN.as_bytes()))
+            .execute(pool)
+            .await,
+        "55000",
+    );
+
+    sqlx::query(
+        "UPDATE workforce_identity_links SET state = 'revoked', revoked_unix_seconds = $1, \
+         resource_version = resource_version + 1 WHERE link_id = $2",
+    )
+    .bind(now)
+    .bind(OPERATIONS_LINK)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_workforce_session_and_token_revoked(
+        pool,
+        &operations_session,
+        "store_operator_access_tokens",
+        &sha256_hex(OPERATIONS_TOKEN.as_bytes()),
+    )
+    .await;
+    let revoked_link = call(
+        application.clone(),
+        Method::GET,
+        "/v1/editorial/releases?limit=1",
+        Some(OPERATIONS_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&revoked_link, StatusCode::UNAUTHORIZED, "unauthorized");
+
+    sqlx::query(
+        "UPDATE reviewers SET state = 'suspended', resource_version = resource_version + 1 \
+         WHERE reviewer_id = $1",
+    )
+    .bind(SUSPEND_REVIEWER)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_workforce_session_and_token_revoked(
+        pool,
+        &suspend_session,
+        "reviewer_access_tokens",
+        &sha256_hex(SUSPEND_TOKEN.as_bytes()),
+    )
+    .await;
+    let suspended = call(
+        application.clone(),
+        Method::GET,
+        "/v1/review/submissions?limit=1",
+        Some(SUSPEND_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&suspended, StatusCode::UNAUTHORIZED, "unauthorized");
+
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE workforce_sessions SET state = 'active', ended_unix_seconds = NULL, \
+             resource_version = resource_version + 1 WHERE session_sha256 = $1",
+        )
+        .bind(&review_session)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM workforce_sessions WHERE session_sha256 = $1")
+            .bind(&review_session)
+            .execute(pool)
+            .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE workforce_identity_links SET state = 'active', \
+             revoked_unix_seconds = NULL, resource_version = resource_version + 1 \
+             WHERE link_id = $1",
+        )
+        .bind(OPERATIONS_LINK)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM workforce_identity_links WHERE link_id = $1")
+            .bind(OPERATIONS_LINK)
+            .execute(pool)
+            .await,
+        "55000",
+    );
+}
+
+async fn insert_workforce_session(
+    pool: &PgPool,
+    session_sha256: &str,
+    link_id: &str,
+    audience: &str,
+    now: i64,
+) {
+    sqlx::query(
+        "INSERT INTO workforce_sessions (session_sha256, csrf_sha256, link_id, audience, state, \
+         created_unix_seconds, last_seen_unix_seconds, idle_expires_unix_seconds, \
+         absolute_expires_unix_seconds, mfa_authenticated_unix_seconds) \
+         VALUES ($1, $2, $3, $4, 'active', $5, $5, $6, $7, $5)",
+    )
+    .bind(session_sha256)
+    .bind(sha256_hex(format!("csrf:{session_sha256}").as_bytes()))
+    .bind(link_id)
+    .bind(audience)
+    .bind(now)
+    .bind(now + 900)
+    .bind(now + 28_800)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn assert_workforce_session_and_token_revoked(
+    pool: &PgPool,
+    session_sha256: &str,
+    token_table: &str,
+    token_sha256: &str,
+) {
+    let session_state: String =
+        sqlx::query_scalar("SELECT state FROM workforce_sessions WHERE session_sha256 = $1")
+            .bind(session_sha256)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(session_state, "revoked");
+    let token_revoked: bool = sqlx::query_scalar(&format!(
+        "SELECT revoked FROM {token_table} WHERE token_sha256 = $1"
+    ))
+    .bind(token_sha256)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(token_revoked);
+}
+
 async fn reset_database(pool: &PgPool) {
     pool.execute("DROP TRIGGER IF EXISTS test_reject_audit_insert ON audit_events")
         .await
@@ -6031,7 +6462,8 @@ async fn reset_database(pool: &PgPool) {
         .await
         .unwrap();
     pool.execute(
-        "TRUNCATE oidc_login_transactions, portal_sessions, team_invitations, \
+        "TRUNCATE workforce_oidc_transactions, workforce_sessions, workforce_identity_links, \
+         oidc_login_transactions, portal_sessions, team_invitations, \
          external_identity_links, portal_accounts, \
          store_moderation_appeal_revisions, store_moderation_appeals, \
          store_developer_notice_revisions, store_developer_notices, \

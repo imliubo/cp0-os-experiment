@@ -254,6 +254,12 @@ published、具有匹配不可变 artifact 且为每个 App 最新投影的 Rele
 keyset cursor；前端同时修正为后端规范的 `rel_` ID 并严格验证响应。生产 workforce SSO/BFF、
 fixture 替换、双人处置和正式政策执行仍保持关闭。
 
+S8H 已冻结 Review Console/Store Operations 共用但 audience 严格分离的 workforce identity v1：
+独立 `__Host-` cookie、OIDC state/nonce/PKCE 事务、15 分钟 idle/8 小时 absolute 会话、最长五分钟
+session-bound 控制 token，以及 session、身份链接或 principal 撤销向 token 的同步级联均由
+PostgreSQL 状态机和真实 HTTP 验收覆盖。生产 BFF、IdP/JWKS、密钥托管、前端适配和现场撤销演练
+仍是外部门禁。具体契约见 `STORE-WORKFORCE-IDENTITY-V1.md`。
+
 - [x] Today/专题运营工具只能引用 approved Release。
 - [x] 建立最小化、可选、去标识化的安装、启动和崩溃聚合指标。
 - [x] 搜索词默认不上传；任何实验功能需要单独同意和保留期限。

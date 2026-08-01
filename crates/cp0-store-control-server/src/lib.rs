@@ -5776,8 +5776,23 @@ async fn lookup_reviewer_identity(
         "SELECT reviewer.reviewer_id, reviewer.role, reviewer.two_factor_enabled, token.scopes \
          FROM reviewer_access_tokens token \
          JOIN reviewers reviewer ON reviewer.reviewer_id = token.reviewer_id \
+         LEFT JOIN workforce_sessions session \
+           ON session.session_sha256 = token.workforce_session_sha256 \
+         LEFT JOIN workforce_identity_links link ON link.link_id = session.link_id \
          WHERE token.token_sha256 = $1 AND NOT token.revoked AND reviewer.state = 'active' \
-           AND token.expires_unix_seconds > EXTRACT(EPOCH FROM clock_timestamp())::BIGINT",
+           AND token.expires_unix_seconds > EXTRACT(EPOCH FROM clock_timestamp())::BIGINT \
+           AND (token.workforce_session_sha256 IS NULL OR ( \
+             session.state = 'active' AND session.audience = 'review' \
+             AND session.idle_expires_unix_seconds > \
+               EXTRACT(EPOCH FROM clock_timestamp())::BIGINT \
+             AND session.absolute_expires_unix_seconds > \
+               EXTRACT(EPOCH FROM clock_timestamp())::BIGINT \
+             AND link.state = 'active' AND link.reviewer_id = token.reviewer_id \
+             AND link.operator_id IS NULL \
+             AND token.created_unix_seconds >= session.created_unix_seconds \
+             AND token.expires_unix_seconds <= LEAST( \
+               session.idle_expires_unix_seconds, session.absolute_expires_unix_seconds, \
+               token.created_unix_seconds + 300)))",
     )
     .bind(token_sha256)
     .fetch_optional(&mut **transaction)
@@ -5800,8 +5815,23 @@ async fn authenticate_store_operator(
         "SELECT operator.operator_id, operator.role, operator.two_factor_enabled, token.scopes \
          FROM store_operator_access_tokens token \
          JOIN store_operators operator ON operator.operator_id = token.operator_id \
+         LEFT JOIN workforce_sessions session \
+           ON session.session_sha256 = token.workforce_session_sha256 \
+         LEFT JOIN workforce_identity_links link ON link.link_id = session.link_id \
          WHERE token.token_sha256 = $1 AND NOT token.revoked AND operator.state = 'active' \
-           AND token.expires_unix_seconds > EXTRACT(EPOCH FROM clock_timestamp())::BIGINT",
+           AND token.expires_unix_seconds > EXTRACT(EPOCH FROM clock_timestamp())::BIGINT \
+           AND (token.workforce_session_sha256 IS NULL OR ( \
+             session.state = 'active' AND session.audience = 'operations' \
+             AND session.idle_expires_unix_seconds > \
+               EXTRACT(EPOCH FROM clock_timestamp())::BIGINT \
+             AND session.absolute_expires_unix_seconds > \
+               EXTRACT(EPOCH FROM clock_timestamp())::BIGINT \
+             AND link.state = 'active' AND link.operator_id = token.operator_id \
+             AND link.reviewer_id IS NULL \
+             AND token.created_unix_seconds >= session.created_unix_seconds \
+             AND token.expires_unix_seconds <= LEAST( \
+               session.idle_expires_unix_seconds, session.absolute_expires_unix_seconds, \
+               token.created_unix_seconds + 300)))",
     )
     .bind(token_sha256)
     .fetch_optional(&mut **transaction)

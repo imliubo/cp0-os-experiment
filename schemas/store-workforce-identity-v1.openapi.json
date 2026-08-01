@@ -1,0 +1,340 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "CardputerZero Store Workforce Identity API",
+    "version": "1.0.0",
+    "description": "Browser-to-BFF contract for provider-neutral Review Console and Store Operations workforce identity."
+  },
+  "servers": [
+    { "url": "https://review.cardputerzero.dev" },
+    { "url": "https://operations.cardputerzero.dev" }
+  ],
+  "paths": {
+    "/review/auth/login": {
+      "get": {
+        "operationId": "beginReviewLogin",
+        "security": [],
+        "parameters": [{ "$ref": "#/components/parameters/Provider" }],
+        "responses": {
+          "302": { "description": "Redirect to the configured workforce OIDC authorization endpoint" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/review/auth/callback": {
+      "get": {
+        "operationId": "completeReviewLogin",
+        "security": [],
+        "parameters": [
+          { "$ref": "#/components/parameters/AuthorizationCode" },
+          { "$ref": "#/components/parameters/OidcState" }
+        ],
+        "responses": {
+          "303": {
+            "description": "Create the Review session and redirect to the same-origin console",
+            "headers": { "Set-Cookie": { "$ref": "#/components/headers/ReviewSessionCookie" } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/review/v1/session": {
+      "get": {
+        "operationId": "getReviewSession",
+        "security": [{ "reviewSession": [] }],
+        "responses": {
+          "200": {
+            "description": "Current Review workforce session",
+            "headers": { "Cache-Control": { "$ref": "#/components/headers/NoStore" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReviewSession" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/review/v1/token": {
+      "post": {
+        "operationId": "issueReviewControlToken",
+        "security": [{ "reviewSession": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session-bound Review control token",
+            "headers": { "Cache-Control": { "$ref": "#/components/headers/NoStore" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReviewControlToken" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/review/v1/session:logout": {
+      "post": {
+        "operationId": "logoutReviewSession",
+        "security": [{ "reviewSession": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoke the session and all bound tokens",
+            "headers": { "Set-Cookie": { "$ref": "#/components/headers/ExpiredReviewSessionCookie" } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/operations/auth/login": {
+      "get": {
+        "operationId": "beginOperationsLogin",
+        "security": [],
+        "parameters": [{ "$ref": "#/components/parameters/Provider" }],
+        "responses": {
+          "302": { "description": "Redirect to the configured workforce OIDC authorization endpoint" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/operations/auth/callback": {
+      "get": {
+        "operationId": "completeOperationsLogin",
+        "security": [],
+        "parameters": [
+          { "$ref": "#/components/parameters/AuthorizationCode" },
+          { "$ref": "#/components/parameters/OidcState" }
+        ],
+        "responses": {
+          "303": {
+            "description": "Create the Operations session and redirect to the same-origin console",
+            "headers": { "Set-Cookie": { "$ref": "#/components/headers/OperationsSessionCookie" } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/operations/v1/session": {
+      "get": {
+        "operationId": "getOperationsSession",
+        "security": [{ "operationsSession": [] }],
+        "responses": {
+          "200": {
+            "description": "Current Operations workforce session",
+            "headers": { "Cache-Control": { "$ref": "#/components/headers/NoStore" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/OperationsSession" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/operations/v1/token": {
+      "post": {
+        "operationId": "issueOperationsControlToken",
+        "security": [{ "operationsSession": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/OperationsTokenRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session-bound Operations control token",
+            "headers": { "Cache-Control": { "$ref": "#/components/headers/NoStore" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/OperationsControlToken" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/operations/v1/session:logout": {
+      "post": {
+        "operationId": "logoutOperationsSession",
+        "security": [{ "operationsSession": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoke the session and all bound tokens",
+            "headers": { "Set-Cookie": { "$ref": "#/components/headers/ExpiredOperationsSessionCookie" } }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "reviewSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-cp0_review"
+      },
+      "operationsSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-cp0_operations"
+      }
+    },
+    "parameters": {
+      "Provider": {
+        "name": "provider",
+        "in": "query",
+        "required": true,
+        "schema": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" }
+      },
+      "AuthorizationCode": {
+        "name": "code",
+        "in": "query",
+        "required": true,
+        "schema": { "type": "string", "minLength": 16, "maxLength": 4096 }
+      },
+      "OidcState": {
+        "name": "state",
+        "in": "query",
+        "required": true,
+        "schema": { "type": "string", "minLength": 32, "maxLength": 256 }
+      },
+      "CsrfToken": {
+        "name": "X-CSRF-Token",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "minLength": 32, "maxLength": 256 }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "minLength": 16, "maxLength": 128 }
+      }
+    },
+    "headers": {
+      "NoStore": {
+        "description": "Sensitive identity response must not be cached",
+        "schema": { "type": "string", "const": "no-store" }
+      },
+      "ReviewSessionCookie": {
+        "description": "__Host-cp0_review session cookie with Secure, HttpOnly, Path=/ and SameSite=Strict",
+        "schema": { "type": "string" }
+      },
+      "ExpiredReviewSessionCookie": {
+        "description": "Expire __Host-cp0_review with Max-Age=0",
+        "schema": { "type": "string" }
+      },
+      "OperationsSessionCookie": {
+        "description": "__Host-cp0_operations session cookie with Secure, HttpOnly, Path=/ and SameSite=Strict",
+        "schema": { "type": "string" }
+      },
+      "ExpiredOperationsSessionCookie": {
+        "description": "Expire __Host-cp0_operations with Max-Age=0",
+        "schema": { "type": "string" }
+      }
+    },
+    "schemas": {
+      "ReviewSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["principal_id", "role", "audience", "idle_expires_unix_seconds", "absolute_expires_unix_seconds", "mfa_authenticated_unix_seconds", "resource_version"],
+        "properties": {
+          "principal_id": { "type": "string", "pattern": "^reviewer_[0-9a-f]{32}$" },
+          "role": { "type": "string", "enum": ["reviewer", "senior-reviewer", "admin"] },
+          "audience": { "type": "string", "const": "review" },
+          "idle_expires_unix_seconds": { "type": "integer", "format": "int64", "minimum": 1 },
+          "absolute_expires_unix_seconds": { "type": "integer", "format": "int64", "minimum": 1 },
+          "mfa_authenticated_unix_seconds": { "type": "integer", "format": "int64", "minimum": 1 },
+          "resource_version": { "type": "integer", "format": "int64", "minimum": 1 }
+        }
+      },
+      "OperationsSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["principal_id", "role", "audience", "allowed_scopes", "idle_expires_unix_seconds", "absolute_expires_unix_seconds", "mfa_authenticated_unix_seconds", "resource_version"],
+        "properties": {
+          "principal_id": { "type": "string", "pattern": "^operator_[0-9a-f]{32}$" },
+          "role": { "type": "string", "enum": ["editor", "admin"] },
+          "audience": { "type": "string", "const": "operations" },
+          "allowed_scopes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": { "type": "string", "enum": ["store.editorial", "store.moderation"] }
+          },
+          "idle_expires_unix_seconds": { "type": "integer", "format": "int64", "minimum": 1 },
+          "absolute_expires_unix_seconds": { "type": "integer", "format": "int64", "minimum": 1 },
+          "mfa_authenticated_unix_seconds": { "type": "integer", "format": "int64", "minimum": 1 },
+          "resource_version": { "type": "integer", "format": "int64", "minimum": 1 }
+        }
+      },
+      "ReviewControlToken": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["access_token", "token_type", "expires_in", "scope", "audience"],
+        "properties": {
+          "access_token": { "type": "string", "minLength": 32, "maxLength": 4096 },
+          "token_type": { "type": "string", "const": "Bearer" },
+          "expires_in": { "type": "integer", "minimum": 1, "maximum": 300 },
+          "scope": { "type": "string", "const": "store.review" },
+          "audience": { "type": "string", "const": "review" }
+        }
+      },
+      "OperationsTokenRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["scope"],
+        "properties": {
+          "scope": { "type": "string", "enum": ["store.editorial", "store.moderation"] }
+        }
+      },
+      "OperationsControlToken": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["access_token", "token_type", "expires_in", "scope", "audience"],
+        "properties": {
+          "access_token": { "type": "string", "minLength": 32, "maxLength": 4096 },
+          "token_type": { "type": "string", "const": "Bearer" },
+          "expires_in": { "type": "integer", "minimum": 1, "maximum": 300 },
+          "scope": { "type": "string", "enum": ["store.editorial", "store.moderation"] },
+          "audience": { "type": "string", "const": "operations" }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "title", "status", "code", "request_id"],
+        "properties": {
+          "type": { "type": "string", "format": "uri", "maxLength": 512 },
+          "title": { "type": "string", "maxLength": 128 },
+          "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+          "code": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+          "request_id": { "type": "string", "pattern": "^req_[0-9a-f]{32}$" }
+        }
+      }
+    },
+    "responses": {
+      "Problem": {
+        "description": "Bounded RFC 9457 problem response",
+        "headers": { "Cache-Control": { "$ref": "#/components/headers/NoStore" } },
+        "content": {
+          "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
+        }
+      }
+    }
+  }
+}
