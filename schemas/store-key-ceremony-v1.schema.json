@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cardputerzero.dev/schemas/store-key-ceremony-v1.schema.json",
+  "title": "CardputerZero Store key ceremony evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ceremony_id",
+    "environment",
+    "operation",
+    "algorithm",
+    "started_unix_seconds",
+    "completed_unix_seconds",
+    "old_key_id",
+    "new_key_id",
+    "catalog_sequence_before",
+    "catalog_sequence_after",
+    "hsm_attestation_sha256",
+    "trust_update_sha256",
+    "approvals",
+    "outcome"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "ceremony_id": {
+      "type": "string",
+      "pattern": "^keycer_[0-9]{8}T[0-9]{6}Z_[0-9a-f]{16}$"
+    },
+    "environment": { "enum": ["staging", "production"] },
+    "operation": { "enum": ["generate", "rotate", "revoke", "destroy"] },
+    "algorithm": { "const": "ed25519" },
+    "started_unix_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "completed_unix_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "old_key_id": { "$ref": "#/$defs/nullable_key_id" },
+    "new_key_id": { "$ref": "#/$defs/nullable_key_id" },
+    "catalog_sequence_before": { "$ref": "#/$defs/nullable_sequence" },
+    "catalog_sequence_after": { "$ref": "#/$defs/nullable_sequence" },
+    "hsm_attestation_sha256": { "$ref": "#/$defs/sha256" },
+    "trust_update_sha256": {
+      "oneOf": [
+        { "$ref": "#/$defs/sha256" },
+        { "type": "null" }
+      ]
+    },
+    "approvals": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/approval" }
+    },
+    "outcome": { "enum": ["approved", "aborted"] }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "operation": { "const": "generate" } },
+        "required": ["operation"]
+      },
+      "then": {
+        "properties": {
+          "old_key_id": { "type": "null" },
+          "new_key_id": { "$ref": "#/$defs/key_id" },
+          "catalog_sequence_before": { "type": "null" },
+          "catalog_sequence_after": { "type": "null" },
+          "trust_update_sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "operation": { "const": "rotate" } },
+        "required": ["operation"]
+      },
+      "then": {
+        "properties": {
+          "old_key_id": { "$ref": "#/$defs/key_id" },
+          "new_key_id": { "$ref": "#/$defs/key_id" },
+          "catalog_sequence_before": { "$ref": "#/$defs/sequence" },
+          "catalog_sequence_after": { "$ref": "#/$defs/sequence" },
+          "trust_update_sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "operation": { "const": "revoke" } },
+        "required": ["operation"]
+      },
+      "then": {
+        "properties": {
+          "old_key_id": { "$ref": "#/$defs/key_id" },
+          "trust_update_sha256": { "$ref": "#/$defs/sha256" }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "new_key_id": { "type": "null" },
+              "catalog_sequence_before": { "$ref": "#/$defs/sequence" },
+              "catalog_sequence_after": { "type": "null" }
+            }
+          },
+          {
+            "properties": {
+              "new_key_id": { "$ref": "#/$defs/key_id" },
+              "catalog_sequence_before": { "$ref": "#/$defs/sequence" },
+              "catalog_sequence_after": { "$ref": "#/$defs/sequence" }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": { "operation": { "const": "destroy" } },
+        "required": ["operation"]
+      },
+      "then": {
+        "properties": {
+          "old_key_id": { "$ref": "#/$defs/key_id" },
+          "new_key_id": { "type": "null" },
+          "catalog_sequence_before": { "$ref": "#/$defs/sequence" },
+          "catalog_sequence_after": { "$ref": "#/$defs/sequence" },
+          "trust_update_sha256": { "type": "null" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "key_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "nullable_key_id": {
+      "oneOf": [
+        { "$ref": "#/$defs/key_id" },
+        { "type": "null" }
+      ]
+    },
+    "nullable_sequence": {
+      "oneOf": [
+        { "$ref": "#/$defs/sequence" },
+        { "type": "null" }
+      ]
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor_id", "role", "evidence_sha256"],
+      "properties": {
+        "actor_id": {
+          "type": "string",
+          "pattern": "^operator_[0-9a-f]{32}$"
+        },
+        "role": {
+          "enum": ["key-custodian", "security-officer", "release-operator", "auditor"]
+        },
+        "evidence_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

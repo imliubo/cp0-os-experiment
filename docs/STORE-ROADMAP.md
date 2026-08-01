@@ -146,6 +146,8 @@ S6E 已新增兼容的签名根索引、分类索引和有界 shard：Publisher 
   当前 transparency v1 覆盖完整 Catalog snapshot 历史；生产对象存储、compact proof 和
   witness/gossip 属于后续基础设施。
 - [ ] 接入生产 HSM 和 key ceremony；当前隔离文件 key 参考 Signer 已保证 Web 服务不能读私钥。
+  provider-neutral ceremony evidence v1 已冻结双人职责分离、无私钥字段、HSM/trust-update 摘要、
+  key/sequence 切换和有界验证器；HSM 选型、真实 quorum 执行及独立审计仍未完成。
 - [x] 实现确定性 Catalog Builder、sequence 分配、发布和紧急撤回。
   pause/resume/remove 生成更高 sequence，过期控制事件安全合并且 sequence 永不复用。
 - [ ] 灾备、key rotation、权限提升和内部威胁测试。

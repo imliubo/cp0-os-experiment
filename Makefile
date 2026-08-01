@@ -7,6 +7,7 @@ check: fmt
 		schemas/store-review-v1.schema.json \
 		schemas/store-listing-v1.schema.json \
 		schemas/store-metrics-v1.schema.json \
+		schemas/store-key-ceremony-v1.schema.json \
 		schemas/store-control-v1.openapi.json \
 		schemas/store-portal-identity-v1.openapi.json \
 		schemas/device-policy-v1.schema.json appd/device-policy.json \
@@ -29,6 +30,7 @@ check: fmt
 	./tests/test-store-scan-profile.sh
 	./tests/test-store-publisher-profile.sh
 	./tests/test-store-resilience-profile.sh
+	./tests/test-store-key-ceremony.sh
 	./tests/test-image-profile.sh
 	./tests/test-overlay-root-profile.sh
 	./tests/test-recovery-image-profile.sh
