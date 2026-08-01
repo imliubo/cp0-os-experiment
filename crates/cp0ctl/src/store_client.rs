@@ -161,7 +161,8 @@ fn exchange_stream(
 fn response_matches(command: &StoreCommand, data: &StoreResponseData) -> bool {
     match (command, data) {
         (StoreCommand::List, StoreResponseData::Catalog { .. })
-        | (StoreCommand::Refresh, StoreResponseData::RefreshAccepted) => true,
+        | (StoreCommand::Refresh, StoreResponseData::RefreshAccepted)
+        | (StoreCommand::GetMetrics, StoreResponseData::MetricsStatus { .. }) => true,
         (
             StoreCommand::Search {
                 query: requested_query,
@@ -255,6 +256,31 @@ mod tests {
             response.outcome,
             StoreOutcome::Ok {
                 data: StoreResponseData::RefreshAccepted
+            }
+        ));
+        worker.join().unwrap();
+
+        let (stream, worker) = serve_once(
+            StoreCommand::GetMetrics,
+            StoreResponse::success(
+                REQUEST_ID,
+                StoreResponseData::MetricsStatus {
+                    enabled: false,
+                    policy_allowed: true,
+                    configured: false,
+                    pending: false,
+                },
+            ),
+        );
+        let response = exchange_stream(stream, StoreCommand::GetMetrics, TIMEOUT).unwrap();
+        assert!(matches!(
+            response.outcome,
+            StoreOutcome::Ok {
+                data: StoreResponseData::MetricsStatus {
+                    enabled: false,
+                    pending: false,
+                    ..
+                }
             }
         ));
         worker.join().unwrap();

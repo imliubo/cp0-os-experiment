@@ -150,6 +150,22 @@ if ((failures != 0)); then
     finish
 fi
 
+if /usr/bin/cp0ctl store metrics >"$run_dir/metrics.json" \
+    2>"$run_dir/metrics.err" && jq -e '
+        .outcome.status == "ok" and
+        .outcome.data.kind == "metrics-status" and
+        .outcome.data.enabled == false and
+        .outcome.data.pending == false and
+        (.outcome.data.policy_allowed | type) == "boolean" and
+        (.outcome.data.configured | type) == "boolean"
+    ' "$run_dir/metrics.json" >/dev/null; then
+    record PASS metrics-default-off "consent=false pending=false"
+else
+    record FAIL metrics-default-off \
+        "Store metrics must remain disabled with no pending aggregate during acceptance"
+    finish
+fi
+
 store_list() {
     /usr/bin/cp0ctl store list 2>/dev/null
 }
@@ -225,15 +241,43 @@ wait_installed() {
 }
 
 launch_installed() {
+    local observer_pid= observer_stopped=0 attempt
     if ! /usr/bin/cp0ctl app start "$app_id" >"$run_dir/start.json" 2>&1; then
         record FAIL installed-launch "app start failed"
         return
     fi
     active_app=1
-    sleep 2
+    for attempt in $(seq 1 20); do
+        observer_pid=$(pgrep -f \
+            '^/usr/bin/systemctl --quiet wait cardputerzero-app-[0-9]+\.service$' |
+            head -1 || true)
+        [[ $observer_pid =~ ^[1-9][0-9]*$ ]] && break
+        sleep 0.1
+    done
+    if [[ $observer_pid =~ ^[1-9][0-9]*$ ]]; then
+        record PASS runtime-observer "systemctl wait pid=$observer_pid"
+    else
+        record FAIL runtime-observer "blocking systemd observer was not found"
+    fi
+    sleep 1
     if /usr/bin/cp0ctl app stop "$app_id" >"$run_dir/stop.json" 2>&1; then
         active_app=0
         record PASS installed-launch "$app_id started and stopped"
+        if [[ $observer_pid =~ ^[1-9][0-9]*$ ]]; then
+            for attempt in $(seq 1 20); do
+                if ! kill -0 "$observer_pid" 2>/dev/null; then
+                    observer_stopped=1
+                    break
+                fi
+                sleep 0.1
+            done
+            if ((observer_stopped == 1)); then
+                record PASS runtime-observer-stopped "observer exited after explicit stop"
+            else
+                record FAIL runtime-observer-stopped \
+                    "observer remained after explicit application stop"
+            fi
+        fi
     else
         record FAIL installed-launch "app stop failed"
     fi

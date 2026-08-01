@@ -215,6 +215,7 @@ S8B 已完成默认关闭的 Store 周聚合：设备只保留安装、启动和
 ## S9：真机门禁（稳定性结束后）
 
 - [ ] 部署最新 Store 协议、`cp0-stored`、appd 和 System Shell。
+- [ ] 验证 App Metrics 默认关闭、无待发数据，以及 appd 的单阻塞生命周期 observer。
 - [ ] Camera2 验证 Today/Apps/Search/Updates、详情和下载进度。
 - [ ] 完成刷新、续传、安装、升级、离线缓存和过期拒绝六步证据。
 - [ ] 测量最大 Catalog 的内存、CPU、输入延迟和 SD 写入。

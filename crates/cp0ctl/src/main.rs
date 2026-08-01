@@ -95,6 +95,9 @@ fn main() -> ExitCode {
         [store_command, command] if store_command == "store" && command == "refresh" => {
             store_client::send(cp0_store_protocol::StoreCommand::Refresh)
         }
+        [store_command, command] if store_command == "store" && command == "metrics" => {
+            store_client::send(cp0_store_protocol::StoreCommand::GetMetrics)
+        }
         [store_command, command, app_id, approval]
             if store_command == "store"
                 && command == "install"
@@ -231,7 +234,7 @@ fn main() -> ExitCode {
             })
         }
         _ => Err(
-            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | store validate <developer-signed.capp> <store/listing.json> | store submit <developer-signed.capp> <store/listing.json> | store publish <submissions-dir> <reviews-dir> <output-dir> <base-url> <sequence> <published-unix> <expires-unix> <store-secret-key> | store list | store search <query> [offset limit] | store refresh | store install <app-id> --approve-permissions | store install-batch --approve-permissions <app-id>... | store pause|resume|cancel <app-id> | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | device status | device <developer|recovery> <on|off> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
+            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | store validate <developer-signed.capp> <store/listing.json> | store submit <developer-signed.capp> <store/listing.json> | store publish <submissions-dir> <reviews-dir> <output-dir> <base-url> <sequence> <published-unix> <expires-unix> <store-secret-key> | store list | store search <query> [offset limit] | store refresh | store metrics | store install <app-id> --approve-permissions | store install-batch --approve-permissions <app-id>... | store pause|resume|cancel <app-id> | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | device status | device <developer|recovery> <on|off> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
                 .into(),
         ),
     };

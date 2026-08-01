@@ -39,6 +39,11 @@ for file in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-gpiod cp0-networkd
     fi
 done
 
+if ! systemctl --help 2>&1 | grep -Eq '^[[:space:]]+wait[[:space:]]'; then
+    echo "error: target systemctl does not support the required wait command" >&2
+    exit 1
+fi
+
 systemctl stop cardputerzero-system-shell.service 2>/dev/null || :
 systemctl stop 'cardputerzero-app-*.service' 2>/dev/null || :
 systemctl stop cardputerzero-appd.service 2>/dev/null || :

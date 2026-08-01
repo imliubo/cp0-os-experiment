@@ -16,6 +16,7 @@ if grep -q 'wait_active cardputerzero-appd.service' "$compositor"; then
     exit 1
 fi
 grep -q 'systemctl stop cardputerzero-system-shell.service' "$platform"
+grep -q 'target systemctl does not support the required wait command' "$platform"
 grep -q 'cardputerzero-appd.socket cardputerzero-broker.socket' "$platform"
 grep -q 'cardputerzero-stored.socket' "$platform"
 grep -q 'cp0-stored' "$prepare"

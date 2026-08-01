@@ -46,6 +46,8 @@
 - 完成 GPIO 读写/拒绝权限/sysfs 收紧真机验收；
 - 完成私有存储持久化、配额和跨应用隔离真机验收；
 - 完成 Store 刷新、续传、安装、升级、离线和过期拒绝六步验收。
+  每步同时绑定 App Metrics 默认关闭/无待发数据；安装和升级还验证 appd 的阻塞
+  lifecycle observer 在显式停止后退出。
 
 当前正式运行是
 `/run/cardputerzero-stability/acceptance/20260731T170228Z-10620`，开始于

@@ -383,8 +383,16 @@ validate_store_dir() {
     require_pass store-config
     require_pass store-trust
     require_pass foreground-precondition
+    require_pass metrics-default-off
     require_pass store-cache-mode
     require_regular "$dir/app-list.json"
+    require_regular "$dir/metrics.json"
+    jq -e '.outcome.status == "ok" and
+        .outcome.data.kind == "metrics-status" and
+        .outcome.data.enabled == false and .outcome.data.pending == false and
+        (.outcome.data.policy_allowed | type) == "boolean" and
+        (.outcome.data.configured | type) == "boolean"' "$dir/metrics.json" >/dev/null ||
+        die "invalid Store metrics evidence"
     jq -e '.outcome.status == "ok" and .outcome.data.kind == "applications" and
         (.outcome.data.apps | type == "array") and
         (.outcome.data.apps | all(.running == false))' "$dir/app-list.json" >/dev/null ||
@@ -406,7 +414,8 @@ validate_store_dir() {
             ;;
         resume-v1)
             for expected_action in install-accepted partial-created store-restart \
-                partial-survived resume-accepted installed-version range-resume installed-launch; do
+                partial-survived resume-accepted installed-version range-resume installed-launch \
+                runtime-observer runtime-observer-stopped; do
                 require_pass "$expected_action"
             done
             [[ ${check_detail[partial-created]} =~ ^[1-9][0-9]*\ bytes$ &&
@@ -419,6 +428,8 @@ validate_store_dir() {
             require_pass upgrade-accepted
             require_pass installed-version
             require_pass installed-launch
+            require_pass runtime-observer
+            require_pass runtime-observer-stopped
             ;;
         offline-v2)
             require_pass offline-cache-before

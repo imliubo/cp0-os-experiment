@@ -204,11 +204,14 @@ failure_count=0
 warning_count=0
 EOF
     for name in stability-interlock device-dependency store-config store-trust \
-        foreground-precondition store-cache-mode; do
+        foreground-precondition metrics-default-off store-cache-mode; do
         check "$dir" PASS "$name"
     done
     cat >"$dir/app-list.json" <<'EOF'
 {"outcome":{"status":"ok","data":{"kind":"applications","apps":[]}}}
+EOF
+    cat >"$dir/metrics.json" <<'EOF'
+{"outcome":{"status":"ok","data":{"kind":"metrics-status","enabled":false,"policy_allowed":true,"configured":false,"pending":false}}}
 EOF
     case "$action" in
         refresh-v1 | refresh-v2)
@@ -227,11 +230,15 @@ EOF
             check "$dir" PASS installed-version
             check "$dir" PASS range-resume
             check "$dir" PASS installed-launch
+            check "$dir" PASS runtime-observer
+            check "$dir" PASS runtime-observer-stopped
             ;;
         upgrade-v2)
             check "$dir" PASS upgrade-accepted
             check "$dir" PASS installed-version
             check "$dir" PASS installed-launch
+            check "$dir" PASS runtime-observer
+            check "$dir" PASS runtime-observer-stopped
             ;;
         offline-v2)
             check "$dir" PASS offline-cache-before

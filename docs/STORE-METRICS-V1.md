@@ -67,6 +67,10 @@ Store records an install only after `appd` accepts the verified package handoff.
 Runtime metric commands are accepted only from UID 0 and are checked against
 the exact installed App ID and version.
 
+`cp0ctl store metrics` is a read-only diagnostic command. It exposes only the
+same four booleans as Settings (`enabled`, policy allowed, endpoint configured,
+and pending) and cannot grant consent or mutate counters.
+
 ## Upload and backend
 
 Before its first attempt, `cp0-stored` creates and durably saves a random batch
@@ -96,5 +100,8 @@ conflicting IDs, unpublished artifacts, the 19/20 privacy threshold, retention
 cleanup and immutable/monotonic database enforcement.
 
 S9 must deploy the binaries only after the current stability observation ends.
-Device acceptance must verify the setting and lifecycle behavior without
-enabling production collection or uploading identifying test data.
+Every six-step Store device run captures the read-only metrics status and is
+rejected unless consent is off and no aggregate is pending. Install/upgrade
+launch probes also require exactly the blocking `systemctl wait` observer to
+appear and to exit after an explicit stop. This verifies lifecycle integration
+without enabling collection or uploading identifying test data.
