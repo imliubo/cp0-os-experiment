@@ -112,6 +112,11 @@ fn main() -> ExitCode {
         {
             parse_store_control(command, app_id).and_then(store_client::send)
         }
+        [store_command, command, app_ids @ ..]
+            if store_command == "store" && command == "install-batch" =>
+        {
+            parse_store_install_batch(app_ids).and_then(store_client::send)
+        }
         [command, input] if command == "install" => install_package(input),
         [command, input, flag, device] if command == "install" && flag == "--device" => {
             remote::install(input, device)
@@ -219,7 +224,7 @@ fn main() -> ExitCode {
             })
         }
         _ => Err(
-            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | store validate <developer-signed.capp> <store/listing.json> | store submit <developer-signed.capp> <store/listing.json> | store publish <submissions-dir> <reviews-dir> <output-dir> <base-url> <sequence> <published-unix> <expires-unix> <store-secret-key> | store list | store search <query> [offset limit] | store refresh | store install|pause|resume|cancel <app-id> | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | device status | device <developer|recovery> <on|off> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
+            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | store validate <developer-signed.capp> <store/listing.json> | store submit <developer-signed.capp> <store/listing.json> | store publish <submissions-dir> <reviews-dir> <output-dir> <base-url> <sequence> <published-unix> <expires-unix> <store-secret-key> | store list | store search <query> [offset limit] | store refresh | store install|pause|resume|cancel <app-id> | store install-batch <app-id>... | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | device status | device <developer|recovery> <on|off> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
                 .into(),
         ),
     };
@@ -250,6 +255,26 @@ fn parse_store_control(
         app_id: app_id.into(),
         action,
     })
+}
+
+fn parse_store_install_batch(
+    app_ids: &[String],
+) -> Result<cp0_store_protocol::StoreCommand, String> {
+    if app_ids.is_empty() || app_ids.len() > cp0_store_protocol::MAX_INSTALL_BATCH_APPS {
+        return Err("store install batch count is outside limits".into());
+    }
+    let mut app_ids = app_ids.to_vec();
+    if app_ids
+        .iter()
+        .any(|app_id| !cp0_manifest::is_valid_app_id(app_id))
+    {
+        return Err("store install batch application ID is invalid".into());
+    }
+    app_ids.sort();
+    if app_ids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("store install batch application IDs are duplicated".into());
+    }
+    Ok(cp0_store_protocol::StoreCommand::InstallBatch { app_ids })
 }
 
 fn parse_store_search(
@@ -514,5 +539,33 @@ mod tests {
         }
         assert!(parse_store_control("stop", "dev.cardputerzero.example").is_err());
         assert!(parse_store_control("pause", "invalid").is_err());
+    }
+
+    #[test]
+    fn cli_store_install_batch_parser_is_bounded_and_canonical() {
+        let app_ids = vec![
+            "dev.cardputerzero.beta".into(),
+            "dev.cardputerzero.alpha".into(),
+        ];
+        assert_eq!(
+            parse_store_install_batch(&app_ids),
+            Ok(cp0_store_protocol::StoreCommand::InstallBatch {
+                app_ids: vec![
+                    "dev.cardputerzero.alpha".into(),
+                    "dev.cardputerzero.beta".into(),
+                ],
+            })
+        );
+        assert!(parse_store_install_batch(&[]).is_err());
+        assert!(parse_store_install_batch(&[app_ids[0].clone(), app_ids[0].clone()]).is_err());
+        assert!(parse_store_install_batch(&["invalid".into()]).is_err());
+        assert!(
+            parse_store_install_batch(
+                &(0..=cp0_store_protocol::MAX_INSTALL_BATCH_APPS)
+                    .map(|index| format!("dev.cardputerzero.batch{index}"))
+                    .collect::<Vec<_>>()
+            )
+            .is_err()
+        );
     }
 }

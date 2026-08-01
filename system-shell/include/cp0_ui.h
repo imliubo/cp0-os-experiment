@@ -25,6 +25,7 @@
 #define CP0_UI_STORE_SUMMARY_MAX 384
 #define CP0_UI_STORE_SEARCH_QUERY_MAX 96
 #define CP0_UI_STORE_SEARCH_PAGE_MAX 8
+#define CP0_UI_STORE_UPDATE_BATCH_MAX 8
 #define CP0_UI_STORE_RECENT_MAX 4
 #define CP0_UI_STORE_DEVELOPER_MAX 320
 #define CP0_UI_STORE_DESCRIPTION_MAX 4096
@@ -80,6 +81,7 @@ enum cp0_ui_event {
     CP0_UI_EVENT_DOCUMENT_CANCEL,
     CP0_UI_EVENT_STORE_REFRESH,
     CP0_UI_EVENT_STORE_INSTALL,
+    CP0_UI_EVENT_STORE_UPDATE_ALL,
     CP0_UI_EVENT_STORE_PAUSE,
     CP0_UI_EVENT_STORE_RESUME,
     CP0_UI_EVENT_STORE_CANCEL,
@@ -283,6 +285,7 @@ struct cp0_ui {
     bool store_list_truncated;
     bool store_catalog_stale;
     bool store_search_stale;
+    bool store_update_all_selected;
     bool store_detail;
     bool app_detail;
     bool app_uninstall_confirm;
@@ -427,6 +430,9 @@ uint16_t cp0_ui_store_search_offset(const struct cp0_ui *ui);
 void cp0_ui_set_store_app_state(struct cp0_ui *ui, const char *app_id,
                                 enum cp0_ui_store_state state,
                                 uint8_t progress_percent);
+size_t cp0_ui_collect_store_update_batch(const struct cp0_ui *ui,
+                                         const char *app_ids[],
+                                         size_t app_capacity);
 const char *cp0_ui_selected_store_app_id(const struct cp0_ui *ui);
 enum cp0_ui_store_state cp0_ui_selected_store_app_state(
     const struct cp0_ui *ui);

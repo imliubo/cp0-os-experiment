@@ -26,6 +26,9 @@
 
 #define BUFFER_COUNT 2
 
+_Static_assert(CP0_STORE_INSTALL_BATCH_MAX == CP0_UI_STORE_UPDATE_BATCH_MAX,
+               "Store batch limits must match");
+
 struct shell;
 
 struct shell_buffer {
@@ -860,6 +863,32 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                                            CP0_UI_STORE_FAILED, 0);
                 fprintf(stderr, "system-shell: store install failed for %s\n",
                         app_id);
+            }
+        }
+    } else if (event == CP0_UI_EVENT_STORE_UPDATE_ALL) {
+        const char *app_ids[CP0_STORE_INSTALL_BATCH_MAX];
+        size_t app_count = cp0_ui_collect_store_update_batch(
+            &shell->ui, app_ids, CP0_STORE_INSTALL_BATCH_MAX);
+        if (app_count > 0) {
+            int result = cp0_store_install_batch(app_ids, app_count);
+            if (result == CP0_STORE_RESULT_OK) {
+                for (size_t index = 0; index < app_count; index++)
+                    cp0_ui_set_store_app_state(
+                        &shell->ui, app_ids[index], CP0_UI_STORE_QUEUED, 0);
+                shell->store_poll_delay = 1;
+                fprintf(stderr,
+                        "system-shell: store update batch requested for %zu apps\n",
+                        app_count);
+            } else if (result == CP0_STORE_RESULT_UNCONFIGURED) {
+                cp0_ui_set_store_status(&shell->ui,
+                                        CP0_UI_STORE_UNCONFIGURED);
+            } else if (result != CP0_STORE_RESULT_BUSY) {
+                for (size_t index = 0; index < app_count; index++)
+                    cp0_ui_set_store_app_state(
+                        &shell->ui, app_ids[index], CP0_UI_STORE_FAILED, 0);
+                fprintf(stderr,
+                        "system-shell: store update batch failed for %zu apps\n",
+                        app_count);
             }
         }
     } else if (event == CP0_UI_EVENT_STORE_PAUSE ||

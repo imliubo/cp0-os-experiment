@@ -772,6 +772,59 @@ static int parse_accepted(const char *response, size_t response_length,
     return CP0_STORE_RESULT_OK;
 }
 
+static bool valid_install_batch(const char *const app_ids[], size_t app_count)
+{
+    if (app_ids == NULL || app_count == 0 ||
+        app_count > CP0_STORE_INSTALL_BATCH_MAX)
+        return false;
+    for (size_t index = 0; index < app_count; index++) {
+        if (!valid_app_id(app_ids[index]) ||
+            (index > 0 && strcmp(app_ids[index - 1], app_ids[index]) >= 0))
+            return false;
+    }
+    return true;
+}
+
+static int parse_install_batch_accepted(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *const expected_app_ids[], size_t expected_app_count)
+{
+    struct cp0_json_token tokens[128];
+    size_t token_count;
+    int data;
+
+    if (!valid_install_batch(expected_app_ids, expected_app_count))
+        return CP0_STORE_RESULT_ERROR;
+    int result = parse_envelope(response, response_length, request_id, tokens,
+                                128, &token_count, &data);
+    if (result != CP0_STORE_RESULT_OK)
+        return result;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int apps = cp0_json_object_get(response, tokens, token_count, data, "apps");
+    if (tokens[data].children != 4 || kind < 0 || apps < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind],
+                                "install-batch-accepted") ||
+        tokens[apps].type != CP0_JSON_ARRAY ||
+        tokens[apps].children != expected_app_count)
+        return CP0_STORE_RESULT_ERROR;
+    for (size_t index = 0; index < expected_app_count; index++) {
+        int item = cp0_json_array_get(tokens, token_count, apps,
+                                      (unsigned int)index);
+        char app_id[CP0_STORE_APP_ID_BYTES];
+        char version[CP0_STORE_VERSION_BYTES];
+        if (item < 0 || tokens[item].type != CP0_JSON_OBJECT ||
+            tokens[item].children != 4 ||
+            !copy_member(response, tokens, token_count, item, "app_id", app_id,
+                         sizeof(app_id)) ||
+            strcmp(app_id, expected_app_ids[index]) != 0 ||
+            !copy_member(response, tokens, token_count, item, "version", version,
+                         sizeof(version)) ||
+            !valid_version(version))
+            return CP0_STORE_RESULT_ERROR;
+    }
+    return CP0_STORE_RESULT_OK;
+}
+
 static const char *control_action_name(enum cp0_store_control_action action)
 {
     static const char *names[] = {"pause", "resume", "cancel"};
@@ -1188,6 +1241,14 @@ int cp0_store_test_parse_install_response(const char *response,
                           "install-accepted", app_id);
 }
 
+int cp0_store_test_parse_install_batch_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *const app_ids[], size_t app_count)
+{
+    return parse_install_batch_accepted(response, response_length, request_id,
+                                        app_ids, app_count);
+}
+
 int cp0_store_test_parse_control_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *app_id, enum cp0_store_control_action action)
@@ -1337,6 +1398,44 @@ int cp0_store_install(const char *app_id)
         return CP0_STORE_RESULT_ERROR;
     return parse_accepted(response, response_length, request_id,
                           "install-accepted", app_id);
+}
+
+int cp0_store_install_batch(const char *const app_ids[], size_t app_count)
+{
+    char request[2048];
+    char response[4096];
+    size_t request_offset = 0;
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+
+    if (!valid_install_batch(app_ids, app_count))
+        return CP0_STORE_RESULT_ERROR;
+    int written = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"install-batch\",\"app_ids\":[",
+        (unsigned long long)request_id);
+    if (written <= 0 || (size_t)written >= sizeof(request))
+        return CP0_STORE_RESULT_ERROR;
+    request_offset = (size_t)written;
+    for (size_t index = 0; index < app_count; index++) {
+        written = snprintf(request + request_offset,
+                           sizeof(request) - request_offset, "%s\"%s\"",
+                           index == 0 ? "" : ",", app_ids[index]);
+        if (written <= 0 || (size_t)written >= sizeof(request) - request_offset)
+            return CP0_STORE_RESULT_ERROR;
+        request_offset += (size_t)written;
+    }
+    written = snprintf(request + request_offset,
+                       sizeof(request) - request_offset, "]}}\n");
+    if (written <= 0 || (size_t)written >= sizeof(request) - request_offset)
+        return CP0_STORE_RESULT_ERROR;
+    request_offset += (size_t)written;
+    if (exchange(request, request_offset, response, sizeof(response),
+                 &response_length, 1000, NULL) != 0)
+        return CP0_STORE_RESULT_ERROR;
+    return parse_install_batch_accepted(response, response_length, request_id,
+                                        app_ids, app_count);
 }
 
 int cp0_store_control(const char *app_id,

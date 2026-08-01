@@ -21,6 +21,9 @@ int cp0_store_test_parse_install_response(const char *response,
                                           size_t response_length,
                                           uint64_t request_id,
                                           const char *app_id);
+int cp0_store_test_parse_install_batch_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *const app_ids[], size_t app_count);
 int cp0_store_test_parse_control_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *app_id, enum cp0_store_control_action action);
@@ -225,6 +228,88 @@ int main(void)
     assert(cp0_store_test_parse_install_response(
                install, strlen(install), 20, "dev.cardputerzero.beta") ==
            CP0_STORE_RESULT_ERROR);
+
+    static const char *const batch_ids[] = {
+        "dev.cardputerzero.alpha",
+        "dev.cardputerzero.beta",
+    };
+    static const char install_batch[] =
+        ENVELOPE_START("35")
+        "\"kind\":\"install-batch-accepted\",\"apps\":[{"
+        "\"app_id\":\"dev.cardputerzero.alpha\",\"version\":\"1.2.3\"},{"
+        "\"app_id\":\"dev.cardputerzero.beta\",\"version\":\"2.0.0\"}]}}}";
+    assert(cp0_store_test_parse_install_batch_response(
+               install_batch, strlen(install_batch), 35, batch_ids, 2) ==
+           CP0_STORE_RESULT_OK);
+    assert(cp0_store_test_parse_install_batch_response(
+               install_batch, strlen(install_batch), 35, batch_ids, 1) ==
+           CP0_STORE_RESULT_ERROR);
+    static const char reordered_batch[] =
+        ENVELOPE_START("36")
+        "\"kind\":\"install-batch-accepted\",\"apps\":[{"
+        "\"app_id\":\"dev.cardputerzero.beta\",\"version\":\"2.0.0\"},{"
+        "\"app_id\":\"dev.cardputerzero.alpha\",\"version\":\"1.2.3\"}]}}}";
+    static const char partial_batch[] =
+        ENVELOPE_START("41")
+        "\"kind\":\"install-batch-accepted\",\"apps\":[{"
+        "\"app_id\":\"dev.cardputerzero.alpha\",\"version\":\"1.2.3\"}]}}}";
+    static const char duplicate_batch[] =
+        ENVELOPE_START("37")
+        "\"kind\":\"install-batch-accepted\",\"apps\":[{"
+        "\"app_id\":\"dev.cardputerzero.alpha\",\"version\":\"1.2.3\"},{"
+        "\"app_id\":\"dev.cardputerzero.alpha\",\"version\":\"1.2.3\"}]}}}";
+    static const char invalid_batch_version[] =
+        ENVELOPE_START("38")
+        "\"kind\":\"install-batch-accepted\",\"apps\":[{"
+        "\"app_id\":\"dev.cardputerzero.alpha\",\"version\":\"1.2.3\"},{"
+        "\"app_id\":\"dev.cardputerzero.beta\",\"version\":\"02.0.0\"}]}}}";
+    static const char extra_batch_item[] =
+        ENVELOPE_START("39")
+        "\"kind\":\"install-batch-accepted\",\"apps\":[{"
+        "\"app_id\":\"dev.cardputerzero.alpha\",\"version\":\"1.2.3\"},{"
+        "\"app_id\":\"dev.cardputerzero.beta\",\"version\":\"2.0.0\"},{"
+        "\"app_id\":\"dev.cardputerzero.gamma\",\"version\":\"3.0.0\"}]}}}";
+    static const char extra_batch_field[] =
+        ENVELOPE_START("40")
+        "\"kind\":\"install-batch-accepted\",\"apps\":[{"
+        "\"app_id\":\"dev.cardputerzero.alpha\",\"version\":\"1.2.3\","
+        "\"extra\":true},{\"app_id\":\"dev.cardputerzero.beta\","
+        "\"version\":\"2.0.0\"}]}}}";
+    assert(cp0_store_test_parse_install_batch_response(
+               reordered_batch, strlen(reordered_batch), 36, batch_ids, 2) ==
+           CP0_STORE_RESULT_ERROR);
+    assert(cp0_store_test_parse_install_batch_response(
+               partial_batch, strlen(partial_batch), 41, batch_ids, 2) ==
+           CP0_STORE_RESULT_ERROR);
+    assert(cp0_store_test_parse_install_batch_response(
+               duplicate_batch, strlen(duplicate_batch), 37, batch_ids, 2) ==
+           CP0_STORE_RESULT_ERROR);
+    assert(cp0_store_test_parse_install_batch_response(
+               invalid_batch_version, strlen(invalid_batch_version), 38,
+               batch_ids, 2) == CP0_STORE_RESULT_ERROR);
+    assert(cp0_store_test_parse_install_batch_response(
+               extra_batch_item, strlen(extra_batch_item), 39, batch_ids, 2) ==
+           CP0_STORE_RESULT_ERROR);
+    assert(cp0_store_test_parse_install_batch_response(
+               extra_batch_field, strlen(extra_batch_field), 40, batch_ids,
+               2) == CP0_STORE_RESULT_ERROR);
+    static const char *const unsorted_batch_ids[] = {
+        "dev.cardputerzero.beta",
+        "dev.cardputerzero.alpha",
+    };
+    assert(cp0_store_test_parse_install_batch_response(
+               install_batch, strlen(install_batch), 35, unsorted_batch_ids,
+               2) == CP0_STORE_RESULT_ERROR);
+    static const char *const oversized_batch_ids[] = {
+        "dev.cardputerzero.batch0", "dev.cardputerzero.batch1",
+        "dev.cardputerzero.batch2", "dev.cardputerzero.batch3",
+        "dev.cardputerzero.batch4", "dev.cardputerzero.batch5",
+        "dev.cardputerzero.batch6", "dev.cardputerzero.batch7",
+        "dev.cardputerzero.batch8",
+    };
+    assert(cp0_store_test_parse_install_batch_response(
+               install_batch, strlen(install_batch), 35, oversized_batch_ids,
+               9) == CP0_STORE_RESULT_ERROR);
 
     static const char paused[] =
         CATALOG_START("28") APP("alpha", "[]", "paused", "42") CATALOG_END;

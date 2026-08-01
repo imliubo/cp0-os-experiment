@@ -159,6 +159,11 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
                              true);
     write_snapshot(directory, "store-search", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    struct cp0_ui_store_catalog_app update_snapshot = store_apps[1];
+    update_snapshot.state = CP0_UI_STORE_AVAILABLE;
+    update_snapshot.progress_percent = 0;
+    update_snapshot.installed_version = "1.0.0";
+    cp0_ui_sync_store_catalog(ui, &update_snapshot, 1, false, false);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     write_snapshot(directory, "store-updates", ui, frame);
 
@@ -693,6 +698,88 @@ int main(int argc, char **argv)
     older_catalog.installed_version = "1.0.0+old-build";
     cp0_ui_sync_store_catalog(&max_query_ui, &older_catalog, 1, false, false);
     assert(max_query_ui.store_apps[0].state == CP0_UI_STORE_INSTALLED);
+
+    struct cp0_ui update_queue_ui;
+    struct cp0_ui_store_catalog_app update_queue[13];
+    char update_ids[13][48];
+    char update_names[13][24];
+    cp0_ui_init(&update_queue_ui);
+    update_queue_ui.screen = CP0_UI_STORE;
+    update_queue_ui.store_section = CP0_UI_STORE_SEARCH;
+    update_queue_ui.store_search_input = false;
+    for (unsigned int index = 0; index < 13; index++) {
+        snprintf(update_ids[index], sizeof(update_ids[index]),
+                 "dev.cardputerzero.batch%02u", index);
+        snprintf(update_names[index], sizeof(update_names[index]),
+                 "Batch Update %02u", index);
+        update_queue[index] = (struct cp0_ui_store_catalog_app){
+            .package_bytes = 4096,
+            .state = CP0_UI_STORE_UPDATE,
+            .app_id = update_ids[index],
+            .name = update_names[index],
+            .version = "2.0.0",
+            .summary = "Bounded update queue candidate",
+            .installed_version = "1.0.0",
+        };
+    }
+    update_queue[1].state = CP0_UI_STORE_DOWNLOADING;
+    update_queue[1].progress_percent = 42;
+    update_queue[2].state = CP0_UI_STORE_PAUSED;
+    update_queue[2].progress_percent = 42;
+    update_queue[3].state = CP0_UI_STORE_INSTALLING;
+    update_queue[4].state = CP0_UI_STORE_FAILED;
+    update_queue[4].failure_reason = CP0_UI_STORE_FAILURE_NETWORK;
+    update_queue[5].state = CP0_UI_STORE_CANCELED;
+    update_queue[6].state = CP0_UI_STORE_QUEUED;
+    cp0_ui_sync_store_catalog(&update_queue_ui, update_queue, 13, false,
+                              false);
+    assert(cp0_ui_handle_action(&update_queue_ui, CP0_UI_RIGHT) ==
+           CP0_UI_EVENT_NONE);
+    assert(update_queue_ui.store_section == CP0_UI_STORE_UPDATES &&
+           update_queue_ui.store_update_all_selected);
+    assert(cp0_ui_handle_action(&update_queue_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_UPDATE_ALL);
+    const char *update_batch[CP0_UI_STORE_UPDATE_BATCH_MAX];
+    size_t update_count = cp0_ui_collect_store_update_batch(
+        &update_queue_ui, update_batch, CP0_UI_STORE_UPDATE_BATCH_MAX);
+    assert(update_count == CP0_UI_STORE_UPDATE_BATCH_MAX);
+    static const unsigned int expected_updates[] = {0, 4, 5, 7, 8, 9, 10, 11};
+    for (size_t index = 0; index < update_count; index++)
+        assert(strcmp(update_batch[index],
+                      update_ids[expected_updates[index]]) == 0);
+
+    cp0_ui_handle_action(&update_queue_ui, CP0_UI_DOWN);
+    assert(!update_queue_ui.store_update_all_selected &&
+           strcmp(cp0_ui_selected_store_app_id(&update_queue_ui),
+                  update_ids[0]) == 0);
+    assert(cp0_ui_handle_action(&update_queue_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_DETAILS);
+    assert(update_queue_ui.store_detail);
+    cp0_ui_handle_action(&update_queue_ui, CP0_UI_BACK);
+    assert(!update_queue_ui.store_detail);
+    cp0_ui_handle_action(&update_queue_ui, CP0_UI_UP);
+    assert(update_queue_ui.store_update_all_selected &&
+           cp0_ui_selected_store_app_id(&update_queue_ui) == NULL);
+
+    cp0_ui_sync_store_catalog(&update_queue_ui, update_queue, 13, false, true);
+    assert(update_queue_ui.store_update_all_selected);
+    assert(cp0_ui_handle_action(&update_queue_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_NONE);
+    assert(cp0_ui_collect_store_update_batch(
+               &update_queue_ui, update_batch,
+               CP0_UI_STORE_UPDATE_BATCH_MAX) == 0);
+    cp0_ui_sync_store_catalog(&update_queue_ui, update_queue, 13, false,
+                              false);
+    for (size_t index = 0; index < update_count; index++)
+        cp0_ui_set_store_app_state(&update_queue_ui, update_batch[index],
+                                   CP0_UI_STORE_QUEUED, 0);
+    assert(update_queue_ui.store_update_all_selected);
+    cp0_ui_set_store_app_state(&update_queue_ui, update_ids[12],
+                               CP0_UI_STORE_QUEUED, 0);
+    assert(!update_queue_ui.store_update_all_selected &&
+           cp0_ui_collect_store_update_batch(
+               &update_queue_ui, update_batch,
+               CP0_UI_STORE_UPDATE_BATCH_MAX) == 0);
 
     cp0_ui_handle_action(&ui, CP0_UI_SHOW_TASKS);
     assert(ui.screen == CP0_UI_TASKS);

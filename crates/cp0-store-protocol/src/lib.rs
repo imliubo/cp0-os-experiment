@@ -25,6 +25,7 @@ pub const MAX_SUMMARY_CHARS: usize = 96;
 pub const MAX_SEARCH_QUERY_CHARS: usize = 32;
 pub const MAX_SEARCH_QUERY_BYTES: usize = 96;
 pub const MAX_SEARCH_PAGE_APPS: u8 = 8;
+pub const MAX_INSTALL_BATCH_APPS: usize = 8;
 pub const MAX_ERROR_MESSAGE_CHARS: usize = 160;
 pub const MAX_CATALOG_LIFETIME_SECONDS: u64 = 31 * 24 * 60 * 60;
 
@@ -135,6 +136,9 @@ pub enum StoreCommand {
     Install {
         app_id: String,
     },
+    InstallBatch {
+        app_ids: Vec<String>,
+    },
     Control {
         app_id: String,
         action: StoreControlAction,
@@ -208,6 +212,9 @@ pub enum StoreResponseData {
         app_id: String,
         version: String,
     },
+    InstallBatchAccepted {
+        apps: Vec<StoreInstallAccepted>,
+    },
     OperationAccepted {
         app_id: String,
         version: String,
@@ -230,6 +237,13 @@ pub enum StoreResponseData {
         version: String,
         media: StoreMediaMetadata,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoreInstallAccepted {
+    pub app_id: String,
+    pub version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -662,6 +676,9 @@ impl StoreRequest {
                     ));
                 }
             }
+            StoreCommand::InstallBatch { app_ids } => {
+                validate_install_batch_ids(app_ids)?;
+            }
             StoreCommand::List | StoreCommand::Refresh => {}
         }
         if let StoreCommand::Media {
@@ -828,6 +845,26 @@ impl StoreResponseData {
                 }
                 Ok(())
             }
+            Self::InstallBatchAccepted { apps } => {
+                if apps.is_empty() || apps.len() > MAX_INSTALL_BATCH_APPS {
+                    return Err(StoreProtocolError::Invalid(
+                        "store install batch response count is outside limits".into(),
+                    ));
+                }
+                let mut previous = None;
+                for app in apps {
+                    if !cp0_manifest::is_valid_app_id(&app.app_id)
+                        || !cp0_manifest::is_valid_app_version(&app.version)
+                        || previous.is_some_and(|value| value >= app.app_id.as_str())
+                    {
+                        return Err(StoreProtocolError::Invalid(
+                            "store install batch response identity is invalid".into(),
+                        ));
+                    }
+                    previous = Some(app.app_id.as_str());
+                }
+                Ok(())
+            }
             Self::AppDetails {
                 app_id,
                 version,
@@ -960,6 +997,26 @@ fn validate_search_page(offset: u16, limit: u8) -> Result<(), StoreProtocolError
         return Err(StoreProtocolError::Invalid(
             "store search page is outside limits".into(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_install_batch_ids(app_ids: &[String]) -> Result<(), StoreProtocolError> {
+    if app_ids.is_empty() || app_ids.len() > MAX_INSTALL_BATCH_APPS {
+        return Err(StoreProtocolError::Invalid(
+            "store install batch count is outside limits".into(),
+        ));
+    }
+    let mut previous = None;
+    for app_id in app_ids {
+        if !cp0_manifest::is_valid_app_id(app_id)
+            || previous.is_some_and(|value| value >= app_id.as_str())
+        {
+            return Err(StoreProtocolError::Invalid(
+                "store install batch IDs are invalid, duplicated or unsorted".into(),
+            ));
+        }
+        previous = Some(app_id.as_str());
     }
     Ok(())
 }
@@ -1805,6 +1862,75 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn validates_bounded_install_batches_and_bound_responses() {
+        let app_ids = vec![
+            "dev.cardputerzero.alpha".into(),
+            "dev.cardputerzero.beta".into(),
+        ];
+        let request = StoreRequest {
+            protocol_version: STORE_PROTOCOL_VERSION,
+            request_id: 48,
+            command: StoreCommand::InstallBatch {
+                app_ids: app_ids.clone(),
+            },
+        };
+        write_request(&mut Vec::new(), &request).unwrap();
+
+        for invalid in [
+            Vec::new(),
+            vec![app_ids[1].clone(), app_ids[0].clone()],
+            vec![app_ids[0].clone(), app_ids[0].clone()],
+            (0..=MAX_INSTALL_BATCH_APPS)
+                .map(|index| format!("dev.cardputerzero.batch{index}"))
+                .collect(),
+        ] {
+            assert!(
+                StoreRequest {
+                    protocol_version: STORE_PROTOCOL_VERSION,
+                    request_id: 49,
+                    command: StoreCommand::InstallBatch { app_ids: invalid },
+                }
+                .validate()
+                .is_err()
+            );
+        }
+
+        let accepted = StoreResponse::success(
+            48,
+            StoreResponseData::InstallBatchAccepted {
+                apps: vec![
+                    StoreInstallAccepted {
+                        app_id: app_ids[0].clone(),
+                        version: "1.0.0".into(),
+                    },
+                    StoreInstallAccepted {
+                        app_id: app_ids[1].clone(),
+                        version: "2.0.0".into(),
+                    },
+                ],
+            },
+        );
+        write_response(&mut Vec::new(), &accepted).unwrap();
+
+        let invalid_response = StoreResponse::success(
+            48,
+            StoreResponseData::InstallBatchAccepted {
+                apps: vec![
+                    StoreInstallAccepted {
+                        app_id: app_ids[1].clone(),
+                        version: "2.0.0".into(),
+                    },
+                    StoreInstallAccepted {
+                        app_id: app_ids[0].clone(),
+                        version: "1.0.0".into(),
+                    },
+                ],
+            },
+        );
+        assert!(invalid_response.validate().is_err());
     }
 
     #[test]

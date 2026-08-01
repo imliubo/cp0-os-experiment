@@ -100,6 +100,16 @@ fn response_matches(command: &StoreCommand, data: &StoreResponseData) -> bool {
             },
             StoreResponseData::OperationAccepted { app_id, action, .. },
         ) => requested_app == app_id && requested_action == action,
+        (
+            StoreCommand::InstallBatch { app_ids },
+            StoreResponseData::InstallBatchAccepted { apps },
+        ) => {
+            app_ids.len() == apps.len()
+                && app_ids
+                    .iter()
+                    .zip(apps)
+                    .all(|(requested, accepted)| requested == &accepted.app_id)
+        }
         _ => false,
     }
 }
@@ -169,6 +179,27 @@ mod tests {
         assert!(
             exchange_stream(stream, StoreCommand::Install { app_id: requested }, TIMEOUT).is_err()
         );
+        worker.join().unwrap();
+
+        let requested = StoreCommand::InstallBatch {
+            app_ids: vec![
+                "dev.cardputerzero.alpha".into(),
+                "dev.cardputerzero.beta".into(),
+            ],
+        };
+        let (stream, worker) = serve_once(
+            requested.clone(),
+            StoreResponse::success(
+                REQUEST_ID,
+                StoreResponseData::InstallBatchAccepted {
+                    apps: vec![cp0_store_protocol::StoreInstallAccepted {
+                        app_id: "dev.cardputerzero.alpha".into(),
+                        version: "1.0.0".into(),
+                    }],
+                },
+            ),
+        );
+        assert!(exchange_stream(stream, requested, TIMEOUT).is_err());
         worker.join().unwrap();
 
         let requested = StoreCommand::Control {

@@ -20,12 +20,12 @@ use cp0_appd::{
 use cp0_networkd::PublicResolver;
 use cp0_store_metadata::validate_png_structure;
 use cp0_store_protocol::{
-    CatalogApp, CatalogImageResource, CatalogObjectResource, SignedCatalog, StoreAppDetails,
-    StoreAppState, StoreAppSummary, StoreCommand, StoreControlAction, StoreErrorCode,
-    StoreFailureReason, StoreMediaMetadata, StoreMediaSelector, StoreRequest, StoreResponse,
-    StoreResponseData, decode_app_details, decode_signed_catalog, is_lower_hex, is_valid_https_url,
-    read_request, response_requires_descriptor, send_response_with_fd, verify_catalog,
-    write_response,
+    CatalogApp, CatalogImageResource, CatalogObjectResource, MAX_INSTALL_BATCH_APPS, SignedCatalog,
+    StoreAppDetails, StoreAppState, StoreAppSummary, StoreCommand, StoreControlAction,
+    StoreErrorCode, StoreFailureReason, StoreInstallAccepted, StoreMediaMetadata,
+    StoreMediaSelector, StoreRequest, StoreResponse, StoreResponseData, decode_app_details,
+    decode_signed_catalog, is_lower_hex, is_valid_https_url, read_request,
+    response_requires_descriptor, send_response_with_fd, verify_catalog, write_response,
 };
 use sha2::{Digest, Sha256};
 use ureq::config::Config;
@@ -654,6 +654,9 @@ impl StoreService {
             StoreCommand::Install { app_id } => self
                 .start_install(&app_id)
                 .map(|version| StoreResponseData::InstallAccepted { app_id, version }),
+            StoreCommand::InstallBatch { app_ids } => self
+                .start_install_batch(&app_ids)
+                .map(|apps| StoreResponseData::InstallBatchAccepted { apps }),
             StoreCommand::Control { app_id, action } => self
                 .control_operation(&app_id, action)
                 .map(|version| StoreResponseData::OperationAccepted {
@@ -869,15 +872,30 @@ impl StoreService {
     }
 
     fn start_install(self: &Arc<Self>, app_id: &str) -> Result<String, StoreServiceError> {
-        self.start_install_mode(app_id, false)
+        let app_ids = [app_id.to_owned()];
+        let accepted = self.start_install_batch(&app_ids)?;
+        Ok(accepted
+            .into_iter()
+            .next()
+            .expect("single install batch returned no identity")
+            .version)
     }
 
-    fn start_install_mode(
+    fn start_install_batch(
         self: &Arc<Self>,
-        app_id: &str,
-        resume: bool,
-    ) -> Result<String, StoreServiceError> {
-        let app = {
+        app_ids: &[String],
+    ) -> Result<Vec<StoreInstallAccepted>, StoreServiceError> {
+        if app_ids.is_empty()
+            || app_ids.len() > MAX_INSTALL_BATCH_APPS
+            || app_ids
+                .windows(2)
+                .any(|pair| pair[0].as_str() >= pair[1].as_str())
+        {
+            return Err(StoreServiceError::Invalid(
+                "install batch IDs are invalid, duplicated or unsorted".into(),
+            ));
+        }
+        let apps = {
             let mut state = self
                 .state
                 .lock()
@@ -895,6 +913,73 @@ impl StoreService {
                     "catalog has expired; refresh before installing".into(),
                 ));
             }
+            let mut apps = Vec::with_capacity(app_ids.len());
+            for app_id in app_ids {
+                let app = catalog
+                    .catalog
+                    .apps
+                    .iter()
+                    .find(|app| app.app_id == *app_id)
+                    .cloned()
+                    .ok_or(StoreServiceError::NotFound)?;
+                if state.operations.get(app_id).is_some_and(|operation| {
+                    matches!(
+                        operation.state,
+                        StoreAppState::Queued
+                            | StoreAppState::Downloading
+                            | StoreAppState::Paused
+                            | StoreAppState::Installing
+                    )
+                }) {
+                    return Err(StoreServiceError::InvalidState);
+                }
+                apps.push(app);
+            }
+            state.active_job = true;
+            for app in &apps {
+                state.operations.insert(
+                    app.app_id.clone(),
+                    OperationState {
+                        version: app.version.clone(),
+                        package_sha256: app.package_sha256.clone(),
+                        state: StoreAppState::Queued,
+                        progress_percent: 0,
+                        failure_reason: None,
+                        control: DownloadControl::Continue,
+                    },
+                );
+            }
+            apps
+        };
+        let accepted = apps
+            .iter()
+            .map(|app| StoreInstallAccepted {
+                app_id: app.app_id.clone(),
+                version: app.version.clone(),
+            })
+            .collect();
+        self.spawn_install_worker(apps)?;
+        Ok(accepted)
+    }
+
+    fn resume_install(self: &Arc<Self>, app_id: &str) -> Result<String, StoreServiceError> {
+        let app = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+            if state.active_job {
+                return Err(StoreServiceError::Busy);
+            }
+            let catalog = state
+                .catalog
+                .as_ref()
+                .ok_or(StoreServiceError::Unconfigured)?;
+            if unix_time() >= catalog.catalog.expires_unix_seconds {
+                return Err(StoreServiceError::Untrusted(
+                    "catalog has expired; refresh before installing".into(),
+                ));
+            }
             let app = catalog
                 .catalog
                 .apps
@@ -902,26 +987,14 @@ impl StoreService {
                 .find(|app| app.app_id == app_id)
                 .cloned()
                 .ok_or(StoreServiceError::NotFound)?;
-            if resume {
-                let operation = state
-                    .operations
-                    .get(app_id)
-                    .ok_or(StoreServiceError::InvalidState)?;
-                if operation.state != StoreAppState::Paused
-                    || operation.version != app.version
-                    || operation.package_sha256 != app.package_sha256
-                {
-                    return Err(StoreServiceError::InvalidState);
-                }
-            } else if state.operations.get(app_id).is_some_and(|operation| {
-                matches!(
-                    operation.state,
-                    StoreAppState::Queued
-                        | StoreAppState::Downloading
-                        | StoreAppState::Paused
-                        | StoreAppState::Installing
-                )
-            }) {
+            let operation = state
+                .operations
+                .get(app_id)
+                .ok_or(StoreServiceError::InvalidState)?;
+            if operation.state != StoreAppState::Paused
+                || operation.version != app.version
+                || operation.package_sha256 != app.package_sha256
+            {
                 return Err(StoreServiceError::InvalidState);
             }
             state.active_job = true;
@@ -939,37 +1012,58 @@ impl StoreService {
             app
         };
         let version = app.version.clone();
-        let app_id = app.app_id.clone();
-        let package_sha256 = app.package_sha256.clone();
+        self.spawn_install_worker(vec![app])?;
+        Ok(version)
+    }
+
+    fn spawn_install_worker(
+        self: &Arc<Self>,
+        apps: Vec<CatalogApp>,
+    ) -> Result<(), StoreServiceError> {
+        let identities = apps
+            .iter()
+            .map(|app| {
+                (
+                    app.app_id.clone(),
+                    app.version.clone(),
+                    app.package_sha256.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
         let service = Arc::clone(self);
         thread::Builder::new()
             .name("cp0-store-install".into())
             .spawn(move || {
-                let result = service.install_now(&app);
-                if let Err(failure) = &result {
-                    eprintln!(
-                        "cp0-stored: {} installation failed: {}",
-                        app.app_id, failure.source
-                    );
+                for app in apps {
+                    let result = service.install_now(&app);
+                    if let Err(failure) = &result {
+                        eprintln!(
+                            "cp0-stored: {} installation failed: {}",
+                            app.app_id, failure.source
+                        );
+                    }
+                    service.finish_install_operation(&app, result);
                 }
-                service.finish_install_operation(&app, result);
+                service.release_job();
             })
             .map_err(|error| {
                 if let Ok(mut state) = self.state.lock() {
                     state.active_job = false;
-                    if let Some(operation) = state.operations.get_mut(&app_id) {
-                        if operation.version == version
-                            && operation.package_sha256 == package_sha256
-                        {
-                            operation.state = StoreAppState::Failed;
-                            operation.progress_percent = 0;
-                            operation.failure_reason = Some(StoreFailureReason::Internal);
+                    for (app_id, version, package_sha256) in &identities {
+                        if let Some(operation) = state.operations.get_mut(app_id) {
+                            if operation.version == *version
+                                && operation.package_sha256 == *package_sha256
+                            {
+                                operation.state = StoreAppState::Failed;
+                                operation.progress_percent = 0;
+                                operation.failure_reason = Some(StoreFailureReason::Internal);
+                            }
                         }
                     }
                 }
                 StoreServiceError::Io(error)
             })?;
-        Ok(version)
+        Ok(())
     }
 
     fn control_operation(
@@ -978,7 +1072,7 @@ impl StoreService {
         action: StoreControlAction,
     ) -> Result<String, StoreServiceError> {
         if action == StoreControlAction::Resume {
-            return self.start_install_mode(app_id, true);
+            return self.resume_install(app_id);
         }
         let mut deferred_cancel = None;
         let version = {
@@ -1279,7 +1373,6 @@ impl StoreService {
         result: Result<InstallOutcome, InstallFailure>,
     ) {
         if let Ok(mut state) = self.state.lock() {
-            state.active_job = false;
             let Some(operation) = state.operations.get_mut(&app.app_id) else {
                 return;
             };
@@ -2301,6 +2394,89 @@ mod tests {
     }
 
     #[derive(Debug)]
+    struct BatchNetwork {
+        packages: BTreeMap<String, Vec<u8>>,
+        first_download: AtomicBool,
+        first_chunk_ready: Barrier,
+        continue_first_download: Barrier,
+    }
+
+    impl BatchNetwork {
+        fn new(packages: BTreeMap<String, Vec<u8>>) -> Self {
+            Self {
+                packages,
+                first_download: AtomicBool::new(true),
+                first_chunk_ready: Barrier::new(2),
+                continue_first_download: Barrier::new(2),
+            }
+        }
+    }
+
+    impl StoreNetwork for BatchNetwork {
+        fn fetch_catalog(&self, _url: &str) -> Result<Vec<u8>, StoreServiceError> {
+            Err(StoreServiceError::Unavailable(
+                "mock refresh is unavailable",
+            ))
+        }
+
+        fn download_package(
+            &self,
+            url: &str,
+            destination: &Path,
+            expected_bytes: u64,
+            control: &mut dyn FnMut(u8) -> DownloadControl,
+        ) -> Result<DownloadOutcome, StoreServiceError> {
+            let package = self
+                .packages
+                .get(url)
+                .ok_or(StoreServiceError::Unavailable(
+                    "mock package is unavailable",
+                ))?;
+            assert_eq!(package.len() as u64, expected_bytes);
+            let mut file = open_resume_file(destination)?;
+            let offset = file.metadata()?.len() as usize;
+            let initial_progress = ((offset as u64 * 100) / expected_bytes) as u8;
+            match control(initial_progress) {
+                DownloadControl::Pause => {
+                    return Ok(DownloadOutcome::Paused {
+                        progress_percent: initial_progress,
+                    });
+                }
+                DownloadControl::Cancel => return Ok(DownloadOutcome::Canceled),
+                DownloadControl::Continue => {}
+            }
+            file.seek(SeekFrom::End(0))?;
+            if offset == 0 && self.first_download.swap(false, Ordering::SeqCst) {
+                let split = package.len() / 2;
+                file.write_all(&package[..split])?;
+                file.sync_all()?;
+                self.first_chunk_ready.wait();
+                self.continue_first_download.wait();
+                match control(((split as u64 * 100) / expected_bytes) as u8) {
+                    DownloadControl::Pause => {
+                        return Ok(DownloadOutcome::Paused {
+                            progress_percent: ((split as u64 * 100) / expected_bytes) as u8,
+                        });
+                    }
+                    DownloadControl::Cancel => return Ok(DownloadOutcome::Canceled),
+                    DownloadControl::Continue => {}
+                }
+                file.write_all(&package[split..])?;
+            } else {
+                file.write_all(&package[offset..])?;
+            }
+            file.sync_all()?;
+            Ok(match control(100) {
+                DownloadControl::Continue => DownloadOutcome::Complete,
+                DownloadControl::Pause => DownloadOutcome::Paused {
+                    progress_percent: 100,
+                },
+                DownloadControl::Cancel => DownloadOutcome::Canceled,
+            })
+        }
+    }
+
+    #[derive(Debug)]
     struct FailingNetwork;
 
     impl StoreNetwork for FailingNetwork {
@@ -2449,6 +2625,7 @@ mod tests {
         let result = service.install_now(app);
         assert!(matches!(&result, Ok(InstallOutcome::Installed)));
         service.finish_install_operation(app, result);
+        service.release_job();
     }
 
     fn wait_for_store_state(service: &StoreService, expected: StoreAppState) -> StoreAppSummary {
@@ -2461,6 +2638,25 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         panic!("store operation did not reach {expected:?}");
+    }
+
+    fn wait_for_app_state(
+        service: &StoreService,
+        app_id: &str,
+        expected: StoreAppState,
+    ) -> StoreAppSummary {
+        for _ in 0..2_000 {
+            if let StoreResponseData::Catalog { apps, .. } = service.catalog_response().unwrap() {
+                if let Some(app) = apps
+                    .into_iter()
+                    .find(|app| app.app_id == app_id && app.state == expected)
+                {
+                    return app;
+                }
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        panic!("{app_id} did not reach {expected:?}");
     }
 
     struct Fixture {
@@ -3114,6 +3310,114 @@ mod tests {
         service.start_install(&app.app_id).unwrap();
         wait_for_store_state(&service, StoreAppState::Installed);
         assert_eq!(installer.installed.lock().unwrap().as_slice(), [app.app_id]);
+    }
+
+    #[test]
+    fn install_batch_is_atomic_bounded_and_continues_after_item_control() {
+        let fixture = Fixture::new("install-batch");
+        let definitions = [
+            ("dev.cardputerzero.alpha", b"alpha package".to_vec()),
+            ("dev.cardputerzero.beta", b"beta package bytes".to_vec()),
+            ("dev.cardputerzero.gamma", b"gamma package payload".to_vec()),
+        ];
+        let mut apps = Vec::new();
+        let mut packages = BTreeMap::new();
+        for (app_id, package) in definitions {
+            let mut app = fixture.catalog_app(app_id, app_id, "Batch update fixture");
+            app.package_url = format!(
+                "https://store.example.com/{}.capp",
+                app_id.rsplit('.').next().unwrap()
+            );
+            app.package_sha256 = cp0_store_protocol::lower_hex(&Sha256::digest(&package));
+            app.package_bytes = package.len() as u64;
+            packages.insert(app.package_url.clone(), package);
+            apps.push(app);
+        }
+        let catalog = fixture.signed_catalog_with_apps(1, unix_time() + 3600, apps.clone());
+        fs::write(&fixture.paths.catalog_cache, catalog).unwrap();
+        let network = Arc::new(BatchNetwork::new(packages.clone()));
+        let installer = Arc::new(MockInstaller::default());
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: Some("https://store.example.com/catalog.json".into()),
+            },
+            network.clone(),
+            installer.clone(),
+            [0],
+        )
+        .unwrap();
+        let app_ids = apps
+            .iter()
+            .map(|app| app.app_id.clone())
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            service.start_install_batch(&[app_ids[0].clone(), "dev.cardputerzero.missing".into()]),
+            Err(StoreServiceError::NotFound)
+        ));
+        {
+            let state = service.state.lock().unwrap();
+            assert!(!state.active_job && state.operations.is_empty());
+        }
+
+        let accepted = service.start_install_batch(&app_ids).unwrap();
+        assert_eq!(
+            accepted
+                .iter()
+                .map(|app| app.app_id.as_str())
+                .collect::<Vec<_>>(),
+            app_ids.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        network.first_chunk_ready.wait();
+        assert!(matches!(
+            service.start_refresh(),
+            Err(StoreServiceError::Busy)
+        ));
+        assert_eq!(
+            wait_for_app_state(&service, &app_ids[0], StoreAppState::Downloading).state,
+            StoreAppState::Downloading
+        );
+        assert_eq!(
+            wait_for_app_state(&service, &app_ids[1], StoreAppState::Queued).state,
+            StoreAppState::Queued
+        );
+        service
+            .control_operation(&app_ids[0], StoreControlAction::Pause)
+            .unwrap();
+        service
+            .control_operation(&app_ids[1], StoreControlAction::Cancel)
+            .unwrap();
+        network.continue_first_download.wait();
+
+        wait_for_app_state(&service, &app_ids[0], StoreAppState::Paused);
+        wait_for_app_state(&service, &app_ids[1], StoreAppState::Canceled);
+        wait_for_app_state(&service, &app_ids[2], StoreAppState::Installed);
+        let package_path = |app: &CatalogApp| {
+            fixture
+                .paths
+                .cache_root
+                .join("packages")
+                .join(format!("{}.part", app.package_sha256))
+        };
+        assert_eq!(
+            fs::metadata(package_path(&apps[0])).unwrap().len(),
+            (packages[&apps[0].package_url].len() / 2) as u64
+        );
+        assert!(!package_path(&apps[1]).exists());
+        assert_eq!(
+            installer.installed.lock().unwrap().as_slice(),
+            [app_ids[2].clone()]
+        );
+
+        service
+            .control_operation(&app_ids[0], StoreControlAction::Resume)
+            .unwrap();
+        wait_for_app_state(&service, &app_ids[0], StoreAppState::Installed);
+        assert_eq!(
+            installer.installed.lock().unwrap().as_slice(),
+            [app_ids[2].clone(), app_ids[0].clone()]
+        );
     }
 
     #[test]

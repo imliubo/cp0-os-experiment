@@ -12,6 +12,7 @@
 #define CP0_STORE_SUMMARY_BYTES 385
 #define CP0_STORE_SEARCH_QUERY_BYTES 97
 #define CP0_STORE_SEARCH_MAX_APPS 8
+#define CP0_STORE_INSTALL_BATCH_MAX 8
 #define CP0_STORE_DEVELOPER_BYTES 321
 #define CP0_STORE_URL_BYTES 2049
 #define CP0_STORE_DESCRIPTION_BYTES 4097
@@ -144,6 +145,7 @@ int cp0_store_search(const char *query, uint16_t offset, uint8_t limit,
                      struct cp0_store_search_results *results);
 int cp0_store_refresh(void);
 int cp0_store_install(const char *app_id);
+int cp0_store_install_batch(const char *const app_ids[], size_t app_count);
 int cp0_store_control(const char *app_id,
                       enum cp0_store_control_action action);
 int cp0_store_get_details(const char *app_id, const char *expected_version,
