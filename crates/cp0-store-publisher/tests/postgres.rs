@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use cp0_manifest::{AppManifest, DisplayMode, ResourceLimits, Runtime};
 use cp0_package::{CApp, PackageEntry};
 use cp0_store_metadata::{AgeRating, ImageAsset, LocalizedListing, StoreCategory, StoreListing};
-use cp0_store_protocol::{decode_signed_catalog, verify_catalog};
+use cp0_store_protocol::{RICH_CATALOG_SCHEMA_VERSION, decode_signed_catalog, verify_catalog};
 use cp0_store_publisher::{RunOutcome, StorePublisher, connect, migrate};
 use cp0_store_scan::submission_content_sha256;
 use cp0_store_transparency::{decode_checkpoint, decode_leaf, leaf_hash, lower_hex, verify_log};
@@ -333,11 +333,20 @@ async fn verify_snapshot(
     );
     let signed = decode_signed_catalog(&encoded).unwrap();
     verify_catalog(&signed, public_key).unwrap();
+    assert_eq!(signed.catalog.schema_version, RICH_CATALOG_SCHEMA_VERSION);
     assert_eq!(signed.catalog.sequence, sequence as u64);
     assert_eq!(signed.catalog.apps.len(), expected_apps);
     if expected_apps == 1 {
         let app = &signed.catalog.apps[0];
         assert_eq!(app.version, expected_version);
+        let discovery = app.discovery.as_ref().unwrap();
+        assert_eq!(discovery.developer, "Publisher Team");
+        assert_eq!(discovery.subtitle, "A deterministic Publisher fixture");
+        assert_eq!(discovery.category, StoreCategory::Utilities);
+        assert_eq!(discovery.keywords, ["publisher"]);
+        assert_eq!(discovery.age_rating, AgeRating::FourPlus);
+        assert_eq!(discovery.privacy_url, "https://example.com/privacy");
+        assert_eq!(discovery.support_url, "https://example.com/support");
         let relative = app
             .package_url
             .strip_prefix("https://store.example.invalid/")

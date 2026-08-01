@@ -3,11 +3,13 @@ use std::fmt;
 use std::io::{self, BufRead, Write};
 
 use cp0_manifest::Permission;
+use cp0_store_metadata::{AgeRating, StoreCategory};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 pub const STORE_PROTOCOL_VERSION: u32 = 1;
 pub const CATALOG_SCHEMA_VERSION: u32 = 1;
+pub const RICH_CATALOG_SCHEMA_VERSION: u32 = 2;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_CATALOG_BYTES: usize = 48 * 1024;
 pub const MAX_CATALOG_APPS: usize = 64;
@@ -44,6 +46,20 @@ pub struct CatalogApp {
     pub package_sha256: String,
     pub package_bytes: u64,
     pub permissions: Vec<Permission>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery: Option<CatalogDiscovery>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogDiscovery {
+    pub developer: String,
+    pub subtitle: String,
+    pub category: StoreCategory,
+    pub keywords: Vec<String>,
+    pub age_rating: AgeRating,
+    pub privacy_url: String,
+    pub support_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,9 +219,12 @@ impl From<serde_json::Error> for StoreProtocolError {
 
 impl Catalog {
     pub fn validate(&self) -> Result<(), StoreProtocolError> {
-        if self.schema_version != CATALOG_SCHEMA_VERSION {
+        if !matches!(
+            self.schema_version,
+            CATALOG_SCHEMA_VERSION | RICH_CATALOG_SCHEMA_VERSION
+        ) {
             return Err(StoreProtocolError::Invalid(format!(
-                "catalog schema must be {CATALOG_SCHEMA_VERSION}"
+                "catalog schema must be {CATALOG_SCHEMA_VERSION} or {RICH_CATALOG_SCHEMA_VERSION}"
             )));
         }
         if self.sequence == 0 {
@@ -231,6 +250,20 @@ impl Catalog {
         let mut ids = BTreeSet::new();
         for app in &self.apps {
             app.validate()?;
+            match (self.schema_version, app.discovery.is_some()) {
+                (CATALOG_SCHEMA_VERSION, false) | (RICH_CATALOG_SCHEMA_VERSION, true) => {}
+                (CATALOG_SCHEMA_VERSION, true) => {
+                    return Err(StoreProtocolError::Invalid(
+                        "Catalog v1 application contains v2 discovery metadata".into(),
+                    ));
+                }
+                (RICH_CATALOG_SCHEMA_VERSION, false) => {
+                    return Err(StoreProtocolError::Invalid(
+                        "Catalog v2 application is missing discovery metadata".into(),
+                    ));
+                }
+                _ => unreachable!("catalog schema was validated above"),
+            }
             if !ids.insert(app.app_id.as_str()) {
                 return Err(StoreProtocolError::Invalid(
                     "catalog contains a duplicate application ID".into(),
@@ -300,6 +333,54 @@ impl CatalogApp {
                 ));
             }
             previous = Some(name);
+        }
+        if let Some(discovery) = &self.discovery {
+            discovery.validate(&self.summary)?;
+        }
+        Ok(())
+    }
+}
+
+impl CatalogDiscovery {
+    fn validate(&self, summary: &str) -> Result<(), StoreProtocolError> {
+        let developer_chars = self.developer.chars().count();
+        if !(1..=80).contains(&developer_chars) || has_unsafe_text(&self.developer) {
+            return Err(StoreProtocolError::Invalid(
+                "catalog developer name is invalid".into(),
+            ));
+        }
+        let subtitle_chars = self.subtitle.chars().count();
+        if !(1..=48).contains(&subtitle_chars)
+            || has_unsafe_text(&self.subtitle)
+            || self.subtitle != summary
+        {
+            return Err(StoreProtocolError::Invalid(
+                "catalog subtitle is invalid or differs from the summary".into(),
+            ));
+        }
+        if self.keywords.len() > cp0_store_metadata::MAX_KEYWORDS {
+            return Err(StoreProtocolError::Invalid(
+                "catalog keyword count is outside limits".into(),
+            ));
+        }
+        let mut previous_keyword: Option<&str> = None;
+        for keyword in &self.keywords {
+            let chars = keyword.chars().count();
+            if !(1..=24).contains(&chars)
+                || keyword.len() > 48
+                || has_unsafe_text(keyword)
+                || previous_keyword.is_some_and(|previous| previous >= keyword.as_str())
+            {
+                return Err(StoreProtocolError::Invalid(
+                    "catalog keywords are invalid, duplicated or unsorted".into(),
+                ));
+            }
+            previous_keyword = Some(keyword);
+        }
+        if !is_valid_https_url(&self.privacy_url) || !is_valid_https_url(&self.support_url) {
+            return Err(StoreProtocolError::Invalid(
+                "catalog privacy and support URLs must be bounded HTTPS URLs".into(),
+            ));
         }
         Ok(())
     }
@@ -775,8 +856,24 @@ mod tests {
                 package_sha256: "11".repeat(32),
                 package_bytes: 4096,
                 permissions: vec![Permission::NetworkClient, Permission::NotificationsPost],
+                discovery: None,
             }],
         }
+    }
+
+    fn rich_catalog() -> Catalog {
+        let mut catalog = catalog();
+        catalog.schema_version = RICH_CATALOG_SCHEMA_VERSION;
+        catalog.apps[0].discovery = Some(CatalogDiscovery {
+            developer: "CardputerZero Labs".into(),
+            subtitle: catalog.apps[0].summary.clone(),
+            category: StoreCategory::Utilities,
+            keywords: vec!["example".into(), "utility".into()],
+            age_rating: AgeRating::FourPlus,
+            privacy_url: "https://example.com/privacy".into(),
+            support_url: "https://example.com/support".into(),
+        });
+        catalog
     }
 
     fn response_app() -> StoreAppSummary {
@@ -825,6 +922,32 @@ mod tests {
         let mut invalid = catalog();
         invalid.apps[0].summary = "unsafe\nsummary".into();
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn validates_strict_rich_discovery_catalogs_without_weakening_v1() {
+        rich_catalog().validate().unwrap();
+
+        let mut missing = rich_catalog();
+        missing.apps[0].discovery = None;
+        assert!(missing.validate().is_err());
+
+        let mut legacy_with_rich_fields = rich_catalog();
+        legacy_with_rich_fields.schema_version = CATALOG_SCHEMA_VERSION;
+        assert!(legacy_with_rich_fields.validate().is_err());
+
+        let mut noncanonical = rich_catalog();
+        noncanonical.apps[0]
+            .discovery
+            .as_mut()
+            .unwrap()
+            .keywords
+            .reverse();
+        assert!(noncanonical.validate().is_err());
+
+        let mut mismatched = rich_catalog();
+        mismatched.apps[0].summary = "A different summary".into();
+        assert!(mismatched.validate().is_err());
     }
 
     #[test]

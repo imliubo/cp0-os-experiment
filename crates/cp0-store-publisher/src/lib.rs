@@ -10,8 +10,9 @@ use cp0_manifest::AppManifest;
 use cp0_package::CApp;
 use cp0_store_metadata::{ImageAsset, StoreListing};
 use cp0_store_protocol::{
-    CATALOG_SCHEMA_VERSION, Catalog, CatalogApp, MAX_CATALOG_APPS, MAX_CATALOG_LIFETIME_SECONDS,
-    encode_signed_catalog, is_valid_https_url, lower_hex, sign_catalog,
+    CATALOG_SCHEMA_VERSION, Catalog, CatalogApp, CatalogDiscovery, MAX_CATALOG_APPS,
+    MAX_CATALOG_LIFETIME_SECONDS, RICH_CATALOG_SCHEMA_VERSION, encode_signed_catalog,
+    is_valid_https_url, lower_hex, sign_catalog,
 };
 use cp0_store_transparency::{
     Checkpoint, TRANSPARENCY_SCHEMA_VERSION, TransparencyLeaf, decode_checkpoint, decode_leaf,
@@ -664,7 +665,7 @@ impl StorePublisher {
                 },
             );
         }
-        let apps = projected
+        let mut apps = projected
             .into_values()
             .filter(|projection| projection.state == "published")
             .map(|projection| {
@@ -677,8 +678,9 @@ impl StorePublisher {
                 "Catalog application bound was exceeded",
             ));
         }
+        let schema_version = catalog_schema_for_projection(&mut apps);
         let catalog = Catalog {
-            schema_version: CATALOG_SCHEMA_VERSION,
+            schema_version,
             sequence: job.catalog_sequence,
             published_unix_seconds: job.published_unix_seconds,
             expires_unix_seconds: job.expires_unix_seconds,
@@ -779,13 +781,14 @@ impl StorePublisher {
              release.resource_version, submission.state AS submission_state, \
              submission.package_sha256, submission.package_bytes, submission.listing_sha256, \
              submission.listing_bytes, submission.assets, submission.finalized_content_sha256, \
-             app.owner_team_id, app.default_locale, \
+             app.owner_team_id, app.default_locale, team.name AS developer_name, \
              EXISTS (SELECT 1 FROM review_decisions decision \
                      WHERE decision.submission_id = submission.submission_id \
                        AND decision.decision = 'approved') AS approved_decision \
              FROM releases release \
              JOIN submissions submission ON submission.submission_id = release.submission_id \
              JOIN apps app ON app.app_id = release.app_id \
+             JOIN teams team ON team.team_id = app.owner_team_id \
              WHERE release.release_id = $1",
         )
         .bind(&job.release_id)
@@ -824,6 +827,7 @@ impl StorePublisher {
                 ))?,
             owner_team_id: row.get("owner_team_id"),
             default_locale: row.get("default_locale"),
+            developer_name: row.get("developer_name"),
         }))
     }
 
@@ -939,6 +943,15 @@ impl StorePublisher {
             package_sha256: package_sha256.clone(),
             package_bytes: encoded.len() as u64,
             permissions,
+            discovery: Some(CatalogDiscovery {
+                developer: release.developer_name.clone(),
+                subtitle: localized.subtitle.clone(),
+                category: listing.category,
+                keywords: localized.keywords.clone(),
+                age_rating: listing.age_rating,
+                privacy_url: listing.privacy_url.clone(),
+                support_url: listing.support_url.clone(),
+            }),
         };
         app.validate()?;
         Ok(PreparedPackage {
@@ -1326,6 +1339,17 @@ impl StorePublisher {
     }
 }
 
+fn catalog_schema_for_projection(apps: &mut [CatalogApp]) -> u32 {
+    if apps.iter().all(|app| app.discovery.is_some()) {
+        RICH_CATALOG_SCHEMA_VERSION
+    } else {
+        for app in apps {
+            app.discovery = None;
+        }
+        CATALOG_SCHEMA_VERSION
+    }
+}
+
 #[derive(Clone)]
 struct ObjectReader {
     chunks: Arc<PathBuf>,
@@ -1591,6 +1615,7 @@ struct ReleaseSource {
     finalized_content_sha256: String,
     owner_team_id: String,
     default_locale: String,
+    developer_name: String,
 }
 
 struct PublicationJob {
@@ -2245,6 +2270,31 @@ fn sha256_hex(value: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cp0_store_metadata::{AgeRating, StoreCategory};
+
+    fn projected_app(discovery: bool) -> CatalogApp {
+        let summary = "A migration-safe discovery fixture".to_owned();
+        CatalogApp {
+            app_id: "dev.cardputerzero.publisher".into(),
+            name: "Publisher".into(),
+            version: "1.0.0".into(),
+            sdk_version: "1.0".into(),
+            summary: summary.clone(),
+            package_url: "https://store.example.com/publisher.capp".into(),
+            package_sha256: "11".repeat(32),
+            package_bytes: 4096,
+            permissions: Vec::new(),
+            discovery: discovery.then_some(CatalogDiscovery {
+                developer: "CardputerZero Labs".into(),
+                subtitle: summary,
+                category: StoreCategory::Utilities,
+                keywords: vec!["publisher".into()],
+                age_rating: AgeRating::FourPlus,
+                privacy_url: "https://example.com/privacy".into(),
+                support_url: "https://example.com/support".into(),
+            }),
+        }
+    }
 
     #[test]
     fn publication_paths_are_stable() {
@@ -2253,6 +2303,23 @@ mod tests {
             package_relative_path(42, "rel_11111111111111111111111111111111"),
             "generations/42/packages/rel_11111111111111111111111111111111.capp"
         );
+    }
+
+    #[test]
+    fn mixed_legacy_projection_stays_pure_v1_until_every_artifact_is_rich() {
+        let mut rich = vec![projected_app(true)];
+        assert_eq!(
+            catalog_schema_for_projection(&mut rich),
+            RICH_CATALOG_SCHEMA_VERSION
+        );
+        assert!(rich[0].discovery.is_some());
+
+        let mut mixed = vec![projected_app(true), projected_app(false)];
+        assert_eq!(
+            catalog_schema_for_projection(&mut mixed),
+            CATALOG_SCHEMA_VERSION
+        );
+        assert!(mixed.iter().all(|app| app.discovery.is_none()));
     }
 
     #[test]

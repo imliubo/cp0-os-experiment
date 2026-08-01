@@ -104,6 +104,10 @@ S5M 已新增独立 Review Console：primary/secondary/我的活动 assignment �
 S5N 已新增版本化审核风险策略：隔离 Scanner 根据真实 SDK 权限确定 standard/elevated/high，
 append-only assessment 绑定 scan/report SHA-256，PostgreSQL 触发器重算并拒绝伪造、乱序、修改和
 删除；Review Queue/OpenAPI/Console 使用同一结果。生产 workforce SSO/BFF 仍待实现。
+S6A 已新增向后兼容的 Discovery Catalog v2：生产 Publisher 从审核绑定的 Listing 和 App 所属
+Team 的权威显示名生成
+developer、subtitle、category、keywords、age/privacy 元数据，v1/v2 严格分流；`cp0-stored`
+在签名 Catalog 上增加开发者、分类和关键词本地搜索。富媒体资源缓存和小屏展示仍待实现。
 
 - [ ] 实现 Identity/Teams、App Registry、Submission 和 Release 服务。
   当前 App Registry、Submission 上传/finalize/read/withdraw、独立双审 Review 和 Release 控制
@@ -125,7 +129,9 @@ append-only assessment 绑定 scan/report SHA-256，PostgreSQL 触发器重算�
 
 ## S6：富媒体 Discovery Catalog
 
-- [ ] Catalog v2 增加 developer、subtitle、category、keywords、age/privacy 元数据。
+- [x] Catalog v2 增加 developer、subtitle、category、keywords、age/privacy 元数据。
+  S6A 的生产 Publisher 已生成严格 v2，设备服务同时验证 v1/v2；当前 System Shell 仍使用有界
+  summary 响应，富字段详情展示属于后续切片。
 - [ ] 定义 32x32/48x48 图标和 320x170 截图的格式、尺寸、摘要和缓存上限。
 - [ ] 增加 Today 专题、精选集合、分类和更新索引。
 - [ ] 规模超过 64 应用时切换为签名根索引和有界 shard。

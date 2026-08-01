@@ -135,6 +135,7 @@ pub fn publish(options: PublishOptions<'_>) -> Result<(), String> {
             package_sha256,
             package_bytes: package.encoded.len() as u64,
             permissions,
+            discovery: None,
         });
         artifacts.push((app_id, file_name, package.encoded));
     }

@@ -439,6 +439,7 @@ version = "0.1.0"
 dependencies = [
  "cp0-manifest",
  "cp0-package",
+ "cp0-store-metadata",
  "ed25519-dalek",
  "serde",
  "serde_json",
@@ -523,6 +524,7 @@ dependencies = [
  "cp0-appd",
  "cp0-networkd",
  "cp0-package",
+ "cp0-store-metadata",
  "cp0-store-protocol",
  "libc",
  "sha2",

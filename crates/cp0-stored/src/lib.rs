@@ -735,10 +735,29 @@ fn search_rank(app: &CatalogApp, normalized_query: &str) -> Option<u8> {
         Some(1)
     } else if name.contains(normalized_query) {
         Some(2)
+    } else if app.discovery.as_ref().is_some_and(|discovery| {
+        discovery
+            .keywords
+            .iter()
+            .any(|keyword| keyword.to_lowercase() == normalized_query)
+    }) {
+        Some(3)
     } else if app.summary.to_lowercase().contains(normalized_query)
         || app.app_id.contains(normalized_query)
+        || app.discovery.as_ref().is_some_and(|discovery| {
+            discovery
+                .developer
+                .to_lowercase()
+                .contains(normalized_query)
+                || discovery.subtitle.to_lowercase().contains(normalized_query)
+                || discovery.category.as_str().contains(normalized_query)
+                || discovery
+                    .keywords
+                    .iter()
+                    .any(|keyword| keyword.to_lowercase().contains(normalized_query))
+        })
     {
-        Some(3)
+        Some(4)
     } else {
         None
     }
@@ -997,8 +1016,10 @@ fn protocol_io(error: cp0_store_protocol::StoreProtocolError) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cp0_store_metadata::{AgeRating, StoreCategory};
     use cp0_store_protocol::{
-        CATALOG_SCHEMA_VERSION, Catalog, encode_signed_catalog, sign_catalog,
+        CATALOG_SCHEMA_VERSION, Catalog, CatalogDiscovery, RICH_CATALOG_SCHEMA_VERSION,
+        encode_signed_catalog, sign_catalog,
     };
     use std::os::unix::fs::PermissionsExt;
 
@@ -1109,6 +1130,7 @@ mod tests {
                 package_sha256: digest,
                 package_bytes: self.package.len() as u64,
                 permissions: Vec::new(),
+                discovery: None,
             }
         }
 
@@ -1312,6 +1334,55 @@ mod tests {
                 ..
             } if apps.iter().map(|app| app.name.as_str()).collect::<Vec<_>>() == ["Utility"]
         ));
+    }
+
+    #[test]
+    fn searches_signed_rich_discovery_fields_from_catalog_v2() {
+        let fixture = Fixture::new("rich-search");
+        let mut app = fixture.catalog_app(
+            "dev.cardputerzero.signal",
+            "Signal Lab",
+            "Inspect local radio signals",
+        );
+        app.discovery = Some(CatalogDiscovery {
+            developer: "CardputerZero Labs".into(),
+            subtitle: app.summary.clone(),
+            category: StoreCategory::DeveloperTools,
+            keywords: vec!["diagnostics".into(), "radio".into()],
+            age_rating: AgeRating::FourPlus,
+            privacy_url: "https://example.com/privacy".into(),
+            support_url: "https://example.com/support".into(),
+        });
+        let now = unix_time();
+        let catalog = Catalog {
+            schema_version: RICH_CATALOG_SCHEMA_VERSION,
+            sequence: 9,
+            published_unix_seconds: now,
+            expires_unix_seconds: now + 3600,
+            apps: vec![app],
+        };
+        let encoded =
+            encode_signed_catalog(&sign_catalog(catalog, &fixture.secret).unwrap()).unwrap();
+        fs::write(&fixture.paths.catalog_cache, encoded).unwrap();
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+
+        for query in ["cardputerzero", "developer-tools", "diagnostics", "radio"] {
+            assert!(matches!(
+                service.search_response(query.into(), 0, 8).unwrap(),
+                StoreResponseData::SearchResults { total: 1, apps, .. }
+                    if apps[0].app_id == "dev.cardputerzero.signal"
+            ));
+        }
     }
 
     #[test]

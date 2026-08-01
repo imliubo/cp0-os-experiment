@@ -3,7 +3,7 @@
 S5G adds `cp0-store-publisher`, the only reference process allowed to read the
 Store Ed25519 private key. It consumes Release control-plane events, revalidates
 approved immutable content, Store-signs packages, builds a deterministic signed
-Catalog v1 and publishes immutable static-origin generations. It is a backend
+Catalog and publishes immutable static-origin generations. It is a backend
 service and is never included in the CardputerZero device image. S5H extends
 the same isolated commit boundary with an append-only transparency leaf and
 signed checkpoint for every Catalog snapshot.
@@ -23,6 +23,14 @@ the developer `.capp`, verifies its signature against a currently active key
 owned by the App team, rejects an existing Store signature, and reparses the
 manifest and Store Listing. Package, Listing, permanent App registry, Release,
 default locale and approved assets must all agree exactly.
+
+S6A makes production snapshots strict Discovery Catalog v2. The Publisher also
+reads the owner Team name and approved default Listing localization, then signs
+developer, subtitle, category, keywords, age rating and privacy/support URLs
+into each entry. Catalog v1 remains accepted for offline recovery fixtures, but
+v1/v2 fields cannot be mixed. If an upgraded projection still contains a legacy
+artifact, the complete snapshot remains pure v1 until every included artifact
+has complete signed discovery data. See `STORE-DISCOVERY-CATALOG-V2.md`.
 
 ## Queue and sequence model
 
@@ -62,7 +70,7 @@ publication sequence. `published` includes that Release, while `paused` or
 versions while its Catalog is built. Pause, resume and remove each request a new
 global snapshot but retain the Release's original package sequence.
 
-Catalog applications are sorted by App ID and remain bounded by protocol v1's
+Catalog applications are sorted by App ID and remain bounded by the protocol's
 64-App and 48 KiB limits. The default Listing localization supplies the signed
 name and summary; manifest permissions are sorted before encoding. PostgreSQL
 stores the exact signed Catalog bytes and append-only digest metadata.

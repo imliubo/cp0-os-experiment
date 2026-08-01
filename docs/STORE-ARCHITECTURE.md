@@ -198,9 +198,11 @@ gossip 和生产 HSM 仍是后续基础设施，详见 `STORE-TRANSPARENCY.md`�
 Shell 进程内存中，重启即清空，不写入 SD 卡，也不发送到网络。每次请求严格绑定 query、
 offset 和 limit；结果页最多 8 条，Previous/Next 分页不会把 64 项 Catalog 常驻复制到 UI。
 
-Catalog v1 没有签名 category 字段，因此 Apps 当前是经过验证的全部应用列表；Today 选择
-稳定的首项作为本地推荐占位，Updates 仅在 Catalog 版本按 SemVer 严格高于 appd 报告的
-已安装版本时出现。旧版本、相同版本和 prerelease 降级都保持 `INSTALLED`，不会伪装成更新。
+S6A 的 Catalog v2 已签名 developer、subtitle、category、keywords 和 age/privacy 元数据，
+`cp0-stored` 已将这些字段用于本地搜索；当前 System Shell 仍消费有界 summary 响应，因此 Apps
+暂时显示全部应用，分类浏览和富字段详情属于后续 S6 切片。Today 选择稳定的首项作为本地推荐
+占位，Updates 仅在 Catalog 版本按 SemVer 严格高于 appd 报告的已安装版本时出现。旧版本、
+相同版本和 prerelease 降级都保持 `INSTALLED`，不会伪装成更新。
 
 #### 下载与更新
 
