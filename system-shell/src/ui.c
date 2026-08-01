@@ -2706,7 +2706,8 @@ void cp0_ui_sync_store_search(
 
     if (ui == NULL || query == NULL || strcmp(query, ui->store_search_query) != 0 ||
         (apps == NULL && app_count > 0) ||
-        app_count > CP0_UI_STORE_SEARCH_PAGE_MAX || total > 64U ||
+        app_count > CP0_UI_STORE_SEARCH_PAGE_MAX ||
+        total > CP0_UI_STORE_CATALOG_MAX ||
         offset != ui->store_search_offset || offset > total ||
         app_count != (size_t)((total - offset) < CP0_UI_STORE_SEARCH_PAGE_MAX
                                   ? (total - offset)

@@ -795,6 +795,19 @@ int main(int argc, char **argv)
            CP0_UI_EVENT_STORE_SEARCH);
     assert(strlen(max_query_ui.store_search_query) == 31);
 
+    struct cp0_ui maximum_offset_ui;
+    cp0_ui_init(&maximum_offset_ui);
+    strcpy(maximum_offset_ui.store_search_query, "app");
+    maximum_offset_ui.store_search_offset = CP0_UI_STORE_CATALOG_MAX;
+    cp0_ui_sync_store_search(&maximum_offset_ui, "app",
+                             CP0_UI_STORE_CATALOG_MAX,
+                             CP0_UI_STORE_CATALOG_MAX, false, 0, NULL, 0,
+                             false);
+    assert(maximum_offset_ui.store_search_status == CP0_UI_STORE_READY &&
+           maximum_offset_ui.store_search_total ==
+               CP0_UI_STORE_CATALOG_MAX &&
+           maximum_offset_ui.store_search_count == 0);
+
     struct cp0_ui_store_catalog_app older_catalog = store_catalog[0];
     older_catalog.version = "1.0.0-beta.1";
     older_catalog.installed_version = "1.0.0";

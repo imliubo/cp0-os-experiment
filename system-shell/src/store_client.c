@@ -20,7 +20,8 @@
 #endif
 #define CP0_STORE_FRAME_BYTES (64U * 1024U)
 #define CP0_STORE_JSON_TOKENS 4096U
-#define CP0_STORE_CATALOG_LIMIT 64U
+#define CP0_STORE_LEGACY_CATALOG_LIMIT 64U
+#define CP0_STORE_CATALOG_LIMIT 1024U
 #define CP0_STORE_SEARCH_QUERY_CHARS 32U
 #define CP0_STORE_MAX_PACKAGE_BYTES (32U * 1024U * 1024U + 4096U)
 #define CP0_STORE_MAX_ICON_BYTES (64U * 1024U)
@@ -700,7 +701,7 @@ static int parse_catalog_response(const char *response, size_t response_length,
         decoded.expires_unix_seconds == 0 ||
         !cp0_json_get_bool(response, &tokens[stale], &decoded.stale) ||
         tokens[apps].type != CP0_JSON_ARRAY ||
-        tokens[apps].children > CP0_STORE_CATALOG_LIMIT) {
+        tokens[apps].children > CP0_STORE_LEGACY_CATALOG_LIMIT) {
         free(tokens);
         return CP0_STORE_RESULT_ERROR;
     }
@@ -895,7 +896,8 @@ static int parse_search_response(
     int result;
 
     if (tokens == NULL || results == NULL ||
-        !valid_search_query(expected_query) || expected_offset > 64U ||
+        !valid_search_query(expected_query) ||
+        expected_offset > CP0_STORE_CATALOG_LIMIT ||
         expected_limit == 0 || expected_limit > CP0_STORE_SEARCH_MAX_APPS) {
         free(tokens);
         return CP0_STORE_RESULT_ERROR;

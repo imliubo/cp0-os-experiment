@@ -586,6 +586,17 @@ int main(void)
                empty_search, strlen(empty_search), 25, "bad\"query", 0, 8,
                &search) == CP0_STORE_RESULT_ERROR);
 
+    static const char maximum_search_offset[] =
+        SEARCH_START("240", "app", "1024", "8", "1024", "null", "false")
+        SEARCH_END;
+    assert(cp0_store_test_parse_search_response(
+               maximum_search_offset, strlen(maximum_search_offset), 240,
+               "app", 1024, 8, &search) == CP0_STORE_RESULT_OK);
+    assert(search.count == 0 && search.total == 1024 && !search.has_next);
+    assert(cp0_store_test_parse_search_response(
+               maximum_search_offset, strlen(maximum_search_offset), 240,
+               "app", 1025, 8, &search) == CP0_STORE_RESULT_ERROR);
+
     struct cp0_store_app_details details;
     static const char valid_details[] =
         ENVELOPE_START("28")
