@@ -20,20 +20,22 @@ use cp0_appd::{
     StoreInstalledApp, read_response as read_appd_response, write_request as write_appd_request,
 };
 use cp0_networkd::PublicResolver;
-use cp0_store_metadata::validate_png_structure;
+use cp0_store_metadata::{StoreCategory, validate_png_structure};
 use cp0_store_metrics::{
     AggregateMetricsReport, AppMetricRecord, MAX_METRIC_RECORDS, MAX_METRICS_REPORT_BYTES,
     MAX_WEEKLY_INSTALLS, MAX_WEEKLY_LAUNCHES, METRICS_SCHEMA_VERSION, WEEK_SECONDS, encode_report,
     week_start,
 };
 use cp0_store_protocol::{
-    CatalogApp, CatalogImageResource, CatalogObjectResource, MAX_INSTALL_BATCH_APPS, SignedCatalog,
-    StoreAppDetails, StoreAppState, StoreAppSummary, StoreCommand, StoreControlAction,
-    StoreEditorial, StoreEditorialCollection, StoreErrorCode, StoreFailureReason,
-    StoreInstallAccepted, StoreInstallPreflight, StoreMediaMetadata, StoreMediaSelector,
-    StoreRequest, StoreResponse, StoreResponseData, StoreRuntimeMetricEvent, decode_app_details,
-    decode_signed_catalog, is_lower_hex, is_valid_https_url, read_request,
-    response_requires_descriptor, send_response_with_fd, verify_catalog, write_response,
+    CatalogApp, CatalogCategoryIndex, CatalogEditorial, CatalogImageResource,
+    CatalogObjectResource, MAX_CATALOG_APPS, MAX_CATALOG_BYTES, MAX_INSTALL_BATCH_APPS,
+    SignedCatalogDocument, StoreAppDetails, StoreAppState, StoreAppSummary, StoreCommand,
+    StoreControlAction, StoreEditorial, StoreEditorialCollection, StoreErrorCode,
+    StoreFailureReason, StoreInstallAccepted, StoreInstallPreflight, StoreMediaMetadata,
+    StoreMediaSelector, StoreRequest, StoreResponse, StoreResponseData, StoreRuntimeMetricEvent,
+    decode_app_details, decode_signed_catalog_document, is_lower_hex, is_valid_https_url,
+    read_request, response_requires_descriptor, send_response_with_fd, verify_catalog,
+    verify_catalog_index, verify_catalog_shard_set, write_response,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -172,6 +174,14 @@ impl From<io::Error> for StoreServiceError {
 
 pub trait StoreNetwork: fmt::Debug + Send + Sync + 'static {
     fn fetch_catalog(&self, url: &str) -> Result<Vec<u8>, StoreServiceError>;
+
+    fn fetch_catalog_shard(
+        &self,
+        url: &str,
+        expected_bytes: u64,
+    ) -> Result<Vec<u8>, StoreServiceError> {
+        self.fetch_resource(url, expected_bytes, MAX_CATALOG_BYTES as u64)
+    }
 
     fn fetch_resource(
         &self,
@@ -790,7 +800,7 @@ impl AutoUpdateStatus {
 
 #[derive(Debug, Default)]
 struct MutableState {
-    catalog: Option<SignedCatalog>,
+    catalog: Option<TrustedCatalog>,
     operations: BTreeMap<String, OperationState>,
     install_authorization: Option<InstallAuthorization>,
     active_job: bool,
@@ -798,6 +808,27 @@ struct MutableState {
     auto_update_running: bool,
     metrics: MetricsPersistentState,
     metrics_upload_running: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TrustedCatalog {
+    sequence: u64,
+    published_unix_seconds: u64,
+    expires_unix_seconds: u64,
+    identity_sha256: String,
+    apps: Vec<CatalogApp>,
+    categories: Vec<CatalogCategoryIndex>,
+    editorial: Option<CatalogEditorial>,
+    sharded: bool,
+}
+
+impl TrustedCatalog {
+    fn app(&self, app_id: &str) -> Option<&CatalogApp> {
+        self.apps
+            .binary_search_by(|app| app.app_id.as_str().cmp(app_id))
+            .ok()
+            .map(|index| &self.apps[index])
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -981,7 +1012,7 @@ impl StoreService {
         prepare_media_directories(&paths)?;
         cleanup_stale_appd_handoffs(&paths.appd_inbox)?;
         let catalog = match fs::read(&paths.catalog_cache) {
-            Ok(encoded) => Some(load_trusted_catalog(&encoded, &paths)?),
+            Ok(encoded) => Some(load_cached_trusted_catalog(&encoded, &paths)?),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };
@@ -1114,6 +1145,11 @@ impl StoreService {
         }
         let result = match request.command {
             StoreCommand::List => self.catalog_response(),
+            StoreCommand::Browse {
+                category,
+                offset,
+                limit,
+            } => self.browse_response(category, offset, limit),
             StoreCommand::Today => self.today_response(),
             StoreCommand::Search {
                 query,
@@ -1689,7 +1725,7 @@ impl StoreService {
             .catalog
             .as_ref()
             .ok_or(StoreServiceError::Unconfigured)?;
-        if unix_time() >= catalog.catalog.expires_unix_seconds {
+        if unix_time() >= catalog.expires_unix_seconds {
             return Err(StoreServiceError::Untrusted(
                 "catalog expired during automatic update selection".into(),
             ));
@@ -1699,7 +1735,7 @@ impl StoreService {
             .map(|app| (app.app_id.as_str(), app))
             .collect::<BTreeMap<_, _>>();
         let mut candidates = Vec::new();
-        for app in &catalog.catalog.apps {
+        for app in &catalog.apps {
             let Some(current) = installed.get(app.app_id.as_str()) else {
                 continue;
             };
@@ -1857,7 +1893,7 @@ impl StoreService {
             .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?
             .catalog
             .as_ref()
-            .and_then(|catalog| catalog.catalog.apps.iter().find(|app| app.app_id == app_id))
+            .and_then(|catalog| catalog.app(app_id))
             .cloned()
             .ok_or(StoreServiceError::NotFound)
     }
@@ -1873,15 +1909,15 @@ impl StoreService {
             .ok_or(StoreServiceError::Unconfigured)?;
         let now = unix_time();
         let apps = catalog
-            .catalog
             .apps
             .iter()
+            .take(MAX_CATALOG_APPS)
             .map(|app| store_app_summary(app, state.operations.get(&app.app_id)))
             .collect();
         Ok(StoreResponseData::Catalog {
-            sequence: catalog.catalog.sequence,
-            expires_unix_seconds: catalog.catalog.expires_unix_seconds,
-            stale: now >= catalog.catalog.expires_unix_seconds,
+            sequence: catalog.sequence,
+            expires_unix_seconds: catalog.expires_unix_seconds,
+            stale: now >= catalog.expires_unix_seconds,
             apps,
         })
     }
@@ -1896,16 +1932,12 @@ impl StoreService {
             .as_ref()
             .ok_or(StoreServiceError::Unconfigured)?;
         let editorial = catalog
-            .catalog
             .editorial
             .as_ref()
             .map(|editorial| {
                 let summary = |app_id: &str| {
                     catalog
-                        .catalog
-                        .apps
-                        .iter()
-                        .find(|app| app.app_id == app_id)
+                        .app(app_id)
                         .map(|app| store_app_summary(app, state.operations.get(app_id)))
                         .ok_or_else(|| {
                             StoreServiceError::Untrusted(
@@ -1937,10 +1969,72 @@ impl StoreService {
             })
             .transpose()?;
         Ok(StoreResponseData::Today {
-            sequence: catalog.catalog.sequence,
-            expires_unix_seconds: catalog.catalog.expires_unix_seconds,
-            stale: unix_time() >= catalog.catalog.expires_unix_seconds,
+            sequence: catalog.sequence,
+            expires_unix_seconds: catalog.expires_unix_seconds,
+            stale: unix_time() >= catalog.expires_unix_seconds,
             editorial,
+        })
+    }
+
+    fn browse_response(
+        &self,
+        category: Option<StoreCategory>,
+        offset: u16,
+        limit: u8,
+    ) -> Result<StoreResponseData, StoreServiceError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+        let catalog = state
+            .catalog
+            .as_ref()
+            .ok_or(StoreServiceError::Unconfigured)?;
+        let matching = catalog
+            .apps
+            .iter()
+            .filter(|app| {
+                category.is_none_or(|category| {
+                    app.discovery
+                        .as_ref()
+                        .is_some_and(|discovery| discovery.category == category)
+                })
+            })
+            .collect::<Vec<_>>();
+        let indexed_total = category.map_or(catalog.apps.len(), |category| {
+            catalog
+                .categories
+                .iter()
+                .find(|entry| entry.category == category)
+                .map(|entry| usize::from(entry.app_count))
+                .unwrap_or(0)
+        });
+        if matching.len() != indexed_total {
+            return Err(StoreServiceError::Untrusted(
+                "verified category index differs from the application set".into(),
+            ));
+        }
+        let total = u16::try_from(matching.len())
+            .map_err(|_| StoreServiceError::Invalid("browse result count overflow".into()))?;
+        let apps = matching
+            .into_iter()
+            .skip(usize::from(offset))
+            .take(usize::from(limit))
+            .map(|app| store_app_summary(app, state.operations.get(&app.app_id)))
+            .collect::<Vec<_>>();
+        let next_offset = offset
+            .checked_add(apps.len() as u16)
+            .filter(|next| *next < total);
+        Ok(StoreResponseData::BrowseResults {
+            category,
+            offset,
+            limit,
+            total,
+            next_offset,
+            sequence: catalog.sequence,
+            expires_unix_seconds: catalog.expires_unix_seconds,
+            stale: unix_time() >= catalog.expires_unix_seconds,
+            apps,
         })
     }
 
@@ -1960,7 +2054,6 @@ impl StoreService {
             .ok_or(StoreServiceError::Unconfigured)?;
         let normalized_query = query.to_lowercase();
         let mut matches = catalog
-            .catalog
             .apps
             .iter()
             .filter_map(|app| {
@@ -1990,9 +2083,9 @@ impl StoreService {
             limit,
             total,
             next_offset,
-            sequence: catalog.catalog.sequence,
-            expires_unix_seconds: catalog.catalog.expires_unix_seconds,
-            stale: unix_time() >= catalog.catalog.expires_unix_seconds,
+            sequence: catalog.sequence,
+            expires_unix_seconds: catalog.expires_unix_seconds,
+            stale: unix_time() >= catalog.expires_unix_seconds,
             apps,
         })
     }
@@ -2025,7 +2118,7 @@ impl StoreService {
             .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?
             .catalog
             .as_ref()
-            .map(|catalog| catalog.catalog.sequence)
+            .map(|catalog| catalog.sequence)
             .ok_or(StoreServiceError::Unconfigured)
     }
 
@@ -2106,10 +2199,10 @@ impl StoreService {
                 .catalog
                 .as_ref()
                 .ok_or(StoreServiceError::Unconfigured)?;
-            if catalog.catalog.sequence != catalog_sequence {
+            if catalog.sequence != catalog_sequence {
                 return Err(StoreServiceError::CatalogChanged);
             }
-            if unix_time() >= catalog.catalog.expires_unix_seconds {
+            if unix_time() >= catalog.expires_unix_seconds {
                 return Err(StoreServiceError::Untrusted(
                     "catalog has expired; refresh before installing".into(),
                 ));
@@ -2131,9 +2224,7 @@ impl StoreService {
             .catalog
             .as_ref()
             .ok_or(StoreServiceError::Unconfigured)?;
-        if catalog.catalog.sequence != catalog_sequence
-            || !catalog_contains_exact_apps(catalog, &apps)
-        {
+        if catalog.sequence != catalog_sequence || !catalog_contains_exact_apps(catalog, &apps) {
             return Err(StoreServiceError::CatalogChanged);
         }
         state.install_authorization = Some(InstallAuthorization {
@@ -2217,12 +2308,12 @@ impl StoreService {
                 .as_ref()
                 .ok_or(StoreServiceError::Unconfigured)?;
             let now = unix_time();
-            if now >= catalog.catalog.expires_unix_seconds {
+            if now >= catalog.expires_unix_seconds {
                 return Err(StoreServiceError::Untrusted(
                     "catalog has expired; refresh before installing".into(),
                 ));
             }
-            if catalog.catalog.sequence != authorization.catalog_sequence
+            if catalog.sequence != authorization.catalog_sequence
                 || !catalog_contains_exact_apps(catalog, &authorization.apps)
             {
                 return Err(StoreServiceError::CatalogChanged);
@@ -2278,16 +2369,13 @@ impl StoreService {
                 .catalog
                 .as_ref()
                 .ok_or(StoreServiceError::Unconfigured)?;
-            if unix_time() >= catalog.catalog.expires_unix_seconds {
+            if unix_time() >= catalog.expires_unix_seconds {
                 return Err(StoreServiceError::Untrusted(
                     "catalog has expired; refresh before installing".into(),
                 ));
             }
             let app = catalog
-                .catalog
-                .apps
-                .iter()
-                .find(|app| app.app_id == app_id)
+                .app(app_id)
                 .cloned()
                 .ok_or(StoreServiceError::NotFound)?;
             let operation = state
@@ -2535,10 +2623,11 @@ impl StoreService {
             .as_deref()
             .ok_or(StoreServiceError::Unconfigured)?;
         let encoded = self.network.fetch_catalog(url)?;
-        let signed = load_trusted_catalog(&encoded, &self.paths)?;
+        let loaded = load_remote_trusted_catalog(&encoded, &self.paths, self.network.as_ref())?;
+        let catalog = loaded.catalog;
         let now = unix_time();
-        if signed.catalog.published_unix_seconds > now.saturating_add(CLOCK_SKEW_SECONDS)
-            || signed.catalog.expires_unix_seconds <= now
+        if catalog.published_unix_seconds > now.saturating_add(CLOCK_SKEW_SECONDS)
+            || catalog.expires_unix_seconds <= now
         {
             return Err(StoreServiceError::Untrusted(
                 "catalog validity window does not include the current time".into(),
@@ -2550,26 +2639,28 @@ impl StoreService {
                 .lock()
                 .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
             if let Some(current) = &state.catalog {
-                if signed.catalog.sequence < current.catalog.sequence {
+                if catalog.sequence < current.sequence {
                     return Err(StoreServiceError::Untrusted(
                         "catalog sequence rollback was rejected".into(),
                     ));
                 }
-                if signed.catalog.sequence == current.catalog.sequence && signed != *current {
+                if catalog.sequence == current.sequence
+                    && catalog.identity_sha256 != current.identity_sha256
+                {
                     return Err(StoreServiceError::Untrusted(
                         "catalog sequence was reused for different content".into(),
                     ));
                 }
             }
         }
-        atomic_write(&self.paths.catalog_cache, &encoded)?;
+        commit_catalog_cache(&self.paths, &encoded, &catalog, &loaded.encoded_shards)?;
         {
             let mut state = self
                 .state
                 .lock()
                 .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
             state.operations.retain(|app_id, operation| {
-                let Some(app) = signed.catalog.apps.iter().find(|app| app.app_id == *app_id) else {
+                let Some(app) = catalog.app(app_id) else {
                     return false;
                 };
                 let identity_changed = operation.version != app.version
@@ -2587,9 +2678,9 @@ impl StoreService {
                 }
                 true
             });
-            state.catalog = Some(signed.clone());
+            state.catalog = Some(catalog.clone());
         }
-        if let Err(error) = self.prefetch_catalog_icons(&signed) {
+        if let Err(error) = self.prefetch_catalog_icons(&catalog) {
             eprintln!("cp0-stored: Catalog accepted without complete icon cache: {error}");
         }
         Ok(())
@@ -2608,13 +2699,13 @@ impl StoreService {
         reconcile_media_for_catalog(&self.paths, &catalog)
     }
 
-    fn prefetch_catalog_icons(&self, catalog: &SignedCatalog) -> Result<(), StoreServiceError> {
+    fn prefetch_catalog_icons(&self, catalog: &TrustedCatalog) -> Result<(), StoreServiceError> {
         reconcile_media_for_catalog(&self.paths, catalog)?;
         let icons = catalog
-            .catalog
             .apps
             .iter()
             .filter_map(|app| app.resources.as_ref().map(|resources| &resources.icon))
+            .take(MAX_CATALOG_APPS)
             .collect::<Vec<_>>();
         validate_resource_budget(
             icons
@@ -2635,7 +2726,7 @@ impl StoreService {
             .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?
             .catalog
             .as_ref()
-            .and_then(|catalog| catalog.catalog.apps.iter().find(|app| app.app_id == app_id))
+            .and_then(|catalog| catalog.app(app_id))
             .cloned()
             .ok_or(StoreServiceError::NotFound)?;
         let resource = &app
@@ -2832,10 +2923,7 @@ fn collect_install_apps(
     let mut apps = Vec::with_capacity(app_ids.len());
     for app_id in app_ids {
         let app = catalog
-            .catalog
-            .apps
-            .iter()
-            .find(|app| app.app_id == *app_id)
+            .app(app_id)
             .cloned()
             .ok_or(StoreServiceError::NotFound)?;
         if state.operations.get(app_id).is_some_and(|operation| {
@@ -2854,15 +2942,9 @@ fn collect_install_apps(
     Ok(apps)
 }
 
-fn catalog_contains_exact_apps(catalog: &SignedCatalog, apps: &[CatalogApp]) -> bool {
-    apps.iter().all(|expected| {
-        catalog
-            .catalog
-            .apps
-            .iter()
-            .find(|app| app.app_id == expected.app_id)
-            == Some(expected)
-    })
+fn catalog_contains_exact_apps(catalog: &TrustedCatalog, apps: &[CatalogApp]) -> bool {
+    apps.iter()
+        .all(|expected| catalog.app(&expected.app_id) == Some(expected))
 }
 
 fn store_app_summary(app: &CatalogApp, operation: Option<&OperationState>) -> StoreAppSummary {
@@ -2942,7 +3024,11 @@ fn filesystem_available_bytes(path: &Path) -> Result<u64, StoreServiceError> {
     }
     // SAFETY: a successful statvfs call initialized the complete structure.
     let status = unsafe { status.assume_init() };
-    Ok((status.f_bavail as u64).saturating_mul(status.f_frsize as u64))
+    #[cfg(target_pointer_width = "64")]
+    let fragment_size = status.f_frsize;
+    #[cfg(target_pointer_width = "32")]
+    let fragment_size = u64::from(status.f_frsize);
+    Ok(u64::from(status.f_bavail).saturating_mul(fragment_size))
 }
 
 fn search_rank(app: &CatalogApp, normalized_query: &str) -> Option<u8> {
@@ -3021,13 +3107,13 @@ fn media_path(
 
 fn reconcile_media_for_catalog(
     paths: &StorePaths,
-    catalog: &SignedCatalog,
+    catalog: &TrustedCatalog,
 ) -> Result<(), StoreServiceError> {
     let mut icon_files = BTreeSet::new();
     let mut detail_files = BTreeSet::new();
     let mut icons = Vec::new();
     let mut details = Vec::new();
-    for app in &catalog.catalog.apps {
+    for app in &catalog.apps {
         let Some(resources) = &app.resources else {
             continue;
         };
@@ -3036,20 +3122,20 @@ fn reconcile_media_for_catalog(
         icons.push((&resources.icon, app));
         details.push((&resources.details, app));
     }
-    validate_resource_budget(
-        icons
-            .iter()
-            .map(|(resource, _)| (resource.sha256.as_str(), resource.bytes)),
-        MediaKind::Icon.budget(),
-    )?;
-    validate_resource_budget(
-        details
-            .iter()
-            .map(|(resource, _)| (resource.sha256.as_str(), resource.bytes)),
-        MediaKind::Details.budget(),
-    )?;
     prune_cache_directory(&media_directory(paths, MediaKind::Icon), &icon_files)?;
     prune_cache_directory(&media_directory(paths, MediaKind::Details), &detail_files)?;
+    enforce_cache_capacity(
+        &media_directory(paths, MediaKind::Icon),
+        MediaKind::Icon.budget(),
+        0,
+        None,
+    )?;
+    enforce_cache_capacity(
+        &media_directory(paths, MediaKind::Details),
+        MediaKind::Details.budget(),
+        0,
+        None,
+    )?;
     prune_unrecognized_cache_files(
         &media_directory(paths, MediaKind::Screenshot),
         MediaKind::Screenshot,
@@ -3435,13 +3521,97 @@ fn atomic_write_media(path: &Path, contents: &[u8]) -> Result<(), StoreServiceEr
     result.map_err(StoreServiceError::Io)
 }
 
-fn load_trusted_catalog(
+struct LoadedRemoteCatalog {
+    catalog: TrustedCatalog,
+    encoded_shards: Vec<Vec<u8>>,
+}
+
+fn load_cached_trusted_catalog(
     encoded: &[u8],
     paths: &StorePaths,
-) -> Result<SignedCatalog, StoreServiceError> {
-    let signed = decode_signed_catalog(encoded)
+) -> Result<TrustedCatalog, StoreServiceError> {
+    let document = decode_signed_catalog_document(encoded)
         .map_err(|error| StoreServiceError::Untrusted(error.to_string()))?;
-    let key_path = paths.trust_root.join(format!("{}.pub", signed.key_id));
+    match document {
+        SignedCatalogDocument::Catalog(signed) => {
+            let public = load_trusted_catalog_key(paths, &signed.key_id)?;
+            verify_catalog(&signed, &public)
+                .map_err(|error| StoreServiceError::Untrusted(error.to_string()))?;
+            Ok(trusted_legacy_catalog(signed, encoded))
+        }
+        SignedCatalogDocument::Index(signed) => {
+            let public = load_trusted_catalog_key(paths, &signed.key_id)?;
+            verify_catalog_index(&signed, &public)
+                .map_err(|error| StoreServiceError::Untrusted(error.to_string()))?;
+            let mut encoded_shards = Vec::with_capacity(signed.catalog_index.shards.len());
+            let directory = catalog_shard_cache_directory(paths, signed.catalog_index.sequence);
+            for descriptor in &signed.catalog_index.shards {
+                let path = directory.join(format!("{:04}.json", descriptor.index));
+                let file = OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                    .open(path)?;
+                let metadata = file.metadata()?;
+                if !metadata.is_file()
+                    || metadata.file_type().is_symlink()
+                    || metadata.mode() & 0o077 != 0
+                    || metadata.len() != u64::from(descriptor.bytes)
+                {
+                    return Err(StoreServiceError::Untrusted(
+                        "cached Catalog shard metadata is invalid".into(),
+                    ));
+                }
+                let mut bytes = Vec::with_capacity(descriptor.bytes as usize);
+                BufReader::new(file).read_to_end(&mut bytes)?;
+                encoded_shards.push(bytes);
+            }
+            trusted_indexed_catalog(signed, encoded, encoded_shards, &public)
+        }
+    }
+}
+
+fn load_remote_trusted_catalog(
+    encoded: &[u8],
+    paths: &StorePaths,
+    network: &dyn StoreNetwork,
+) -> Result<LoadedRemoteCatalog, StoreServiceError> {
+    let document = decode_signed_catalog_document(encoded)
+        .map_err(|error| StoreServiceError::Untrusted(error.to_string()))?;
+    match document {
+        SignedCatalogDocument::Catalog(signed) => {
+            let public = load_trusted_catalog_key(paths, &signed.key_id)?;
+            verify_catalog(&signed, &public)
+                .map_err(|error| StoreServiceError::Untrusted(error.to_string()))?;
+            Ok(LoadedRemoteCatalog {
+                catalog: trusted_legacy_catalog(signed, encoded),
+                encoded_shards: Vec::new(),
+            })
+        }
+        SignedCatalogDocument::Index(signed) => {
+            let public = load_trusted_catalog_key(paths, &signed.key_id)?;
+            verify_catalog_index(&signed, &public)
+                .map_err(|error| StoreServiceError::Untrusted(error.to_string()))?;
+            let mut encoded_shards = Vec::with_capacity(signed.catalog_index.shards.len());
+            for descriptor in &signed.catalog_index.shards {
+                encoded_shards.push(
+                    network.fetch_catalog_shard(&descriptor.url, u64::from(descriptor.bytes))?,
+                );
+            }
+            let catalog =
+                trusted_indexed_catalog(signed, encoded, encoded_shards.clone(), &public)?;
+            Ok(LoadedRemoteCatalog {
+                catalog,
+                encoded_shards,
+            })
+        }
+    }
+}
+
+fn load_trusted_catalog_key(
+    paths: &StorePaths,
+    key_id: &str,
+) -> Result<[u8; 32], StoreServiceError> {
+    let key_path = paths.trust_root.join(format!("{key_id}.pub"));
     let key_file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
@@ -3458,12 +3628,165 @@ fn load_trusted_catalog(
     }
     let mut public = Vec::new();
     BufReader::new(key_file).read_to_end(&mut public)?;
-    let public: [u8; 32] = public.try_into().map_err(|_| {
-        StoreServiceError::Untrusted("trusted catalog key length is invalid".into())
-    })?;
-    verify_catalog(&signed, &public)
+    public
+        .try_into()
+        .map_err(|_| StoreServiceError::Untrusted("trusted catalog key length is invalid".into()))
+}
+
+fn trusted_legacy_catalog(
+    signed: cp0_store_protocol::SignedCatalog,
+    encoded: &[u8],
+) -> TrustedCatalog {
+    let catalog = signed.catalog;
+    let categories = derive_categories(&catalog.apps, false);
+    TrustedCatalog {
+        sequence: catalog.sequence,
+        published_unix_seconds: catalog.published_unix_seconds,
+        expires_unix_seconds: catalog.expires_unix_seconds,
+        identity_sha256: cp0_store_protocol::lower_hex(&Sha256::digest(encoded)),
+        apps: catalog.apps,
+        categories,
+        editorial: catalog.editorial,
+        sharded: false,
+    }
+}
+
+fn trusted_indexed_catalog(
+    signed: cp0_store_protocol::SignedCatalogIndex,
+    encoded_root: &[u8],
+    encoded_shards: Vec<Vec<u8>>,
+    public: &[u8; 32],
+) -> Result<TrustedCatalog, StoreServiceError> {
+    let verified = verify_catalog_shard_set(&signed, &encoded_shards, public)
         .map_err(|error| StoreServiceError::Untrusted(error.to_string()))?;
-    Ok(signed)
+    let index = signed.catalog_index;
+    let apps = verified
+        .into_iter()
+        .flat_map(|shard| shard.catalog_shard.apps)
+        .collect::<Vec<_>>();
+    Ok(TrustedCatalog {
+        sequence: index.sequence,
+        published_unix_seconds: index.published_unix_seconds,
+        expires_unix_seconds: index.expires_unix_seconds,
+        identity_sha256: cp0_store_protocol::lower_hex(&Sha256::digest(encoded_root)),
+        apps,
+        categories: index.categories,
+        editorial: index.editorial,
+        sharded: true,
+    })
+}
+
+fn derive_categories(apps: &[CatalogApp], include_shard: bool) -> Vec<CatalogCategoryIndex> {
+    StoreCategory::ALL
+        .into_iter()
+        .filter_map(|category| {
+            let count = apps
+                .iter()
+                .filter(|app| {
+                    app.discovery
+                        .as_ref()
+                        .is_some_and(|discovery| discovery.category == category)
+                })
+                .count();
+            (count > 0).then(|| CatalogCategoryIndex {
+                category,
+                app_count: count as u16,
+                shard_indices: include_shard.then_some(0).into_iter().collect(),
+            })
+        })
+        .collect()
+}
+
+fn catalog_shard_cache_directory(paths: &StorePaths, sequence: u64) -> PathBuf {
+    paths
+        .cache_root
+        .join("catalog-shards")
+        .join(sequence.to_string())
+}
+
+fn commit_catalog_cache(
+    paths: &StorePaths,
+    encoded_root: &[u8],
+    catalog: &TrustedCatalog,
+    encoded_shards: &[Vec<u8>],
+) -> Result<(), StoreServiceError> {
+    if catalog.sharded {
+        let base = paths.cache_root.join("catalog-shards");
+        prepare_private_cache_directory(&base)?;
+        let final_directory = catalog_shard_cache_directory(paths, catalog.sequence);
+        if final_directory.exists() {
+            verify_cached_catalog_shards(&final_directory, encoded_shards)?;
+        } else {
+            let staging = base.join(format!(
+                ".tmp-{}-{}-{}",
+                catalog.sequence,
+                std::process::id(),
+                STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            let result = (|| -> io::Result<()> {
+                fs::create_dir(&staging)?;
+                fs::set_permissions(&staging, fs::Permissions::from_mode(0o700))?;
+                for (index, encoded) in encoded_shards.iter().enumerate() {
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .open(staging.join(format!("{index:04}.json")))?;
+                    file.write_all(encoded)?;
+                    file.sync_all()?;
+                }
+                File::open(&staging)?.sync_all()?;
+                fs::rename(&staging, &final_directory)?;
+                File::open(&base)?.sync_all()?;
+                Ok(())
+            })();
+            if result.is_err() {
+                let _ = fs::remove_dir_all(&staging);
+            }
+            result?;
+            verify_cached_catalog_shards(&final_directory, encoded_shards)?;
+        }
+    } else if !encoded_shards.is_empty() {
+        return Err(StoreServiceError::Invalid(
+            "legacy Catalog unexpectedly has shard bytes".into(),
+        ));
+    }
+    atomic_write(&paths.catalog_cache, encoded_root)
+}
+
+fn verify_cached_catalog_shards(
+    directory: &Path,
+    expected: &[Vec<u8>],
+) -> Result<(), StoreServiceError> {
+    let metadata = fs::symlink_metadata(directory)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() || metadata.mode() & 0o077 != 0 {
+        return Err(StoreServiceError::Untrusted(
+            "Catalog shard cache directory metadata is invalid".into(),
+        ));
+    }
+    for (index, expected) in expected.iter().enumerate() {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(directory.join(format!("{index:04}.json")))?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.mode() & 0o077 != 0
+            || metadata.len() != expected.len() as u64
+        {
+            return Err(StoreServiceError::Untrusted(
+                "Catalog shard cache file metadata is invalid".into(),
+            ));
+        }
+        let mut actual = Vec::new();
+        file.read_to_end(&mut actual)?;
+        if actual != *expected {
+            return Err(StoreServiceError::Untrusted(
+                "cached Catalog shard differs from the verified generation".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn open_resume_file(path: &Path) -> Result<File, StoreServiceError> {
@@ -4284,11 +4607,14 @@ mod tests {
     use super::*;
     use cp0_store_metadata::{AgeRating, StoreCategory};
     use cp0_store_protocol::{
-        APP_DETAILS_SCHEMA_VERSION, CATALOG_SCHEMA_VERSION, Catalog, CatalogDiscovery,
-        CatalogEditorial, CatalogEditorialCollection, CatalogImageResource, CatalogObjectResource,
-        CatalogResources, EDITORIAL_CATALOG_SCHEMA_VERSION, MEDIA_CATALOG_SCHEMA_VERSION,
-        RICH_CATALOG_SCHEMA_VERSION, StoreAppDetails, encode_app_details, encode_signed_catalog,
-        sign_catalog,
+        APP_DETAILS_SCHEMA_VERSION, CATALOG_INDEX_SCHEMA_VERSION, CATALOG_SCHEMA_VERSION,
+        CATALOG_SHARD_SCHEMA_VERSION, Catalog, CatalogCategoryIndex, CatalogDiscovery,
+        CatalogEditorial, CatalogEditorialCollection, CatalogImageResource, CatalogIndex,
+        CatalogObjectResource, CatalogResources, CatalogShard, CatalogShardDescriptor,
+        EDITORIAL_CATALOG_SCHEMA_VERSION, MEDIA_CATALOG_SCHEMA_VERSION,
+        RICH_CATALOG_SCHEMA_VERSION, StoreAppDetails, decode_signed_catalog, encode_app_details,
+        encode_signed_catalog, encode_signed_catalog_index, encode_signed_catalog_shard,
+        sign_catalog, sign_catalog_index, sign_catalog_shard,
     };
     use std::net::TcpListener;
     use std::os::fd::AsRawFd;
@@ -4338,6 +4664,64 @@ mod tests {
             file.write_all(&self.package[offset..])?;
             file.sync_all()?;
             assert_eq!(self.package.len() as u64, expected_bytes);
+            Ok(match control(100) {
+                DownloadControl::Continue => DownloadOutcome::Complete,
+                DownloadControl::Pause => DownloadOutcome::Paused {
+                    progress_percent: 100,
+                },
+                DownloadControl::Cancel => DownloadOutcome::Canceled,
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct ShardedNetwork {
+        root: Vec<u8>,
+        shards: BTreeMap<String, Vec<u8>>,
+        package: Vec<u8>,
+    }
+
+    impl StoreNetwork for ShardedNetwork {
+        fn fetch_catalog(&self, _url: &str) -> Result<Vec<u8>, StoreServiceError> {
+            Ok(self.root.clone())
+        }
+
+        fn fetch_catalog_shard(
+            &self,
+            url: &str,
+            expected_bytes: u64,
+        ) -> Result<Vec<u8>, StoreServiceError> {
+            let encoded = self
+                .shards
+                .get(url)
+                .cloned()
+                .ok_or(StoreServiceError::Unavailable(
+                    "Catalog shard is unavailable",
+                ))?;
+            if encoded.len() as u64 != expected_bytes {
+                return Err(StoreServiceError::Untrusted(
+                    "Catalog shard length differs from its descriptor".into(),
+                ));
+            }
+            Ok(encoded)
+        }
+
+        fn download_package(
+            &self,
+            _url: &str,
+            destination: &Path,
+            expected_bytes: u64,
+            control: &mut dyn FnMut(u8) -> DownloadControl,
+        ) -> Result<DownloadOutcome, StoreServiceError> {
+            if self.package.len() as u64 != expected_bytes {
+                return Err(StoreServiceError::Untrusted(
+                    "test package length is invalid".into(),
+                ));
+            }
+            let mut file = open_resume_file(destination)?;
+            file.set_len(0)?;
+            file.write_all(&self.package)?;
+            file.sync_all()?;
             Ok(match control(100) {
                 DownloadControl::Continue => DownloadOutcome::Complete,
                 DownloadControl::Pause => DownloadOutcome::Paused {
@@ -4995,6 +5379,92 @@ mod tests {
         }
     }
 
+    fn sharded_catalog_fixture(
+        fixture: &Fixture,
+        sequence: u64,
+    ) -> (Vec<u8>, BTreeMap<String, Vec<u8>>) {
+        let apps = (0..65)
+            .map(|index| {
+                let summary = "Verified sharded discovery application";
+                let mut app = fixture.catalog_app(
+                    &format!("dev.cardputerzero.sharded{index:03}"),
+                    &format!("Sharded {index:03}"),
+                    summary,
+                );
+                app.package_url = format!("https://store.example.com/app{index:03}.capp");
+                app.discovery = Some(CatalogDiscovery {
+                    developer: "CardputerZero Labs".into(),
+                    subtitle: summary.into(),
+                    category: if index % 2 == 0 {
+                        StoreCategory::Utilities
+                    } else {
+                        StoreCategory::Productivity
+                    },
+                    keywords: vec!["sharded".into()],
+                    age_rating: AgeRating::FourPlus,
+                    privacy_url: "https://example.com/privacy".into(),
+                    support_url: "https://example.com/support".into(),
+                });
+                app
+            })
+            .collect::<Vec<_>>();
+        let mut descriptors = Vec::new();
+        let mut resources = BTreeMap::new();
+        for (index, chunk) in apps.chunks(MAX_CATALOG_APPS).enumerate() {
+            let signed = sign_catalog_shard(
+                CatalogShard {
+                    schema_version: CATALOG_SHARD_SCHEMA_VERSION,
+                    catalog_schema_version: RICH_CATALOG_SCHEMA_VERSION,
+                    sequence,
+                    index: index as u16,
+                    apps: chunk.to_vec(),
+                },
+                &fixture.secret,
+            )
+            .unwrap();
+            let encoded = encode_signed_catalog_shard(&signed).unwrap();
+            let url =
+                format!("https://store.example.com/generations/{sequence}/shards/{index:04}.json");
+            descriptors.push(CatalogShardDescriptor {
+                index: index as u16,
+                url: url.clone(),
+                sha256: cp0_store_protocol::lower_hex(&Sha256::digest(&encoded)),
+                bytes: encoded.len() as u32,
+                app_count: chunk.len() as u16,
+                first_app_id: chunk.first().unwrap().app_id.clone(),
+                last_app_id: chunk.last().unwrap().app_id.clone(),
+            });
+            resources.insert(url, encoded);
+        }
+        let now = unix_time();
+        let index = CatalogIndex {
+            schema_version: CATALOG_INDEX_SCHEMA_VERSION,
+            catalog_schema_version: RICH_CATALOG_SCHEMA_VERSION,
+            sequence,
+            published_unix_seconds: now,
+            expires_unix_seconds: now + 3600,
+            total_app_count: 65,
+            shards: descriptors,
+            categories: vec![
+                CatalogCategoryIndex {
+                    category: StoreCategory::Productivity,
+                    app_count: 32,
+                    shard_indices: vec![0],
+                },
+                CatalogCategoryIndex {
+                    category: StoreCategory::Utilities,
+                    app_count: 33,
+                    shard_indices: vec![0, 1],
+                },
+            ],
+            editorial: None,
+        };
+        let root =
+            encode_signed_catalog_index(&sign_catalog_index(index, &fixture.secret).unwrap())
+                .unwrap();
+        (root, resources)
+    }
+
     fn media_catalog(
         fixture: &Fixture,
         sequence: u64,
@@ -5219,7 +5689,8 @@ mod tests {
         for catalog in [v1.clone(), v2, v3] {
             let signed = sign_catalog(catalog.clone(), &fixture.secret).unwrap();
             signed.catalog.validate().unwrap();
-            service.state.lock().unwrap().catalog = Some(signed);
+            let encoded = encode_signed_catalog(&signed).unwrap();
+            service.state.lock().unwrap().catalog = Some(trusted_legacy_catalog(signed, &encoded));
             assert!(matches!(
                 service.today_response().unwrap(),
                 StoreResponseData::Today {
@@ -5250,7 +5721,9 @@ mod tests {
         });
         let signed_v4 = sign_catalog(v4, &fixture.secret).unwrap();
         signed_v4.catalog.validate().unwrap();
-        service.state.lock().unwrap().catalog = Some(signed_v4);
+        let encoded_v4 = encode_signed_catalog(&signed_v4).unwrap();
+        service.state.lock().unwrap().catalog =
+            Some(trusted_legacy_catalog(signed_v4, &encoded_v4));
         let response = service.dispatch(StoreRequest {
             protocol_version: cp0_store_protocol::STORE_PROTOCOL_VERSION,
             request_id: 24,
@@ -6345,6 +6818,94 @@ mod tests {
     }
 
     #[test]
+    fn atomically_loads_shards_and_browses_the_signed_category_index() {
+        let fixture = Fixture::new("sharded-browse");
+        let (root, shards) = sharded_catalog_fixture(&fixture, 40);
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
+            },
+            Arc::new(ShardedNetwork {
+                root: root.clone(),
+                shards,
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+
+        service.refresh_now().unwrap();
+        assert_eq!(service.current_catalog_sequence().unwrap(), 40);
+        assert_eq!(fs::read(&fixture.paths.catalog_cache).unwrap(), root);
+        let shard_directory = catalog_shard_cache_directory(&fixture.paths, 40);
+        assert!(shard_directory.join("0000.json").is_file());
+        assert!(shard_directory.join("0001.json").is_file());
+
+        let browse = service
+            .browse_response(Some(StoreCategory::Utilities), 32, 8)
+            .unwrap();
+        assert!(matches!(
+            &browse,
+            StoreResponseData::BrowseResults {
+                category: Some(StoreCategory::Utilities),
+                total: 33,
+                next_offset: None,
+                apps,
+                ..
+            } if apps.len() == 1 && apps[0].app_id == "dev.cardputerzero.sharded064"
+        ));
+        StoreResponse::success(1, browse).validate().unwrap();
+
+        assert!(matches!(
+            service.search_response("sharded".into(), 0, 8).unwrap(),
+            StoreResponseData::SearchResults {
+                total: 65,
+                next_offset: Some(8),
+                apps,
+                ..
+            } if apps.len() == 8
+        ));
+    }
+
+    #[test]
+    fn missing_shard_preserves_the_previous_cached_catalog() {
+        let fixture = Fixture::new("sharded-incomplete");
+        let legacy = fixture.signed_catalog(41);
+        fs::write(&fixture.paths.catalog_cache, &legacy).unwrap();
+        let (root, mut shards) = sharded_catalog_fixture(&fixture, 42);
+        let missing = shards.keys().next_back().unwrap().clone();
+        shards.remove(&missing);
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig {
+                catalog_url: Some("https://store.example.com/catalog.json".into()),
+                metrics_url: None,
+            },
+            Arc::new(ShardedNetwork {
+                root,
+                shards,
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+
+        assert!(matches!(
+            service.refresh_now(),
+            Err(StoreServiceError::Unavailable(
+                "Catalog shard is unavailable"
+            ))
+        ));
+        assert_eq!(service.current_catalog_sequence().unwrap(), 41);
+        assert_eq!(fs::read(&fixture.paths.catalog_cache).unwrap(), legacy);
+        assert!(!catalog_shard_cache_directory(&fixture.paths, 42).exists());
+    }
+
+    #[test]
     fn searches_signed_rich_discovery_fields_from_catalog_v2() {
         let fixture = Fixture::new("rich-search");
         let mut app = fixture.catalog_app(
@@ -6562,7 +7123,7 @@ mod tests {
         )
         .unwrap();
         let status = service.auto_update_status().unwrap();
-        assert!(!status.enabled && status.policy_allowed && status.due == false);
+        assert!(!status.enabled && status.policy_allowed && !status.due);
         assert!(!status.charging && !status.unmetered_network && !status.checking);
 
         let status = service.set_auto_update(true).unwrap();

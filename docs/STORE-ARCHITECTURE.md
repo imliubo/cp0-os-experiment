@@ -155,9 +155,10 @@ gossip 和生产 HSM 仍是后续基础设施，详见 `STORE-TRANSPARENCY.md`�
 - 公钥轮换和撤销元数据；
 - `ETag`、`Range`、合理缓存头和多区域 CDN。
 
-首版仍可把不超过 64 个应用放在一个有界 Catalog。规模增长后使用签名根索引和分类/
-搜索 shard；每个 shard 都有独立摘要、大小和 sequence 绑定，设备不会接受 CDN 自行
-拼接的搜索 JSON。
+S6E 保留不超过 64 项且编码不超过 48 KiB 的旧 Catalog；项目数或字节数先达到上限时，
+Publisher 切换为签名根索引和最多 16 个有界 shard。根签名绑定分类索引及每个 shard 的 URL、
+摘要、大小、数量、App ID 范围和 sequence；shard 另有独立签名域。设备必须完整验证整个
+generation 后才原子切换缓存，不接受 CDN 自行拼接的搜索或分类 JSON。
 
 ### 2.3 设备端
 
@@ -202,10 +203,11 @@ gossip 和生产 HSM 仍是后续基础设施，详见 `STORE-TRANSPARENCY.md`�
 当前 System Shell 使用物理键盘直接输入 ASCII 字母、数字、空格、点、连字符和下划线，
 最多 32 字符；协议继续保留 96 字节 UTF-8 边界，为后续可信输入法留出空间。最近查询只保存在
 Shell 进程内存中，重启即清空，不写入 SD 卡，也不发送到网络。每次请求严格绑定 query、
-offset 和 limit；结果页最多 8 条，Previous/Next 分页不会把 64 项 Catalog 常驻复制到 UI。
+offset 和 limit；结果页最多 8 条，Previous/Next 分页不会把完整 Catalog 复制到 UI。
 
 S6A 的 Catalog v2 已签名 developer、subtitle、category、keywords 和 age/privacy 元数据，
-`cp0-stored` 已将这些字段用于本地搜索；Apps 当前仍显示全部应用，分类索引属于后续 S6 切片。
+`cp0-stored` 已将这些字段用于本地搜索。S6E 的 `browse` IPC/CLI 使用根中签名的分类计数，
+每页最多返回 8 项；旧 `list` 保留兼容并只返回第一个 64 项有界页面。
 Updates 仅在 Catalog 版本按 SemVer 严格高于 appd 报告的已安装版本时出现。旧版本、相同版本
 和 prerelease 降级都保持 `INSTALLED`，不会伪装成更新。
 
@@ -215,6 +217,11 @@ S6B 的 Catalog v3 在此基础上摘要绑定 icon 和有界 details 清单，d
 screenshot 独立缓存；所有对象按摘要命名、单任务下载、结构复验后原子提交，截图使用稳定 LRU。
 媒体失败与 Catalog/应用安装解耦。S6D 已通过严格 details/media IPC 将图标、描述、截图、
 权限差异和更新说明接入 System Shell。
+
+S6E 在此基础上增加签名根索引、签名分类索引和独立 shard。Publisher 同时按应用数和实际
+签名编码字节装箱；PostgreSQL 的完成触发器要求 root/shard 数量和应用总数闭合。`cp0-stored`
+先顺序下载并验证全部 shard，再安装私有 generation 目录并最后原子替换根缓存；缺失、错序、
+截断、替换或同 sequence 不同内容都保留上一 generation。
 
 S8A 的 Catalog v4 在 v3 上增加签名 editorial 投影，并将运营 rebuild job 精确绑定到不可变
 editorial resource version。Publisher 只有在所有引用 Release 仍可发布、产物身份匹配且应用

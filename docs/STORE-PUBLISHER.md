@@ -39,6 +39,13 @@ details document binds every screenshot. Migration selects pure v1, v2 or v3
 for the complete projection; schema fields are never mixed. See
 `STORE-MEDIA-RESOURCES-V1.md`.
 
+S6E adds a backward-compatible signed root index. A projection uses the legacy
+v1-v4 `SignedCatalog` only while it has at most 64 applications and its encoded
+bytes fit the 48 KiB limit. Otherwise the Publisher deterministically packs
+applications into independently signed, size-tested shards. The signed root
+binds every shard descriptor, the exact category index and any v4 editorial
+projection. See `STORE-SHARDED-CATALOG-V1.md`.
+
 ## Queue and sequence model
 
 `release.publish-requested` and `catalog.rebuild-requested` outbox records are
@@ -81,10 +88,12 @@ publication sequence. `published` includes that Release, while `paused` or
 versions while its Catalog is built. Pause, resume and remove each request a new
 global snapshot but retain the Release's original package sequence.
 
-Catalog applications are sorted by App ID and remain bounded by the protocol's
-64-App and 48 KiB limits. The default Listing localization supplies the signed
-name and summary; manifest permissions are sorted before encoding. PostgreSQL
-stores the exact signed Catalog bytes and append-only digest metadata.
+Catalog applications are sorted by App ID. A legacy root remains bounded to 64
+applications and 48 KiB; an indexed generation is bounded to 16 shards, 64
+applications and 48 KiB per shard, and 1024 applications in total. The default
+Listing localization supplies the signed name and summary; manifest permissions
+are sorted before encoding. PostgreSQL stores the exact signed root and shard
+bytes with append-only digest metadata.
 
 ## Filesystem commit and recovery
 
@@ -94,7 +103,7 @@ therefore uses this ordering:
 1. reserve sequence and timestamps in PostgreSQL;
 2. build deterministic signed artifacts;
 3. write, sync and atomically rename an immutable generation containing the
-   Catalog, transparency leaf/checkpoint and Store public key;
+   Catalog root, any shards, transparency leaf/checkpoint and Store public key;
 4. atomically commit package metadata, Catalog snapshot, transparency records,
    Release state, audit and outbox;
 5. verify every committed generation object and atomically switch `current`.
@@ -102,7 +111,7 @@ therefore uses this ordering:
 A crash before step 4 leaves an unreferenced generation that is verified and
 reused by the same leased job. A crash after step 4 temporarily leaves the prior
 Catalog visible; startup verifies the complete database transparency history,
-then checks the highest Catalog, leaf, checkpoint and public key byte-for-byte
+then checks the highest Catalog, every bound shard, leaf, checkpoint and public key byte-for-byte
 before repairing `current`. A database with no snapshot rejects any pre-existing
 `current` pointer instead of exposing uncommitted content. The process never
 rewrites or removes a committed generation.

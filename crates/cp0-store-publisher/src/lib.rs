@@ -8,14 +8,18 @@ use std::sync::Arc;
 
 use cp0_manifest::AppManifest;
 use cp0_package::CApp;
-use cp0_store_metadata::{ImageAsset, StoreListing};
+use cp0_store_metadata::{ImageAsset, StoreCategory, StoreListing};
 use cp0_store_protocol::{
-    APP_DETAILS_SCHEMA_VERSION, CATALOG_SCHEMA_VERSION, Catalog, CatalogApp, CatalogDiscovery,
-    CatalogEditorial, CatalogEditorialCollection, CatalogImageResource, CatalogObjectResource,
-    CatalogResources, EDITORIAL_CATALOG_SCHEMA_VERSION, MAX_CATALOG_APPS,
-    MAX_CATALOG_LIFETIME_SECONDS, MEDIA_CATALOG_SCHEMA_VERSION, RICH_CATALOG_SCHEMA_VERSION,
-    StoreAppDetails, encode_app_details, encode_signed_catalog, is_valid_https_url, lower_hex,
-    sign_catalog,
+    APP_DETAILS_SCHEMA_VERSION, CATALOG_INDEX_SCHEMA_VERSION, CATALOG_SCHEMA_VERSION,
+    CATALOG_SHARD_SCHEMA_VERSION, Catalog, CatalogApp, CatalogCategoryIndex, CatalogDiscovery,
+    CatalogEditorial, CatalogEditorialCollection, CatalogImageResource, CatalogIndex,
+    CatalogObjectResource, CatalogResources, CatalogShard, CatalogShardDescriptor,
+    EDITORIAL_CATALOG_SCHEMA_VERSION, MAX_CATALOG_APPS, MAX_CATALOG_LIFETIME_SECONDS,
+    MAX_SHARDED_CATALOG_APPS, MEDIA_CATALOG_SCHEMA_VERSION, RICH_CATALOG_SCHEMA_VERSION,
+    SignedCatalogDocument, StoreAppDetails, StoreProtocolError, decode_signed_catalog_document,
+    encode_app_details, encode_signed_catalog, encode_signed_catalog_index,
+    encode_signed_catalog_shard, is_valid_https_url, lower_hex, sign_catalog, sign_catalog_index,
+    sign_catalog_shard, verify_catalog, verify_catalog_shard_set,
 };
 use cp0_store_transparency::{
     Checkpoint, TRANSPARENCY_SCHEMA_VERSION, TransparencyLeaf, decode_checkpoint, decode_leaf,
@@ -25,7 +29,7 @@ use cp0_store_transparency::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgPool, PgPoolOptions, PgRow};
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
@@ -313,6 +317,7 @@ impl StorePublisher {
             .verify_committed_generation(
                 job.catalog_sequence,
                 &prepared.catalog_encoded,
+                &prepared.shards,
                 &prepared.transparency.leaf_encoded,
                 &prepared.transparency.checkpoint_encoded,
                 &prepared.store_public_key,
@@ -347,10 +352,23 @@ impl StorePublisher {
         let encoded: Vec<u8> = snapshot.get("encoded_catalog");
         let leaf: Vec<u8> = snapshot.get("encoded_leaf");
         let checkpoint: Vec<u8> = snapshot.get("encoded_checkpoint");
+        let shard_rows = sqlx::query(
+            "SELECT shard_index, shard_sha256, relative_path, app_count, first_app_id, last_app_id, \
+             encoded_shard FROM store_catalog_shards WHERE catalog_sequence = $1 \
+             ORDER BY shard_index",
+        )
+        .bind(i64_from_u64(sequence)?)
+        .fetch_all(&self.pool)
+        .await?;
+        let shards = shard_rows
+            .into_iter()
+            .map(|row| stored_catalog_shard_from_row(sequence, row))
+            .collect::<Result<Vec<_>, _>>()?;
         self.origin
             .verify_committed_generation(
                 sequence,
                 &encoded,
+                &shards,
                 &leaf,
                 &checkpoint,
                 &self.signer.public_key,
@@ -703,7 +721,7 @@ impl StorePublisher {
                 projection.app
             })
             .collect::<Vec<_>>();
-        if apps.len() > MAX_CATALOG_APPS {
+        if apps.len() > MAX_SHARDED_CATALOG_APPS {
             return Err(PublisherError::InvalidState(
                 "Catalog application bound was exceeded",
             ));
@@ -717,16 +735,17 @@ impl StorePublisher {
         if editorial.is_some() {
             schema_version = EDITORIAL_CATALOG_SCHEMA_VERSION;
         }
-        let catalog = Catalog {
+        let catalog_objects = prepare_catalog_objects(
+            &self.base_url,
+            &self.signer.secret,
+            job.catalog_sequence,
+            job.published_unix_seconds,
+            job.expires_unix_seconds,
             schema_version,
-            sequence: job.catalog_sequence,
-            published_unix_seconds: job.published_unix_seconds,
-            expires_unix_seconds: job.expires_unix_seconds,
             apps,
             editorial,
-        };
-        let signed = sign_catalog(catalog, &self.signer.secret)?;
-        let catalog_encoded = encode_signed_catalog(&signed)?;
+        )?;
+        let catalog_encoded = catalog_objects.catalog_encoded;
         let catalog_sha256 = sha256_hex(&catalog_encoded);
         let transparency = self
             .prepare_transparency(job, &catalog_sha256, catalog_encoded.len())
@@ -735,7 +754,9 @@ impl StorePublisher {
             catalog_sha256,
             catalog_encoded,
             catalog_relative_path: catalog_relative_path(job.catalog_sequence),
-            app_count: signed.catalog.apps.len(),
+            document_kind: catalog_objects.document_kind,
+            app_count: catalog_objects.app_count,
+            shards: catalog_objects.shards,
             package: target,
             store_public_key: self.signer.public_key,
             store_key_id: self.signer.key_id.clone(),
@@ -1263,8 +1284,8 @@ impl StorePublisher {
             "INSERT INTO store_catalog_snapshots (sequence, source_event_id, source_release_id, \
              catalog_sha256, catalog_bytes, relative_path, store_key_id, app_count, \
              published_unix_seconds, expires_unix_seconds, encoded_catalog, created_unix_seconds, \
-             editorial_resource_version) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+             editorial_resource_version, document_kind, shard_count) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
         )
         .bind(i64_from_u64(job.catalog_sequence)?)
         .bind(&job.event_id)
@@ -1277,7 +1298,7 @@ impl StorePublisher {
         .bind(&prepared.catalog_relative_path)
         .bind(&prepared.store_key_id)
         .bind(
-            i16::try_from(prepared.app_count).map_err(|_| {
+            i32::try_from(prepared.app_count).map_err(|_| {
                 PublisherError::InvalidState("Catalog app count cannot be represented")
             })?,
         )
@@ -1290,8 +1311,43 @@ impl StorePublisher {
                 .map(i64_from_u64)
                 .transpose()?,
         )
+        .bind(prepared.document_kind)
+        .bind(i16::try_from(prepared.shards.len()).map_err(|_| {
+            PublisherError::InvalidState("Catalog shard count cannot be represented")
+        })?)
         .execute(&mut *transaction)
         .await?;
+
+        for shard in &prepared.shards {
+            sqlx::query(
+                "INSERT INTO store_catalog_shards (catalog_sequence, shard_index, shard_sha256, \
+                 shard_bytes, relative_path, store_key_id, app_count, first_app_id, last_app_id, \
+                 encoded_shard, created_unix_seconds) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+            )
+            .bind(i64_from_u64(job.catalog_sequence)?)
+            .bind(i16::try_from(shard.index).map_err(|_| {
+                PublisherError::InvalidState("Catalog shard index cannot be represented")
+            })?)
+            .bind(&shard.sha256)
+            .bind(i32::try_from(shard.encoded.len()).map_err(|_| {
+                PublisherError::InvalidState("Catalog shard size cannot be represented")
+            })?)
+            .bind(format!(
+                "generations/{}/{}",
+                job.catalog_sequence, shard.relative_path
+            ))
+            .bind(&prepared.store_key_id)
+            .bind(i16::try_from(shard.app_count).map_err(|_| {
+                PublisherError::InvalidState("Catalog shard app count cannot be represented")
+            })?)
+            .bind(&shard.first_app_id)
+            .bind(&shard.last_app_id)
+            .bind(&shard.encoded)
+            .bind(now)
+            .execute(&mut *transaction)
+            .await?;
+        }
 
         sqlx::query(
             "INSERT INTO store_transparency_leaves (tree_index, catalog_sequence, leaf_sha256, \
@@ -1539,6 +1595,213 @@ fn catalog_schema_for_projection(apps: &mut [CatalogApp]) -> u32 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn prepare_catalog_objects(
+    base_url: &str,
+    signing_key: &[u8; 32],
+    sequence: u64,
+    published_unix_seconds: u64,
+    expires_unix_seconds: u64,
+    schema_version: u32,
+    apps: Vec<CatalogApp>,
+    editorial: Option<CatalogEditorial>,
+) -> Result<PreparedCatalogObjects, PublisherError> {
+    let app_count = apps.len();
+    if app_count <= MAX_CATALOG_APPS {
+        let signed = sign_catalog(
+            Catalog {
+                schema_version,
+                sequence,
+                published_unix_seconds,
+                expires_unix_seconds,
+                apps: apps.clone(),
+                editorial: editorial.clone(),
+            },
+            signing_key,
+        )?;
+        match encode_signed_catalog(&signed) {
+            Ok(catalog_encoded) => {
+                return Ok(PreparedCatalogObjects {
+                    catalog_encoded,
+                    document_kind: "legacy",
+                    app_count,
+                    shards: Vec::new(),
+                });
+            }
+            Err(StoreProtocolError::FrameTooLarge) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    if app_count > MAX_SHARDED_CATALOG_APPS || schema_version < RICH_CATALOG_SCHEMA_VERSION {
+        return Err(PublisherError::InvalidState(
+            "sharded Catalog bounds or discovery schema are invalid",
+        ));
+    }
+
+    let mut encoded_chunks = Vec::<(Vec<CatalogApp>, Vec<u8>)>::new();
+    let mut current = Vec::<CatalogApp>::new();
+    let mut current_encoded: Option<Vec<u8>> = None;
+    for app in apps.iter().cloned() {
+        if current.len() == MAX_CATALOG_APPS {
+            encoded_chunks.push((
+                std::mem::take(&mut current),
+                current_encoded.take().expect("non-empty shard was encoded"),
+            ));
+        }
+        let mut candidate = current.clone();
+        candidate.push(app.clone());
+        let index = u16::try_from(encoded_chunks.len())
+            .map_err(|_| PublisherError::InvalidState("Catalog shard index overflow"))?;
+        match encode_catalog_shard_apps(signing_key, sequence, schema_version, index, &candidate) {
+            Ok(encoded) => {
+                current = candidate;
+                current_encoded = Some(encoded);
+            }
+            Err(PublisherError::Protocol(StoreProtocolError::FrameTooLarge))
+                if !current.is_empty() =>
+            {
+                encoded_chunks.push((
+                    std::mem::take(&mut current),
+                    current_encoded.take().expect("non-empty shard was encoded"),
+                ));
+                let index = u16::try_from(encoded_chunks.len())
+                    .map_err(|_| PublisherError::InvalidState("Catalog shard index overflow"))?;
+                current = vec![app];
+                current_encoded = Some(encode_catalog_shard_apps(
+                    signing_key,
+                    sequence,
+                    schema_version,
+                    index,
+                    &current,
+                )?);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if !current.is_empty() {
+        encoded_chunks.push((
+            current,
+            current_encoded.expect("non-empty shard was encoded"),
+        ));
+    }
+    if encoded_chunks.len() > cp0_store_protocol::MAX_CATALOG_SHARDS {
+        return Err(PublisherError::InvalidState(
+            "Catalog shard count bound was exceeded",
+        ));
+    }
+
+    let mut descriptors = Vec::new();
+    let mut shards = Vec::new();
+    for (index, (chunk, encoded)) in encoded_chunks.iter().enumerate() {
+        let index = u16::try_from(index)
+            .map_err(|_| PublisherError::InvalidState("Catalog shard index overflow"))?;
+        let relative_path = format!("shards/{index:04}.json");
+        let sha256 = sha256_hex(encoded);
+        let first_app_id = chunk
+            .first()
+            .expect("application shard cannot be empty")
+            .app_id
+            .clone();
+        let last_app_id = chunk
+            .last()
+            .expect("application shard cannot be empty")
+            .app_id
+            .clone();
+        descriptors.push(CatalogShardDescriptor {
+            index,
+            url: publication_url(base_url, sequence, &relative_path)?,
+            sha256: sha256.clone(),
+            bytes: u32::try_from(encoded.len())
+                .map_err(|_| PublisherError::InvalidState("Catalog shard size overflow"))?,
+            app_count: u16::try_from(chunk.len())
+                .map_err(|_| PublisherError::InvalidState("Catalog shard app count overflow"))?,
+            first_app_id: first_app_id.clone(),
+            last_app_id: last_app_id.clone(),
+        });
+        shards.push(PreparedCatalogShard {
+            index,
+            relative_path,
+            sha256,
+            app_count: chunk.len(),
+            first_app_id,
+            last_app_id,
+            encoded: encoded.clone(),
+        });
+    }
+
+    let mut categories = Vec::new();
+    for category in StoreCategory::ALL {
+        let mut count = 0_usize;
+        let mut shard_indices = Vec::new();
+        for (index, (chunk, _)) in encoded_chunks.iter().enumerate() {
+            let shard_count = chunk
+                .iter()
+                .filter(|app| {
+                    app.discovery
+                        .as_ref()
+                        .is_some_and(|discovery| discovery.category == category)
+                })
+                .count();
+            count += shard_count;
+            if shard_count > 0 {
+                shard_indices.push(u16::try_from(index).map_err(|_| {
+                    PublisherError::InvalidState("Catalog category shard index overflow")
+                })?);
+            }
+        }
+        if count > 0 {
+            categories.push(CatalogCategoryIndex {
+                category,
+                app_count: u16::try_from(count).map_err(|_| {
+                    PublisherError::InvalidState("Catalog category app count overflow")
+                })?,
+                shard_indices,
+            });
+        }
+    }
+    let signed = sign_catalog_index(
+        CatalogIndex {
+            schema_version: CATALOG_INDEX_SCHEMA_VERSION,
+            catalog_schema_version: schema_version,
+            sequence,
+            published_unix_seconds,
+            expires_unix_seconds,
+            total_app_count: u16::try_from(app_count)
+                .map_err(|_| PublisherError::InvalidState("Catalog total app count overflow"))?,
+            shards: descriptors,
+            categories,
+            editorial,
+        },
+        signing_key,
+    )?;
+    Ok(PreparedCatalogObjects {
+        catalog_encoded: encode_signed_catalog_index(&signed)?,
+        document_kind: "index",
+        app_count,
+        shards,
+    })
+}
+
+fn encode_catalog_shard_apps(
+    signing_key: &[u8; 32],
+    sequence: u64,
+    schema_version: u32,
+    index: u16,
+    apps: &[CatalogApp],
+) -> Result<Vec<u8>, PublisherError> {
+    let signed = sign_catalog_shard(
+        CatalogShard {
+            schema_version: CATALOG_SHARD_SCHEMA_VERSION,
+            catalog_schema_version: schema_version,
+            sequence,
+            index,
+            apps: apps.to_vec(),
+        },
+        signing_key,
+    )?;
+    encode_signed_catalog_shard(&signed).map_err(PublisherError::Protocol)
+}
+
 #[derive(Clone)]
 struct ObjectReader {
     chunks: Arc<PathBuf>,
@@ -1651,12 +1914,14 @@ impl PublicationRoot {
         &self,
         sequence: u64,
         expected_catalog: &[u8],
+        expected_shards: &[PreparedCatalogShard],
         expected_leaf: &[u8],
         expected_checkpoint: &[u8],
         expected_public_key: &[u8; 32],
     ) -> Result<(), PublisherError> {
         let directory = self.generations.join(sequence.to_string());
         let expected_catalog = expected_catalog.to_vec();
+        let expected_shards = expected_shards.to_vec();
         let expected_leaf = expected_leaf.to_vec();
         let expected_checkpoint = expected_checkpoint.to_vec();
         let expected_public_key = *expected_public_key;
@@ -1664,6 +1929,7 @@ impl PublicationRoot {
             verify_committed_generation_sync(
                 &directory,
                 &expected_catalog,
+                &expected_shards,
                 &expected_leaf,
                 &expected_checkpoint,
                 &expected_public_key,
@@ -1749,11 +2015,31 @@ struct PreparedPublication {
     catalog_encoded: Vec<u8>,
     catalog_sha256: String,
     catalog_relative_path: String,
+    document_kind: &'static str,
     app_count: usize,
+    shards: Vec<PreparedCatalogShard>,
     package: Option<PreparedPackage>,
     store_public_key: [u8; 32],
     store_key_id: String,
     transparency: PreparedTransparency,
+}
+
+#[derive(Clone)]
+struct PreparedCatalogShard {
+    index: u16,
+    relative_path: String,
+    sha256: String,
+    app_count: usize,
+    first_app_id: String,
+    last_app_id: String,
+    encoded: Vec<u8>,
+}
+
+struct PreparedCatalogObjects {
+    catalog_encoded: Vec<u8>,
+    document_kind: &'static str,
+    app_count: usize,
+    shards: Vec<PreparedCatalogShard>,
 }
 
 #[derive(Clone)]
@@ -2109,9 +2395,12 @@ fn write_generation_sync(
     generations: &Path,
     prepared: &PreparedPublication,
 ) -> io::Result<()> {
-    let signed = cp0_store_protocol::decode_signed_catalog(&prepared.catalog_encoded)
+    let document = decode_signed_catalog_document(&prepared.catalog_encoded)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Catalog encoding is invalid"))?;
-    let sequence = signed.catalog.sequence;
+    let sequence = match document {
+        SignedCatalogDocument::Catalog(signed) => signed.catalog.sequence,
+        SignedCatalogDocument::Index(signed) => signed.catalog_index.sequence,
+    };
     let final_directory = generations.join(sequence.to_string());
     if final_directory.exists() {
         return verify_generation_sync(&final_directory, prepared);
@@ -2153,6 +2442,15 @@ fn write_generation_sync(
         sync_directory(&screenshots_directory)?;
         sync_directory(&app_assets_directory)?;
         sync_directory(&assets_directory)?;
+    }
+    if !prepared.shards.is_empty() {
+        let shard_directory = temporary.join("shards");
+        fs::create_dir(&shard_directory)?;
+        fs::set_permissions(&shard_directory, fs::Permissions::from_mode(0o755))?;
+        for shard in &prepared.shards {
+            write_new_synced(&temporary.join(&shard.relative_path), &shard.encoded, 0o444)?;
+        }
+        sync_directory(&shard_directory)?;
     }
     write_new_synced(
         &temporary.join("catalog.json"),
@@ -2209,6 +2507,20 @@ fn verify_generation_sync(directory: &Path, prepared: &PreparedPublication) -> i
         ));
     }
     verify_exact_file(&directory.join("catalog.json"), &prepared.catalog_encoded)?;
+    if !prepared.shards.is_empty() {
+        let shard_directory = directory.join("shards");
+        let metadata = fs::symlink_metadata(&shard_directory)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Catalog shard path is not a real directory",
+            ));
+        }
+        for shard in &prepared.shards {
+            verify_exact_file(&directory.join(&shard.relative_path), &shard.encoded)?;
+        }
+        fs::set_permissions(shard_directory, fs::Permissions::from_mode(0o555))?;
+    }
     verify_exact_file(&directory.join("store.pub"), &prepared.store_public_key)?;
     let transparency_directory = directory.join("transparency");
     let transparency_metadata = fs::symlink_metadata(&transparency_directory)?;
@@ -2251,6 +2563,7 @@ fn verify_generation_sync(directory: &Path, prepared: &PreparedPublication) -> i
 fn verify_committed_generation_sync(
     directory: &Path,
     expected_catalog: &[u8],
+    expected_shards: &[PreparedCatalogShard],
     expected_leaf: &[u8],
     expected_checkpoint: &[u8],
     expected_public_key: &[u8; 32],
@@ -2271,6 +2584,41 @@ fn verify_committed_generation_sync(
         ));
     }
     verify_exact_file(&directory.join("catalog.json"), expected_catalog)?;
+    let document = decode_signed_catalog_document(expected_catalog)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Catalog encoding is invalid"))?;
+    match document {
+        SignedCatalogDocument::Catalog(signed) => {
+            if !expected_shards.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "legacy Catalog unexpectedly has shards",
+                ));
+            }
+            verify_catalog(&signed, expected_public_key).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "Catalog signature is invalid")
+            })?;
+        }
+        SignedCatalogDocument::Index(signed) => {
+            let encoded_shards = expected_shards
+                .iter()
+                .map(|shard| shard.encoded.clone())
+                .collect::<Vec<_>>();
+            verify_catalog_shard_set(&signed, &encoded_shards, expected_public_key).map_err(
+                |_| io::Error::new(io::ErrorKind::InvalidData, "Catalog shard set is invalid"),
+            )?;
+            let shard_directory = directory.join("shards");
+            let metadata = fs::symlink_metadata(&shard_directory)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "committed Catalog shard path is not a real directory",
+                ));
+            }
+            for shard in expected_shards {
+                verify_exact_file(&directory.join(&shard.relative_path), &shard.encoded)?;
+            }
+        }
+    }
     verify_exact_file(&transparency_directory.join("leaf.json"), expected_leaf)?;
     verify_exact_file(
         &transparency_directory.join("checkpoint.json"),
@@ -2437,6 +2785,37 @@ fn publication_job_from_row(row: sqlx::postgres::PgRow) -> Result<PublicationJob
             row.get::<Option<i64>, _>("expires_unix_seconds")
                 .ok_or(PublisherError::InvalidState("Catalog expiry is missing"))?,
         )?,
+    })
+}
+
+fn stored_catalog_shard_from_row(
+    sequence: u64,
+    row: PgRow,
+) -> Result<PreparedCatalogShard, PublisherError> {
+    let index = u16::try_from(row.get::<i16, _>("shard_index"))
+        .map_err(|_| PublisherError::InvalidState("stored Catalog shard index is invalid"))?;
+    let encoded: Vec<u8> = row.get("encoded_shard");
+    let sha256: String = row.get("shard_sha256");
+    if sha256_hex(&encoded) != sha256 {
+        return Err(PublisherError::InvalidState(
+            "stored Catalog shard digest is invalid",
+        ));
+    }
+    let relative_path = format!("shards/{index:04}.json");
+    if row.get::<String, _>("relative_path") != format!("generations/{sequence}/{relative_path}") {
+        return Err(PublisherError::InvalidState(
+            "stored Catalog shard path is invalid",
+        ));
+    }
+    Ok(PreparedCatalogShard {
+        index,
+        relative_path,
+        sha256,
+        app_count: usize::try_from(row.get::<i16, _>("app_count"))
+            .map_err(|_| PublisherError::InvalidState("stored shard app count is invalid"))?,
+        first_app_id: row.get("first_app_id"),
+        last_app_id: row.get("last_app_id"),
+        encoded,
     })
 }
 
@@ -2653,6 +3032,76 @@ mod tests {
             CATALOG_SCHEMA_VERSION
         );
         assert!(mixed.iter().all(|app| app.discovery.is_none()));
+    }
+
+    #[test]
+    fn publisher_switches_to_a_complete_signed_index_above_sixty_four_apps() {
+        let secret = [31; 32];
+        let public = cp0_package::public_key(&secret);
+        let apps = (0..65)
+            .map(|index| {
+                let mut app = projected_app(true, false);
+                app.app_id = format!("dev.cardputerzero.publisher{index:03}");
+                app.name = format!("Publisher {index:03}");
+                app.package_url = format!("https://store.example.com/app{index:03}.capp");
+                app.package_sha256 = format!("{index:064x}");
+                app.discovery.as_mut().unwrap().category = if index % 2 == 0 {
+                    StoreCategory::Utilities
+                } else {
+                    StoreCategory::Productivity
+                };
+                app
+            })
+            .collect::<Vec<_>>();
+        let legacy = prepare_catalog_objects(
+            "https://store.example.com",
+            &secret,
+            10,
+            1_800_000_000,
+            1_800_086_400,
+            RICH_CATALOG_SCHEMA_VERSION,
+            apps[..64].to_vec(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(legacy.document_kind, "legacy");
+        assert!(legacy.shards.is_empty());
+        assert!(matches!(
+            decode_signed_catalog_document(&legacy.catalog_encoded).unwrap(),
+            SignedCatalogDocument::Catalog(_)
+        ));
+
+        let indexed = prepare_catalog_objects(
+            "https://store.example.com",
+            &secret,
+            11,
+            1_800_000_000,
+            1_800_086_400,
+            RICH_CATALOG_SCHEMA_VERSION,
+            apps,
+            None,
+        )
+        .unwrap();
+        assert_eq!(indexed.document_kind, "index");
+        assert_eq!(indexed.shards.len(), 2);
+        let SignedCatalogDocument::Index(root) =
+            decode_signed_catalog_document(&indexed.catalog_encoded).unwrap()
+        else {
+            panic!("65 applications must use a signed Catalog index");
+        };
+        let encoded_shards = indexed
+            .shards
+            .iter()
+            .map(|shard| shard.encoded.clone())
+            .collect::<Vec<_>>();
+        let verified = verify_catalog_shard_set(&root, &encoded_shards, &public).unwrap();
+        assert_eq!(
+            verified
+                .iter()
+                .map(|shard| shard.catalog_shard.apps.len())
+                .sum::<usize>(),
+            65
+        );
     }
 
     #[test]

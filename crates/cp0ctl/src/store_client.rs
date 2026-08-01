@@ -177,6 +177,21 @@ fn response_matches(command: &StoreCommand, data: &StoreResponseData) -> bool {
             },
         ) => requested_query == query && requested_offset == offset && requested_limit == limit,
         (
+            StoreCommand::Browse {
+                category: requested_category,
+                offset: requested_offset,
+                limit: requested_limit,
+            },
+            StoreResponseData::BrowseResults {
+                category,
+                offset,
+                limit,
+                ..
+            },
+        ) => {
+            requested_category == category && requested_offset == offset && requested_limit == limit
+        }
+        (
             StoreCommand::Install {
                 app_id: requested, ..
             },

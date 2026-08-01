@@ -9,17 +9,22 @@ use cp0_manifest::Permission;
 use cp0_store_metadata::{AgeRating, StoreCategory};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 pub const STORE_PROTOCOL_VERSION: u32 = 1;
 pub const CATALOG_SCHEMA_VERSION: u32 = 1;
 pub const RICH_CATALOG_SCHEMA_VERSION: u32 = 2;
 pub const MEDIA_CATALOG_SCHEMA_VERSION: u32 = 3;
 pub const EDITORIAL_CATALOG_SCHEMA_VERSION: u32 = 4;
+pub const CATALOG_INDEX_SCHEMA_VERSION: u32 = 1;
+pub const CATALOG_SHARD_SCHEMA_VERSION: u32 = 1;
 pub const APP_DETAILS_SCHEMA_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_CATALOG_BYTES: usize = 48 * 1024;
 pub const MAX_APP_DETAILS_BYTES: usize = 16 * 1024;
 pub const MAX_CATALOG_APPS: usize = 64;
+pub const MAX_CATALOG_SHARDS: usize = 16;
+pub const MAX_SHARDED_CATALOG_APPS: usize = MAX_CATALOG_APPS * MAX_CATALOG_SHARDS;
 pub const MAX_PACKAGE_BYTES: u64 = cp0_package::MAX_PAYLOAD_BYTES as u64 + 4096;
 pub const MAX_PACKAGE_URL_BYTES: usize = 2048;
 pub const MAX_SUMMARY_CHARS: usize = 96;
@@ -35,6 +40,8 @@ pub const MAX_ERROR_MESSAGE_CHARS: usize = 160;
 pub const MAX_CATALOG_LIFETIME_SECONDS: u64 = 31 * 24 * 60 * 60;
 
 const CATALOG_SIGNATURE_DOMAIN: &[u8] = b"CardputerZero store catalog signature v1\0";
+const CATALOG_INDEX_SIGNATURE_DOMAIN: &[u8] = b"CardputerZero store catalog index signature v1\0";
+const CATALOG_SHARD_SIGNATURE_DOMAIN: &[u8] = b"CardputerZero store catalog shard signature v1\0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,6 +146,74 @@ pub struct SignedCatalog {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CatalogIndex {
+    pub schema_version: u32,
+    pub catalog_schema_version: u32,
+    pub sequence: u64,
+    pub published_unix_seconds: u64,
+    pub expires_unix_seconds: u64,
+    pub total_app_count: u16,
+    pub shards: Vec<CatalogShardDescriptor>,
+    pub categories: Vec<CatalogCategoryIndex>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editorial: Option<CatalogEditorial>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogShardDescriptor {
+    pub index: u16,
+    pub url: String,
+    pub sha256: String,
+    pub bytes: u32,
+    pub app_count: u16,
+    pub first_app_id: String,
+    pub last_app_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogCategoryIndex {
+    pub category: StoreCategory,
+    pub app_count: u16,
+    pub shard_indices: Vec<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogShard {
+    pub schema_version: u32,
+    pub catalog_schema_version: u32,
+    pub sequence: u64,
+    pub index: u16,
+    pub apps: Vec<CatalogApp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedCatalogIndex {
+    pub catalog_index: CatalogIndex,
+    pub key_id: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedCatalogShard {
+    pub catalog_shard: CatalogShard,
+    pub key_id: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SignedCatalogDocument {
+    Catalog(SignedCatalog),
+    Index(SignedCatalogIndex),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StoreRequest {
     pub protocol_version: u32,
     pub request_id: u64,
@@ -149,6 +224,12 @@ pub struct StoreRequest {
 #[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum StoreCommand {
     List,
+    Browse {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        category: Option<StoreCategory>,
+        offset: u16,
+        limit: u8,
+    },
     Today,
     Search {
         query: String,
@@ -254,6 +335,18 @@ pub enum StoreResponseData {
     },
     SearchResults {
         query: String,
+        offset: u16,
+        limit: u8,
+        total: u16,
+        next_offset: Option<u16>,
+        sequence: u64,
+        expires_unix_seconds: u64,
+        stale: bool,
+        apps: Vec<StoreAppSummary>,
+    },
+    BrowseResults {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        category: Option<StoreCategory>,
         offset: u16,
         limit: u8,
         total: u16,
@@ -553,7 +646,7 @@ impl Catalog {
                 }
                 _ => unreachable!("catalog schema was validated above"),
             }
-            if !ids.insert(app.app_id.as_str()) {
+            if !ids.insert(app.app_id.clone()) {
                 return Err(StoreProtocolError::Invalid(
                     "catalog contains a duplicate application ID".into(),
                 ));
@@ -572,8 +665,166 @@ impl Catalog {
     }
 }
 
+impl CatalogIndex {
+    pub fn validate(&self) -> Result<(), StoreProtocolError> {
+        if self.schema_version != CATALOG_INDEX_SCHEMA_VERSION
+            || !matches!(
+                self.catalog_schema_version,
+                CATALOG_SCHEMA_VERSION
+                    | RICH_CATALOG_SCHEMA_VERSION
+                    | MEDIA_CATALOG_SCHEMA_VERSION
+                    | EDITORIAL_CATALOG_SCHEMA_VERSION
+            )
+            || self.sequence == 0
+        {
+            return Err(StoreProtocolError::Invalid(
+                "catalog index identity or schema is invalid".into(),
+            ));
+        }
+        validate_catalog_lifetime(self.published_unix_seconds, self.expires_unix_seconds)?;
+        let total = usize::from(self.total_app_count);
+        if !(1..=MAX_SHARDED_CATALOG_APPS).contains(&total)
+            || !(1..=MAX_CATALOG_SHARDS).contains(&self.shards.len())
+        {
+            return Err(StoreProtocolError::Invalid(
+                "catalog index application or shard count is outside limits".into(),
+            ));
+        }
+        match (self.catalog_schema_version, self.editorial.is_some()) {
+            (EDITORIAL_CATALOG_SCHEMA_VERSION, true)
+            | (CATALOG_SCHEMA_VERSION, false)
+            | (RICH_CATALOG_SCHEMA_VERSION, false)
+            | (MEDIA_CATALOG_SCHEMA_VERSION, false) => {}
+            _ => {
+                return Err(StoreProtocolError::Invalid(
+                    "catalog index editorial metadata is inconsistent with its content schema"
+                        .into(),
+                ));
+            }
+        }
+        if let Some(editorial) = &self.editorial {
+            editorial.validate_structure()?;
+        }
+
+        let mut app_count = 0_usize;
+        let mut previous_last: Option<&str> = None;
+        for (expected_index, shard) in self.shards.iter().enumerate() {
+            if usize::from(shard.index) != expected_index
+                || !is_valid_https_url(&shard.url)
+                || !is_lower_hex(&shard.sha256, 32)
+                || !(1..=MAX_CATALOG_BYTES as u32).contains(&shard.bytes)
+                || !(1..=MAX_CATALOG_APPS).contains(&usize::from(shard.app_count))
+                || !cp0_manifest::is_valid_app_id(&shard.first_app_id)
+                || !cp0_manifest::is_valid_app_id(&shard.last_app_id)
+                || shard.first_app_id > shard.last_app_id
+                || previous_last.is_some_and(|previous| previous >= shard.first_app_id.as_str())
+            {
+                return Err(StoreProtocolError::Invalid(
+                    "catalog shard descriptor is invalid or unordered".into(),
+                ));
+            }
+            app_count = app_count
+                .checked_add(usize::from(shard.app_count))
+                .ok_or_else(|| StoreProtocolError::Invalid("catalog app count overflow".into()))?;
+            previous_last = Some(&shard.last_app_id);
+        }
+        if app_count != total {
+            return Err(StoreProtocolError::Invalid(
+                "catalog index total differs from its shard descriptors".into(),
+            ));
+        }
+
+        let mut previous_category: Option<&str> = None;
+        let mut category_total = 0_usize;
+        for category in &self.categories {
+            let name = category.category.as_str();
+            if previous_category.is_some_and(|previous| previous >= name)
+                || category.app_count == 0
+                || category.shard_indices.is_empty()
+                || category.shard_indices.len() > self.shards.len()
+                || category
+                    .shard_indices
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
+                || category
+                    .shard_indices
+                    .iter()
+                    .any(|index| usize::from(*index) >= self.shards.len())
+            {
+                return Err(StoreProtocolError::Invalid(
+                    "catalog category index is invalid or unordered".into(),
+                ));
+            }
+            category_total = category_total
+                .checked_add(usize::from(category.app_count))
+                .ok_or_else(|| StoreProtocolError::Invalid("category count overflow".into()))?;
+            previous_category = Some(name);
+        }
+        if category_total != total {
+            return Err(StoreProtocolError::Invalid(
+                "catalog category total differs from the application total".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl CatalogShard {
+    pub fn validate(&self) -> Result<(), StoreProtocolError> {
+        if self.schema_version != CATALOG_SHARD_SCHEMA_VERSION
+            || self.sequence == 0
+            || usize::from(self.index) >= MAX_CATALOG_SHARDS
+            || self.apps.is_empty()
+        {
+            return Err(StoreProtocolError::Invalid(
+                "catalog shard identity or bounds are invalid".into(),
+            ));
+        }
+        let validation_schema = match self.catalog_schema_version {
+            EDITORIAL_CATALOG_SCHEMA_VERSION => MEDIA_CATALOG_SCHEMA_VERSION,
+            CATALOG_SCHEMA_VERSION | RICH_CATALOG_SCHEMA_VERSION | MEDIA_CATALOG_SCHEMA_VERSION => {
+                self.catalog_schema_version
+            }
+            _ => {
+                return Err(StoreProtocolError::Invalid(
+                    "catalog shard content schema is invalid".into(),
+                ));
+            }
+        };
+        Catalog {
+            schema_version: validation_schema,
+            sequence: self.sequence,
+            published_unix_seconds: 1,
+            expires_unix_seconds: 2,
+            apps: self.apps.clone(),
+            editorial: None,
+        }
+        .validate()
+    }
+}
+
 impl CatalogEditorial {
-    fn validate(&self, catalog_app_ids: &BTreeSet<&str>) -> Result<(), StoreProtocolError> {
+    fn validate(&self, catalog_app_ids: &BTreeSet<String>) -> Result<(), StoreProtocolError> {
+        self.validate_structure()?;
+        let mut referenced = BTreeSet::from([self.featured_app_id.as_str()]);
+        if !catalog_app_ids.contains(self.featured_app_id.as_str()) {
+            return Err(StoreProtocolError::Invalid(
+                "catalog editorial application reference is invalid or duplicated".into(),
+            ));
+        }
+        for collection in &self.collections {
+            for app_id in &collection.app_ids {
+                if !catalog_app_ids.contains(app_id.as_str()) || !referenced.insert(app_id) {
+                    return Err(StoreProtocolError::Invalid(
+                        "catalog editorial application reference is invalid or duplicated".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_structure(&self) -> Result<(), StoreProtocolError> {
         let headline_chars = self.headline.chars().count();
         if !(1..=MAX_EDITORIAL_HEADLINE_CHARS).contains(&headline_chars)
             || has_unsafe_text(&self.headline)
@@ -583,15 +834,14 @@ impl CatalogEditorial {
             ));
         }
         if !cp0_manifest::is_valid_app_id(&self.featured_app_id)
-            || !catalog_app_ids.contains(self.featured_app_id.as_str())
             || !(1..=MAX_EDITORIAL_COLLECTIONS).contains(&self.collections.len())
         {
             return Err(StoreProtocolError::Invalid(
                 "catalog editorial identity or collection count is invalid".into(),
             ));
         }
-        let mut referenced = BTreeSet::from([self.featured_app_id.as_str()]);
         let mut titles = BTreeSet::new();
+        let mut referenced = BTreeSet::from([self.featured_app_id.as_str()]);
         for collection in &self.collections {
             let title_chars = collection.title.chars().count();
             if !(1..=MAX_EDITORIAL_COLLECTION_TITLE_CHARS).contains(&title_chars)
@@ -604,10 +854,7 @@ impl CatalogEditorial {
                 ));
             }
             for app_id in &collection.app_ids {
-                if !cp0_manifest::is_valid_app_id(app_id)
-                    || !catalog_app_ids.contains(app_id.as_str())
-                    || !referenced.insert(app_id)
-                {
+                if !cp0_manifest::is_valid_app_id(app_id) || !referenced.insert(app_id) {
                     return Err(StoreProtocolError::Invalid(
                         "catalog editorial application reference is invalid or duplicated".into(),
                     ));
@@ -840,6 +1087,9 @@ impl StoreRequest {
             ));
         }
         match &self.command {
+            StoreCommand::Browse { offset, limit, .. } => {
+                validate_search_page(*offset, *limit)?;
+            }
             StoreCommand::Search {
                 query,
                 offset,
@@ -1044,7 +1294,7 @@ impl StoreResponseData {
                         "store search catalog metadata is invalid".into(),
                     ));
                 }
-                if usize::from(*total) > MAX_CATALOG_APPS {
+                if usize::from(*total) > MAX_SHARDED_CATALOG_APPS {
                     return Err(StoreProtocolError::Invalid(
                         "store search total exceeds the catalog limit".into(),
                     ));
@@ -1073,6 +1323,54 @@ impl StoreResponseData {
                         ));
                     }
                 }
+                Ok(())
+            }
+            Self::BrowseResults {
+                category,
+                offset,
+                limit,
+                total,
+                next_offset,
+                sequence,
+                expires_unix_seconds,
+                apps,
+                ..
+            } => {
+                validate_search_page(*offset, *limit)?;
+                if *sequence == 0
+                    || *expires_unix_seconds == 0
+                    || usize::from(*total) > MAX_SHARDED_CATALOG_APPS
+                {
+                    return Err(StoreProtocolError::Invalid(
+                        "store browse catalog metadata is invalid".into(),
+                    ));
+                }
+                let remaining = total.saturating_sub(*offset);
+                let expected_page = remaining.min(u16::from(*limit));
+                if apps.len() != usize::from(expected_page) {
+                    return Err(StoreProtocolError::Invalid(
+                        "store browse page length is inconsistent".into(),
+                    ));
+                }
+                let expected_next = offset
+                    .checked_add(expected_page)
+                    .filter(|next| *next < *total);
+                if *next_offset != expected_next {
+                    return Err(StoreProtocolError::Invalid(
+                        "store browse next offset is inconsistent".into(),
+                    ));
+                }
+                let mut previous_id: Option<&str> = None;
+                for app in apps {
+                    app.validate()?;
+                    if previous_id.is_some_and(|previous| previous >= app.app_id.as_str()) {
+                        return Err(StoreProtocolError::Invalid(
+                            "store browse applications are duplicated or unsorted".into(),
+                        ));
+                    }
+                    previous_id = Some(&app.app_id);
+                }
+                let _ = category;
                 Ok(())
             }
             Self::RefreshAccepted | Self::AutoUpdateAccepted | Self::MetricRecorded => Ok(()),
@@ -1332,7 +1630,9 @@ pub fn validate_search_query(query: &str) -> Result<(), StoreProtocolError> {
 }
 
 fn validate_search_page(offset: u16, limit: u8) -> Result<(), StoreProtocolError> {
-    if usize::from(offset) > MAX_CATALOG_APPS || !(1..=MAX_SEARCH_PAGE_APPS).contains(&limit) {
+    if usize::from(offset) > MAX_SHARDED_CATALOG_APPS
+        || !(1..=MAX_SEARCH_PAGE_APPS).contains(&limit)
+    {
         return Err(StoreProtocolError::Invalid(
             "store search page is outside limits".into(),
         ));
@@ -1514,6 +1814,229 @@ pub fn decode_signed_catalog(encoded: &[u8]) -> Result<SignedCatalog, StoreProto
     Ok(signed)
 }
 
+pub fn sign_catalog_index(
+    catalog_index: CatalogIndex,
+    signing_key: &[u8; 32],
+) -> Result<SignedCatalogIndex, StoreProtocolError> {
+    let canonical = canonical_catalog_index(&catalog_index)?;
+    let key = SigningKey::from_bytes(signing_key);
+    let public = key.verifying_key().to_bytes();
+    let signature = key.sign(&signature_message(
+        CATALOG_INDEX_SIGNATURE_DOMAIN,
+        &canonical,
+    ));
+    Ok(SignedCatalogIndex {
+        catalog_index,
+        key_id: lower_hex(&cp0_package::key_id(&public)),
+        signature: lower_hex(&signature.to_bytes()),
+    })
+}
+
+pub fn verify_catalog_index(
+    signed: &SignedCatalogIndex,
+    public_key: &[u8; 32],
+) -> Result<(), StoreProtocolError> {
+    let canonical = canonical_catalog_index(&signed.catalog_index)?;
+    verify_signature(
+        &signed.key_id,
+        &signed.signature,
+        public_key,
+        CATALOG_INDEX_SIGNATURE_DOMAIN,
+        &canonical,
+        "catalog index",
+    )
+}
+
+pub fn encode_signed_catalog_index(
+    signed: &SignedCatalogIndex,
+) -> Result<Vec<u8>, StoreProtocolError> {
+    verify_signed_index_shape(signed)?;
+    let encoded = serde_json::to_vec(signed)?;
+    if encoded.len() > MAX_CATALOG_BYTES {
+        return Err(StoreProtocolError::FrameTooLarge);
+    }
+    Ok(encoded)
+}
+
+pub fn decode_signed_catalog_index(
+    encoded: &[u8],
+) -> Result<SignedCatalogIndex, StoreProtocolError> {
+    if encoded.len() > MAX_CATALOG_BYTES {
+        return Err(StoreProtocolError::FrameTooLarge);
+    }
+    let signed: SignedCatalogIndex = serde_json::from_slice(encoded)?;
+    verify_signed_index_shape(&signed)?;
+    Ok(signed)
+}
+
+pub fn sign_catalog_shard(
+    catalog_shard: CatalogShard,
+    signing_key: &[u8; 32],
+) -> Result<SignedCatalogShard, StoreProtocolError> {
+    let canonical = canonical_catalog_shard(&catalog_shard)?;
+    let key = SigningKey::from_bytes(signing_key);
+    let public = key.verifying_key().to_bytes();
+    let signature = key.sign(&signature_message(
+        CATALOG_SHARD_SIGNATURE_DOMAIN,
+        &canonical,
+    ));
+    Ok(SignedCatalogShard {
+        catalog_shard,
+        key_id: lower_hex(&cp0_package::key_id(&public)),
+        signature: lower_hex(&signature.to_bytes()),
+    })
+}
+
+pub fn verify_catalog_shard(
+    signed: &SignedCatalogShard,
+    public_key: &[u8; 32],
+) -> Result<(), StoreProtocolError> {
+    let canonical = canonical_catalog_shard(&signed.catalog_shard)?;
+    verify_signature(
+        &signed.key_id,
+        &signed.signature,
+        public_key,
+        CATALOG_SHARD_SIGNATURE_DOMAIN,
+        &canonical,
+        "catalog shard",
+    )
+}
+
+pub fn encode_signed_catalog_shard(
+    signed: &SignedCatalogShard,
+) -> Result<Vec<u8>, StoreProtocolError> {
+    verify_signed_shard_shape(signed)?;
+    let encoded = serde_json::to_vec(signed)?;
+    if encoded.len() > MAX_CATALOG_BYTES {
+        return Err(StoreProtocolError::FrameTooLarge);
+    }
+    Ok(encoded)
+}
+
+pub fn decode_signed_catalog_shard(
+    encoded: &[u8],
+) -> Result<SignedCatalogShard, StoreProtocolError> {
+    if encoded.len() > MAX_CATALOG_BYTES {
+        return Err(StoreProtocolError::FrameTooLarge);
+    }
+    let signed: SignedCatalogShard = serde_json::from_slice(encoded)?;
+    verify_signed_shard_shape(&signed)?;
+    Ok(signed)
+}
+
+pub fn decode_signed_catalog_document(
+    encoded: &[u8],
+) -> Result<SignedCatalogDocument, StoreProtocolError> {
+    if encoded.len() > MAX_CATALOG_BYTES {
+        return Err(StoreProtocolError::FrameTooLarge);
+    }
+    let document: SignedCatalogDocument = serde_json::from_slice(encoded)?;
+    match &document {
+        SignedCatalogDocument::Catalog(signed) => verify_signed_shape(signed)?,
+        SignedCatalogDocument::Index(signed) => verify_signed_index_shape(signed)?,
+    }
+    Ok(document)
+}
+
+pub fn verify_catalog_shard_set(
+    signed_index: &SignedCatalogIndex,
+    encoded_shards: &[Vec<u8>],
+    public_key: &[u8; 32],
+) -> Result<Vec<SignedCatalogShard>, StoreProtocolError> {
+    verify_catalog_index(signed_index, public_key)?;
+    let index = &signed_index.catalog_index;
+    if encoded_shards.len() != index.shards.len() {
+        return Err(StoreProtocolError::Invalid(
+            "catalog shard set is incomplete".into(),
+        ));
+    }
+    let mut signed_shards = Vec::with_capacity(encoded_shards.len());
+    let mut category_members = StoreCategory::ALL
+        .into_iter()
+        .map(|category| (category, 0_u16, Vec::<u16>::new()))
+        .collect::<Vec<_>>();
+    let mut all_ids = BTreeSet::new();
+    let mut previous_id: Option<String> = None;
+    for (descriptor, encoded) in index.shards.iter().zip(encoded_shards) {
+        if encoded.len() != descriptor.bytes as usize
+            || lower_hex(&Sha256::digest(encoded)) != descriptor.sha256
+        {
+            return Err(StoreProtocolError::Invalid(
+                "catalog shard bytes differ from the signed descriptor".into(),
+            ));
+        }
+        let signed = decode_signed_catalog_shard(encoded)?;
+        verify_catalog_shard(&signed, public_key)?;
+        let shard = &signed.catalog_shard;
+        let first = shard.apps.first().expect("validated shard is non-empty");
+        let last = shard.apps.last().expect("validated shard is non-empty");
+        if shard.sequence != index.sequence
+            || shard.catalog_schema_version != index.catalog_schema_version
+            || shard.index != descriptor.index
+            || shard.apps.len() != usize::from(descriptor.app_count)
+            || first.app_id != descriptor.first_app_id
+            || last.app_id != descriptor.last_app_id
+        {
+            return Err(StoreProtocolError::Invalid(
+                "catalog shard identity differs from the signed descriptor".into(),
+            ));
+        }
+        for app in &shard.apps {
+            if previous_id
+                .as_deref()
+                .is_some_and(|previous| previous >= app.app_id.as_str())
+                || !all_ids.insert(app.app_id.clone())
+            {
+                return Err(StoreProtocolError::Invalid(
+                    "catalog shard applications overlap or are unordered".into(),
+                ));
+            }
+            previous_id = Some(app.app_id.clone());
+            let discovery = app.discovery.as_ref().ok_or_else(|| {
+                StoreProtocolError::Invalid(
+                    "sharded catalog application is missing discovery metadata".into(),
+                )
+            })?;
+            let (_, count, shard_indices) = category_members
+                .iter_mut()
+                .find(|(category, _, _)| *category == discovery.category)
+                .expect("all Store categories are indexed");
+            *count = count.checked_add(1).ok_or_else(|| {
+                StoreProtocolError::Invalid("catalog category count overflow".into())
+            })?;
+            if shard_indices.last() != Some(&shard.index) {
+                shard_indices.push(shard.index);
+            }
+        }
+        signed_shards.push(signed);
+    }
+    if all_ids.len() != usize::from(index.total_app_count) {
+        return Err(StoreProtocolError::Invalid(
+            "verified shard total differs from the signed index".into(),
+        ));
+    }
+    let expected_categories = category_members
+        .into_iter()
+        .filter(|(_, count, _)| *count > 0)
+        .map(
+            |(category, app_count, shard_indices)| CatalogCategoryIndex {
+                category,
+                app_count,
+                shard_indices,
+            },
+        )
+        .collect::<Vec<_>>();
+    if index.categories != expected_categories {
+        return Err(StoreProtocolError::Invalid(
+            "catalog category index differs from verified shard contents".into(),
+        ));
+    }
+    if let Some(editorial) = &index.editorial {
+        editorial.validate(&all_ids)?;
+    }
+    Ok(signed_shards)
+}
+
 pub fn encode_app_details(details: &StoreAppDetails) -> Result<Vec<u8>, StoreProtocolError> {
     details.validate()?;
     let encoded = serde_json::to_vec(details)?;
@@ -1635,6 +2158,16 @@ fn canonical_catalog(catalog: &Catalog) -> Result<Vec<u8>, StoreProtocolError> {
     serde_json::to_vec(catalog).map_err(StoreProtocolError::InvalidJson)
 }
 
+fn canonical_catalog_index(index: &CatalogIndex) -> Result<Vec<u8>, StoreProtocolError> {
+    index.validate()?;
+    serde_json::to_vec(index).map_err(StoreProtocolError::InvalidJson)
+}
+
+fn canonical_catalog_shard(shard: &CatalogShard) -> Result<Vec<u8>, StoreProtocolError> {
+    shard.validate()?;
+    serde_json::to_vec(shard).map_err(StoreProtocolError::InvalidJson)
+}
+
 fn verify_signed_shape(signed: &SignedCatalog) -> Result<(), StoreProtocolError> {
     signed.catalog.validate()?;
     if !is_lower_hex(&signed.key_id, 32) || !is_lower_hex(&signed.signature, 64) {
@@ -1645,11 +2178,76 @@ fn verify_signed_shape(signed: &SignedCatalog) -> Result<(), StoreProtocolError>
     Ok(())
 }
 
+fn verify_signed_index_shape(signed: &SignedCatalogIndex) -> Result<(), StoreProtocolError> {
+    signed.catalog_index.validate()?;
+    validate_signed_encodings(&signed.key_id, &signed.signature, "catalog index")
+}
+
+fn verify_signed_shard_shape(signed: &SignedCatalogShard) -> Result<(), StoreProtocolError> {
+    signed.catalog_shard.validate()?;
+    validate_signed_encodings(&signed.key_id, &signed.signature, "catalog shard")
+}
+
+fn validate_signed_encodings(
+    key_id: &str,
+    signature: &str,
+    kind: &str,
+) -> Result<(), StoreProtocolError> {
+    if !is_lower_hex(key_id, 32) || !is_lower_hex(signature, 64) {
+        return Err(StoreProtocolError::Invalid(format!(
+            "{kind} key ID or signature encoding is invalid"
+        )));
+    }
+    Ok(())
+}
+
 fn catalog_signature_message(canonical: &[u8]) -> Vec<u8> {
-    let mut message = Vec::with_capacity(CATALOG_SIGNATURE_DOMAIN.len() + canonical.len());
-    message.extend_from_slice(CATALOG_SIGNATURE_DOMAIN);
+    signature_message(CATALOG_SIGNATURE_DOMAIN, canonical)
+}
+
+fn signature_message(domain: &[u8], canonical: &[u8]) -> Vec<u8> {
+    let mut message = Vec::with_capacity(domain.len() + canonical.len());
+    message.extend_from_slice(domain);
     message.extend_from_slice(canonical);
     message
+}
+
+fn verify_signature(
+    key_id: &str,
+    signature: &str,
+    public_key: &[u8; 32],
+    domain: &[u8],
+    canonical: &[u8],
+    kind: &str,
+) -> Result<(), StoreProtocolError> {
+    let expected_key_id = lower_hex(&cp0_package::key_id(public_key));
+    if key_id != expected_key_id {
+        return Err(StoreProtocolError::Signature(format!(
+            "{kind} key ID does not match trusted key"
+        )));
+    }
+    let signature = decode_hex::<64>(signature)
+        .ok_or_else(|| StoreProtocolError::Signature(format!("{kind} signature is invalid")))?;
+    let key = VerifyingKey::from_bytes(public_key)
+        .map_err(|_| StoreProtocolError::Signature("trusted store key is invalid".into()))?;
+    key.verify(
+        &signature_message(domain, canonical),
+        &Signature::from_bytes(&signature),
+    )
+    .map_err(|_| StoreProtocolError::Signature(format!("{kind} signature does not match")))
+}
+
+fn validate_catalog_lifetime(
+    published_unix_seconds: u64,
+    expires_unix_seconds: u64,
+) -> Result<(), StoreProtocolError> {
+    expires_unix_seconds
+        .checked_sub(published_unix_seconds)
+        .filter(|lifetime| *lifetime > 0 && *lifetime <= MAX_CATALOG_LIFETIME_SECONDS)
+        .map(|_| ())
+        .ok_or_else(|| {
+            StoreProtocolError::Invalid("catalog validity interval is outside limits".into())
+        })
 }
 
 fn has_unsafe_text(value: &str) -> bool {
@@ -1782,6 +2380,78 @@ mod tests {
         catalog
     }
 
+    fn sharded_catalog(secret: &[u8; 32]) -> (SignedCatalogIndex, Vec<Vec<u8>>) {
+        let template = rich_catalog().apps.remove(0);
+        let apps = (0..65)
+            .map(|index| {
+                let mut app = template.clone();
+                app.app_id = format!("dev.cardputerzero.app{index:03}");
+                app.name = format!("App {index:03}");
+                app.package_url = format!("https://store.example.com/apps/app{index:03}.capp");
+                app.package_sha256 = format!("{index:064x}");
+                app.discovery.as_mut().unwrap().category = if index % 2 == 0 {
+                    StoreCategory::Utilities
+                } else {
+                    StoreCategory::Productivity
+                };
+                app
+            })
+            .collect::<Vec<_>>();
+        let mut descriptors = Vec::new();
+        let mut encoded_shards = Vec::new();
+        for (index, chunk) in apps.chunks(MAX_CATALOG_APPS).enumerate() {
+            let signed = sign_catalog_shard(
+                CatalogShard {
+                    schema_version: CATALOG_SHARD_SCHEMA_VERSION,
+                    catalog_schema_version: RICH_CATALOG_SCHEMA_VERSION,
+                    sequence: 9,
+                    index: index as u16,
+                    apps: chunk.to_vec(),
+                },
+                secret,
+            )
+            .unwrap();
+            let encoded = encode_signed_catalog_shard(&signed).unwrap();
+            descriptors.push(CatalogShardDescriptor {
+                index: index as u16,
+                url: format!("https://store.example.com/generations/9/shards/{index:04}.json"),
+                sha256: lower_hex(&Sha256::digest(&encoded)),
+                bytes: encoded.len() as u32,
+                app_count: chunk.len() as u16,
+                first_app_id: chunk.first().unwrap().app_id.clone(),
+                last_app_id: chunk.last().unwrap().app_id.clone(),
+            });
+            encoded_shards.push(encoded);
+        }
+        let signed_index = sign_catalog_index(
+            CatalogIndex {
+                schema_version: CATALOG_INDEX_SCHEMA_VERSION,
+                catalog_schema_version: RICH_CATALOG_SCHEMA_VERSION,
+                sequence: 9,
+                published_unix_seconds: 1_800_000_000,
+                expires_unix_seconds: 1_800_086_400,
+                total_app_count: 65,
+                shards: descriptors,
+                categories: vec![
+                    CatalogCategoryIndex {
+                        category: StoreCategory::Productivity,
+                        app_count: 32,
+                        shard_indices: vec![0],
+                    },
+                    CatalogCategoryIndex {
+                        category: StoreCategory::Utilities,
+                        app_count: 33,
+                        shard_indices: vec![0, 1],
+                    },
+                ],
+                editorial: None,
+            },
+            secret,
+        )
+        .unwrap();
+        (signed_index, encoded_shards)
+    }
+
     fn media_catalog() -> Catalog {
         let mut catalog = rich_catalog();
         catalog.schema_version = MEDIA_CATALOG_SCHEMA_VERSION;
@@ -1868,6 +2538,64 @@ mod tests {
         let mut tampered = decoded;
         tampered.catalog.apps[0].package_bytes += 1;
         assert!(verify_catalog(&tampered, &public).is_err());
+    }
+
+    #[test]
+    fn signs_and_verifies_a_complete_bounded_sharded_catalog() {
+        let secret = [19; 32];
+        let public = cp0_package::public_key(&secret);
+        let (signed_index, encoded_shards) = sharded_catalog(&secret);
+        verify_catalog_index(&signed_index, &public).unwrap();
+        let encoded_index = encode_signed_catalog_index(&signed_index).unwrap();
+        assert!(matches!(
+            decode_signed_catalog_document(&encoded_index).unwrap(),
+            SignedCatalogDocument::Index(_)
+        ));
+        let shards = verify_catalog_shard_set(&signed_index, &encoded_shards, &public).unwrap();
+        assert_eq!(shards.len(), 2);
+        assert_eq!(
+            shards
+                .iter()
+                .map(|shard| shard.catalog_shard.apps.len())
+                .sum::<usize>(),
+            65
+        );
+    }
+
+    #[test]
+    fn rejects_incomplete_reordered_replaced_or_misindexed_shards() {
+        let secret = [20; 32];
+        let public = cp0_package::public_key(&secret);
+        let (signed_index, encoded_shards) = sharded_catalog(&secret);
+
+        assert!(verify_catalog_shard_set(&signed_index, &encoded_shards[..1], &public).is_err());
+        let mut reordered = encoded_shards.clone();
+        reordered.swap(0, 1);
+        assert!(verify_catalog_shard_set(&signed_index, &reordered, &public).is_err());
+        let mut replaced = encoded_shards.clone();
+        replaced[0][0] ^= 1;
+        assert!(verify_catalog_shard_set(&signed_index, &replaced, &public).is_err());
+
+        let mut wrong_category = signed_index.catalog_index.clone();
+        wrong_category.categories[0].app_count += 1;
+        wrong_category.categories[1].app_count -= 1;
+        let wrong_category = sign_catalog_index(wrong_category, &secret).unwrap();
+        assert!(verify_catalog_shard_set(&wrong_category, &encoded_shards, &public).is_err());
+
+        let mut wrong_range = signed_index.catalog_index.clone();
+        wrong_range.shards[0].last_app_id = "dev.cardputerzero.app062".into();
+        let wrong_range = sign_catalog_index(wrong_range, &secret).unwrap();
+        assert!(verify_catalog_shard_set(&wrong_range, &encoded_shards, &public).is_err());
+    }
+
+    #[test]
+    fn catalog_signature_domains_cannot_be_replayed_across_document_types() {
+        let secret = [21; 32];
+        let public = cp0_package::public_key(&secret);
+        let (mut signed_index, encoded_shards) = sharded_catalog(&secret);
+        let signed_shard = decode_signed_catalog_shard(&encoded_shards[0]).unwrap();
+        signed_index.signature = signed_shard.signature;
+        assert!(verify_catalog_index(&signed_index, &public).is_err());
     }
 
     #[test]
@@ -2044,7 +2772,7 @@ mod tests {
         assert!(validate_search_query(&"界".repeat(MAX_SEARCH_QUERY_CHARS + 1)).is_err());
         assert!(validate_search_query(&"a".repeat(MAX_SEARCH_QUERY_BYTES + 1)).is_err());
 
-        for (offset, limit) in [(0, 0), (0, MAX_SEARCH_PAGE_APPS + 1), (65, 1)] {
+        for (offset, limit) in [(0, 0), (0, MAX_SEARCH_PAGE_APPS + 1), (1025, 1)] {
             let invalid = StoreRequest {
                 protocol_version: STORE_PROTOCOL_VERSION,
                 request_id: 10,
@@ -2056,6 +2784,19 @@ mod tests {
             };
             assert!(invalid.validate().is_err());
         }
+
+        let browse = StoreRequest {
+            protocol_version: STORE_PROTOCOL_VERSION,
+            request_id: 11,
+            command: StoreCommand::Browse {
+                category: Some(StoreCategory::Utilities),
+                offset: MAX_SHARDED_CATALOG_APPS as u16,
+                limit: MAX_SEARCH_PAGE_APPS,
+            },
+        };
+        let mut encoded = Vec::new();
+        write_request(&mut encoded, &browse).unwrap();
+        assert_eq!(read_request(&mut encoded.as_slice()).unwrap(), Some(browse));
 
         let unknown =
             br#"{"protocol_version":1,"request_id":1,"command":{"name":"list"},"extra":true}\n"#;
@@ -2218,6 +2959,47 @@ mod tests {
             },
         );
         assert!(write_response(&mut Vec::new(), &invalid_page_length).is_err());
+
+        let browse = StoreResponse::success(
+            4,
+            StoreResponseData::BrowseResults {
+                category: Some(StoreCategory::Utilities),
+                offset: 0,
+                limit: 1,
+                total: 2,
+                next_offset: Some(1),
+                sequence: 2,
+                expires_unix_seconds: 1_900_000_000,
+                stale: false,
+                apps: vec![response_app()],
+            },
+        );
+        let mut encoded = Vec::new();
+        write_response(&mut encoded, &browse).unwrap();
+        assert_eq!(
+            read_response(&mut encoded.as_slice()).unwrap(),
+            Some(browse.clone())
+        );
+
+        let mut invalid_browse_next = browse.clone();
+        let StoreOutcome::Ok {
+            data: StoreResponseData::BrowseResults { next_offset, .. },
+        } = &mut invalid_browse_next.outcome
+        else {
+            unreachable!();
+        };
+        *next_offset = None;
+        assert!(write_response(&mut Vec::new(), &invalid_browse_next).is_err());
+
+        let mut oversized_browse = browse;
+        let StoreOutcome::Ok {
+            data: StoreResponseData::BrowseResults { total, .. },
+        } = &mut oversized_browse.outcome
+        else {
+            unreachable!();
+        };
+        *total = MAX_SHARDED_CATALOG_APPS as u16 + 1;
+        assert!(write_response(&mut Vec::new(), &oversized_browse).is_err());
 
         let oversized_error = StoreResponse::error(
             4,

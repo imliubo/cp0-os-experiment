@@ -5,8 +5,9 @@ use cp0_manifest::{AppManifest, DisplayMode, ResourceLimits, Runtime};
 use cp0_package::{CApp, PackageEntry};
 use cp0_store_metadata::{AgeRating, ImageAsset, LocalizedListing, StoreCategory, StoreListing};
 use cp0_store_protocol::{
-    EDITORIAL_CATALOG_SCHEMA_VERSION, MEDIA_CATALOG_SCHEMA_VERSION, decode_app_details,
-    decode_signed_catalog, verify_catalog,
+    EDITORIAL_CATALOG_SCHEMA_VERSION, MEDIA_CATALOG_SCHEMA_VERSION, SignedCatalogDocument,
+    decode_app_details, decode_signed_catalog, decode_signed_catalog_document,
+    decode_signed_catalog_shard, verify_catalog, verify_catalog_shard_set,
 };
 use cp0_store_publisher::{RunOutcome, StorePublisher, connect, migrate};
 use cp0_store_scan::submission_content_sha256;
@@ -303,6 +304,134 @@ async fn postgres_store_publisher_acceptance() {
         &publisher.store_public_key(),
     )
     .await;
+    verify_sharded_publication(&pool, &root, store_secret).await;
+}
+
+async fn verify_sharded_publication(pool: &PgPool, root: &Path, store_secret: [u8; 32]) {
+    reset_database(pool).await;
+    let objects = root.join("sharded-objects");
+    let origin = root.join("sharded-origin");
+    tokio::fs::create_dir_all(objects.join("chunks"))
+        .await
+        .unwrap();
+    tokio::fs::create_dir_all(&origin).await.unwrap();
+    let signing_key = root.join("sharded-store-signing.key");
+    tokio::fs::write(&signing_key, store_secret).await.unwrap();
+    tokio::fs::set_permissions(&signing_key, std::fs::Permissions::from_mode(0o600))
+        .await
+        .unwrap();
+
+    let first_app = "dev.example.sharded000";
+    let first = Fixture::new(first_app, "1.0.0", [7_u8; 32]);
+    seed_identity(pool, first_app, &first.developer_public_key).await;
+    let publisher = StorePublisher::open(
+        pool.clone(),
+        &objects,
+        &origin,
+        &signing_key,
+        "https://store.example.invalid",
+        "publisher-sharded-acceptance",
+    )
+    .await
+    .unwrap();
+
+    for index in 0..65_u64 {
+        let app_id = format!("dev.example.sharded{index:03}");
+        let fixture = Fixture::new(&app_id, "1.0.0", [7_u8; 32]);
+        if index > 0 {
+            seed_app(pool, &app_id).await;
+        }
+        let suffix = format!("{:032x}", index + 4096);
+        seed_submission_release(
+            pool,
+            &objects,
+            &fixture,
+            &format!("sub_{suffix}"),
+            &format!("rel_{suffix}"),
+            &format!("decision_{suffix}"),
+            &format!("evt_{suffix}"),
+            1,
+            1000 + index as i64,
+        )
+        .await;
+        let outcome = publisher.run_once().await.unwrap();
+        assert!(
+            matches!(
+                &outcome,
+                RunOutcome::Published {
+                    catalog_sequence,
+                    app_count,
+                    ..
+                } if *catalog_sequence == index + 1 && *app_count == index as usize + 1
+            ),
+            "unexpected outcome at application {index}: {outcome:?}"
+        );
+    }
+
+    let snapshot = sqlx::query(
+        "SELECT encoded_catalog, document_kind, shard_count, app_count \
+         FROM store_catalog_snapshots WHERE sequence = 65",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(snapshot.get::<String, _>("document_kind"), "index");
+    assert_eq!(snapshot.get::<i16, _>("shard_count"), 2);
+    assert_eq!(snapshot.get::<i32, _>("app_count"), 65);
+    let encoded_root: Vec<u8> = snapshot.get("encoded_catalog");
+    let SignedCatalogDocument::Index(signed_index) =
+        decode_signed_catalog_document(&encoded_root).unwrap()
+    else {
+        panic!("the 65-application snapshot must be a signed index");
+    };
+    let rows = sqlx::query(
+        "SELECT shard_index, encoded_shard FROM store_catalog_shards \
+         WHERE catalog_sequence = 65 ORDER BY shard_index",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    let encoded_shards = rows
+        .iter()
+        .map(|row| row.get::<Vec<u8>, _>("encoded_shard"))
+        .collect::<Vec<_>>();
+    let verified = verify_catalog_shard_set(
+        &signed_index,
+        &encoded_shards,
+        &publisher.store_public_key(),
+    )
+    .unwrap();
+    assert_eq!(
+        verified
+            .iter()
+            .map(|shard| shard.catalog_shard.apps.len())
+            .sum::<usize>(),
+        65
+    );
+    for row in rows {
+        let index = row.get::<i16, _>("shard_index");
+        let encoded: Vec<u8> = row.get("encoded_shard");
+        decode_signed_catalog_shard(&encoded).unwrap();
+        assert_eq!(
+            tokio::fs::read(origin.join(format!("generations/65/shards/{index:04}.json")))
+                .await
+                .unwrap(),
+            encoded
+        );
+    }
+
+    assert!(
+        sqlx::query(
+            "INSERT INTO store_catalog_shards (catalog_sequence, shard_index, shard_sha256, \
+         shard_bytes, relative_path, store_key_id, app_count, first_app_id, last_app_id, \
+         encoded_shard, created_unix_seconds) VALUES \
+         (64, 0, repeat('0', 64), 2, 'generations/64/shards/0000.json', repeat('0', 64), \
+          1, 'dev.example.fake', 'dev.example.fake', '\\x7b7d', 1)",
+        )
+        .execute(pool)
+        .await
+        .is_err()
+    );
 }
 
 async fn assert_published_sequence(publisher: &StorePublisher, sequence: u64, app_count: usize) {

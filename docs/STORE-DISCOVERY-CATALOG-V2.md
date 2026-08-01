@@ -54,7 +54,8 @@ Catalog responses to the current System Shell remain the bounded v1 summary
 shape, so this change does not increase the C UI allocation or frame size. S6B
 now publishes signed icon/screenshot resources through Catalog v3; caching and
 rendering those resources, localized selection, Today collections and signed
-shards remain later S6 slices.
+S6E now adds the compatible signed root/category index and bounded shards; see
+`STORE-SHARDED-CATALOG-V1.md`.
 
 ## Verification
 

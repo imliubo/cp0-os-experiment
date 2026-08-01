@@ -116,6 +116,9 @@ screenshot 缓存、精确摘要与 PNG/details 身份复验、独立预算和�
 S8A 已新增 Catalog v4 editorial 层：Today 主推荐、1-2 个专题和每组最多 4 个应用均来自 approved
 且 published 的 Release；运营 revision、Publisher snapshot、设备 `today` IPC 和 320x170 Shell
 导航形成完整纵向链路。引用失效时 Publisher 安全退回 v3，不发布过期推荐。
+S6E 已新增兼容的签名根索引、分类索引和有界 shard：Publisher 在 64 项或 48 KiB 任一上限先到
+时确定性切换，数据库和不可变 generation 原子记录全部对象；`cp0-stored` 完整验证后原子缓存，
+并通过 8 项有界 `browse`/`search` 分页访问最多 1024 项。
 
 - [x] 实现 App Registry、Submission、独立双审 Review 和 Release 服务主体。
   App Registry、Submission 上传/finalize/read/withdraw、Release 控制、OAuth 开发者 Device Flow、
@@ -146,8 +149,11 @@ S8A 已新增 Catalog v4 editorial 层：Today 主推荐、1-2 个专题和每�
 - [x] 增加 Today 专题和精选集合。
   S8A 通过 Catalog v4、严格 `today` IPC 和 System Shell 单前台集合导航完成；Updates 已由 S7
   使用 verified Catalog 与 appd 安装快照计算。
-- [ ] 增加签名分类索引；Apps 当前在最多 64 项的完整 Catalog 上浏览。
-- [ ] 规模超过 64 应用时切换为签名根索引和有界 shard。
+- [x] 增加签名分类索引。
+  S6E 根签名绑定精确分类计数和 shard ordinal，设备从已验证应用集重算后才接受；`browse`
+  IPC 和 `cp0ctl store browse` 提供 all/category 的 8 项分页。
+- [x] 规模超过 64 应用时切换为签名根索引和有界 shard。
+  实现同时处理更早达到 48 KiB 的目录，最多 16 个 shard/1024 项；缺失或篡改 shard 不切换缓存。
 - [x] `cp0-stored` 原子缓存 Catalog/资源，资源解析失败不影响本地应用启动。
   S6C 在 Catalog 提交后尽力预取图标，details/截图按需缓存；截断、替换、错误尺寸、错误身份和
   不安全缓存 inode 均不会生成最终对象，且不回滚 Catalog 或阻断已验证包安装。
