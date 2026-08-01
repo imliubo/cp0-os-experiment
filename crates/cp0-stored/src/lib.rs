@@ -24,10 +24,11 @@ use cp0_store_metadata::validate_png_structure;
 use cp0_store_protocol::{
     CatalogApp, CatalogImageResource, CatalogObjectResource, MAX_INSTALL_BATCH_APPS, SignedCatalog,
     StoreAppDetails, StoreAppState, StoreAppSummary, StoreCommand, StoreControlAction,
-    StoreErrorCode, StoreFailureReason, StoreInstallAccepted, StoreInstallPreflight,
-    StoreMediaMetadata, StoreMediaSelector, StoreRequest, StoreResponse, StoreResponseData,
-    decode_app_details, decode_signed_catalog, is_lower_hex, is_valid_https_url, read_request,
-    response_requires_descriptor, send_response_with_fd, verify_catalog, write_response,
+    StoreEditorial, StoreEditorialCollection, StoreErrorCode, StoreFailureReason,
+    StoreInstallAccepted, StoreInstallPreflight, StoreMediaMetadata, StoreMediaSelector,
+    StoreRequest, StoreResponse, StoreResponseData, decode_app_details, decode_signed_catalog,
+    is_lower_hex, is_valid_https_url, read_request, response_requires_descriptor,
+    send_response_with_fd, verify_catalog, write_response,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -969,6 +970,7 @@ impl StoreService {
         }
         let result = match request.command {
             StoreCommand::List => self.catalog_response(),
+            StoreCommand::Today => self.today_response(),
             StoreCommand::Search {
                 query,
                 offset,
@@ -1420,6 +1422,64 @@ impl StoreService {
             expires_unix_seconds: catalog.catalog.expires_unix_seconds,
             stale: now >= catalog.catalog.expires_unix_seconds,
             apps,
+        })
+    }
+
+    fn today_response(&self) -> Result<StoreResponseData, StoreServiceError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| StoreServiceError::Unavailable("store state lock is unavailable"))?;
+        let catalog = state
+            .catalog
+            .as_ref()
+            .ok_or(StoreServiceError::Unconfigured)?;
+        let editorial = catalog
+            .catalog
+            .editorial
+            .as_ref()
+            .map(|editorial| {
+                let summary = |app_id: &str| {
+                    catalog
+                        .catalog
+                        .apps
+                        .iter()
+                        .find(|app| app.app_id == app_id)
+                        .map(|app| store_app_summary(app, state.operations.get(app_id)))
+                        .ok_or_else(|| {
+                            StoreServiceError::Untrusted(
+                                "signed editorial application is missing from the Catalog".into(),
+                            )
+                        })
+                };
+                let featured = summary(&editorial.featured_app_id)?;
+                let collections = editorial
+                    .collections
+                    .iter()
+                    .map(|collection| {
+                        let apps = collection
+                            .app_ids
+                            .iter()
+                            .map(|app_id| summary(app_id))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok(StoreEditorialCollection {
+                            title: collection.title.clone(),
+                            apps,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, StoreServiceError>>()?;
+                Ok::<_, StoreServiceError>(StoreEditorial {
+                    headline: editorial.headline.clone(),
+                    featured,
+                    collections,
+                })
+            })
+            .transpose()?;
+        Ok(StoreResponseData::Today {
+            sequence: catalog.catalog.sequence,
+            expires_unix_seconds: catalog.catalog.expires_unix_seconds,
+            stale: unix_time() >= catalog.catalog.expires_unix_seconds,
+            editorial,
         })
     }
 
@@ -3586,9 +3646,10 @@ mod tests {
     use cp0_store_metadata::{AgeRating, StoreCategory};
     use cp0_store_protocol::{
         APP_DETAILS_SCHEMA_VERSION, CATALOG_SCHEMA_VERSION, Catalog, CatalogDiscovery,
-        CatalogImageResource, CatalogObjectResource, CatalogResources,
-        MEDIA_CATALOG_SCHEMA_VERSION, RICH_CATALOG_SCHEMA_VERSION, StoreAppDetails,
-        encode_app_details, encode_signed_catalog, sign_catalog,
+        CatalogEditorial, CatalogEditorialCollection, CatalogImageResource, CatalogObjectResource,
+        CatalogResources, EDITORIAL_CATALOG_SCHEMA_VERSION, MEDIA_CATALOG_SCHEMA_VERSION,
+        RICH_CATALOG_SCHEMA_VERSION, StoreAppDetails, encode_app_details, encode_signed_catalog,
+        sign_catalog,
     };
     use std::net::TcpListener;
     use std::os::fd::AsRawFd;
@@ -4219,6 +4280,7 @@ mod tests {
                 published_unix_seconds: expires_unix_seconds.saturating_sub(3600),
                 expires_unix_seconds,
                 apps,
+                editorial: None,
             };
             encode_signed_catalog(&sign_catalog(catalog, &self.secret).unwrap()).unwrap()
         }
@@ -4284,6 +4346,7 @@ mod tests {
             published_unix_seconds: now,
             expires_unix_seconds: now + 3600,
             apps: vec![app.clone()],
+            editorial: None,
         };
         let catalog =
             encode_signed_catalog(&sign_catalog(catalog, &fixture.secret).unwrap()).unwrap();
@@ -4394,6 +4457,110 @@ mod tests {
             fixture.root.starts_with(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp")
             )
+        );
+    }
+
+    #[test]
+    fn today_projects_verified_v4_editorial_and_legacy_catalogs_return_null() {
+        let fixture = Fixture::new("today");
+        let service = StoreService::new(
+            fixture.paths.clone(),
+            StoreConfig { catalog_url: None },
+            Arc::new(MockNetwork {
+                catalog: Vec::new(),
+                package: fixture.package.clone(),
+            }),
+            Arc::new(MockInstaller::default()),
+            [0],
+        )
+        .unwrap();
+        let now = unix_time();
+        let v1 = Catalog {
+            schema_version: CATALOG_SCHEMA_VERSION,
+            sequence: 21,
+            published_unix_seconds: now,
+            expires_unix_seconds: now + 3600,
+            apps: vec![fixture.catalog_app(
+                "dev.cardputerzero.storetest",
+                "Store Test",
+                "Legacy Store application",
+            )],
+            editorial: None,
+        };
+        let mut v2 = v1.clone();
+        v2.schema_version = RICH_CATALOG_SCHEMA_VERSION;
+        v2.sequence = 22;
+        v2.apps[0].discovery = Some(CatalogDiscovery {
+            developer: "CardputerZero Labs".into(),
+            subtitle: v2.apps[0].summary.clone(),
+            category: StoreCategory::Utilities,
+            keywords: vec!["legacy".into()],
+            age_rating: AgeRating::FourPlus,
+            privacy_url: "https://example.com/privacy".into(),
+            support_url: "https://example.com/support".into(),
+        });
+        let (v3_encoded, _, _) = media_catalog(&fixture, 23);
+        let v3 = decode_signed_catalog(&v3_encoded).unwrap().catalog;
+        for catalog in [v1.clone(), v2, v3] {
+            let signed = sign_catalog(catalog.clone(), &fixture.secret).unwrap();
+            signed.catalog.validate().unwrap();
+            service.state.lock().unwrap().catalog = Some(signed);
+            assert!(matches!(
+                service.today_response().unwrap(),
+                StoreResponseData::Today {
+                    sequence,
+                    editorial: None,
+                    ..
+                } if sequence == catalog.sequence
+            ));
+        }
+
+        let (v4_base, _, _) = media_catalog(&fixture, 24);
+        let mut v4 = decode_signed_catalog(&v4_base).unwrap().catalog;
+        let mut second = v4.apps[0].clone();
+        second.app_id = "dev.cardputerzero.tools".into();
+        second.name = "Tools".into();
+        second.summary = "Reviewed small-screen utilities".into();
+        second.package_url = "https://store.example.com/tools.capp".into();
+        second.discovery.as_mut().unwrap().subtitle = second.summary.clone();
+        v4.apps.push(second);
+        v4.schema_version = EDITORIAL_CATALOG_SCHEMA_VERSION;
+        v4.editorial = Some(CatalogEditorial {
+            headline: "Made for CardputerZero".into(),
+            featured_app_id: "dev.cardputerzero.storetest".into(),
+            collections: vec![CatalogEditorialCollection {
+                title: "Small-screen essentials".into(),
+                app_ids: vec!["dev.cardputerzero.tools".into()],
+            }],
+        });
+        let signed_v4 = sign_catalog(v4, &fixture.secret).unwrap();
+        signed_v4.catalog.validate().unwrap();
+        service.state.lock().unwrap().catalog = Some(signed_v4);
+        let response = service.dispatch(StoreRequest {
+            protocol_version: cp0_store_protocol::STORE_PROTOCOL_VERSION,
+            request_id: 24,
+            command: StoreCommand::Today,
+        });
+        response.validate().unwrap();
+        let cp0_store_protocol::StoreOutcome::Ok {
+            data:
+                StoreResponseData::Today {
+                    sequence,
+                    editorial: Some(editorial),
+                    ..
+                },
+        } = response.outcome
+        else {
+            panic!("Today must return verified v4 editorial data");
+        };
+        assert_eq!(sequence, 24);
+        assert_eq!(editorial.headline, "Made for CardputerZero");
+        assert_eq!(editorial.featured.app_id, "dev.cardputerzero.storetest");
+        assert_eq!(editorial.collections.len(), 1);
+        assert_eq!(editorial.collections[0].title, "Small-screen essentials");
+        assert_eq!(
+            editorial.collections[0].apps[0].app_id,
+            "dev.cardputerzero.tools"
         );
     }
 
@@ -5421,6 +5588,7 @@ mod tests {
             published_unix_seconds: now,
             expires_unix_seconds: now + 3600,
             apps: vec![app],
+            editorial: None,
         };
         let encoded =
             encode_signed_catalog(&sign_catalog(catalog, &fixture.secret).unwrap()).unwrap();

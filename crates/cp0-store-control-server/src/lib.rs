@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path as FilePath, PathBuf};
 use std::sync::Arc;
@@ -2538,6 +2539,211 @@ impl StoreControlService {
         Ok(release)
     }
 
+    async fn get_today_editorial(&self, token: &str) -> Result<EditorialLayoutResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        let identity = authenticate_store_operator(&mut transaction, &token_sha256)
+            .await
+            .map_err(ApiError::from_transaction)?;
+        require_editorial_access(&identity).map_err(|error| error)?;
+        let layout = load_editorial_layout(&mut transaction, false)
+            .await
+            .map_err(ApiError::from_transaction)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        Ok(layout)
+    }
+
+    async fn replace_today_editorial(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+        request_id: &str,
+        expected_version: Option<u64>,
+        request: &EditorialLayoutRequest,
+    ) -> Result<EditorialLayoutResponse, ApiError> {
+        let token_sha256 = sha256_hex(token.as_bytes());
+        let key_sha256 = sha256_hex(idempotency_key.as_bytes());
+        for attempt in 0..MAX_TRANSACTION_ATTEMPTS {
+            match self
+                .replace_today_editorial_once(
+                    &token_sha256,
+                    &key_sha256,
+                    request_id,
+                    expected_version,
+                    request,
+                )
+                .await
+            {
+                Err(TxError::Sql(error)) if is_retryable_transaction_error(&error) => {
+                    if attempt + 1 == MAX_TRANSACTION_ATTEMPTS {
+                        return Err(ApiError::unavailable());
+                    }
+                    retry_delay(attempt).await;
+                }
+                Err(TxError::Sql(_)) => return Err(ApiError::unavailable()),
+                Err(TxError::Api(error)) => return Err(error),
+                Ok(layout) => return Ok(layout),
+            }
+        }
+        Err(ApiError::unavailable())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn replace_today_editorial_once(
+        &self,
+        token_sha256: &str,
+        key_sha256: &str,
+        request_id: &str,
+        expected_version: Option<u64>,
+        request: &EditorialLayoutRequest,
+    ) -> Result<EditorialLayoutResponse, TxError> {
+        validate_editorial_request(request)?;
+        let mut transaction = begin_serializable(&self.pool).await?;
+        let identity = authenticate_store_operator(&mut transaction, token_sha256).await?;
+        require_editorial_access(&identity)?;
+        let request_sha256 = editorial_request_sha256(expected_version, request)?;
+        let now = database_now(&mut transaction).await?;
+        let response_status = if expected_version.is_some() {
+            StatusCode::OK
+        } else {
+            StatusCode::CREATED
+        };
+        match reserve_idempotency(
+            &mut transaction,
+            &identity.operator_id,
+            key_sha256,
+            &request_sha256,
+            now,
+        )
+        .await?
+        {
+            IdempotencyReservation::Fresh => {}
+            IdempotencyReservation::Replay { status, body }
+                if status == response_status.as_u16() as i16 =>
+            {
+                let layout = serde_json::from_value(body).map_err(|_| ApiError::internal())?;
+                transaction.commit().await.map_err(TxError::Sql)?;
+                return Ok(layout);
+            }
+            IdempotencyReservation::Replay { .. } => {
+                return Err(ApiError::internal().into());
+            }
+        }
+
+        let current = sqlx::query_scalar::<_, i64>(
+            "SELECT resource_version FROM store_editorial_layouts \
+             WHERE layout_id = 'today' FOR UPDATE",
+        )
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .map(|version| u64::try_from(version).map_err(|_| ApiError::internal()))
+        .transpose()?;
+        let resource_version = match (expected_version, current) {
+            (None, None) => 1,
+            (None, Some(_)) => return Err(ApiError::conflict().into()),
+            (Some(_), None) => return Err(ApiError::not_found().into()),
+            (Some(expected), Some(current)) if expected != current => {
+                return Err(ApiError::precondition_failed().into());
+            }
+            (Some(expected), Some(_)) => expected.checked_add(1).ok_or_else(ApiError::internal)?,
+        };
+        let resolved = resolve_editorial_layout(&mut transaction, request).await?;
+        let layout = EditorialLayoutResponse {
+            layout_id: "today".into(),
+            headline: request.headline.clone(),
+            featured: resolved.featured.clone(),
+            collections: resolved.collections.clone(),
+            resource_version,
+            updated_unix_seconds: u64::try_from(now).map_err(|_| ApiError::internal())?,
+        };
+        if expected_version.is_none() {
+            sqlx::query(
+                "INSERT INTO store_editorial_layouts (layout_id, headline, featured_release_id, \
+                 featured_app_id, collections, resource_version, created_unix_seconds, \
+                 updated_unix_seconds) VALUES ('today', $1, $2, $3, $4, 1, $5, $5)",
+            )
+            .bind(&layout.headline)
+            .bind(&layout.featured.release_id)
+            .bind(&layout.featured.app_id)
+            .bind(&resolved.collections_json)
+            .bind(now)
+            .execute(&mut *transaction)
+            .await
+            .map_err(TxError::Sql)?;
+        } else {
+            sqlx::query(
+                "UPDATE store_editorial_layouts SET headline = $1, featured_release_id = $2, \
+                 featured_app_id = $3, collections = $4, resource_version = $5, \
+                 updated_unix_seconds = $6 WHERE layout_id = 'today'",
+            )
+            .bind(&layout.headline)
+            .bind(&layout.featured.release_id)
+            .bind(&layout.featured.app_id)
+            .bind(&resolved.collections_json)
+            .bind(i64::try_from(resource_version).map_err(|_| ApiError::internal())?)
+            .bind(now)
+            .execute(&mut *transaction)
+            .await
+            .map_err(TxError::Sql)?;
+        }
+        sqlx::query(
+            "INSERT INTO store_editorial_revisions (layout_id, resource_version, operator_id, \
+             headline, featured_release_id, featured_app_id, collections, request_sha256, \
+             created_unix_seconds) VALUES ('today', $1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(i64::try_from(resource_version).map_err(|_| ApiError::internal())?)
+        .bind(&identity.operator_id)
+        .bind(&layout.headline)
+        .bind(&layout.featured.release_id)
+        .bind(&layout.featured.app_id)
+        .bind(&resolved.collections_json)
+        .bind(&request_sha256)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(TxError::Sql)?;
+
+        let response_body = serde_json::to_value(&layout).map_err(|_| ApiError::internal())?;
+        complete_idempotency(
+            &mut transaction,
+            &identity.operator_id,
+            key_sha256,
+            response_status,
+            &response_body,
+        )
+        .await?;
+        append_editorial_mutation(
+            &mut transaction,
+            EditorialMutationEvent {
+                now,
+                operator_id: &identity.operator_id,
+                action: if expected_version.is_some() {
+                    "editorial.today-updated"
+                } else {
+                    "editorial.today-created"
+                },
+                resource_version,
+                request_id,
+                request_sha256: &request_sha256,
+                key_sha256,
+                featured_release_id: &layout.featured.release_id,
+                featured_app_id: &layout.featured.app_id,
+                featured_release_version: resolved.featured_release_version,
+            },
+        )
+        .await?;
+        transaction.commit().await.map_err(TxError::Sql)?;
+        Ok(layout)
+    }
+
     async fn post_review_message(
         &self,
         token: &str,
@@ -2779,6 +2985,13 @@ pub fn router(service: StoreControlService) -> Router {
                 .post(mutate_release)
                 .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
         )
+        .route(
+            "/v1/editorial/today",
+            get(get_today_editorial)
+                .post(post_today_editorial)
+                .put(put_today_editorial)
+                .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(fallback)
         .with_state(service)
@@ -2928,6 +3141,21 @@ struct RemovalRequest {
     note: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditorialCollectionRequest {
+    title: String,
+    release_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditorialLayoutRequest {
+    headline: String,
+    featured_release_id: String,
+    collections: Vec<EditorialCollectionRequest>,
+}
+
 struct ReviewCursor {
     created_unix_seconds: i64,
     submission_id: String,
@@ -2985,6 +3213,38 @@ struct ReleaseResponse {
     scheduled_unix_seconds: Option<u64>,
     catalog_sequence: Option<u64>,
     resource_version: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditorialItemResponse {
+    release_id: String,
+    app_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditorialCollectionResponse {
+    title: String,
+    items: Vec<EditorialItemResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditorialLayoutResponse {
+    layout_id: String,
+    headline: String,
+    featured: EditorialItemResponse,
+    collections: Vec<EditorialCollectionResponse>,
+    resource_version: u64,
+    updated_unix_seconds: u64,
+}
+
+struct ResolvedEditorialLayout {
+    featured: EditorialItemResponse,
+    featured_release_version: u64,
+    collections: Vec<EditorialCollectionResponse>,
+    collections_json: Value,
 }
 
 enum ReleaseAction {
@@ -3420,6 +3680,20 @@ impl ReviewerIdentity {
     }
 }
 
+#[derive(Debug)]
+struct StoreOperatorIdentity {
+    operator_id: String,
+    role: String,
+    two_factor_enabled: bool,
+    scopes: Vec<String>,
+}
+
+impl StoreOperatorIdentity {
+    fn has_scope(&self, expected: &str) -> bool {
+        self.scopes.iter().any(|scope| scope == expected)
+    }
+}
+
 enum MessageIdentity {
     Developer(Identity),
     Reviewer(ReviewerIdentity),
@@ -3455,6 +3729,19 @@ struct MutationEvent<'a> {
     request_sha256: &'a str,
     key_sha256: &'a str,
     payload: Value,
+}
+
+struct EditorialMutationEvent<'a> {
+    now: i64,
+    operator_id: &'a str,
+    action: &'a str,
+    resource_version: u64,
+    request_id: &'a str,
+    request_sha256: &'a str,
+    key_sha256: &'a str,
+    featured_release_id: &'a str,
+    featured_app_id: &'a str,
+    featured_release_version: u64,
 }
 
 async fn begin_serializable(pool: &PgPool) -> Result<Transaction<'_, Postgres>, TxError> {
@@ -3551,6 +3838,18 @@ fn require_reviewer_write(identity: &ReviewerIdentity) -> Result<(), ApiError> {
     Ok(())
 }
 
+fn require_editorial_access(identity: &StoreOperatorIdentity) -> Result<(), ApiError> {
+    if !matches!(identity.role.as_str(), "editor" | "admin")
+        || !identity.has_scope("store.editorial")
+    {
+        return Err(ApiError::forbidden());
+    }
+    if !identity.two_factor_enabled {
+        return Err(ApiError::two_factor_required());
+    }
+    Ok(())
+}
+
 async fn complete_idempotency(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: &str,
@@ -3612,6 +3911,51 @@ async fn append_mutation(
     .bind(version)
     .bind(event.request_sha256)
     .bind(event.payload)
+    .bind(event.now)
+    .execute(&mut **transaction)
+    .await
+    .map_err(TxError::Sql)?;
+    Ok(())
+}
+
+async fn append_editorial_mutation(
+    transaction: &mut Transaction<'_, Postgres>,
+    event: EditorialMutationEvent<'_>,
+) -> Result<(), TxError> {
+    let layout_version = i64::try_from(event.resource_version).map_err(|_| ApiError::internal())?;
+    let release_version =
+        i64::try_from(event.featured_release_version).map_err(|_| ApiError::internal())?;
+    sqlx::query(
+        "INSERT INTO audit_events (occurred_unix_seconds, actor_id, action, object_kind, \
+         object_id, before_state, after_state, resource_version, request_id, request_sha256, \
+         idempotency_key_sha256) VALUES ($1, $2, $3, 'editorial', 'today', NULL, 'active', \
+         $4, $5, $6, $7)",
+    )
+    .bind(event.now)
+    .bind(event.operator_id)
+    .bind(event.action)
+    .bind(layout_version)
+    .bind(event.request_id)
+    .bind(event.request_sha256)
+    .bind(event.key_sha256)
+    .execute(&mut **transaction)
+    .await
+    .map_err(TxError::Sql)?;
+    sqlx::query(
+        "INSERT INTO outbox_events (event_id, topic, aggregate_kind, aggregate_id, \
+         aggregate_version, request_sha256, payload, created_unix_seconds) \
+         VALUES ($1, 'catalog.rebuild-requested', 'release', $2, $3, $4, $5, $6)",
+    )
+    .bind(prefixed_uuid("evt_"))
+    .bind(event.featured_release_id)
+    .bind(release_version)
+    .bind(event.request_sha256)
+    .bind(json!({
+        "release_id": event.featured_release_id,
+        "app_id": event.featured_app_id,
+        "state": "published",
+        "editorial_resource_version": event.resource_version
+    }))
     .bind(event.now)
     .execute(&mut **transaction)
     .await
@@ -3722,6 +4066,106 @@ async fn load_release(
         .map_err(TxError::Sql)?
         .ok_or_else(ApiError::not_found)?;
     release_from_row(&row).map_err(Into::into)
+}
+
+async fn load_editorial_layout(
+    transaction: &mut Transaction<'_, Postgres>,
+    lock: bool,
+) -> Result<EditorialLayoutResponse, TxError> {
+    let sql = if lock {
+        "SELECT headline, featured_release_id, featured_app_id, collections, \
+         resource_version, updated_unix_seconds FROM store_editorial_layouts \
+         WHERE layout_id = 'today' FOR UPDATE"
+    } else {
+        "SELECT headline, featured_release_id, featured_app_id, collections, \
+         resource_version, updated_unix_seconds FROM store_editorial_layouts \
+         WHERE layout_id = 'today'"
+    };
+    let row = sqlx::query(sql)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .ok_or_else(ApiError::not_found)?;
+    let collections: Value = row.get("collections");
+    Ok(EditorialLayoutResponse {
+        layout_id: "today".into(),
+        headline: row.get("headline"),
+        featured: EditorialItemResponse {
+            release_id: row.get("featured_release_id"),
+            app_id: row.get("featured_app_id"),
+        },
+        collections: serde_json::from_value(collections).map_err(|_| ApiError::internal())?,
+        resource_version: row_version(&row)?,
+        updated_unix_seconds: u64::try_from(row.get::<i64, _>("updated_unix_seconds"))
+            .map_err(|_| ApiError::internal())?,
+    })
+}
+
+async fn resolve_editorial_layout(
+    transaction: &mut Transaction<'_, Postgres>,
+    request: &EditorialLayoutRequest,
+) -> Result<ResolvedEditorialLayout, TxError> {
+    let release_ids = std::iter::once(request.featured_release_id.as_str())
+        .chain(
+            request
+                .collections
+                .iter()
+                .flat_map(|collection| collection.release_ids.iter().map(String::as_str)),
+        )
+        .collect::<BTreeSet<_>>();
+    let mut releases = BTreeMap::new();
+    for release_id in release_ids {
+        let row = sqlx::query(
+            "SELECT release.app_id, release.resource_version FROM releases release \
+             JOIN submissions submission ON submission.submission_id = release.submission_id \
+             WHERE release.release_id = $1 AND release.state = 'published' \
+               AND submission.state = 'approved' AND submission.app_id = release.app_id \
+               AND submission.version = release.version FOR SHARE OF release, submission",
+        )
+        .bind(release_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(TxError::Sql)?
+        .ok_or_else(ApiError::invalid_transition)?;
+        let app_id: String = row.get("app_id");
+        let version = u64::try_from(row.get::<i64, _>("resource_version"))
+            .map_err(|_| ApiError::internal())?;
+        releases.insert(release_id.to_owned(), (app_id, version));
+    }
+    let (featured_app_id, featured_release_version) = releases
+        .get(&request.featured_release_id)
+        .cloned()
+        .ok_or_else(ApiError::internal)?;
+    let featured = EditorialItemResponse {
+        release_id: request.featured_release_id.clone(),
+        app_id: featured_app_id.clone(),
+    };
+    let mut app_ids = BTreeSet::from([featured_app_id]);
+    let mut collections = Vec::with_capacity(request.collections.len());
+    for collection in &request.collections {
+        let mut items = Vec::with_capacity(collection.release_ids.len());
+        for release_id in &collection.release_ids {
+            let (app_id, _) = releases.get(release_id).ok_or_else(ApiError::internal)?;
+            if !app_ids.insert(app_id.clone()) {
+                return Err(ApiError::invalid_request().into());
+            }
+            items.push(EditorialItemResponse {
+                release_id: release_id.clone(),
+                app_id: app_id.clone(),
+            });
+        }
+        collections.push(EditorialCollectionResponse {
+            title: collection.title.clone(),
+            items,
+        });
+    }
+    let collections_json = serde_json::to_value(&collections).map_err(|_| ApiError::internal())?;
+    Ok(ResolvedEditorialLayout {
+        featured,
+        featured_release_version,
+        collections,
+        collections_json,
+    })
 }
 
 async fn load_team(
@@ -4006,6 +4450,54 @@ fn mutation_request_sha256(domain: &str, fields: &[&str]) -> String {
     lower_hex(&hasher.finalize())
 }
 
+fn editorial_request_sha256(
+    expected_version: Option<u64>,
+    request: &EditorialLayoutRequest,
+) -> Result<String, ApiError> {
+    let encoded = serde_json::to_vec(request).map_err(|_| ApiError::internal())?;
+    let mut hasher = Sha256::new();
+    hash_field(&mut hasher, b"editorial.today.replace.v1");
+    hash_field(
+        &mut hasher,
+        expected_version
+            .map_or_else(|| "create".into(), |version| version.to_string())
+            .as_bytes(),
+    );
+    hash_field(&mut hasher, &encoded);
+    Ok(lower_hex(&hasher.finalize()))
+}
+
+fn validate_editorial_request(request: &EditorialLayoutRequest) -> Result<(), ApiError> {
+    if !valid_editorial_text(&request.headline, 48)
+        || !is_valid_release_id(&request.featured_release_id)
+        || !(1..=2).contains(&request.collections.len())
+    {
+        return Err(ApiError::invalid_request());
+    }
+    let mut releases = BTreeSet::from([request.featured_release_id.as_str()]);
+    let mut titles = BTreeSet::new();
+    for collection in &request.collections {
+        if !valid_editorial_text(&collection.title, 32)
+            || !titles.insert(collection.title.as_str())
+            || !(1..=4).contains(&collection.release_ids.len())
+            || collection
+                .release_ids
+                .iter()
+                .any(|release_id| !is_valid_release_id(release_id) || !releases.insert(release_id))
+        {
+            return Err(ApiError::invalid_request());
+        }
+    }
+    Ok(())
+}
+
+fn valid_editorial_text(value: &str, maximum_chars: usize) -> bool {
+    let chars = value.chars().count();
+    (1..=maximum_chars).contains(&chars)
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
 fn oauth_decision_request_sha256(request: &DeviceAuthorizationDecisionRequest) -> String {
     mutation_request_sha256(
         "oauth-device.decision.v1",
@@ -4164,6 +4656,30 @@ async fn lookup_reviewer_identity(
         two_factor_enabled: row.get("two_factor_enabled"),
         scopes: row.get("scopes"),
     }))
+}
+
+async fn authenticate_store_operator(
+    transaction: &mut Transaction<'_, Postgres>,
+    token_sha256: &str,
+) -> Result<StoreOperatorIdentity, TxError> {
+    let row = sqlx::query(
+        "SELECT operator.operator_id, operator.role, operator.two_factor_enabled, token.scopes \
+         FROM store_operator_access_tokens token \
+         JOIN store_operators operator ON operator.operator_id = token.operator_id \
+         WHERE token.token_sha256 = $1 AND NOT token.revoked AND operator.state = 'active' \
+           AND token.expires_unix_seconds > EXTRACT(EPOCH FROM clock_timestamp())::BIGINT",
+    )
+    .bind(token_sha256)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(TxError::Sql)?
+    .ok_or_else(ApiError::unauthorized)?;
+    Ok(StoreOperatorIdentity {
+        operator_id: row.get("operator_id"),
+        role: row.get("role"),
+        two_factor_enabled: row.get("two_factor_enabled"),
+        scopes: row.get("scopes"),
+    })
 }
 
 async fn authenticate_message_actor(
@@ -4861,6 +5377,113 @@ async fn post_release(
         Ok(release) => {
             let version = release.resource_version;
             resource_response(StatusCode::CREATED, release, version, request_id)
+        }
+        Err(error) => error.response(request_id),
+    }
+}
+
+async fn get_today_editorial(
+    State(service): State<StoreControlService>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = request_id();
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    match service.get_today_editorial(&token).await {
+        Ok(layout) => {
+            let version = layout.resource_version;
+            resource_response(StatusCode::OK, layout, version, request_id)
+        }
+        Err(error) => error.response(request_id),
+    }
+}
+
+async fn post_today_editorial(
+    State(service): State<StoreControlService>,
+    headers: HeaderMap,
+    payload: Result<Json<EditorialLayoutRequest>, JsonRejection>,
+) -> Response {
+    if headers.contains_key(IF_MATCH) {
+        return ApiError::invalid_request().response(request_id());
+    }
+    replace_today_editorial_request(service, headers, payload, None, StatusCode::CREATED).await
+}
+
+async fn put_today_editorial(
+    State(service): State<StoreControlService>,
+    headers: HeaderMap,
+    payload: Result<Json<EditorialLayoutRequest>, JsonRejection>,
+) -> Response {
+    let request_id = request_id();
+    let expected_version = match expected_version(&headers) {
+        Ok(version) => version,
+        Err(error) => return error.response(request_id),
+    };
+    replace_today_editorial_request_with_id(
+        service,
+        headers,
+        payload,
+        Some(expected_version),
+        StatusCode::OK,
+        request_id,
+    )
+    .await
+}
+
+async fn replace_today_editorial_request(
+    service: StoreControlService,
+    headers: HeaderMap,
+    payload: Result<Json<EditorialLayoutRequest>, JsonRejection>,
+    expected_version: Option<u64>,
+    status: StatusCode,
+) -> Response {
+    let request_id = request_id();
+    replace_today_editorial_request_with_id(
+        service,
+        headers,
+        payload,
+        expected_version,
+        status,
+        request_id,
+    )
+    .await
+}
+
+async fn replace_today_editorial_request_with_id(
+    service: StoreControlService,
+    headers: HeaderMap,
+    payload: Result<Json<EditorialLayoutRequest>, JsonRejection>,
+    expected_version: Option<u64>,
+    status: StatusCode,
+    request_id: String,
+) -> Response {
+    let token = match bearer_token(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.response(request_id),
+    };
+    let idempotency_key = match idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(error) => return error.response(request_id),
+    };
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => return json_rejection(rejection).response(request_id),
+    };
+    match service
+        .replace_today_editorial(
+            &token,
+            &idempotency_key,
+            &request_id,
+            expected_version,
+            &request,
+        )
+        .await
+    {
+        Ok(layout) => {
+            let version = layout.resource_version;
+            resource_response(status, layout, version, request_id)
         }
         Err(error) => error.response(request_id),
     }

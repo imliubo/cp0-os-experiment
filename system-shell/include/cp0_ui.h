@@ -34,6 +34,10 @@
 #define CP0_UI_STORE_AGE_RATING_MAX 3
 #define CP0_UI_STORE_ICON_MAX_PIXELS (48U * 48U)
 #define CP0_UI_STORE_SCREENSHOT_PIXELS (320U * 170U)
+#define CP0_UI_STORE_EDITORIAL_COLLECTION_MAX 2
+#define CP0_UI_STORE_EDITORIAL_COLLECTION_APP_MAX 4
+#define CP0_UI_STORE_EDITORIAL_HEADLINE_MAX 192
+#define CP0_UI_STORE_EDITORIAL_TITLE_MAX 128
 
 enum cp0_ui_screen {
     CP0_UI_HOME,
@@ -252,6 +256,26 @@ struct cp0_ui_store_app {
     char summary[CP0_UI_STORE_SUMMARY_MAX + 1];
 };
 
+struct cp0_ui_store_editorial_collection {
+    const char *title;
+    const struct cp0_ui_store_catalog_app *apps;
+    size_t app_count;
+};
+
+struct cp0_ui_store_editorial {
+    const char *headline;
+    const struct cp0_ui_store_catalog_app *featured;
+    const struct cp0_ui_store_editorial_collection *collections;
+    size_t collection_count;
+};
+
+struct cp0_ui_store_editorial_collection_state {
+    size_t app_count;
+    char title[CP0_UI_STORE_EDITORIAL_TITLE_MAX + 1];
+    struct cp0_ui_store_app
+        apps[CP0_UI_STORE_EDITORIAL_COLLECTION_APP_MAX];
+};
+
 struct cp0_ui_store_completion {
     uint8_t count;
     char app_name[CP0_UI_APP_NAME_MAX + 1];
@@ -282,6 +306,9 @@ struct cp0_ui {
     unsigned int store_search_count;
     unsigned int store_recent_selected;
     unsigned int store_recent_count;
+    unsigned int store_today_selected;
+    unsigned int store_today_collection_selected;
+    unsigned int store_today_open_collection;
     unsigned int store_detail_page;
     unsigned int store_operation_action_selected;
     unsigned int store_screenshot_index;
@@ -309,6 +336,8 @@ struct cp0_ui {
     bool store_catalog_observed;
     bool store_update_all_selected;
     bool store_detail;
+    bool store_today_available;
+    bool store_today_collection_open;
     bool app_detail;
     bool app_uninstall_confirm;
     bool settings_detail;
@@ -422,12 +451,17 @@ struct cp0_ui {
     char store_age_rating[CP0_UI_STORE_AGE_RATING_MAX + 1];
     char store_description[CP0_UI_STORE_DESCRIPTION_MAX + 1];
     char store_release_notes[CP0_UI_STORE_RELEASE_NOTES_MAX + 1];
+    char store_today_headline[CP0_UI_STORE_EDITORIAL_HEADLINE_MAX + 1];
     const uint32_t *store_icon_pixels;
     const uint32_t *store_screenshot_pixels;
     struct cp0_ui_app apps[CP0_UI_MAX_APPS];
     struct cp0_ui_store_app store_apps[CP0_UI_MAX_APPS];
     struct cp0_ui_store_app
         store_search_apps[CP0_UI_STORE_SEARCH_PAGE_MAX];
+    struct cp0_ui_store_app store_today_featured;
+    struct cp0_ui_store_editorial_collection_state
+        store_today_collections[CP0_UI_STORE_EDITORIAL_COLLECTION_MAX];
+    size_t store_today_collection_count;
 };
 
 void cp0_ui_init(struct cp0_ui *ui);
@@ -459,6 +493,8 @@ void cp0_ui_set_store_status(struct cp0_ui *ui,
 void cp0_ui_sync_store_catalog(
     struct cp0_ui *ui, const struct cp0_ui_store_catalog_app *apps,
     size_t app_count, bool truncated, bool stale);
+void cp0_ui_sync_store_today(
+    struct cp0_ui *ui, const struct cp0_ui_store_editorial *editorial);
 void cp0_ui_sync_store_search(
     struct cp0_ui *ui, const char *query, uint16_t offset, uint16_t total,
     bool has_next, uint16_t next_offset,

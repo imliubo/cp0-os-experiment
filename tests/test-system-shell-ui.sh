@@ -50,7 +50,7 @@ mkdir -p "$snapshot_dir"
     -o "$work_dir/system-shell-system-info-test"
 "$work_dir/system-shell-system-info-test"
 
-snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-auto-update.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm store-background-progress.ppm store-description.ppm store-detail.ppm store-failed.ppm store-install-confirm.ppm store-install-storage.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
+snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-auto-update.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm store-background-progress.ppm store-description.ppm store-detail.ppm store-failed.ppm store-install-confirm.ppm store-install-storage.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-today-collection.ppm store-today.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
 if command -v sha256sum >/dev/null 2>&1; then
     actual=$(cd "$snapshot_dir" && sha256sum $snapshot_files)
 else
@@ -102,6 +102,8 @@ cfd18ef5f9110ee2c908d09ca62720b1f37e3d020478f8842d57b2d3b61b51cb  store-search-m
 67083cf393e6e9e477cf5026b8c19c5fa14dca9d596599fce2f75c990f340e98  store-search-none.ppm
 66147ca2c4d5a1b657c7edadbd67ef7adea421a0338b3522687c0c21e2b52e97  store-search-recent.ppm
 3b6e5012e93115b55fbe224ed49d6057404ada973bbbb1ca604d898c2cc3c7af  store-search.ppm
+d344743cfc5353d55fd0b61f282b88f8d10945520b1c17bca746035f6927c7eb  store-today-collection.ppm
+f00d349cb5d000db552fe795a63df63738b9552d77e508758aadbc2216dd7689  store-today.ppm
 54f4f4baed4d74492ce1940a0864c66522b0215eebbb70719a826c4cc43c95cf  store-updates.ppm
 1dd93ca475967d20190e96bb9eaacef42e9f674de162c39ab15c8004d78e4bf3  store.ppm
 c8f03c8a917c9dfb0cecd57f32df1e6e11d913a75480e5ca11c2a35b04b0d62e  system-brightness.ppm

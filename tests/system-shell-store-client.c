@@ -14,6 +14,9 @@
 int cp0_store_test_parse_catalog_response(
     const char *response, size_t response_length, uint64_t request_id,
     struct cp0_store_catalog *catalog);
+int cp0_store_test_parse_today_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    struct cp0_store_today *today);
 int cp0_store_test_parse_refresh_response(const char *response,
                                           size_t response_length,
                                           uint64_t request_id);
@@ -141,6 +144,46 @@ int main(void)
     assert(parse_catalog(valid, 7, &catalog) == CP0_STORE_RESULT_OK);
     assert(catalog.sequence == 4 && catalog.count == 2 && !catalog.stale &&
            !catalog.truncated);
+
+    struct cp0_store_today today;
+    static const char valid_today[] =
+        ENVELOPE_START("60")
+        "\"kind\":\"today\",\"sequence\":4,\"expires_unix_seconds\":200,"
+        "\"stale\":false,\"editorial\":{\"headline\":\"Made for CP0\","
+        "\"featured\":" APP("alpha", "[]", "available", "0")
+        ",\"collections\":[{\"title\":\"New and useful\",\"apps\":["
+        APP("beta", "[]", "installed", "100")
+        "]},{\"title\":\"Tools\",\"apps\":["
+        APP("gamma", "[]", "available", "0") ","
+        APP("delta", "[]", "available", "0") "]}]}}}}";
+    assert(cp0_store_test_parse_today_response(
+               valid_today, strlen(valid_today), 60, &today) ==
+           CP0_STORE_RESULT_OK);
+    assert(today.has_editorial && today.sequence == 4 && !today.stale &&
+           today.collection_count == 2 &&
+           strcmp(today.headline, "Made for CP0") == 0 &&
+           strcmp(today.featured.app_id, "dev.cardputerzero.alpha") == 0 &&
+           today.collections[0].count == 1 &&
+           strcmp(today.collections[1].apps[1].app_id,
+                  "dev.cardputerzero.delta") == 0);
+    static const char legacy_today[] =
+        ENVELOPE_START("61")
+        "\"kind\":\"today\",\"sequence\":4,\"expires_unix_seconds\":200,"
+        "\"stale\":true,\"editorial\":null}}}";
+    assert(cp0_store_test_parse_today_response(
+               legacy_today, strlen(legacy_today), 61, &today) ==
+           CP0_STORE_RESULT_OK);
+    assert(!today.has_editorial && today.stale && today.collection_count == 0);
+    static const char duplicate_today[] =
+        ENVELOPE_START("62")
+        "\"kind\":\"today\",\"sequence\":4,\"expires_unix_seconds\":200,"
+        "\"stale\":false,\"editorial\":{\"headline\":\"Duplicate\","
+        "\"featured\":" APP("alpha", "[]", "available", "0")
+        ",\"collections\":[{\"title\":\"Again\",\"apps\":["
+        APP("alpha", "[]", "available", "0") "]}]}}}}";
+    assert(cp0_store_test_parse_today_response(
+               duplicate_today, strlen(duplicate_today), 62, &today) ==
+           CP0_STORE_RESULT_ERROR);
 
     struct cp0_store_auto_update_status auto_update;
     static const char valid_auto_update[] =

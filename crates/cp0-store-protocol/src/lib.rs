@@ -14,6 +14,7 @@ pub const STORE_PROTOCOL_VERSION: u32 = 1;
 pub const CATALOG_SCHEMA_VERSION: u32 = 1;
 pub const RICH_CATALOG_SCHEMA_VERSION: u32 = 2;
 pub const MEDIA_CATALOG_SCHEMA_VERSION: u32 = 3;
+pub const EDITORIAL_CATALOG_SCHEMA_VERSION: u32 = 4;
 pub const APP_DETAILS_SCHEMA_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_CATALOG_BYTES: usize = 48 * 1024;
@@ -26,6 +27,10 @@ pub const MAX_SEARCH_QUERY_CHARS: usize = 32;
 pub const MAX_SEARCH_QUERY_BYTES: usize = 96;
 pub const MAX_SEARCH_PAGE_APPS: u8 = 8;
 pub const MAX_INSTALL_BATCH_APPS: usize = 8;
+pub const MAX_EDITORIAL_COLLECTIONS: usize = 2;
+pub const MAX_EDITORIAL_COLLECTION_APPS: usize = 4;
+pub const MAX_EDITORIAL_HEADLINE_CHARS: usize = 48;
+pub const MAX_EDITORIAL_COLLECTION_TITLE_CHARS: usize = 32;
 pub const MAX_ERROR_MESSAGE_CHARS: usize = 160;
 pub const MAX_CATALOG_LIFETIME_SECONDS: u64 = 31 * 24 * 60 * 60;
 
@@ -39,6 +44,23 @@ pub struct Catalog {
     pub published_unix_seconds: u64,
     pub expires_unix_seconds: u64,
     pub apps: Vec<CatalogApp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editorial: Option<CatalogEditorial>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogEditorial {
+    pub headline: String,
+    pub featured_app_id: String,
+    pub collections: Vec<CatalogEditorialCollection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogEditorialCollection {
+    pub title: String,
+    pub app_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +149,7 @@ pub struct StoreRequest {
 #[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum StoreCommand {
     List,
+    Today,
     Search {
         query: String,
         offset: u16,
@@ -206,6 +229,12 @@ pub enum StoreResponseData {
         expires_unix_seconds: u64,
         stale: bool,
         apps: Vec<StoreAppSummary>,
+    },
+    Today {
+        sequence: u64,
+        expires_unix_seconds: u64,
+        stale: bool,
+        editorial: Option<StoreEditorial>,
     },
     SearchResults {
         query: String,
@@ -315,6 +344,21 @@ pub struct StoreAppSummary {
     pub failure_reason: Option<StoreFailureReason>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoreEditorial {
+    pub headline: String,
+    pub featured: StoreAppSummary,
+    pub collections: Vec<StoreEditorialCollection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoreEditorialCollection {
+    pub title: String,
+    pub apps: Vec<StoreAppSummary>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StoreAppState {
@@ -404,10 +448,13 @@ impl Catalog {
     pub fn validate(&self) -> Result<(), StoreProtocolError> {
         if !matches!(
             self.schema_version,
-            CATALOG_SCHEMA_VERSION | RICH_CATALOG_SCHEMA_VERSION | MEDIA_CATALOG_SCHEMA_VERSION
+            CATALOG_SCHEMA_VERSION
+                | RICH_CATALOG_SCHEMA_VERSION
+                | MEDIA_CATALOG_SCHEMA_VERSION
+                | EDITORIAL_CATALOG_SCHEMA_VERSION
         ) {
             return Err(StoreProtocolError::Invalid(format!(
-                "catalog schema must be {CATALOG_SCHEMA_VERSION}, {RICH_CATALOG_SCHEMA_VERSION} or {MEDIA_CATALOG_SCHEMA_VERSION}"
+                "catalog schema must be {CATALOG_SCHEMA_VERSION}, {RICH_CATALOG_SCHEMA_VERSION}, {MEDIA_CATALOG_SCHEMA_VERSION} or {EDITORIAL_CATALOG_SCHEMA_VERSION}"
             )));
         }
         if self.sequence == 0 {
@@ -428,6 +475,22 @@ impl Catalog {
                 "catalog contains too many applications".into(),
             ));
         }
+        match (self.schema_version, self.editorial.is_some()) {
+            (EDITORIAL_CATALOG_SCHEMA_VERSION, true)
+            | (CATALOG_SCHEMA_VERSION, false)
+            | (RICH_CATALOG_SCHEMA_VERSION, false)
+            | (MEDIA_CATALOG_SCHEMA_VERSION, false) => {}
+            (EDITORIAL_CATALOG_SCHEMA_VERSION, false) => {
+                return Err(StoreProtocolError::Invalid(
+                    "Catalog v4 is missing editorial metadata".into(),
+                ));
+            }
+            _ => {
+                return Err(StoreProtocolError::Invalid(
+                    "older Catalog schema contains v4 editorial metadata".into(),
+                ));
+            }
+        }
 
         let mut previous_id: Option<&str> = None;
         let mut ids = BTreeSet::new();
@@ -437,24 +500,32 @@ impl Catalog {
                 self.schema_version,
                 app.discovery.is_some(),
                 app.resources.is_some(),
+                self.editorial.is_some(),
             ) {
-                (CATALOG_SCHEMA_VERSION, false, false)
-                | (RICH_CATALOG_SCHEMA_VERSION, true, false)
-                | (MEDIA_CATALOG_SCHEMA_VERSION, true, true) => {}
-                (CATALOG_SCHEMA_VERSION, _, _) => {
+                (CATALOG_SCHEMA_VERSION, false, false, false)
+                | (RICH_CATALOG_SCHEMA_VERSION, true, false, false)
+                | (MEDIA_CATALOG_SCHEMA_VERSION, true, true, false)
+                | (EDITORIAL_CATALOG_SCHEMA_VERSION, true, true, true) => {}
+                (CATALOG_SCHEMA_VERSION, _, _, _) => {
                     return Err(StoreProtocolError::Invalid(
                         "Catalog v1 application contains newer metadata".into(),
                     ));
                 }
-                (RICH_CATALOG_SCHEMA_VERSION, _, _) => {
+                (RICH_CATALOG_SCHEMA_VERSION, _, _, _) => {
                     return Err(StoreProtocolError::Invalid(
                         "Catalog v2 application metadata is incomplete or includes v3 resources"
                             .into(),
                     ));
                 }
-                (MEDIA_CATALOG_SCHEMA_VERSION, _, _) => {
+                (MEDIA_CATALOG_SCHEMA_VERSION, _, _, _) => {
                     return Err(StoreProtocolError::Invalid(
-                        "Catalog v3 application is missing discovery or resource metadata".into(),
+                        "Catalog v3 application metadata is incomplete or includes v4 editorial data"
+                            .into(),
+                    ));
+                }
+                (EDITORIAL_CATALOG_SCHEMA_VERSION, _, _, _) => {
+                    return Err(StoreProtocolError::Invalid(
+                        "Catalog v4 application or editorial metadata is incomplete".into(),
                     ));
                 }
                 _ => unreachable!("catalog schema was validated above"),
@@ -470,6 +541,55 @@ impl Catalog {
                 ));
             }
             previous_id = Some(&app.app_id);
+        }
+        if let Some(editorial) = &self.editorial {
+            editorial.validate(&ids)?;
+        }
+        Ok(())
+    }
+}
+
+impl CatalogEditorial {
+    fn validate(&self, catalog_app_ids: &BTreeSet<&str>) -> Result<(), StoreProtocolError> {
+        let headline_chars = self.headline.chars().count();
+        if !(1..=MAX_EDITORIAL_HEADLINE_CHARS).contains(&headline_chars)
+            || has_unsafe_text(&self.headline)
+        {
+            return Err(StoreProtocolError::Invalid(
+                "catalog editorial headline is invalid".into(),
+            ));
+        }
+        if !cp0_manifest::is_valid_app_id(&self.featured_app_id)
+            || !catalog_app_ids.contains(self.featured_app_id.as_str())
+            || !(1..=MAX_EDITORIAL_COLLECTIONS).contains(&self.collections.len())
+        {
+            return Err(StoreProtocolError::Invalid(
+                "catalog editorial identity or collection count is invalid".into(),
+            ));
+        }
+        let mut referenced = BTreeSet::from([self.featured_app_id.as_str()]);
+        let mut titles = BTreeSet::new();
+        for collection in &self.collections {
+            let title_chars = collection.title.chars().count();
+            if !(1..=MAX_EDITORIAL_COLLECTION_TITLE_CHARS).contains(&title_chars)
+                || has_unsafe_text(&collection.title)
+                || !titles.insert(collection.title.as_str())
+                || !(1..=MAX_EDITORIAL_COLLECTION_APPS).contains(&collection.app_ids.len())
+            {
+                return Err(StoreProtocolError::Invalid(
+                    "catalog editorial collection is invalid".into(),
+                ));
+            }
+            for app_id in &collection.app_ids {
+                if !cp0_manifest::is_valid_app_id(app_id)
+                    || !catalog_app_ids.contains(app_id.as_str())
+                    || !referenced.insert(app_id)
+                {
+                    return Err(StoreProtocolError::Invalid(
+                        "catalog editorial application reference is invalid or duplicated".into(),
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -747,6 +867,7 @@ impl StoreRequest {
                 }
             }
             StoreCommand::List
+            | StoreCommand::Today
             | StoreCommand::Refresh
             | StoreCommand::GetAutoUpdate
             | StoreCommand::SetAutoUpdate { .. }
@@ -850,6 +971,22 @@ impl StoreResponseData {
                         ));
                     }
                     previous_id = Some(&app.app_id);
+                }
+                Ok(())
+            }
+            Self::Today {
+                sequence,
+                expires_unix_seconds,
+                editorial,
+                ..
+            } => {
+                if *sequence == 0 || *expires_unix_seconds == 0 {
+                    return Err(StoreProtocolError::Invalid(
+                        "store Today catalog metadata is invalid".into(),
+                    ));
+                }
+                if let Some(editorial) = editorial {
+                    editorial.validate()?;
                 }
                 Ok(())
             }
@@ -1035,6 +1172,44 @@ impl StoreResponseData {
                 media.validate()
             }
         }
+    }
+}
+
+impl StoreEditorial {
+    fn validate(&self) -> Result<(), StoreProtocolError> {
+        let headline_chars = self.headline.chars().count();
+        if !(1..=MAX_EDITORIAL_HEADLINE_CHARS).contains(&headline_chars)
+            || has_unsafe_text(&self.headline)
+            || !(1..=MAX_EDITORIAL_COLLECTIONS).contains(&self.collections.len())
+        {
+            return Err(StoreProtocolError::Invalid(
+                "store Today editorial bounds are invalid".into(),
+            ));
+        }
+        self.featured.validate()?;
+        let mut app_ids = BTreeSet::from([self.featured.app_id.as_str()]);
+        let mut titles = BTreeSet::new();
+        for collection in &self.collections {
+            let title_chars = collection.title.chars().count();
+            if !(1..=MAX_EDITORIAL_COLLECTION_TITLE_CHARS).contains(&title_chars)
+                || has_unsafe_text(&collection.title)
+                || !titles.insert(collection.title.as_str())
+                || !(1..=MAX_EDITORIAL_COLLECTION_APPS).contains(&collection.apps.len())
+            {
+                return Err(StoreProtocolError::Invalid(
+                    "store Today collection bounds are invalid".into(),
+                ));
+            }
+            for app in &collection.apps {
+                app.validate()?;
+                if !app_ids.insert(app.app_id.as_str()) {
+                    return Err(StoreProtocolError::Invalid(
+                        "store Today contains duplicate applications".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1538,6 +1713,7 @@ mod tests {
                 discovery: None,
                 resources: None,
             }],
+            editorial: None,
         }
     }
 
@@ -1573,6 +1749,26 @@ mod tests {
                 sha256: "33".repeat(32),
                 bytes: 1024,
             },
+        });
+        catalog
+    }
+
+    fn editorial_catalog() -> Catalog {
+        let mut catalog = media_catalog();
+        let mut second = catalog.apps[0].clone();
+        second.app_id = "dev.cardputerzero.second".into();
+        second.name = "Second".into();
+        second.package_url = "https://store.example.com/apps/second.capp".into();
+        second.package_sha256 = "55".repeat(32);
+        catalog.apps.push(second);
+        catalog.schema_version = EDITORIAL_CATALOG_SCHEMA_VERSION;
+        catalog.editorial = Some(CatalogEditorial {
+            headline: "Made for CardputerZero".into(),
+            featured_app_id: "dev.cardputerzero.example".into(),
+            collections: vec![CatalogEditorialCollection {
+                title: "New and useful".into(),
+                app_ids: vec!["dev.cardputerzero.second".into()],
+            }],
         });
         catalog
     }
@@ -1699,6 +1895,33 @@ mod tests {
         let mut multiline = app_details();
         multiline.description = "First paragraph.\nSecond paragraph.".into();
         multiline.validate().unwrap();
+    }
+
+    #[test]
+    fn validates_editorial_catalogs_against_the_signed_application_set() {
+        editorial_catalog().validate().unwrap();
+
+        let mut missing = editorial_catalog();
+        missing.editorial = None;
+        assert!(missing.validate().is_err());
+
+        let mut legacy = editorial_catalog();
+        legacy.schema_version = MEDIA_CATALOG_SCHEMA_VERSION;
+        assert!(legacy.validate().is_err());
+
+        let mut unknown = editorial_catalog();
+        unknown.editorial.as_mut().unwrap().collections[0].app_ids[0] =
+            "dev.cardputerzero.missing".into();
+        assert!(unknown.validate().is_err());
+
+        let mut duplicate = editorial_catalog();
+        duplicate.editorial.as_mut().unwrap().collections[0].app_ids[0] =
+            "dev.cardputerzero.example".into();
+        assert!(duplicate.validate().is_err());
+
+        let mut unsafe_title = editorial_catalog();
+        unsafe_title.editorial.as_mut().unwrap().collections[0].title = "Unsafe\nTitle".into();
+        assert!(unsafe_title.validate().is_err());
     }
 
     #[test]
@@ -2064,6 +2287,113 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn validates_strict_today_requests_and_editorial_responses() {
+        let request = StoreRequest {
+            protocol_version: STORE_PROTOCOL_VERSION,
+            request_id: 52,
+            command: StoreCommand::Today,
+        };
+        let mut encoded = Vec::new();
+        write_request(&mut encoded, &request).unwrap();
+        assert_eq!(
+            read_request(&mut encoded.as_slice()).unwrap(),
+            Some(request)
+        );
+
+        let featured = response_app();
+        let mut collection_app = response_app();
+        collection_app.app_id = "dev.cardputerzero.second".into();
+        collection_app.name = "Second".into();
+        let response = StoreResponse::success(
+            52,
+            StoreResponseData::Today {
+                sequence: 7,
+                expires_unix_seconds: 1_900_000_000,
+                stale: false,
+                editorial: Some(StoreEditorial {
+                    headline: "Made for CardputerZero".into(),
+                    featured: featured.clone(),
+                    collections: vec![StoreEditorialCollection {
+                        title: "New and useful".into(),
+                        apps: vec![collection_app.clone()],
+                    }],
+                }),
+            },
+        );
+        let mut encoded = Vec::new();
+        write_response(&mut encoded, &response).unwrap();
+        assert_eq!(
+            read_response(&mut encoded.as_slice()).unwrap(),
+            Some(response.clone())
+        );
+        write_response(
+            &mut Vec::new(),
+            &StoreResponse::success(
+                53,
+                StoreResponseData::Today {
+                    sequence: 7,
+                    expires_unix_seconds: 1_900_000_000,
+                    stale: false,
+                    editorial: None,
+                },
+            ),
+        )
+        .unwrap();
+
+        let mut invalid_metadata = response.clone();
+        let StoreOutcome::Ok {
+            data: StoreResponseData::Today { sequence, .. },
+        } = &mut invalid_metadata.outcome
+        else {
+            unreachable!()
+        };
+        *sequence = 0;
+        assert!(invalid_metadata.validate().is_err());
+
+        let mut duplicate = response.clone();
+        let StoreOutcome::Ok {
+            data:
+                StoreResponseData::Today {
+                    editorial: Some(editorial),
+                    ..
+                },
+        } = &mut duplicate.outcome
+        else {
+            unreachable!()
+        };
+        editorial.collections[0].apps[0] = featured;
+        assert!(duplicate.validate().is_err());
+
+        let mut unsafe_title = response.clone();
+        let StoreOutcome::Ok {
+            data:
+                StoreResponseData::Today {
+                    editorial: Some(editorial),
+                    ..
+                },
+        } = &mut unsafe_title.outcome
+        else {
+            unreachable!()
+        };
+        editorial.collections[0].title = "Unsafe\nTitle".into();
+        assert!(unsafe_title.validate().is_err());
+
+        let mut oversized = response;
+        let StoreOutcome::Ok {
+            data:
+                StoreResponseData::Today {
+                    editorial: Some(editorial),
+                    ..
+                },
+        } = &mut oversized.outcome
+        else {
+            unreachable!()
+        };
+        editorial.headline = "x".repeat(MAX_EDITORIAL_HEADLINE_CHARS + 1);
+        assert!(oversized.validate().is_err());
     }
 
     #[test]

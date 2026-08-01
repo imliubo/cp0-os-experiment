@@ -71,6 +71,12 @@ Listing 和资源清单的精确 SHA-256。
 已审核、未撤销的 Release 中选取内容，不能绕过审核发布任意包。每次变更生成新的有序
 Catalog snapshot，并进入可审计的发布队列。
 
+S8A 已实现 Today 的首个运营纵向切片：独立 operator 身份、2FA、`store.editorial` scope、
+强 ETag 和幂等写入共同保护 `GET/POST/PUT /v1/editorial/today`。布局固定为一个主推荐、
+1-2 个专题、每个专题 1-4 个应用；只能引用仍处于 published 且 Submission 仍 approved 的
+Release，并拒绝重复 Release 或 App。每次写入原子生成不可变 revision、audit 和绑定该
+revision 的 Catalog rebuild outbox；完整契约见 `STORE-EDITORIAL-V1.md`。
+
 ### 2.2 后端
 
 后端分为控制面和不可变发布面。设备只访问发布面。
@@ -199,16 +205,22 @@ Shell 进程内存中，重启即清空，不写入 SD 卡，也不发送到网�
 offset 和 limit；结果页最多 8 条，Previous/Next 分页不会把 64 项 Catalog 常驻复制到 UI。
 
 S6A 的 Catalog v2 已签名 developer、subtitle、category、keywords 和 age/privacy 元数据，
-`cp0-stored` 已将这些字段用于本地搜索；当前 System Shell 仍消费有界 summary 响应，因此 Apps
-暂时显示全部应用，分类浏览和富字段详情属于后续 S6 切片。Today 选择稳定的首项作为本地推荐
-占位，Updates 仅在 Catalog 版本按 SemVer 严格高于 appd 报告的已安装版本时出现。旧版本、
-相同版本和 prerelease 降级都保持 `INSTALLED`，不会伪装成更新。
+`cp0-stored` 已将这些字段用于本地搜索；Apps 当前仍显示全部应用，分类索引属于后续 S6 切片。
+Updates 仅在 Catalog 版本按 SemVer 严格高于 appd 报告的已安装版本时出现。旧版本、相同版本
+和 prerelease 降级都保持 `INSTALLED`，不会伪装成更新。
 
 S6B 的 Catalog v3 在此基础上摘要绑定 icon 和有界 details 清单，details 再绑定截图；Publisher
 已将这些资源放入包所在的不可变 generation。根 Catalog 不内联长 description 或截图数组，避免
 64 应用目录超出 48 KiB。S6C 已在 `cp0-stored` 加入 4 MiB icon、1 MiB details 和 8 MiB
 screenshot 独立缓存；所有对象按摘要命名、单任务下载、结构复验后原子提交，截图使用稳定 LRU。
-媒体失败与 Catalog/应用安装解耦。System Shell 富媒体渲染仍由后续切片实现。
+媒体失败与 Catalog/应用安装解耦。S6D 已通过严格 details/media IPC 将图标、描述、截图、
+权限差异和更新说明接入 System Shell。
+
+S8A 的 Catalog v4 在 v3 上增加签名 editorial 投影，并将运营 rebuild job 精确绑定到不可变
+editorial resource version。Publisher 只有在所有引用 Release 仍可发布、产物身份匹配且应用
+存在于同一个 Catalog 时才发出 v4；暂停、下架、替换或缺失引用会安全退回无 editorial 的 v3。
+`cp0-stored` 通过独立 `today` IPC 返回同一 sequence 的有界完整应用摘要；Shell 在响应 sequence
+不一致、旧 Catalog、null 或解析错误时清空运营状态，避免混合两个快照。
 
 #### 下载与更新
 
@@ -265,6 +277,7 @@ AVAILABLE -> QUEUED -> DOWNLOADING -> VERIFYING -> INSTALLING -> INSTALLED
 | Scan Report | report_id | submission digest、工具链版本、结论 |
 | Review Decision | decision_id | submission、reviewer、字段级原因 |
 | Release | release_id | approved submission、范围、发布时间 |
+| Editorial Revision | layout_id + resource_version | operator、approved published Releases、audit/outbox |
 | Catalog Snapshot | sequence | releases、editorial、资源摘要、签名 |
 
 Listing v1 至少包含 `app_id`、`version`、locale、subtitle、description、category、
@@ -287,6 +300,9 @@ POST   /v1/submissions/{id}/messages
 POST   /v1/releases
 POST   /v1/releases/{id}:publish
 POST   /v1/releases/{id}:pause
+GET    /v1/editorial/today
+POST   /v1/editorial/today
+PUT    /v1/editorial/today
 ```
 
 冻结的 OpenAPI 3.1 契约位于 `schemas/store-control-v1.openapi.json`；上表仅是入口摘要。
@@ -294,8 +310,9 @@ POST   /v1/releases/{id}:pause
 大文件上传使用短期、单对象、限尺寸的 presigned URL。finalize 请求必须提交所有对象
 摘要；后端重新读取对象并校验，不信任浏览器报告的大小和 SHA。
 
-设备协议不复用这些 HTTP API。Shell 只通过 Unix socket 发出 `list/search/refresh/install`
-等有界命令；`cp0-stored` 再读取已经签名的发布面对象。
+设备协议不复用这些 HTTP API。Shell 只通过 Unix socket 发出 `list/today/search/refresh/install`
+等有界命令；`cp0-stored` 再读取已经签名的发布面对象。Today 响应必须与刚读取的 Catalog
+sequence 完全一致，Catalog v1-v3 返回 `editorial: null`。
 
 ## 6. 隐私、合规和运营质量
 
@@ -313,11 +330,11 @@ POST   /v1/releases/{id}:pause
 | --- | --- | --- |
 | 开发者发布 | 本地目录 + 手工 review JSON | Portal/CLI 上传、状态流、团队管理 |
 | 审核 | 精确静态记录 | 自动扫描 + Review Console + 审计事件 |
-| Catalog | 64 应用单文件 | discovery/editorial/search shard 与资源摘要 |
-| 设备浏览 | 单一列表和详情 | Today/Apps/Search/Updates |
-| 搜索 | 协议、`cp0-stored` 和 CLI 已实现 | System Shell 搜索页，后续签名 shard |
-| 资源 | 无 Store 图标/截图管线 | 审核绑定、摘要校验、设备缓存 |
-| 下载 | 单任务、续传、验签 | 可暂停/恢复、统一进度、更新队列 |
+| Catalog | v4 单文件含 discovery、资源摘要和 editorial | 超过 64 应用后的签名 shard |
+| 设备浏览 | Today/Apps/Search/Updates、富详情 | 分类索引和后续产品迭代 |
+| 搜索 | 本地协议、daemon、CLI 和 Shell 已实现 | 超过 64 应用后的签名 shard |
+| 资源 | 审核绑定、摘要校验、设备缓存和 Shell 展示 | CDN/缓存真机容量门禁 |
+| 下载 | 暂停/恢复、统一进度、更新队列和自动更新策略 | S9 真实断电/断网证据 |
 | 用户账户 | 无 | 首版保持无账户；未来另立安全设计 |
 | 商业化 | 无 | 不在首版范围 |
 
@@ -332,6 +349,8 @@ POST   /v1/releases/{id}:pause
 7. 本地 Store socket 的搜索命令作为协议 v1 的可选增量：旧客户端不会收到未经请求的
    搜索响应，新客户端连接旧服务会得到严格的 invalid-request；产品镜像仍统一升级
    Shell、CLI、`cp0-stored` 和协议库，跨版本混用不作为受支持部署方式。
+8. 运营布局只引用 Release，设备只接收同一签名 Catalog 中的 App 投影；运营 mutation 绑定
+   不可变 revision，引用失效时退回 v3，绝不继续展示过期推荐。
 
 首版内容、隐私、审核、申诉和下架工程基线见 `STORE-POLICY-V1.md`；生产文本仍需产品、
 安全和法务签署。

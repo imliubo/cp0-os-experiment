@@ -146,6 +146,7 @@ pub fn publish(options: PublishOptions<'_>) -> Result<(), String> {
         published_unix_seconds: published,
         expires_unix_seconds: expires,
         apps: catalog_apps,
+        editorial: None,
     };
     let signed = sign_catalog(catalog, &secret).map_err(|error| error.to_string())?;
     let encoded = encode_signed_catalog(&signed).map_err(|error| error.to_string())?;

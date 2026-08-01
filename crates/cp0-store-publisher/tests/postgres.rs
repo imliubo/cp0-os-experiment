@@ -5,7 +5,8 @@ use cp0_manifest::{AppManifest, DisplayMode, ResourceLimits, Runtime};
 use cp0_package::{CApp, PackageEntry};
 use cp0_store_metadata::{AgeRating, ImageAsset, LocalizedListing, StoreCategory, StoreListing};
 use cp0_store_protocol::{
-    MEDIA_CATALOG_SCHEMA_VERSION, decode_app_details, decode_signed_catalog, verify_catalog,
+    EDITORIAL_CATALOG_SCHEMA_VERSION, MEDIA_CATALOG_SCHEMA_VERSION, decode_app_details,
+    decode_signed_catalog, verify_catalog,
 };
 use cp0_store_publisher::{RunOutcome, StorePublisher, connect, migrate};
 use cp0_store_scan::submission_content_sha256;
@@ -18,9 +19,11 @@ use uuid::Uuid;
 const TEAM_ID: &str = "team_11111111111111111111111111111111";
 const MEMBER_ID: &str = "member_11111111111111111111111111111111";
 const KEY_ID: &str = "key_11111111111111111111111111111111";
+const EDITORIAL_KEY_ID: &str = "key_22222222222222222222222222222222";
 const REVIEWER_ID: &str = "reviewer_11111111111111111111111111111111";
 const SECONDARY_REVIEWER_ID: &str = "reviewer_22222222222222222222222222222222";
 const APP_ID: &str = "dev.example.publisher";
+const EDITORIAL_OPERATOR_ID: &str = "operator_11111111111111111111111111111111";
 
 #[tokio::test]
 #[ignore = "requires CP0_STORE_TEST_DATABASE_URL"]
@@ -290,6 +293,7 @@ async fn postgres_store_publisher_acceptance() {
         Path::new("generations/8")
     );
 
+    verify_editorial_publication(&pool, &objects, &origin, &recovered).await;
     verify_database_guards(&pool).await;
     verify_database_tamper_rejection(
         &pool,
@@ -581,6 +585,445 @@ async fn verify_atomic_publication_rollback(
     .execute(pool)
     .await
     .unwrap();
+}
+
+async fn verify_editorial_publication(
+    pool: &PgPool,
+    objects: &Path,
+    origin: &Path,
+    publisher: &StorePublisher,
+) {
+    const APP_A: &str = "dev.example.editorial-a";
+    const APP_B: &str = "dev.example.editorial-b";
+    const APP_C: &str = "dev.example.editorial-c";
+    const RELEASE_A: &str = "rel_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+    const RELEASE_B: &str = "rel_a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2";
+    const RELEASE_C: &str = "rel_a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3";
+    const EDITORIAL_V1_EVENT: &str = "evt_b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1";
+    const EDITORIAL_V2_EVENT: &str = "evt_b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+    const EDITORIAL_V3_EVENT: &str = "evt_b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6";
+    let fixture_a = Fixture::new(APP_A, "1.0.0", [13_u8; 32]);
+    let fixture_b = Fixture::new(APP_B, "1.0.0", [13_u8; 32]);
+    let fixture_c = Fixture::new(APP_C, "1.0.0", [13_u8; 32]);
+    sqlx::query(
+        "INSERT INTO developer_keys (key_id, team_id, name, algorithm, public_key, \
+         fingerprint_sha256, state, created_unix_seconds) \
+         VALUES ($1, $2, 'Editorial Key', 'ed25519', $3, $4, 'active', 10)",
+    )
+    .bind(EDITORIAL_KEY_ID)
+    .bind(TEAM_ID)
+    .bind(fixture_a.developer_public_key.to_vec())
+    .bind(sha256_hex(&fixture_a.developer_public_key))
+    .execute(pool)
+    .await
+    .unwrap();
+    for app_id in [APP_A, APP_B, APP_C] {
+        seed_app(pool, app_id).await;
+    }
+    for (fixture, submission, release, decision, event, created, sequence, apps) in [
+        (
+            &fixture_a,
+            "sub_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            RELEASE_A,
+            "decision_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "evt_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            10,
+            10,
+            2,
+        ),
+        (
+            &fixture_b,
+            "sub_a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+            RELEASE_B,
+            "decision_a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+            "evt_a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+            11,
+            11,
+            3,
+        ),
+        (
+            &fixture_c,
+            "sub_a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+            RELEASE_C,
+            "decision_a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+            "evt_a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+            12,
+            12,
+            4,
+        ),
+    ] {
+        seed_submission_release(
+            pool, objects, fixture, submission, release, decision, event, 1, created,
+        )
+        .await;
+        assert_published_sequence(publisher, sequence, apps).await;
+    }
+
+    sqlx::query(
+        "INSERT INTO store_operators (operator_id, email, role, two_factor_enabled, state, \
+         created_unix_seconds) VALUES \
+         ($1, 'publisher-editor@cardputerzero.dev', 'editor', TRUE, 'active', 1)",
+    )
+    .bind(EDITORIAL_OPERATOR_ID)
+    .execute(pool)
+    .await
+    .unwrap();
+    let collections_v1 = json!([{
+        "title": "Publisher essentials",
+        "items": [
+            {"release_id": RELEASE_B, "app_id": APP_B},
+            {"release_id": RELEASE_C, "app_id": APP_C}
+        ]
+    }]);
+    seed_editorial_mutation(
+        pool,
+        1,
+        "Editorial revision one",
+        RELEASE_A,
+        APP_A,
+        &collections_v1,
+        EDITORIAL_V1_EVENT,
+        13,
+    )
+    .await;
+    queue_editorial_event(pool, EDITORIAL_V1_EVENT, 13).await;
+    let collections_v2 = json!([{
+        "title": "Current small-screen picks",
+        "items": [
+            {"release_id": RELEASE_A, "app_id": APP_A},
+            {"release_id": RELEASE_C, "app_id": APP_C}
+        ]
+    }]);
+    seed_editorial_mutation(
+        pool,
+        2,
+        "Editorial revision two",
+        RELEASE_B,
+        APP_B,
+        &collections_v2,
+        EDITORIAL_V2_EVENT,
+        14,
+    )
+    .await;
+
+    assert_published_sequence(publisher, 13, 4).await;
+    verify_editorial_snapshot(
+        pool,
+        origin,
+        13,
+        Some(1),
+        Some(("Editorial revision one", APP_A, &[APP_B, APP_C])),
+    )
+    .await;
+    assert_published_sequence(publisher, 14, 4).await;
+    verify_editorial_snapshot(
+        pool,
+        origin,
+        14,
+        Some(2),
+        Some(("Editorial revision two", APP_B, &[APP_A, APP_C])),
+    )
+    .await;
+
+    transition_with_rebuild(
+        pool,
+        "rel_99999999999999999999999999999999",
+        "paused",
+        4,
+        "evt_b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3",
+        15,
+    )
+    .await;
+    assert_published_sequence(publisher, 15, 3).await;
+    verify_editorial_snapshot(
+        pool,
+        origin,
+        15,
+        None,
+        Some(("Editorial revision two", APP_B, &[APP_A, APP_C])),
+    )
+    .await;
+
+    transition_with_rebuild(
+        pool,
+        RELEASE_C,
+        "paused",
+        4,
+        "evt_b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4",
+        16,
+    )
+    .await;
+    assert_published_sequence(publisher, 16, 2).await;
+    verify_editorial_snapshot(pool, origin, 16, None, None).await;
+    transition_with_rebuild(
+        pool,
+        RELEASE_C,
+        "published",
+        5,
+        "evt_b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5",
+        17,
+    )
+    .await;
+    assert_published_sequence(publisher, 17, 3).await;
+    verify_editorial_snapshot(
+        pool,
+        origin,
+        17,
+        None,
+        Some(("Editorial revision two", APP_B, &[APP_A, APP_C])),
+    )
+    .await;
+
+    let collections_v3 = json!([{
+        "title": "Superseded picks",
+        "items": [
+            {"release_id": RELEASE_A, "app_id": APP_A},
+            {"release_id": RELEASE_B, "app_id": APP_B}
+        ]
+    }]);
+    seed_editorial_mutation(
+        pool,
+        3,
+        "Editorial revision three",
+        RELEASE_C,
+        APP_C,
+        &collections_v3,
+        EDITORIAL_V3_EVENT,
+        18,
+    )
+    .await;
+    queue_editorial_event(pool, EDITORIAL_V3_EVENT, 18).await;
+    transition_with_rebuild(
+        pool,
+        RELEASE_C,
+        "removed",
+        6,
+        "evt_b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7",
+        19,
+    )
+    .await;
+    assert!(matches!(
+        publisher.run_once().await.unwrap(),
+        RunOutcome::Superseded {
+            catalog_sequence: 18,
+            ..
+        }
+    ));
+    assert_eq!(count_where_sequence(pool, 18).await, 0);
+    assert_published_sequence(publisher, 19, 2).await;
+    verify_editorial_snapshot(pool, origin, 19, None, None).await;
+    assert_eq!(last_catalog_sequence(pool).await, 19);
+    assert_eq!(
+        tokio::fs::read_link(origin.join("current")).await.unwrap(),
+        Path::new("generations/19")
+    );
+
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE store_publication_jobs SET editorial_resource_version = 99 \
+             WHERE event_id = $1",
+        )
+        .bind(EDITORIAL_V1_EVENT)
+        .execute(pool)
+        .await,
+        "55000",
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn seed_editorial_mutation(
+    pool: &PgPool,
+    resource_version: i64,
+    headline: &str,
+    featured_release_id: &str,
+    featured_app_id: &str,
+    collections: &serde_json::Value,
+    event_id: &str,
+    created: i64,
+) {
+    let mut transaction = pool.begin().await.unwrap();
+    if resource_version == 1 {
+        sqlx::query(
+            "INSERT INTO store_editorial_layouts (layout_id, headline, featured_release_id, \
+             featured_app_id, collections, resource_version, created_unix_seconds, \
+             updated_unix_seconds) VALUES ('today', $1, $2, $3, $4, 1, $5, $5)",
+        )
+        .bind(headline)
+        .bind(featured_release_id)
+        .bind(featured_app_id)
+        .bind(collections)
+        .bind(created)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    } else {
+        sqlx::query(
+            "UPDATE store_editorial_layouts SET headline = $1, featured_release_id = $2, \
+             featured_app_id = $3, collections = $4, resource_version = $5, \
+             updated_unix_seconds = $6 WHERE layout_id = 'today' \
+             AND resource_version = $7",
+        )
+        .bind(headline)
+        .bind(featured_release_id)
+        .bind(featured_app_id)
+        .bind(collections)
+        .bind(resource_version)
+        .bind(created)
+        .bind(resource_version - 1)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    }
+    let request_sha256 = sha256_hex(event_id.as_bytes());
+    sqlx::query(
+        "INSERT INTO store_editorial_revisions (layout_id, resource_version, operator_id, \
+         headline, featured_release_id, featured_app_id, collections, request_sha256, \
+         created_unix_seconds) VALUES ('today', $1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(resource_version)
+    .bind(EDITORIAL_OPERATOR_ID)
+    .bind(headline)
+    .bind(featured_release_id)
+    .bind(featured_app_id)
+    .bind(collections)
+    .bind(&request_sha256)
+    .bind(created)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO audit_events (occurred_unix_seconds, actor_id, action, object_kind, \
+         object_id, before_state, after_state, resource_version, request_id, request_sha256, \
+         idempotency_key_sha256) VALUES \
+         ($1, $2, $3, 'editorial', 'today', NULL, 'active', $4, $5, $6, $7)",
+    )
+    .bind(created)
+    .bind(EDITORIAL_OPERATOR_ID)
+    .bind(if resource_version == 1 {
+        "editorial.today-created"
+    } else {
+        "editorial.today-updated"
+    })
+    .bind(resource_version)
+    .bind(format!("req_{:032x}", resource_version))
+    .bind(&request_sha256)
+    .bind(sha256_hex(
+        format!("editorial-idempotency-{resource_version}").as_bytes(),
+    ))
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    let featured_release_version: i64 =
+        sqlx::query_scalar("SELECT resource_version FROM releases WHERE release_id = $1")
+            .bind(featured_release_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .unwrap();
+    sqlx::query(
+        "INSERT INTO outbox_events (event_id, topic, aggregate_kind, aggregate_id, \
+         aggregate_version, request_sha256, payload, created_unix_seconds) \
+         VALUES ($1, 'catalog.rebuild-requested', 'release', $2, $3, $4, $5, $6)",
+    )
+    .bind(event_id)
+    .bind(featured_release_id)
+    .bind(featured_release_version)
+    .bind(&request_sha256)
+    .bind(json!({
+        "release_id": featured_release_id,
+        "app_id": featured_app_id,
+        "state": "published",
+        "editorial_resource_version": resource_version
+    }))
+    .bind(created)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    transaction.commit().await.unwrap();
+}
+
+async fn queue_editorial_event(pool: &PgPool, event_id: &str, created: i64) {
+    let event = sqlx::query(
+        "SELECT aggregate_id, aggregate_version, payload FROM outbox_events WHERE event_id = $1",
+    )
+    .bind(event_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let payload: serde_json::Value = event.get("payload");
+    sqlx::query(
+        "INSERT INTO store_publication_jobs (event_id, release_id, job_kind, \
+         source_resource_version, source_state, editorial_resource_version, state, \
+         created_unix_seconds) VALUES ($1, $2, 'rebuild-catalog', $3, 'published', $4, \
+         'queued', $5)",
+    )
+    .bind(event_id)
+    .bind(event.get::<String, _>("aggregate_id"))
+    .bind(event.get::<i64, _>("aggregate_version"))
+    .bind(payload["editorial_resource_version"].as_i64().unwrap())
+    .bind(created)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE outbox_events SET published_unix_seconds = created_unix_seconds, attempts = 1 \
+         WHERE event_id = $1",
+    )
+    .bind(event_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn verify_editorial_snapshot(
+    pool: &PgPool,
+    origin: &Path,
+    sequence: i64,
+    expected_resource_version: Option<i64>,
+    expected: Option<(&str, &str, &[&str])>,
+) {
+    let row = sqlx::query(
+        "SELECT encoded_catalog, editorial_resource_version FROM store_catalog_snapshots \
+         WHERE sequence = $1",
+    )
+    .bind(sequence)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        row.get::<Option<i64>, _>("editorial_resource_version"),
+        expected_resource_version
+    );
+    let encoded: Vec<u8> = row.get("encoded_catalog");
+    assert_eq!(
+        tokio::fs::read(origin.join(format!("generations/{sequence}/catalog.json")))
+            .await
+            .unwrap(),
+        encoded
+    );
+    let signed = decode_signed_catalog(&encoded).unwrap();
+    match expected {
+        Some((headline, featured_app_id, collection_app_ids)) => {
+            assert_eq!(
+                signed.catalog.schema_version,
+                EDITORIAL_CATALOG_SCHEMA_VERSION
+            );
+            let editorial = signed.catalog.editorial.as_ref().unwrap();
+            assert_eq!(editorial.headline, headline);
+            assert_eq!(editorial.featured_app_id, featured_app_id);
+            assert_eq!(editorial.collections.len(), 1);
+            assert_eq!(
+                editorial.collections[0].app_ids,
+                collection_app_ids
+                    .iter()
+                    .map(|app_id| (*app_id).to_owned())
+                    .collect::<Vec<_>>()
+            );
+        }
+        None => {
+            assert_eq!(signed.catalog.schema_version, MEDIA_CATALOG_SCHEMA_VERSION);
+            assert!(signed.catalog.editorial.is_none());
+        }
+    }
 }
 
 async fn publication_atomic_counts(pool: &PgPool) -> (i64, i64, i64, i64, i64, i64) {
@@ -1252,7 +1695,9 @@ async fn set_trigger(pool: &PgPool, table: &str, trigger: &str, enabled: bool) {
 
 async fn reset_database(pool: &PgPool) {
     sqlx::query(
-        "TRUNCATE teams, reviewers, audit_events, outbox_events, idempotency_records, catalog_sequence \
+        "TRUNCATE store_operator_access_tokens, store_operators, \
+         store_editorial_revisions, store_editorial_layouts, teams, reviewers, audit_events, \
+         outbox_events, idempotency_records, catalog_sequence \
          RESTART IDENTITY CASCADE",
     )
     .execute(pool)

@@ -104,8 +104,25 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
          .summary = "Deliver reviewed status notifications"},
     };
     cp0_ui_sync_store_catalog(ui, store_apps, 2, false, false);
+    static const struct cp0_ui_store_editorial_collection store_collections[] = {
+        {.title = "Small-screen essentials",
+         .apps = &store_apps[1],
+         .app_count = 1},
+    };
+    static const struct cp0_ui_store_editorial store_editorial = {
+        .headline = "Made for your CardputerZero",
+        .featured = &store_apps[0],
+        .collections = store_collections,
+        .collection_count = 1,
+    };
+    cp0_ui_sync_store_today(ui, &store_editorial);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    write_snapshot(directory, "store-today", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_DOWN);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    write_snapshot(directory, "store-today-collection", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_BACK);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     cp0_ui_handle_action(ui, CP0_UI_DOWN);
     write_snapshot(directory, "store", ui, frame);
@@ -487,6 +504,57 @@ int main(int argc, char **argv)
          .installed_version = "1.0.0",
          .installed_permissions = 1U << 6},
     };
+    struct cp0_ui today_ui;
+    cp0_ui_init(&today_ui);
+    cp0_ui_set_local_simulation(&today_ui, true);
+    cp0_ui_sync_store_catalog(&today_ui, store_catalog, 2, false, false);
+    const struct cp0_ui_store_editorial_collection today_collections[] = {
+        {.title = "Utilities",
+         .apps = &store_catalog[1],
+         .app_count = 1},
+    };
+    const struct cp0_ui_store_editorial today_editorial = {
+        .headline = "Reviewed for the small screen",
+        .featured = &store_catalog[0],
+        .collections = today_collections,
+        .collection_count = 1,
+    };
+    cp0_ui_sync_store_today(&today_ui, &today_editorial);
+    cp0_ui_handle_action(&today_ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&today_ui, CP0_UI_ACCEPT);
+    assert(today_ui.screen == CP0_UI_STORE &&
+           today_ui.store_section == CP0_UI_STORE_TODAY &&
+           strcmp(cp0_ui_selected_store_app_id(&today_ui),
+                  "dev.cardputerzero.alpha") == 0);
+    cp0_ui_handle_action(&today_ui, CP0_UI_DOWN);
+    assert(today_ui.store_today_selected == 1 &&
+           cp0_ui_selected_store_app_id(&today_ui) == NULL);
+    assert(cp0_ui_handle_action(&today_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_NONE);
+    assert(today_ui.store_today_collection_open &&
+           strcmp(cp0_ui_selected_store_app_id(&today_ui),
+                  "dev.cardputerzero.beta") == 0);
+    cp0_ui_handle_action(&today_ui, CP0_UI_RIGHT);
+    assert(today_ui.store_section == CP0_UI_STORE_TODAY);
+    cp0_ui_sync_store_today(&today_ui, &today_editorial);
+    assert(today_ui.store_today_collection_open &&
+           strcmp(cp0_ui_selected_store_app_id(&today_ui),
+                  "dev.cardputerzero.beta") == 0);
+    cp0_ui_handle_action(&today_ui, CP0_UI_LEFT);
+    assert(today_ui.store_section == CP0_UI_STORE_TODAY &&
+           today_ui.store_today_collection_open);
+    assert(cp0_ui_handle_action(&today_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STORE_DETAILS);
+    assert(today_ui.store_detail);
+    cp0_ui_handle_action(&today_ui, CP0_UI_BACK);
+    assert(!today_ui.store_detail && today_ui.store_today_collection_open);
+    cp0_ui_handle_action(&today_ui, CP0_UI_BACK);
+    assert(!today_ui.store_today_collection_open &&
+           today_ui.store_today_selected == 1);
+    cp0_ui_sync_store_today(&today_ui, NULL);
+    assert(!today_ui.store_today_available &&
+           today_ui.store_today_collection_count == 0);
+
     cp0_ui_sync_store_catalog(&ui, store_catalog, 2, false, false);
     assert(ui.store_apps[0].state == CP0_UI_STORE_INSTALLED);
     assert(ui.store_apps[1].state == CP0_UI_STORE_UPDATE);

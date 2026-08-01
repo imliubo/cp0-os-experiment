@@ -111,7 +111,11 @@ developer、subtitle、category、keywords、age/privacy 元数据，v1/v2 严�
 S6B 已新增 Catalog v3 富媒体资源层：根 Catalog 摘要绑定 icon 和有界 details 清单，details 再
 绑定 320x170 截图；Publisher 将包、图片、details、Catalog 和 transparency 对象写入同一不可变
 generation，并支持 v1/v2/v3 渐进升级。S6C 已在 `cp0-stored` 实现内容寻址的 icon/details/
-screenshot 缓存、精确摘要与 PNG/details 身份复验、独立预算和截图 LRU；System Shell 展示仍待实现。
+screenshot 缓存、精确摘要与 PNG/details 身份复验、独立预算和截图 LRU；S6D 已通过严格 IPC
+将图标、详情、截图、权限差异和更新说明接入 System Shell。
+S8A 已新增 Catalog v4 editorial 层：Today 主推荐、1-2 个专题和每组最多 4 个应用均来自 approved
+且 published 的 Release；运营 revision、Publisher snapshot、设备 `today` IPC 和 320x170 Shell
+导航形成完整纵向链路。引用失效时 Publisher 安全退回 v3，不发布过期推荐。
 
 - [ ] 实现 Identity/Teams、App Registry、Submission 和 Release 服务。
   当前 App Registry、Submission 上传/finalize/read/withdraw、独立双审 Review 和 Release 控制
@@ -139,7 +143,10 @@ screenshot 缓存、精确摘要与 PNG/details 身份复验、独立预算和�
 - [x] 定义 32x32/48x48 图标和 320x170 截图的格式、尺寸、摘要和缓存上限。
   S6B 已冻结 PNG/descriptor/details 契约、单资源与 CM0 总缓存预算，并由 Publisher 原子发布；
   `cp0-stored` 缓存实现仍由下方独立任务跟踪。
-- [ ] 增加 Today 专题、精选集合、分类和更新索引。
+- [x] 增加 Today 专题和精选集合。
+  S8A 通过 Catalog v4、严格 `today` IPC 和 System Shell 单前台集合导航完成；Updates 已由 S7
+  使用 verified Catalog 与 appd 安装快照计算。
+- [ ] 增加签名分类索引；Apps 当前在最多 64 项的完整 Catalog 上浏览。
 - [ ] 规模超过 64 应用时切换为签名根索引和有界 shard。
 - [x] `cp0-stored` 原子缓存 Catalog/资源，资源解析失败不影响本地应用启动。
   S6C 在 Catalog 提交后尽力预取图标，details/截图按需缓存；截断、替换、错误尺寸、错误身份和
@@ -189,7 +196,12 @@ S7F 已增加默认关闭的自动应用更新：私有原子偏好和六小时�
 
 ## S8：运营质量与隐私
 
-- [ ] Today/专题运营工具只能引用 approved Release。
+S8A 已完成 Today editorial 控制面纵向切片：独立 operator token 域、role/2FA/state/expiry/
+revocation/scope 校验，首次创建和 ETag 更新、精确幂等、不可变 revision、audit/outbox、Catalog v4
+确定性投影和 v3 fail-closed 降级均通过真实 PostgreSQL 验收；设备 `cp0-stored` 与 System Shell
+同步完成 Today/专题消费。具体契约见 `STORE-EDITORIAL-V1.md`。
+
+- [x] Today/专题运营工具只能引用 approved Release。
 - [ ] 建立最小化、可选、去标识化的安装和崩溃聚合指标。
 - [ ] 搜索词默认不上传；任何实验功能需要单独同意和保留期限。
 - [ ] 建立内容举报、下架申诉、开发者通知和安全响应 SLA。

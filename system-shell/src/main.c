@@ -309,6 +309,64 @@ static enum cp0_ui_store_failure_reason store_ui_failure_reason(
     return direct_reasons[app->failure_reason];
 }
 
+static struct cp0_ui_store_catalog_app store_ui_catalog_app(
+    const struct shell *shell, const struct cp0_store_app_summary *app)
+{
+    const struct cp0_app_summary *installed =
+        installed_app(shell, app->app_id);
+    return (struct cp0_ui_store_catalog_app){
+        .package_bytes = app->package_bytes,
+        .permissions = app->permissions,
+        .progress_percent = app->progress_percent,
+        .state = store_ui_state(app),
+        .failure_reason = store_ui_failure_reason(app),
+        .app_id = app->app_id,
+        .name = app->name,
+        .version = app->version,
+        .summary = app->summary,
+        .installed_version = installed == NULL ? NULL : installed->version,
+        .installed_permissions =
+            installed == NULL ? 0 : installed->permissions,
+    };
+}
+
+static void poll_store_today(struct shell *shell, uint64_t expected_sequence)
+{
+    struct cp0_store_today today;
+    struct cp0_ui_store_catalog_app featured;
+    struct cp0_ui_store_catalog_app collection_apps
+        [CP0_STORE_EDITORIAL_COLLECTION_MAX]
+        [CP0_STORE_EDITORIAL_COLLECTION_APP_MAX];
+    struct cp0_ui_store_editorial_collection collections
+        [CP0_STORE_EDITORIAL_COLLECTION_MAX];
+    struct cp0_ui_store_editorial editorial;
+
+    if (cp0_store_today(&today) != CP0_STORE_RESULT_OK ||
+        !today.has_editorial || today.sequence != expected_sequence) {
+        cp0_ui_sync_store_today(&shell->ui, NULL);
+        return;
+    }
+    featured = store_ui_catalog_app(shell, &today.featured);
+    for (size_t collection = 0; collection < today.collection_count;
+         collection++) {
+        for (size_t app = 0; app < today.collections[collection].count; app++)
+            collection_apps[collection][app] = store_ui_catalog_app(
+                shell, &today.collections[collection].apps[app]);
+        collections[collection] = (struct cp0_ui_store_editorial_collection){
+            .title = today.collections[collection].title,
+            .apps = collection_apps[collection],
+            .app_count = today.collections[collection].count,
+        };
+    }
+    editorial = (struct cp0_ui_store_editorial){
+        .headline = today.headline,
+        .featured = &featured,
+        .collections = collections,
+        .collection_count = today.collection_count,
+    };
+    cp0_ui_sync_store_today(&shell->ui, &editorial);
+}
+
 static void poll_store_catalog(struct shell *shell)
 {
     struct cp0_store_catalog catalog;
@@ -317,34 +375,21 @@ static void poll_store_catalog(struct shell *shell)
 
     result = cp0_store_list(&catalog);
     if (result == CP0_STORE_RESULT_UNCONFIGURED) {
+        cp0_ui_sync_store_today(&shell->ui, NULL);
         cp0_ui_set_store_status(&shell->ui, CP0_UI_STORE_UNCONFIGURED);
         return;
     }
     if (result != CP0_STORE_RESULT_OK) {
+        cp0_ui_sync_store_today(&shell->ui, NULL);
         cp0_ui_set_store_status(&shell->ui, CP0_UI_STORE_UNAVAILABLE);
         return;
     }
     shell->store_catalog_sequence = catalog.sequence;
-    for (size_t index = 0; index < catalog.count; index++) {
-        const struct cp0_app_summary *installed =
-            installed_app(shell, catalog.apps[index].app_id);
-        apps[index] = (struct cp0_ui_store_catalog_app){
-            .package_bytes = catalog.apps[index].package_bytes,
-            .permissions = catalog.apps[index].permissions,
-            .progress_percent = catalog.apps[index].progress_percent,
-            .state = store_ui_state(&catalog.apps[index]),
-            .failure_reason = store_ui_failure_reason(&catalog.apps[index]),
-            .app_id = catalog.apps[index].app_id,
-            .name = catalog.apps[index].name,
-            .version = catalog.apps[index].version,
-            .summary = catalog.apps[index].summary,
-            .installed_version = installed == NULL ? NULL : installed->version,
-            .installed_permissions =
-                installed == NULL ? 0 : installed->permissions,
-        };
-    }
+    for (size_t index = 0; index < catalog.count; index++)
+        apps[index] = store_ui_catalog_app(shell, &catalog.apps[index]);
     cp0_ui_sync_store_catalog(&shell->ui, apps, catalog.count,
                               catalog.truncated, catalog.stale);
+    poll_store_today(shell, catalog.sequence);
 }
 
 static void poll_store_search(struct shell *shell)
@@ -370,24 +415,8 @@ static void poll_store_search(struct shell *shell)
                                            CP0_UI_STORE_UNAVAILABLE);
         return;
     }
-    for (size_t index = 0; index < results.count; index++) {
-        const struct cp0_app_summary *installed =
-            installed_app(shell, results.apps[index].app_id);
-        apps[index] = (struct cp0_ui_store_catalog_app){
-            .package_bytes = results.apps[index].package_bytes,
-            .permissions = results.apps[index].permissions,
-            .progress_percent = results.apps[index].progress_percent,
-            .state = store_ui_state(&results.apps[index]),
-            .failure_reason = store_ui_failure_reason(&results.apps[index]),
-            .app_id = results.apps[index].app_id,
-            .name = results.apps[index].name,
-            .version = results.apps[index].version,
-            .summary = results.apps[index].summary,
-            .installed_version = installed == NULL ? NULL : installed->version,
-            .installed_permissions =
-                installed == NULL ? 0 : installed->permissions,
-        };
-    }
+    for (size_t index = 0; index < results.count; index++)
+        apps[index] = store_ui_catalog_app(shell, &results.apps[index]);
     cp0_ui_sync_store_search(
         &shell->ui, results.query, results.offset, results.total,
         results.has_next, results.next_offset, apps, results.count,

@@ -32,6 +32,9 @@ jq -e '
   .paths["/v1/releases/{release_id}:pause"].post.operationId == "pauseRelease" and
   .paths["/v1/releases/{release_id}:resume"].post.operationId == "resumeRelease" and
   .paths["/v1/releases/{release_id}:remove"].post.operationId == "removeRelease" and
+  .paths["/v1/editorial/today"].get.operationId == "getTodayEditorial" and
+  .paths["/v1/editorial/today"].post.operationId == "createTodayEditorial" and
+  .paths["/v1/editorial/today"].put.operationId == "updateTodayEditorial" and
   .components.schemas.SubmissionState.enum == [
     "draft", "uploading", "processing", "ready-for-review", "in-review",
     "pending-secondary-review", "needs-changes", "approved", "rejected", "withdrawn"
@@ -47,7 +50,9 @@ jq -e '
       "CreateAppRequest", "App", "AssetDescriptor",
       "CreateSubmissionRequest", "FinalizeSubmissionRequest", "Submission",
       "ReviewMessageRequest", "ReviewMessage", "ReviewDecisionRequest",
-      "CreateReleaseRequest", "ScheduleReleaseRequest", "RemovalRequest", "Release"
+      "CreateReleaseRequest", "ScheduleReleaseRequest", "RemovalRequest", "Release",
+      "EditorialLayoutRequest", "EditorialCollectionRequest", "EditorialItem",
+      "EditorialCollection", "EditorialLayout"
     ];
     .additionalProperties == false
   ) and
@@ -96,6 +101,36 @@ jq -e '
   (.paths["/v1/releases/{release_id}:publish"].post | has("requestBody") | not) and
   (.paths["/v1/releases/{release_id}:pause"].post | has("requestBody") | not) and
   (.paths["/v1/releases/{release_id}:resume"].post | has("requestBody") | not)
+' "$api" >/dev/null
+
+jq -e '
+  def refs($operation): [($operation.parameters // [])[] | .["$ref"]];
+  (refs(.paths["/v1/editorial/today"].post) |
+    index("#/components/parameters/IdempotencyKey") != null and
+    index("#/components/parameters/IfMatch") == null) and
+  (refs(.paths["/v1/editorial/today"].put) |
+    index("#/components/parameters/IdempotencyKey") != null and
+    index("#/components/parameters/IfMatch") != null) and
+  (.paths["/v1/editorial/today"].get.parameters // []) == [] and
+  .paths["/v1/editorial/today"].post.requestBody.required == true and
+  .paths["/v1/editorial/today"].put.requestBody.required == true and
+  .paths["/v1/editorial/today"].post.requestBody.content["application/json"].schema["$ref"] ==
+    "#/components/schemas/EditorialLayoutRequest" and
+  .paths["/v1/editorial/today"].put.requestBody.content["application/json"].schema["$ref"] ==
+    "#/components/schemas/EditorialLayoutRequest" and
+  all([
+    .paths["/v1/editorial/today"].get.responses["200"],
+    .paths["/v1/editorial/today"].post.responses["201"],
+    .paths["/v1/editorial/today"].put.responses["200"]
+  ][];
+    .headers.ETag["$ref"] == "#/components/headers/ETag" and
+    .content["application/json"].schema["$ref"] == "#/components/schemas/EditorialLayout") and
+  .components.schemas.EditorialLayoutRequest.properties.collections.minItems == 1 and
+  .components.schemas.EditorialLayoutRequest.properties.collections.maxItems == 2 and
+  .components.schemas.EditorialCollectionRequest.properties.release_ids.minItems == 1 and
+  .components.schemas.EditorialCollectionRequest.properties.release_ids.maxItems == 4 and
+  .components.schemas.EditorialCollectionRequest.properties.release_ids.uniqueItems == true and
+  .components.schemas.EditorialLayout.properties.layout_id.const == "today"
 ' "$api" >/dev/null
 
 jq -e '

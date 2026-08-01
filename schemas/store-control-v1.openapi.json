@@ -535,6 +535,68 @@
           "default": { "$ref": "#/components/responses/Problem" }
         }
       }
+    },
+    "/v1/editorial/today": {
+      "get": {
+        "operationId": "getTodayEditorial",
+        "responses": {
+          "200": {
+            "description": "Current immutable-versioned Today editorial layout",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/EditorialLayout" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "post": {
+        "operationId": "createTodayEditorial",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EditorialLayoutRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Initial Today editorial layout created and Catalog rebuild queued",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/EditorialLayout" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "put": {
+        "operationId": "updateTodayEditorial",
+        "parameters": [
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EditorialLayoutRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New immutable Today editorial revision created and Catalog rebuild queued",
+            "headers": { "ETag": { "$ref": "#/components/headers/ETag" } },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/EditorialLayout" } }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
     }
   },
   "components": {
@@ -955,6 +1017,80 @@
         "properties": {
           "reason_code": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
           "note": { "type": "string", "minLength": 1, "maxLength": 2000 }
+        }
+      },
+      "EditorialLayoutRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["headline", "featured_release_id", "collections"],
+        "properties": {
+          "headline": { "type": "string", "minLength": 1, "maxLength": 48 },
+          "featured_release_id": { "$ref": "#/components/schemas/ReleaseId" },
+          "collections": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "items": { "$ref": "#/components/schemas/EditorialCollectionRequest" }
+          }
+        }
+      },
+      "EditorialCollectionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "release_ids"],
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "release_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": { "$ref": "#/components/schemas/ReleaseId" }
+          }
+        }
+      },
+      "EditorialItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["release_id", "app_id"],
+        "properties": {
+          "release_id": { "$ref": "#/components/schemas/ReleaseId" },
+          "app_id": { "$ref": "#/components/schemas/AppId" }
+        }
+      },
+      "EditorialCollection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "items"],
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": { "$ref": "#/components/schemas/EditorialItem" }
+          }
+        }
+      },
+      "EditorialLayout": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "layout_id", "headline", "featured", "collections", "resource_version",
+          "updated_unix_seconds"
+        ],
+        "properties": {
+          "layout_id": { "const": "today" },
+          "headline": { "type": "string", "minLength": 1, "maxLength": 48 },
+          "featured": { "$ref": "#/components/schemas/EditorialItem" },
+          "collections": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "items": { "$ref": "#/components/schemas/EditorialCollection" }
+          },
+          "resource_version": { "type": "integer", "minimum": 1 },
+          "updated_unix_seconds": { "type": "integer", "minimum": 1 }
         }
       },
       "Release": {

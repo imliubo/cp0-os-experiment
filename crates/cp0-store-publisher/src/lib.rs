@@ -11,7 +11,8 @@ use cp0_package::CApp;
 use cp0_store_metadata::{ImageAsset, StoreListing};
 use cp0_store_protocol::{
     APP_DETAILS_SCHEMA_VERSION, CATALOG_SCHEMA_VERSION, Catalog, CatalogApp, CatalogDiscovery,
-    CatalogImageResource, CatalogObjectResource, CatalogResources, MAX_CATALOG_APPS,
+    CatalogEditorial, CatalogEditorialCollection, CatalogImageResource, CatalogObjectResource,
+    CatalogResources, EDITORIAL_CATALOG_SCHEMA_VERSION, MAX_CATALOG_APPS,
     MAX_CATALOG_LIFETIME_SECONDS, MEDIA_CATALOG_SCHEMA_VERSION, RICH_CATALOG_SCHEMA_VERSION,
     StoreAppDetails, encode_app_details, encode_signed_catalog, is_valid_https_url, lower_hex,
     sign_catalog,
@@ -21,6 +22,7 @@ use cp0_store_transparency::{
     encode_checkpoint, encode_leaf, leaf_hash, lower_hex as transparency_hex,
     merkle_root_from_hashes, sign_checkpoint, verify_log,
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::{PgPool, PgPoolOptions};
@@ -490,17 +492,35 @@ impl StorePublisher {
                 ));
             }
         };
+        let editorial_resource_version = match payload.get("editorial_resource_version") {
+            None => None,
+            Some(value) if job_kind == "rebuild-catalog" => Some(
+                value
+                    .as_u64()
+                    .filter(|version| *version > 0 && *version <= i64::MAX as u64)
+                    .ok_or(PublisherError::InvalidState(
+                        "editorial publication version is invalid",
+                    ))?,
+            ),
+            Some(_) => {
+                return Err(PublisherError::InvalidState(
+                    "publish-release event contains an editorial version",
+                ));
+            }
+        };
         let now = database_now(&mut transaction).await?;
         sqlx::query(
             "INSERT INTO store_publication_jobs (event_id, release_id, job_kind, \
-             source_resource_version, source_state, state, created_unix_seconds) \
-             VALUES ($1, $2, $3, $4, $5, 'queued', $6) ON CONFLICT (event_id) DO NOTHING",
+             source_resource_version, source_state, editorial_resource_version, state, \
+             created_unix_seconds) VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7) \
+             ON CONFLICT (event_id) DO NOTHING",
         )
         .bind(&event_id)
         .bind(&release_id)
         .bind(job_kind)
         .bind(source_resource_version)
         .bind(source_state)
+        .bind(editorial_resource_version.map(i64_from_u64).transpose()?)
         .bind(now)
         .execute(&mut *transaction)
         .await?;
@@ -533,8 +553,8 @@ impl StorePublisher {
         .await?;
         let row = sqlx::query(
             "SELECT event_id, release_id, job_kind, source_resource_version, source_state, \
-             developer_name, lease_token, attempts, catalog_sequence, published_unix_seconds, \
-             expires_unix_seconds \
+             editorial_resource_version, developer_name, lease_token, attempts, catalog_sequence, \
+             published_unix_seconds, expires_unix_seconds \
              FROM store_publication_jobs WHERE state = 'running' AND attempts >= 8 AND \
              leased_until_unix_seconds <= EXTRACT(EPOCH FROM clock_timestamp())::BIGINT \
              ORDER BY created_unix_seconds, event_id LIMIT 1",
@@ -612,8 +632,8 @@ impl StorePublisher {
              )) \
              WHERE event_id = $6 AND state = 'queued' \
              RETURNING event_id, release_id, job_kind, source_resource_version, source_state, \
-             developer_name, lease_token, attempts, catalog_sequence, published_unix_seconds, \
-             expires_unix_seconds",
+             editorial_resource_version, developer_name, lease_token, attempts, catalog_sequence, \
+             published_unix_seconds, expires_unix_seconds",
         )
         .bind(&lease_token)
         .bind(now + LEASE_SECONDS)
@@ -688,13 +708,22 @@ impl StorePublisher {
                 "Catalog application bound was exceeded",
             ));
         }
-        let schema_version = catalog_schema_for_projection(&mut apps);
+        let mut schema_version = catalog_schema_for_projection(&mut apps);
+        let editorial = if schema_version == MEDIA_CATALOG_SCHEMA_VERSION {
+            self.load_editorial_projection(job, &apps).await?
+        } else {
+            None
+        };
+        if editorial.is_some() {
+            schema_version = EDITORIAL_CATALOG_SCHEMA_VERSION;
+        }
         let catalog = Catalog {
             schema_version,
             sequence: job.catalog_sequence,
             published_unix_seconds: job.published_unix_seconds,
             expires_unix_seconds: job.expires_unix_seconds,
             apps,
+            editorial,
         };
         let signed = sign_catalog(catalog, &self.signer.secret)?;
         let catalog_encoded = encode_signed_catalog(&signed)?;
@@ -712,6 +741,90 @@ impl StorePublisher {
             store_key_id: self.signer.key_id.clone(),
             transparency,
         })))
+    }
+
+    async fn load_editorial_projection(
+        &self,
+        job: &PublicationJob,
+        apps: &[CatalogApp],
+    ) -> Result<Option<CatalogEditorial>, PublisherError> {
+        let row = if let Some(resource_version) = job.editorial_resource_version {
+            sqlx::query(
+                "SELECT headline, featured_release_id, featured_app_id, collections \
+                 FROM store_editorial_revisions WHERE layout_id = 'today' \
+                   AND resource_version = $1",
+            )
+            .bind(i64_from_u64(resource_version)?)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or(PublisherError::InvalidState(
+                "bound editorial revision is missing",
+            ))?
+        } else {
+            let Some(row) = sqlx::query(
+                "SELECT headline, featured_release_id, featured_app_id, collections \
+                 FROM store_editorial_layouts WHERE layout_id = 'today'",
+            )
+            .fetch_optional(&self.pool)
+            .await?
+            else {
+                return Ok(None);
+            };
+            row
+        };
+
+        let headline: String = row.get("headline");
+        let featured_release_id: String = row.get("featured_release_id");
+        let featured_app_id: String = row.get("featured_app_id");
+        let collections =
+            serde_json::from_value::<Vec<StoredEditorialCollection>>(row.get("collections"))
+                .map_err(|_| {
+                    PublisherError::InvalidState("stored editorial collections are invalid")
+                })?;
+        let mut bindings = vec![(featured_release_id, featured_app_id.clone())];
+        let mut catalog_collections = Vec::with_capacity(collections.len());
+        for collection in collections {
+            let mut app_ids = Vec::with_capacity(collection.items.len());
+            for item in collection.items {
+                bindings.push((item.release_id, item.app_id.clone()));
+                app_ids.push(item.app_id);
+            }
+            catalog_collections.push(CatalogEditorialCollection {
+                title: collection.title,
+                app_ids,
+            });
+        }
+        let catalog_app_ids = apps
+            .iter()
+            .map(|app| app.app_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        for (release_id, app_id) in &bindings {
+            if !catalog_app_ids.contains(app_id.as_str()) {
+                return Ok(None);
+            }
+            let publishable: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM releases release \
+                 JOIN submissions submission ON submission.submission_id = release.submission_id \
+                 JOIN store_package_artifacts artifact ON artifact.release_id = release.release_id \
+                 WHERE release.release_id = $1 AND release.app_id = $2 \
+                   AND release.state = 'published' AND submission.state = 'approved' \
+                   AND submission.app_id = release.app_id AND submission.version = release.version \
+                   AND artifact.catalog_app->>'app_id' = release.app_id \
+                   AND artifact.catalog_app->>'version' = release.version)",
+            )
+            .bind(release_id)
+            .bind(app_id)
+            .fetch_one(&self.pool)
+            .await?;
+            if !publishable {
+                return Ok(None);
+            }
+        }
+        Ok(Some(CatalogEditorial {
+            headline,
+            featured_app_id,
+            collections: catalog_collections,
+        }))
     }
 
     async fn prepare_transparency(
@@ -1149,8 +1262,9 @@ impl StorePublisher {
         sqlx::query(
             "INSERT INTO store_catalog_snapshots (sequence, source_event_id, source_release_id, \
              catalog_sha256, catalog_bytes, relative_path, store_key_id, app_count, \
-             published_unix_seconds, expires_unix_seconds, encoded_catalog, created_unix_seconds) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+             published_unix_seconds, expires_unix_seconds, encoded_catalog, created_unix_seconds, \
+             editorial_resource_version) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
         .bind(i64_from_u64(job.catalog_sequence)?)
         .bind(&job.event_id)
@@ -1171,6 +1285,11 @@ impl StorePublisher {
         .bind(i64_from_u64(job.expires_unix_seconds)?)
         .bind(&prepared.catalog_encoded)
         .bind(now)
+        .bind(
+            job.editorial_resource_version
+                .map(i64_from_u64)
+                .transpose()?,
+        )
         .execute(&mut *transaction)
         .await?;
 
@@ -1680,6 +1799,20 @@ struct ProjectedApp {
     app: CatalogApp,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredEditorialItem {
+    release_id: String,
+    app_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredEditorialCollection {
+    title: String,
+    items: Vec<StoredEditorialItem>,
+}
+
 struct ReleaseSource {
     submission_id: String,
     app_id: String,
@@ -1701,6 +1834,7 @@ struct PublicationJob {
     job_kind: String,
     source_resource_version: u64,
     source_state: String,
+    editorial_resource_version: Option<u64>,
     developer_name: String,
     lease_token: String,
     attempts: i16,
@@ -1774,7 +1908,8 @@ async fn lock_active_job(
 ) -> Result<(), PublisherError> {
     let row = sqlx::query(
         "SELECT state, lease_token, catalog_sequence, source_resource_version, source_state, \
-         developer_name FROM store_publication_jobs WHERE event_id = $1 FOR UPDATE",
+         editorial_resource_version, developer_name FROM store_publication_jobs \
+         WHERE event_id = $1 FOR UPDATE",
     )
     .bind(&job.event_id)
     .fetch_optional(&mut **transaction)
@@ -1787,6 +1922,11 @@ async fn lock_active_job(
         || positive_u64(row.get::<i64, _>("source_resource_version"))?
             != job.source_resource_version
         || row.get::<String, _>("source_state") != job.source_state
+        || row
+            .get::<Option<i64>, _>("editorial_resource_version")
+            .map(positive_u64)
+            .transpose()?
+            != job.editorial_resource_version
         || row.get::<Option<String>, _>("developer_name").as_deref() != Some(&job.developer_name)
     {
         return Err(PublisherError::InvalidState("publication lease is stale"));
@@ -2275,6 +2415,10 @@ fn publication_job_from_row(row: sqlx::postgres::PgRow) -> Result<PublicationJob
         job_kind: row.get("job_kind"),
         source_resource_version: positive_u64(row.get::<i64, _>("source_resource_version"))?,
         source_state: row.get("source_state"),
+        editorial_resource_version: row
+            .get::<Option<i64>, _>("editorial_resource_version")
+            .map(positive_u64)
+            .transpose()?,
         developer_name,
         lease_token: row.get::<Option<String>, _>("lease_token").ok_or(
             PublisherError::InvalidState("publication lease token is missing"),

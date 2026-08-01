@@ -684,6 +684,141 @@ static int parse_catalog_response(const char *response, size_t response_length,
     return CP0_STORE_RESULT_OK;
 }
 
+static bool editorial_text_valid(const char *value, size_t maximum_chars,
+                                 size_t maximum_bytes)
+{
+    size_t length;
+    return valid_text(value, maximum_chars, maximum_bytes) &&
+           (length = strlen(value)) > 0 && value[0] != ' ' &&
+           value[length - 1U] != ' ';
+}
+
+static int parse_today_response(const char *response, size_t response_length,
+                                uint64_t request_id,
+                                struct cp0_store_today *today)
+{
+    struct cp0_json_token *tokens =
+        calloc(CP0_STORE_JSON_TOKENS, sizeof(*tokens));
+    struct cp0_store_today decoded = {0};
+    char seen[1U + CP0_STORE_EDITORIAL_COLLECTION_MAX *
+                       CP0_STORE_EDITORIAL_COLLECTION_APP_MAX]
+             [CP0_STORE_APP_ID_BYTES] = {{0}};
+    size_t seen_count = 0;
+    size_t token_count;
+    int data;
+    int result;
+
+    if (tokens == NULL || today == NULL) {
+        free(tokens);
+        return CP0_STORE_RESULT_ERROR;
+    }
+    result = parse_envelope(response, response_length, request_id, tokens,
+                            CP0_STORE_JSON_TOKENS, &token_count, &data);
+    if (result != CP0_STORE_RESULT_OK) {
+        free(tokens);
+        return result;
+    }
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int sequence = cp0_json_object_get(response, tokens, token_count, data,
+                                       "sequence");
+    int expires = cp0_json_object_get(response, tokens, token_count, data,
+                                      "expires_unix_seconds");
+    int stale = cp0_json_object_get(response, tokens, token_count, data, "stale");
+    int editorial = cp0_json_object_get(response, tokens, token_count, data,
+                                        "editorial");
+    if (tokens[data].children != 10 || kind < 0 || sequence < 0 || expires < 0 ||
+        stale < 0 || editorial < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind], "today") ||
+        !cp0_json_get_u64(response, &tokens[sequence], &decoded.sequence) ||
+        decoded.sequence == 0 ||
+        !cp0_json_get_u64(response, &tokens[expires],
+                          &decoded.expires_unix_seconds) ||
+        decoded.expires_unix_seconds == 0 ||
+        !cp0_json_get_bool(response, &tokens[stale], &decoded.stale)) {
+        free(tokens);
+        return CP0_STORE_RESULT_ERROR;
+    }
+    if (cp0_json_is_null(response, &tokens[editorial])) {
+        free(tokens);
+        *today = decoded;
+        return CP0_STORE_RESULT_OK;
+    }
+
+    int headline = cp0_json_object_get(response, tokens, token_count, editorial,
+                                       "headline");
+    int featured = cp0_json_object_get(response, tokens, token_count, editorial,
+                                       "featured");
+    int collections = cp0_json_object_get(response, tokens, token_count,
+                                          editorial, "collections");
+    if (tokens[editorial].type != CP0_JSON_OBJECT ||
+        tokens[editorial].children != 6 || headline < 0 || featured < 0 ||
+        collections < 0 ||
+        !cp0_json_copy_string(response, &tokens[headline], decoded.headline,
+                              sizeof(decoded.headline)) ||
+        !editorial_text_valid(decoded.headline, 48,
+                              CP0_STORE_EDITORIAL_HEADLINE_BYTES - 1U) ||
+        !parse_app(response, tokens, token_count, featured, &decoded.featured) ||
+        tokens[collections].type != CP0_JSON_ARRAY ||
+        tokens[collections].children == 0 ||
+        tokens[collections].children > CP0_STORE_EDITORIAL_COLLECTION_MAX) {
+        free(tokens);
+        return CP0_STORE_RESULT_ERROR;
+    }
+    memcpy(seen[seen_count++], decoded.featured.app_id,
+           strlen(decoded.featured.app_id) + 1U);
+    decoded.collection_count = tokens[collections].children;
+    for (unsigned int collection_index = 0;
+         collection_index < tokens[collections].children; collection_index++) {
+        int collection = cp0_json_array_get(tokens, token_count, collections,
+                                            collection_index);
+        int title = cp0_json_object_get(response, tokens, token_count, collection,
+                                        "title");
+        int apps = cp0_json_object_get(response, tokens, token_count, collection,
+                                       "apps");
+        struct cp0_store_editorial_collection *decoded_collection =
+            &decoded.collections[collection_index];
+        if (collection < 0 || tokens[collection].type != CP0_JSON_OBJECT ||
+            tokens[collection].children != 4 || title < 0 || apps < 0 ||
+            !cp0_json_copy_string(response, &tokens[title],
+                                  decoded_collection->title,
+                                  sizeof(decoded_collection->title)) ||
+            !editorial_text_valid(decoded_collection->title, 32,
+                                  CP0_STORE_EDITORIAL_TITLE_BYTES - 1U) ||
+            (collection_index > 0 &&
+             strcmp(decoded.collections[0].title,
+                    decoded_collection->title) == 0) ||
+            tokens[apps].type != CP0_JSON_ARRAY || tokens[apps].children == 0 ||
+            tokens[apps].children > CP0_STORE_EDITORIAL_COLLECTION_APP_MAX) {
+            free(tokens);
+            return CP0_STORE_RESULT_ERROR;
+        }
+        decoded_collection->count = tokens[apps].children;
+        for (unsigned int app_index = 0; app_index < tokens[apps].children;
+             app_index++) {
+            int app = cp0_json_array_get(tokens, token_count, apps, app_index);
+            struct cp0_store_app_summary *decoded_app =
+                &decoded_collection->apps[app_index];
+            if (app < 0 ||
+                !parse_app(response, tokens, token_count, app, decoded_app)) {
+                free(tokens);
+                return CP0_STORE_RESULT_ERROR;
+            }
+            for (size_t previous = 0; previous < seen_count; previous++) {
+                if (strcmp(seen[previous], decoded_app->app_id) == 0) {
+                    free(tokens);
+                    return CP0_STORE_RESULT_ERROR;
+                }
+            }
+            memcpy(seen[seen_count++], decoded_app->app_id,
+                   strlen(decoded_app->app_id) + 1U);
+        }
+    }
+    decoded.has_editorial = true;
+    free(tokens);
+    *today = decoded;
+    return CP0_STORE_RESULT_OK;
+}
+
 static bool valid_search_query(const char *query)
 {
     size_t length;
@@ -1373,6 +1508,14 @@ int cp0_store_test_parse_catalog_response(
     return parse_catalog_response(response, response_length, request_id, catalog);
 }
 
+int cp0_store_test_parse_today_response(const char *response,
+                                        size_t response_length,
+                                        uint64_t request_id,
+                                        struct cp0_store_today *today)
+{
+    return parse_today_response(response, response_length, request_id, today);
+}
+
 int cp0_store_test_parse_refresh_response(const char *response,
                                           size_t response_length,
                                           uint64_t request_id)
@@ -1491,6 +1634,29 @@ int cp0_store_list(struct cp0_store_catalog *catalog)
                  CP0_STORE_FRAME_BYTES, &response_length, 500, NULL) == 0)
         result = parse_catalog_response(response, response_length, request_id,
                                         catalog);
+    free(response);
+    return result;
+}
+
+int cp0_store_today(struct cp0_store_today *today)
+{
+    char request[192];
+    char *response = malloc(CP0_STORE_FRAME_BYTES);
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"today\"}}\n",
+        (unsigned long long)request_id);
+    int result = CP0_STORE_RESULT_ERROR;
+
+    if (today != NULL && response != NULL && request_length > 0 &&
+        (size_t)request_length < sizeof(request) &&
+        exchange(request, (size_t)request_length, response,
+                 CP0_STORE_FRAME_BYTES, &response_length, 500, NULL) == 0)
+        result = parse_today_response(response, response_length, request_id,
+                                      today);
     free(response);
     return result;
 }

@@ -31,6 +31,11 @@ const REVIEWER_REVOKED_TOKEN: &str = "reviewer-revoked-token-0000000000004";
 const RELEASE_MANAGER_TOKEN: &str = "release-manager-token-000000000000001";
 const RELEASE_NO_2FA_TOKEN: &str = "release-no2fa-token-00000000000000002";
 const STALE_MFA_TOKEN: &str = "stale-mfa-token-000000000000000000001";
+const EDITOR_TOKEN: &str = "editor-token-000000000000000000000001";
+const EDITOR_NO_2FA_TOKEN: &str = "editor-no2fa-token-000000000000000001";
+const EDITOR_EXPIRED_TOKEN: &str = "editor-expired-token-00000000000000001";
+const EDITOR_REVOKED_TOKEN: &str = "editor-revoked-token-00000000000000001";
+const EDITOR_SUSPENDED_TOKEN: &str = "editor-suspended-token-000000000000001";
 
 const TEAM_A: &str = "team_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TEAM_B: &str = "team_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -43,6 +48,9 @@ const RELEASE_NO_2FA: &str = "member_ffffffffffffffffffffffffffffffff";
 const REVIEWER_A: &str = "reviewer_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const REVIEWER_B: &str = "reviewer_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const REVIEWER_NO_2FA: &str = "reviewer_cccccccccccccccccccccccccccccccc";
+const EDITOR: &str = "operator_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const EDITOR_NO_2FA: &str = "operator_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const EDITOR_SUSPENDED: &str = "operator_cccccccccccccccccccccccccccccccc";
 
 struct HttpResult {
     status: StatusCode,
@@ -78,6 +86,7 @@ async fn postgres_http_transaction_acceptance() {
     verify_submission_withdrawal(&application, &pool).await;
     verify_oauth_device_flow(&application, &pool).await;
     verify_team_management(&application, &pool).await;
+    verify_editorial_backend(&application, &pool).await;
     verify_database_immutability(&pool).await;
     tokio::fs::remove_dir_all(object_root)
         .await
@@ -3107,6 +3116,636 @@ async fn verify_team_management(application: &Router, pool: &PgPool) {
     assert!(revoked_after_commit);
 }
 
+async fn verify_editorial_backend(application: &Router, pool: &PgPool) {
+    const FEATURED: &str = "rel_e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1";
+    const COLLECTION_A: &str = "rel_e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2";
+    const COLLECTION_B: &str = "rel_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3";
+    const PAUSED: &str = "rel_e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4";
+    const REMOVED: &str = "rel_e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5";
+    const UNAPPROVED: &str = "rel_e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6";
+    const DUPLICATE_APP: &str = "rel_e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7";
+
+    seed_editorial_release(
+        pool,
+        FEATURED,
+        "sub_e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+        "dev.cardputerzero.editorial-featured",
+        "1.0.0",
+        901,
+    )
+    .await;
+    seed_editorial_release(
+        pool,
+        COLLECTION_A,
+        "sub_e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2",
+        "dev.cardputerzero.editorial-a",
+        "1.0.0",
+        902,
+    )
+    .await;
+    seed_editorial_release(
+        pool,
+        COLLECTION_B,
+        "sub_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3",
+        "dev.cardputerzero.editorial-b",
+        "1.0.0",
+        903,
+    )
+    .await;
+    seed_editorial_release(
+        pool,
+        PAUSED,
+        "sub_e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4",
+        "dev.cardputerzero.editorial-paused",
+        "1.0.0",
+        904,
+    )
+    .await;
+    sqlx::query("UPDATE releases SET state = 'paused', resource_version = 4 WHERE release_id = $1")
+        .bind(PAUSED)
+        .execute(pool)
+        .await
+        .unwrap();
+    seed_editorial_release(
+        pool,
+        REMOVED,
+        "sub_e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+        "dev.cardputerzero.editorial-removed",
+        "1.0.0",
+        905,
+    )
+    .await;
+    sqlx::query(
+        "UPDATE releases SET state = 'removed', resource_version = 4 WHERE release_id = $1",
+    )
+    .bind(REMOVED)
+    .execute(pool)
+    .await
+    .unwrap();
+    seed_unapproved_editorial_release(pool, UNAPPROVED).await;
+    seed_editorial_release(
+        pool,
+        DUPLICATE_APP,
+        "sub_e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7",
+        "dev.cardputerzero.editorial-a",
+        "2.0.0",
+        907,
+    )
+    .await;
+
+    let request = json!({
+        "headline": "Reviewed for 320 x 170",
+        "featured_release_id": FEATURED,
+        "collections": [{
+            "title": "Small-screen essentials",
+            "release_ids": [COLLECTION_A, COLLECTION_B]
+        }]
+    });
+    let missing = call(
+        application.clone(),
+        Method::GET,
+        "/v1/editorial/today",
+        Some(EDITOR_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&missing, StatusCode::NOT_FOUND, "not-found");
+    for (token, status, code) in [
+        (OWNER_A_TOKEN, StatusCode::UNAUTHORIZED, "unauthorized"),
+        (REVIEWER_A_TOKEN, StatusCode::UNAUTHORIZED, "unauthorized"),
+        (
+            EDITOR_NO_2FA_TOKEN,
+            StatusCode::FORBIDDEN,
+            "two-factor-required",
+        ),
+        (
+            EDITOR_EXPIRED_TOKEN,
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+        ),
+        (
+            EDITOR_REVOKED_TOKEN,
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+        ),
+        (
+            EDITOR_SUSPENDED_TOKEN,
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+        ),
+    ] {
+        let denied = call(
+            application.clone(),
+            Method::GET,
+            "/v1/editorial/today",
+            Some(token),
+            None,
+            None,
+        )
+        .await;
+        assert_problem(&denied, status, code);
+    }
+    let unauthenticated = call(
+        application.clone(),
+        Method::GET,
+        "/v1/editorial/today",
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_problem(&unauthenticated, StatusCode::UNAUTHORIZED, "unauthorized");
+    let create_with_etag = call_with_etag(
+        application.clone(),
+        Method::POST,
+        "/v1/editorial/today",
+        EDITOR_TOKEN,
+        "editorial-create-etag1",
+        1,
+        Some(request.clone()),
+    )
+    .await;
+    assert_problem(
+        &create_with_etag,
+        StatusCode::BAD_REQUEST,
+        "invalid-request",
+    );
+
+    for (key, featured, expected_status, expected_code) in [
+        (
+            "editorial-missing-001",
+            "rel_ffffffffffffffffffffffffffffffff",
+            StatusCode::CONFLICT,
+            "invalid-transition",
+        ),
+        (
+            "editorial-paused-001",
+            PAUSED,
+            StatusCode::CONFLICT,
+            "invalid-transition",
+        ),
+        (
+            "editorial-removed-001",
+            REMOVED,
+            StatusCode::CONFLICT,
+            "invalid-transition",
+        ),
+        (
+            "editorial-unapproved1",
+            UNAPPROVED,
+            StatusCode::CONFLICT,
+            "invalid-transition",
+        ),
+    ] {
+        let mut invalid = request.clone();
+        invalid["featured_release_id"] = Value::String(featured.into());
+        let response = call(
+            application.clone(),
+            Method::POST,
+            "/v1/editorial/today",
+            Some(EDITOR_TOKEN),
+            Some(key),
+            Some(invalid),
+        )
+        .await;
+        assert_problem(&response, expected_status, expected_code);
+    }
+    let duplicate_release = call(
+        application.clone(),
+        Method::POST,
+        "/v1/editorial/today",
+        Some(EDITOR_TOKEN),
+        Some("editorial-duplicate1"),
+        Some(json!({
+            "headline": "Duplicate Release",
+            "featured_release_id": FEATURED,
+            "collections": [{"title": "Repeated", "release_ids": [FEATURED]}]
+        })),
+    )
+    .await;
+    assert_problem(
+        &duplicate_release,
+        StatusCode::BAD_REQUEST,
+        "invalid-request",
+    );
+    let duplicate_app = call(
+        application.clone(),
+        Method::POST,
+        "/v1/editorial/today",
+        Some(EDITOR_TOKEN),
+        Some("editorial-dup-app01"),
+        Some(json!({
+            "headline": "Duplicate App",
+            "featured_release_id": FEATURED,
+            "collections": [{
+                "title": "Repeated App",
+                "release_ids": [COLLECTION_A, DUPLICATE_APP]
+            }]
+        })),
+    )
+    .await;
+    assert_problem(&duplicate_app, StatusCode::BAD_REQUEST, "invalid-request");
+
+    let created = call(
+        application.clone(),
+        Method::POST,
+        "/v1/editorial/today",
+        Some(EDITOR_TOKEN),
+        Some("editorial-create-001"),
+        Some(request.clone()),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    assert_eq!(etag_version(&created), 1);
+    let created_body: Value = serde_json::from_slice(&created.body).unwrap();
+    assert_eq!(created_body["layout_id"], "today");
+    assert_eq!(created_body["resource_version"], 1);
+    assert_eq!(created_body["featured"]["release_id"], FEATURED);
+    assert_eq!(
+        created_body["collections"][0]["items"][0]["app_id"],
+        "dev.cardputerzero.editorial-a"
+    );
+    let replay = call(
+        application.clone(),
+        Method::POST,
+        "/v1/editorial/today",
+        Some(EDITOR_TOKEN),
+        Some("editorial-create-001"),
+        Some(request.clone()),
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::CREATED);
+    assert_eq!(replay.body, created.body);
+    let replay_conflict = call(
+        application.clone(),
+        Method::POST,
+        "/v1/editorial/today",
+        Some(EDITOR_TOKEN),
+        Some("editorial-create-001"),
+        Some(json!({
+            "headline": "Different replay body",
+            "featured_release_id": FEATURED,
+            "collections": [{"title": "Apps", "release_ids": [COLLECTION_A]}]
+        })),
+    )
+    .await;
+    assert_problem(
+        &replay_conflict,
+        StatusCode::CONFLICT,
+        "idempotency-conflict",
+    );
+    let duplicate_create = call(
+        application.clone(),
+        Method::POST,
+        "/v1/editorial/today",
+        Some(EDITOR_TOKEN),
+        Some("editorial-create-002"),
+        Some(request.clone()),
+    )
+    .await;
+    assert_problem(&duplicate_create, StatusCode::CONFLICT, "conflict");
+
+    let missing_precondition = call(
+        application.clone(),
+        Method::PUT,
+        "/v1/editorial/today",
+        Some(EDITOR_TOKEN),
+        Some("editorial-put-noetag"),
+        Some(request.clone()),
+    )
+    .await;
+    assert_problem(
+        &missing_precondition,
+        StatusCode::BAD_REQUEST,
+        "invalid-request",
+    );
+    let stale = call_with_etag(
+        application.clone(),
+        Method::PUT,
+        "/v1/editorial/today",
+        EDITOR_TOKEN,
+        "editorial-put-stale1",
+        9,
+        Some(request.clone()),
+    )
+    .await;
+    assert_problem(
+        &stale,
+        StatusCode::PRECONDITION_FAILED,
+        "precondition-failed",
+    );
+    let updated_request = json!({
+        "headline": "Fresh picks for CardputerZero",
+        "featured_release_id": COLLECTION_A,
+        "collections": [{
+            "title": "Editor's utilities",
+            "release_ids": [FEATURED, COLLECTION_B]
+        }]
+    });
+    let updated = call_with_etag(
+        application.clone(),
+        Method::PUT,
+        "/v1/editorial/today",
+        EDITOR_TOKEN,
+        "editorial-update-001",
+        1,
+        Some(updated_request.clone()),
+    )
+    .await;
+    assert_eq!(updated.status, StatusCode::OK);
+    assert_eq!(etag_version(&updated), 2);
+    let update_replay = call_with_etag(
+        application.clone(),
+        Method::PUT,
+        "/v1/editorial/today",
+        EDITOR_TOKEN,
+        "editorial-update-001",
+        1,
+        Some(updated_request),
+    )
+    .await;
+    assert_eq!(update_replay.status, StatusCode::OK);
+    assert_eq!(update_replay.body, updated.body);
+    let get = call(
+        application.clone(),
+        Method::GET,
+        "/v1/editorial/today",
+        Some(EDITOR_TOKEN),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(get.status, StatusCode::OK);
+    assert_eq!(get.body, updated.body);
+    assert_eq!(etag_version(&get), 2);
+
+    let revision_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM store_editorial_revisions WHERE layout_id = 'today'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE object_kind = 'editorial' AND object_id = 'today'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let outbox_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox_events \
+         WHERE topic = 'catalog.rebuild-requested' \
+           AND payload ? 'editorial_resource_version'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((revision_count, audit_count, outbox_count), (2, 2, 2));
+    let revisions = sqlx::query(
+        "SELECT resource_version, headline, featured_release_id \
+         FROM store_editorial_revisions WHERE layout_id = 'today' \
+         ORDER BY resource_version",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(revisions[0].get::<i64, _>("resource_version"), 1);
+    assert_eq!(
+        revisions[0].get::<String, _>("headline"),
+        "Reviewed for 320 x 170"
+    );
+    assert_eq!(
+        revisions[0].get::<String, _>("featured_release_id"),
+        FEATURED
+    );
+    assert_eq!(revisions[1].get::<i64, _>("resource_version"), 2);
+    assert_eq!(
+        revisions[1].get::<String, _>("featured_release_id"),
+        COLLECTION_A
+    );
+    let audit_actions = sqlx::query_scalar::<_, String>(
+        "SELECT action FROM audit_events \
+         WHERE object_kind = 'editorial' AND object_id = 'today' \
+         ORDER BY resource_version",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        audit_actions,
+        vec!["editorial.today-created", "editorial.today-updated"]
+    );
+    let editorial_versions = sqlx::query_scalar::<_, i64>(
+        "SELECT (payload->>'editorial_resource_version')::BIGINT \
+         FROM outbox_events WHERE payload ? 'editorial_resource_version' \
+         ORDER BY (payload->>'editorial_resource_version')::BIGINT",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(editorial_versions, vec![1, 2]);
+
+    assert_sqlstate(
+        sqlx::query(
+            "UPDATE store_editorial_revisions SET headline = 'Tampered' \
+             WHERE layout_id = 'today' AND resource_version = 1",
+        )
+        .execute(pool)
+        .await,
+        "55000",
+    );
+    assert_sqlstate(
+        sqlx::query("DELETE FROM store_editorial_layouts WHERE layout_id = 'today'")
+            .execute(pool)
+            .await,
+        "55000",
+    );
+    assert_editorial_tamper_rejected(pool, false, false, "3".repeat(64)).await;
+    assert_editorial_tamper_rejected(pool, true, false, "4".repeat(64)).await;
+    assert_editorial_tamper_rejected(pool, true, true, "5".repeat(64)).await;
+}
+
+async fn seed_editorial_release(
+    pool: &PgPool,
+    release_id: &str,
+    submission_id: &str,
+    app_id: &str,
+    version: &str,
+    catalog_sequence: i64,
+) {
+    let now: i64 = sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO apps (app_id, owner_team_id, default_locale, created_unix_seconds) \
+         VALUES ($1, $2, 'en', $3) ON CONFLICT (app_id) DO NOTHING",
+    )
+    .bind(app_id)
+    .bind(TEAM_A)
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO submissions (submission_id, app_id, version, revision, state, \
+         package_sha256, package_bytes, listing_sha256, listing_bytes, assets, \
+         resource_version, created_unix_seconds) \
+         VALUES ($1, $2, $3, 1, 'approved', $4, 100, $5, 100, '[{},{}]'::jsonb, 1, $6)",
+    )
+    .bind(submission_id)
+    .bind(app_id)
+    .bind(version)
+    .bind("a".repeat(64))
+    .bind("b".repeat(64))
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+    let mut release_seed = pool.begin().await.unwrap();
+    release_seed
+        .execute("ALTER TABLE releases DISABLE TRIGGER releases_approved_creation")
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO releases (release_id, submission_id, app_id, version, state, \
+         rollout_percent, resource_version, created_unix_seconds) \
+         VALUES ($1, $2, $3, $4, 'ready', 100, 1, $5)",
+    )
+    .bind(release_id)
+    .bind(submission_id)
+    .bind(app_id)
+    .bind(version)
+    .bind(now)
+    .execute(&mut *release_seed)
+    .await
+    .unwrap();
+    release_seed
+        .execute("ALTER TABLE releases ENABLE TRIGGER releases_approved_creation")
+        .await
+        .unwrap();
+    release_seed.commit().await.unwrap();
+    sqlx::query(
+        "UPDATE releases SET state = 'publishing', resource_version = 2 WHERE release_id = $1",
+    )
+    .bind(release_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE releases SET state = 'published', catalog_sequence = $2, resource_version = 3 \
+         WHERE release_id = $1",
+    )
+    .bind(release_id)
+    .bind(catalog_sequence)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn seed_unapproved_editorial_release(pool: &PgPool, release_id: &str) {
+    let now: i64 = sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO apps (app_id, owner_team_id, default_locale, created_unix_seconds) \
+         VALUES ('dev.cardputerzero.editorial-unapproved', $1, 'en', $2)",
+    )
+    .bind(TEAM_A)
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO submissions (submission_id, app_id, version, revision, state, \
+         package_sha256, package_bytes, listing_sha256, listing_bytes, assets, \
+         resource_version, created_unix_seconds) VALUES \
+         ('sub_e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6', \
+          'dev.cardputerzero.editorial-unapproved', '1.0.0', 1, 'ready-for-review', \
+          $1, 100, $2, 100, '[{},{}]'::jsonb, 1, $3)",
+    )
+    .bind("c".repeat(64))
+    .bind("d".repeat(64))
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+    let mut release_seed = pool.begin().await.unwrap();
+    release_seed
+        .execute("ALTER TABLE releases DISABLE TRIGGER releases_approved_creation")
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO releases (release_id, submission_id, app_id, version, state, \
+         rollout_percent, catalog_sequence, resource_version, created_unix_seconds) VALUES \
+         ($1, 'sub_e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6', \
+          'dev.cardputerzero.editorial-unapproved', '1.0.0', 'published', 100, 906, 3, $2)",
+    )
+    .bind(release_id)
+    .bind(now)
+    .execute(&mut *release_seed)
+    .await
+    .unwrap();
+    release_seed
+        .execute("ALTER TABLE releases ENABLE TRIGGER releases_approved_creation")
+        .await
+        .unwrap();
+    release_seed.commit().await.unwrap();
+}
+
+async fn assert_editorial_tamper_rejected(
+    pool: &PgPool,
+    include_revision: bool,
+    include_audit: bool,
+    request_sha256: String,
+) {
+    let mut transaction = pool.begin().await.unwrap();
+    let now: i64 = sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM clock_timestamp())::BIGINT")
+        .fetch_one(&mut *transaction)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE store_editorial_layouts SET headline = 'Tampered layout', \
+         resource_version = 3, updated_unix_seconds = $1 WHERE layout_id = 'today'",
+    )
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    if include_revision {
+        sqlx::query(
+            "INSERT INTO store_editorial_revisions (layout_id, resource_version, operator_id, \
+             headline, featured_release_id, featured_app_id, collections, request_sha256, \
+             created_unix_seconds) SELECT layout_id, resource_version, $1, headline, \
+             featured_release_id, featured_app_id, collections, $2, updated_unix_seconds \
+             FROM store_editorial_layouts WHERE layout_id = 'today'",
+        )
+        .bind(EDITOR)
+        .bind(&request_sha256)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    }
+    if include_audit {
+        sqlx::query(
+            "INSERT INTO audit_events (occurred_unix_seconds, actor_id, action, object_kind, \
+             object_id, before_state, after_state, resource_version, request_id, request_sha256, \
+             idempotency_key_sha256) VALUES \
+             ($1, $2, 'editorial.today-updated', 'editorial', 'today', NULL, 'active', 3, \
+              'req_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', $3, $4)",
+        )
+        .bind(now)
+        .bind(EDITOR)
+        .bind(&request_sha256)
+        .bind("6".repeat(64))
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    }
+    assert_sqlstate(transaction.commit().await, "55000");
+}
+
 async fn verify_database_immutability(pool: &PgPool) {
     assert_sqlstate(
         sqlx::query(
@@ -3425,7 +4064,10 @@ async fn reset_database(pool: &PgPool) {
         .await
         .unwrap();
     pool.execute(
-        "TRUNCATE outbox_events, audit_events, idempotency_records, oauth_device_authorizations, \
+        "TRUNCATE store_catalog_snapshots, store_publication_jobs, \
+         store_editorial_revisions, store_editorial_layouts, \
+         store_operator_access_tokens, store_operators, \
+         outbox_events, audit_events, idempotency_records, oauth_device_authorizations, \
          release_operations, \
          submission_upload_chunks, submission_upload_parts, releases, \
          review_decisions, review_messages, review_assignments, submissions, apps, developer_keys, \
@@ -3677,6 +4319,65 @@ async fn seed_identities(pool: &PgPool) {
         )
         .bind(sha256_hex(token.as_bytes()))
         .bind(reviewer_id)
+        .bind(expires)
+        .bind(revoked)
+        .bind(created)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    for (operator_id, email, role, two_factor, state) in [
+        (EDITOR, "editor@cardputerzero.dev", "editor", true, "active"),
+        (
+            EDITOR_NO_2FA,
+            "editor-no2fa@cardputerzero.dev",
+            "editor",
+            false,
+            "active",
+        ),
+        (
+            EDITOR_SUSPENDED,
+            "editor-suspended@cardputerzero.dev",
+            "admin",
+            true,
+            "suspended",
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO store_operators (operator_id, email, role, two_factor_enabled, state, \
+             created_unix_seconds) VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(operator_id)
+        .bind(email)
+        .bind(role)
+        .bind(two_factor)
+        .bind(state)
+        .bind(now)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    for (token, operator_id, created, expires, revoked) in [
+        (EDITOR_TOKEN, EDITOR, now, now + 3600, false),
+        (EDITOR_NO_2FA_TOKEN, EDITOR_NO_2FA, now, now + 3600, false),
+        (
+            EDITOR_SUSPENDED_TOKEN,
+            EDITOR_SUSPENDED,
+            now,
+            now + 3600,
+            false,
+        ),
+        (EDITOR_EXPIRED_TOKEN, EDITOR, now - 3601, now - 1, false),
+        (EDITOR_REVOKED_TOKEN, EDITOR, now, now + 3600, true),
+    ] {
+        sqlx::query(
+            "INSERT INTO store_operator_access_tokens (token_sha256, operator_id, scopes, \
+             expires_unix_seconds, revoked, created_unix_seconds) \
+             VALUES ($1, $2, ARRAY['store.editorial'], $3, $4, $5)",
+        )
+        .bind(sha256_hex(token.as_bytes()))
+        .bind(operator_id)
         .bind(expires)
         .bind(revoked)
         .bind(created)

@@ -658,6 +658,13 @@ static unsigned int store_section_count(const struct cp0_ui *ui)
 {
     switch (ui->store_section) {
     case CP0_UI_STORE_TODAY:
+        if (ui->store_today_available) {
+            if (ui->store_today_collection_open)
+                return (unsigned int)ui
+                    ->store_today_collections[ui->store_today_open_collection]
+                    .app_count;
+            return 1U + (unsigned int)ui->store_today_collection_count;
+        }
         return ui->store_count == 0 ? 0 : 1;
     case CP0_UI_STORE_APPS:
         return ui->store_count;
@@ -673,6 +680,16 @@ static unsigned int store_section_count(const struct cp0_ui *ui)
 static const struct cp0_ui_store_app *store_section_app(
     const struct cp0_ui *ui, unsigned int index)
 {
+    if (ui->store_section == CP0_UI_STORE_TODAY &&
+        ui->store_today_available) {
+        if (ui->store_today_collection_open) {
+            const struct cp0_ui_store_editorial_collection_state *collection =
+                &ui->store_today_collections[ui->store_today_open_collection];
+            return index < collection->app_count ? &collection->apps[index]
+                                                 : NULL;
+        }
+        return index == 0 ? &ui->store_today_featured : NULL;
+    }
     if (ui->store_section == CP0_UI_STORE_SEARCH)
         return index < ui->store_search_count ? &ui->store_search_apps[index]
                                               : NULL;
@@ -683,6 +700,11 @@ static const struct cp0_ui_store_app *store_section_app(
 
 static unsigned int store_section_selected(const struct cp0_ui *ui)
 {
+    if (ui->store_section == CP0_UI_STORE_TODAY &&
+        ui->store_today_available)
+        return ui->store_today_collection_open
+                   ? ui->store_today_collection_selected
+                   : ui->store_today_selected;
     return ui->store_section == CP0_UI_STORE_SEARCH
                ? ui->store_search_selected
                : ui->store_selected;
@@ -796,7 +818,44 @@ static void draw_store_list(struct canvas *canvas, const struct cp0_ui *ui)
         return;
     }
 
-    if (ui->store_section == CP0_UI_STORE_TODAY) {
+    if (ui->store_section == CP0_UI_STORE_TODAY &&
+        ui->store_today_available && ui->store_today_collection_open) {
+        const struct cp0_ui_store_editorial_collection_state *collection =
+            &ui->store_today_collections[ui->store_today_open_collection];
+        draw_prompt_line(canvas, 47, collection->title, 0, 42);
+        draw_store_rows(canvas, ui, 60, 4);
+        draw_text(canvas, 257, 48, "ESC", 1, COLOR_MUTED);
+    } else if (ui->store_section == CP0_UI_STORE_TODAY &&
+               ui->store_today_available) {
+        const struct cp0_ui_store_app *app = &ui->store_today_featured;
+        char state[16];
+        draw_prompt_line(canvas, 46, ui->store_today_headline, 0, 46);
+        fill_rect(canvas, 8, 59, 304, 39,
+                  ui->store_today_selected == 0 ? COLOR_SELECTED
+                                                : COLOR_SURFACE);
+        stroke_rect(canvas, 8, 59, 304, 39,
+                    ui->store_today_selected == 0 ? 2 : 1,
+                    ui->store_today_selected == 0 ? COLOR_GREEN : COLOR_BAR);
+        draw_prompt_line(canvas, 68, app->name, 0, 31);
+        draw_text(canvas, 220, 81, store_state_label(app, state), 1,
+                  COLOR_YELLOW);
+        for (unsigned int index = 0;
+             index < ui->store_today_collection_count; index++) {
+            const struct cp0_ui_store_editorial_collection_state *collection =
+                &ui->store_today_collections[index];
+            int y = 103 + (int)index * 27;
+            bool selected = ui->store_today_selected == index + 1U;
+            char count[8];
+            fill_rect(canvas, 8, y, 304, 24,
+                      selected ? COLOR_SELECTED : COLOR_SURFACE);
+            stroke_rect(canvas, 8, y, 304, 24, selected ? 2 : 1,
+                        selected ? COLOR_GREEN : COLOR_BAR);
+            draw_prompt_line(canvas, y + 7, collection->title, 0, 34);
+            snprintf(count, sizeof(count), "%zu >", collection->app_count);
+            draw_text(canvas, 270, y + 7, count, 1,
+                      selected ? COLOR_TEXT : COLOR_MUTED);
+        }
+    } else if (ui->store_section == CP0_UI_STORE_TODAY) {
         const struct cp0_ui_store_app *app = &ui->store_apps[0];
         draw_text(canvas, 14, 50, "FEATURED", 1, COLOR_GREEN);
         fill_rect(canvas, 8, 63, 304, 74, COLOR_SURFACE);
@@ -2474,6 +2533,125 @@ void cp0_ui_sync_store_catalog(
     reconcile_store_detail_identity(ui);
 }
 
+void cp0_ui_sync_store_today(
+    struct cp0_ui *ui, const struct cp0_ui_store_editorial *editorial)
+{
+    struct cp0_ui_store_app featured = {0};
+    struct cp0_ui_store_editorial_collection_state collections
+        [CP0_UI_STORE_EDITORIAL_COLLECTION_MAX] = {0};
+    char selected_collection_title[CP0_UI_STORE_EDITORIAL_TITLE_MAX + 1] = {0};
+    char selected_app_id[CP0_UI_APP_ID_MAX + 1] = {0};
+    bool collection_open = false;
+
+    if (ui == NULL)
+        return;
+    if (ui->store_today_available) {
+        if (ui->store_today_collection_open &&
+            ui->store_today_open_collection <
+                ui->store_today_collection_count) {
+            const struct cp0_ui_store_editorial_collection_state *collection =
+                &ui->store_today_collections[ui->store_today_open_collection];
+            collection_open = true;
+            copy_optional_text(selected_collection_title,
+                               sizeof(selected_collection_title),
+                               collection->title);
+            if (ui->store_today_collection_selected < collection->app_count)
+                copy_optional_text(
+                    selected_app_id, sizeof(selected_app_id),
+                    collection->apps[ui->store_today_collection_selected]
+                        .app_id);
+        } else if (ui->store_today_selected > 0 &&
+                   ui->store_today_selected <=
+                       ui->store_today_collection_count) {
+            copy_optional_text(
+                selected_collection_title,
+                sizeof(selected_collection_title),
+                ui->store_today_collections[ui->store_today_selected - 1U]
+                    .title);
+        }
+    }
+    if (editorial == NULL || editorial->headline == NULL ||
+        editorial->featured == NULL || editorial->collections == NULL ||
+        editorial->collection_count == 0 ||
+        editorial->collection_count > CP0_UI_STORE_EDITORIAL_COLLECTION_MAX ||
+        !copy_text(ui->store_today_headline,
+                   sizeof(ui->store_today_headline), editorial->headline) ||
+        !copy_store_app(&featured, editorial->featured)) {
+        ui->store_today_available = false;
+        ui->store_today_collection_open = false;
+        ui->store_today_collection_count = 0;
+        ui->store_today_selected = 0;
+        ui->store_today_collection_selected = 0;
+        ui->store_today_open_collection = 0;
+        memset(ui->store_today_headline, 0,
+               sizeof(ui->store_today_headline));
+        memset(&ui->store_today_featured, 0,
+               sizeof(ui->store_today_featured));
+        memset(ui->store_today_collections, 0,
+               sizeof(ui->store_today_collections));
+        reconcile_store_detail_identity(ui);
+        return;
+    }
+    for (size_t index = 0; index < editorial->collection_count; index++) {
+        const struct cp0_ui_store_editorial_collection *source =
+            &editorial->collections[index];
+        if (source->title == NULL || source->apps == NULL ||
+            source->app_count == 0 ||
+            source->app_count > CP0_UI_STORE_EDITORIAL_COLLECTION_APP_MAX ||
+            !copy_text(collections[index].title,
+                       sizeof(collections[index].title), source->title)) {
+            cp0_ui_sync_store_today(ui, NULL);
+            return;
+        }
+        collections[index].app_count = source->app_count;
+        for (size_t app = 0; app < source->app_count; app++) {
+            if (!copy_store_app(&collections[index].apps[app],
+                                &source->apps[app])) {
+                cp0_ui_sync_store_today(ui, NULL);
+                return;
+            }
+        }
+    }
+    ui->store_today_featured = featured;
+    memcpy(ui->store_today_collections, collections, sizeof(collections));
+    ui->store_today_collection_count = editorial->collection_count;
+    ui->store_today_available = true;
+    ui->store_today_collection_open = false;
+    ui->store_today_selected = 0;
+    ui->store_today_collection_selected = 0;
+    ui->store_today_open_collection = 0;
+    if (selected_collection_title[0] != '\0') {
+        for (size_t collection = 0;
+             collection < ui->store_today_collection_count; collection++) {
+            if (strcmp(ui->store_today_collections[collection].title,
+                       selected_collection_title) != 0)
+                continue;
+            if (!collection_open) {
+                ui->store_today_selected = (unsigned int)collection + 1U;
+                break;
+            }
+            ui->store_today_open_collection = (unsigned int)collection;
+            ui->store_today_collection_open = true;
+            if (selected_app_id[0] != '\0') {
+                for (size_t app = 0;
+                     app < ui->store_today_collections[collection].app_count;
+                     app++) {
+                    if (strcmp(ui->store_today_collections[collection]
+                                   .apps[app]
+                                   .app_id,
+                               selected_app_id) == 0) {
+                        ui->store_today_collection_selected =
+                            (unsigned int)app;
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+    }
+    reconcile_store_detail_identity(ui);
+}
+
 void cp0_ui_set_store_search_status(struct cp0_ui *ui,
                                     enum cp0_ui_store_status status)
 {
@@ -2557,6 +2735,30 @@ void cp0_ui_set_store_app_state(struct cp0_ui *ui, const char *app_id,
             ui->store_search_apps[search].operation_state = state;
             ui->store_search_apps[search].progress_percent = progress_percent;
             ui->store_search_apps[search].failure_reason =
+                state == CP0_UI_STORE_FAILED ? CP0_UI_STORE_FAILURE_INTERNAL
+                                             : CP0_UI_STORE_FAILURE_NONE;
+        }
+    }
+    if (ui->store_today_available) {
+        struct cp0_ui_store_app *today_apps
+            [1U + CP0_UI_STORE_EDITORIAL_COLLECTION_MAX *
+                      CP0_UI_STORE_EDITORIAL_COLLECTION_APP_MAX];
+        size_t today_count = 0;
+        today_apps[today_count++] = &ui->store_today_featured;
+        for (size_t collection = 0;
+             collection < ui->store_today_collection_count; collection++) {
+            for (size_t app = 0;
+                 app < ui->store_today_collections[collection].app_count; app++)
+                today_apps[today_count++] =
+                    &ui->store_today_collections[collection].apps[app];
+        }
+        for (size_t app = 0; app < today_count; app++) {
+            if (strcmp(today_apps[app]->app_id, app_id) != 0)
+                continue;
+            today_apps[app]->state = state;
+            today_apps[app]->operation_state = state;
+            today_apps[app]->progress_percent = progress_percent;
+            today_apps[app]->failure_reason =
                 state == CP0_UI_STORE_FAILED ? CP0_UI_STORE_FAILURE_INTERNAL
                                              : CP0_UI_STORE_FAILURE_NONE;
         }
@@ -3271,6 +3473,15 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             return CP0_UI_EVENT_NONE;
         }
         if (ui->screen == CP0_UI_STORE &&
+            ui->store_section == CP0_UI_STORE_TODAY &&
+            ui->store_today_collection_open) {
+            ui->store_today_selected =
+                ui->store_today_open_collection + 1U;
+            ui->store_today_collection_open = false;
+            ui->store_today_collection_selected = 0;
+            return CP0_UI_EVENT_NONE;
+        }
+        if (ui->screen == CP0_UI_STORE &&
             ui->store_section == CP0_UI_STORE_SEARCH &&
             ui->store_search_input) {
             ui->store_search_input = false;
@@ -3455,6 +3666,7 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             return CP0_UI_EVENT_NONE;
         }
         if (action == CP0_UI_LEFT && !ui->store_search_input &&
+            !ui->store_today_collection_open &&
             ui->store_section > CP0_UI_STORE_TODAY) {
             ui->store_section--;
             ui->store_update_all_selected = false;
@@ -3465,6 +3677,7 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             return CP0_UI_EVENT_NONE;
         }
         if (action == CP0_UI_RIGHT && !ui->store_search_input &&
+            !ui->store_today_collection_open &&
             ui->store_section < CP0_UI_STORE_UPDATES) {
             ui->store_section++;
             ui->store_selected = 0;
@@ -3549,6 +3762,27 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             return action == CP0_UI_ACCEPT ? CP0_UI_EVENT_STORE_REFRESH
                                            : CP0_UI_EVENT_NONE;
         unsigned int count = store_section_count(ui);
+        if (ui->store_section == CP0_UI_STORE_TODAY &&
+            ui->store_today_available) {
+            unsigned int *selected = ui->store_today_collection_open
+                                         ? &ui->store_today_collection_selected
+                                         : &ui->store_today_selected;
+            if (action == CP0_UI_UP && *selected > 0) {
+                (*selected)--;
+            } else if (action == CP0_UI_DOWN && *selected + 1U < count) {
+                (*selected)++;
+            } else if (action == CP0_UI_ACCEPT && count > 0) {
+                if (!ui->store_today_collection_open && *selected > 0) {
+                    ui->store_today_open_collection = *selected - 1U;
+                    ui->store_today_collection_selected = 0;
+                    ui->store_today_collection_open = true;
+                } else {
+                    begin_store_detail(ui);
+                    return CP0_UI_EVENT_STORE_DETAILS;
+                }
+            }
+            return CP0_UI_EVENT_NONE;
+        }
         if (ui->store_section == CP0_UI_STORE_UPDATES &&
             ui->store_update_all_selected) {
             if (action == CP0_UI_DOWN && count > 0)

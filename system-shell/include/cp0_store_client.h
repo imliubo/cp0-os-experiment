@@ -21,6 +21,10 @@
 #define CP0_STORE_MAX_SCREENSHOTS 5
 #define CP0_STORE_ICON_MAX_PIXELS (48U * 48U)
 #define CP0_STORE_SCREENSHOT_PIXELS (320U * 170U)
+#define CP0_STORE_EDITORIAL_COLLECTION_MAX 2
+#define CP0_STORE_EDITORIAL_COLLECTION_APP_MAX 4
+#define CP0_STORE_EDITORIAL_HEADLINE_BYTES 193
+#define CP0_STORE_EDITORIAL_TITLE_BYTES 129
 
 enum cp0_store_result {
     CP0_STORE_RESULT_OK = 0,
@@ -89,6 +93,25 @@ struct cp0_store_catalog {
     bool stale;
     bool truncated;
     struct cp0_store_app_summary apps[CP0_STORE_MAX_APPS];
+};
+
+struct cp0_store_editorial_collection {
+    size_t count;
+    char title[CP0_STORE_EDITORIAL_TITLE_BYTES];
+    struct cp0_store_app_summary
+        apps[CP0_STORE_EDITORIAL_COLLECTION_APP_MAX];
+};
+
+struct cp0_store_today {
+    uint64_t sequence;
+    uint64_t expires_unix_seconds;
+    size_t collection_count;
+    bool stale;
+    bool has_editorial;
+    char headline[CP0_STORE_EDITORIAL_HEADLINE_BYTES];
+    struct cp0_store_app_summary featured;
+    struct cp0_store_editorial_collection
+        collections[CP0_STORE_EDITORIAL_COLLECTION_MAX];
 };
 
 struct cp0_store_install_preflight_app {
@@ -169,6 +192,7 @@ struct cp0_store_auto_update_status {
 };
 
 int cp0_store_list(struct cp0_store_catalog *catalog);
+int cp0_store_today(struct cp0_store_today *today);
 int cp0_store_search(const char *query, uint16_t offset, uint8_t limit,
                      struct cp0_store_search_results *results);
 int cp0_store_refresh(void);
