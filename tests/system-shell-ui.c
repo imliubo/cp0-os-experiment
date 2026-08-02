@@ -452,6 +452,31 @@ int main(int argc, char **argv)
     assert(frame != NULL);
     assert(sizeof(struct cp0_ui) <= 64U * 1024U);
 
+    static const struct {
+        uint32_t key;
+        char character;
+    } symbol_keys[] = {
+        {26, '!'}, {27, '@'}, {39, '#'}, {40, '$'}, {41, '%'},
+        {43, '^'}, {51, '&'}, {52, '*'}, {53, '('}, {94, ')'},
+        {55, '~'}, {69, '`'}, {70, '_'}, {71, '-'}, {72, '+'},
+        {73, '='}, {74, '['}, {75, ']'}, {76, '{'}, {77, '}'},
+        {79, ';'}, {80, ':'}, {81, '\''}, {82, '"'}, {83, '<'},
+        {85, '>'}, {86, '\\'}, {89, '|'}, {90, ','}, {91, '.'},
+        {92, '/'}, {93, '?'},
+    };
+    for (size_t index = 0;
+         index < sizeof(symbol_keys) / sizeof(symbol_keys[0]); index++)
+        assert(cp0_ui_key_character(symbol_keys[index].key, false) ==
+               symbol_keys[index].character);
+    assert(cp0_ui_key_character(30, false) == 'a');
+    assert(cp0_ui_key_character(30, true) == 'A');
+    assert(cp0_ui_key_character(2, false) == '1');
+    assert(cp0_ui_key_character(11, false) == '0');
+    assert(cp0_ui_key_character(12, false) == '-');
+    assert(cp0_ui_key_character(12, true) == '_');
+    assert(cp0_ui_key_character(57, false) == ' ');
+    assert(cp0_ui_key_character(0, false) == '\0');
+
     cp0_ui_init(&ui);
     cp0_ui_set_local_simulation(&ui, true);
     cp0_ui_set_status(&ui, "12:34", true, 73);

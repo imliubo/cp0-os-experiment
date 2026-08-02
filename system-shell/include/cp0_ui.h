@@ -588,6 +588,7 @@ struct cp0_ui {
 };
 
 void cp0_ui_init(struct cp0_ui *ui);
+char cp0_ui_key_character(uint32_t key, bool shifted);
 void cp0_ui_setup_begin(struct cp0_ui *ui, enum cp0_ui_setup_page page);
 void cp0_ui_setup_resume(struct cp0_ui *ui, unsigned int phase,
                          const char *hostname, const char *display_name,

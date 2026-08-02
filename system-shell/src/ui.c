@@ -24,7 +24,18 @@ struct canvas {
 
 static const uint8_t font[][5] = {
     [' ' - ' '] = {0x00, 0x00, 0x00, 0x00, 0x00},
+    ['!' - ' '] = {0x00, 0x00, 0x5f, 0x00, 0x00},
+    ['"' - ' '] = {0x00, 0x07, 0x00, 0x07, 0x00},
+    ['#' - ' '] = {0x14, 0x7f, 0x14, 0x7f, 0x14},
+    ['$' - ' '] = {0x24, 0x2a, 0x7f, 0x2a, 0x12},
     ['%' - ' '] = {0x23, 0x13, 0x08, 0x64, 0x62},
+    ['&' - ' '] = {0x36, 0x49, 0x55, 0x22, 0x50},
+    ['\'' - ' '] = {0x00, 0x05, 0x03, 0x00, 0x00},
+    ['(' - ' '] = {0x00, 0x1c, 0x22, 0x41, 0x00},
+    [')' - ' '] = {0x00, 0x41, 0x22, 0x1c, 0x00},
+    ['*' - ' '] = {0x14, 0x08, 0x3e, 0x08, 0x14},
+    ['+' - ' '] = {0x08, 0x08, 0x3e, 0x08, 0x08},
+    [',' - ' '] = {0x00, 0x50, 0x30, 0x00, 0x00},
     ['-' - ' '] = {0x08, 0x08, 0x08, 0x08, 0x08},
     ['.' - ' '] = {0x00, 0x60, 0x60, 0x00, 0x00},
     ['/' - ' '] = {0x20, 0x10, 0x08, 0x04, 0x02},
@@ -39,6 +50,12 @@ static const uint8_t font[][5] = {
     ['8' - ' '] = {0x36, 0x49, 0x49, 0x49, 0x36},
     ['9' - ' '] = {0x06, 0x49, 0x49, 0x29, 0x1e},
     [':' - ' '] = {0x00, 0x36, 0x36, 0x00, 0x00},
+    [';' - ' '] = {0x00, 0x56, 0x36, 0x00, 0x00},
+    ['<' - ' '] = {0x08, 0x14, 0x22, 0x41, 0x00},
+    ['=' - ' '] = {0x14, 0x14, 0x14, 0x14, 0x14},
+    ['>' - ' '] = {0x00, 0x41, 0x22, 0x14, 0x08},
+    ['?' - ' '] = {0x02, 0x01, 0x51, 0x09, 0x06},
+    ['@' - ' '] = {0x32, 0x49, 0x79, 0x41, 0x3e},
     ['A' - ' '] = {0x7e, 0x11, 0x11, 0x11, 0x7e},
     ['B' - ' '] = {0x7f, 0x49, 0x49, 0x49, 0x36},
     ['C' - ' '] = {0x3e, 0x41, 0x41, 0x41, 0x22},
@@ -65,6 +82,42 @@ static const uint8_t font[][5] = {
     ['X' - ' '] = {0x63, 0x14, 0x08, 0x14, 0x63},
     ['Y' - ' '] = {0x07, 0x08, 0x70, 0x08, 0x07},
     ['Z' - ' '] = {0x61, 0x51, 0x49, 0x45, 0x43},
+    ['[' - ' '] = {0x00, 0x7f, 0x41, 0x41, 0x00},
+    ['\\' - ' '] = {0x02, 0x04, 0x08, 0x10, 0x20},
+    [']' - ' '] = {0x00, 0x41, 0x41, 0x7f, 0x00},
+    ['^' - ' '] = {0x04, 0x02, 0x01, 0x02, 0x04},
+    ['_' - ' '] = {0x40, 0x40, 0x40, 0x40, 0x40},
+    ['`' - ' '] = {0x00, 0x01, 0x02, 0x04, 0x00},
+    ['a' - ' '] = {0x20, 0x54, 0x54, 0x54, 0x78},
+    ['b' - ' '] = {0x7f, 0x48, 0x44, 0x44, 0x38},
+    ['c' - ' '] = {0x38, 0x44, 0x44, 0x44, 0x20},
+    ['d' - ' '] = {0x38, 0x44, 0x44, 0x48, 0x7f},
+    ['e' - ' '] = {0x38, 0x54, 0x54, 0x54, 0x18},
+    ['f' - ' '] = {0x08, 0x7e, 0x09, 0x01, 0x02},
+    ['g' - ' '] = {0x0c, 0x52, 0x52, 0x52, 0x3e},
+    ['h' - ' '] = {0x7f, 0x08, 0x04, 0x04, 0x78},
+    ['i' - ' '] = {0x00, 0x44, 0x7d, 0x40, 0x00},
+    ['j' - ' '] = {0x20, 0x40, 0x44, 0x3d, 0x00},
+    ['k' - ' '] = {0x7f, 0x10, 0x28, 0x44, 0x00},
+    ['l' - ' '] = {0x00, 0x41, 0x7f, 0x40, 0x00},
+    ['m' - ' '] = {0x7c, 0x04, 0x18, 0x04, 0x78},
+    ['n' - ' '] = {0x7c, 0x08, 0x04, 0x04, 0x78},
+    ['o' - ' '] = {0x38, 0x44, 0x44, 0x44, 0x38},
+    ['p' - ' '] = {0x7c, 0x14, 0x14, 0x14, 0x08},
+    ['q' - ' '] = {0x08, 0x14, 0x14, 0x18, 0x7c},
+    ['r' - ' '] = {0x7c, 0x08, 0x04, 0x04, 0x08},
+    ['s' - ' '] = {0x48, 0x54, 0x54, 0x54, 0x20},
+    ['t' - ' '] = {0x04, 0x3f, 0x44, 0x40, 0x20},
+    ['u' - ' '] = {0x3c, 0x40, 0x40, 0x20, 0x7c},
+    ['v' - ' '] = {0x1c, 0x20, 0x40, 0x20, 0x1c},
+    ['w' - ' '] = {0x3c, 0x40, 0x30, 0x40, 0x3c},
+    ['x' - ' '] = {0x44, 0x28, 0x10, 0x28, 0x44},
+    ['y' - ' '] = {0x0c, 0x50, 0x50, 0x50, 0x3c},
+    ['z' - ' '] = {0x44, 0x64, 0x54, 0x4c, 0x44},
+    ['{' - ' '] = {0x00, 0x08, 0x36, 0x41, 0x00},
+    ['|' - ' '] = {0x00, 0x00, 0x7f, 0x00, 0x00},
+    ['}' - ' '] = {0x00, 0x41, 0x36, 0x08, 0x00},
+    ['~' - ' '] = {0x08, 0x04, 0x08, 0x10, 0x08},
 };
 
 static void fill_rect(struct canvas *canvas, int x, int y, int width,
@@ -137,12 +190,10 @@ static void stroke_rect(struct canvas *canvas, int x, int y, int width,
     fill_rect(canvas, x + width - thickness, y, thickness, height, color);
 }
 
-static void draw_glyph(struct canvas *canvas, int x, int y, char character,
-                       int scale, uint32_t color)
+static void draw_glyph_exact(struct canvas *canvas, int x, int y,
+                             char character, int scale, uint32_t color)
 {
-    if (character >= 'a' && character <= 'z')
-        character = (char)(character - 'a' + 'A');
-    if (character < ' ' || character > 'Z')
+    if (character < ' ' || character > '~')
         character = ' ';
 
     const uint8_t *columns = font[(unsigned char)character - ' '];
@@ -155,11 +206,33 @@ static void draw_glyph(struct canvas *canvas, int x, int y, char character,
     }
 }
 
+static void draw_glyph(struct canvas *canvas, int x, int y, char character,
+                       int scale, uint32_t color)
+{
+    if (character >= 'a' && character <= 'z')
+        character = (char)(character - 'a' + 'A');
+    if (character != ' ' && character != '%' && character != '-' &&
+        character != '.' && character != '/' && character != ':' &&
+        !(character >= '0' && character <= '9') &&
+        !(character >= 'A' && character <= 'Z'))
+        character = ' ';
+    draw_glyph_exact(canvas, x, y, character, scale, color);
+}
+
 static void draw_text(struct canvas *canvas, int x, int y, const char *text,
                       int scale, uint32_t color)
 {
     for (; *text != '\0'; text++) {
         draw_glyph(canvas, x, y, *text, scale, color);
+        x += 6 * scale;
+    }
+}
+
+static void draw_text_exact(struct canvas *canvas, int x, int y,
+                            const char *text, int scale, uint32_t color)
+{
+    for (; *text != '\0'; text++) {
+        draw_glyph_exact(canvas, x, y, *text, scale, color);
         x += 6 * scale;
     }
 }
@@ -178,6 +251,89 @@ static void draw_wrapped_line(struct canvas *canvas, int x, int y,
 static bool copy_optional_text(char *output, size_t capacity,
                                const char *input);
 static void format_bytes(char output[16], uint64_t bytes);
+
+char cp0_ui_key_character(uint32_t key, bool shifted)
+{
+    char character = '\0';
+
+    /* CardputerZero V0.6 keymap1 emits these stable Linux input ABI codes. */
+    switch (key) {
+    case 26: return '!';
+    case 27: return '@';
+    case 39: return '#';
+    case 40: return '$';
+    case 41: return '%';
+    case 43: return '^';
+    case 51: return '&';
+    case 52: return '*';
+    case 53: return '(';
+    case 94: return ')';
+    case 55: return '~';
+    case 69: return '`';
+    case 70: return '_';
+    case 71: return '-';
+    case 72: return '+';
+    case 73: return '=';
+    case 74: return '[';
+    case 75: return ']';
+    case 76: return '{';
+    case 77: return '}';
+    case 79: return ';';
+    case 80: return ':';
+    case 81: return '\'';
+    case 82: return '"';
+    case 83: return '<';
+    case 85: return '>';
+    case 86: return '\\';
+    case 89: return '|';
+    case 90: return ',';
+    case 91: return '.';
+    case 92: return '/';
+    case 93: return '?';
+    default: break;
+    }
+
+    switch (key) {
+    case 30: character = 'a'; break;
+    case 48: character = 'b'; break;
+    case 46: character = 'c'; break;
+    case 32: character = 'd'; break;
+    case 18: character = 'e'; break;
+    case 33: character = 'f'; break;
+    case 34: character = 'g'; break;
+    case 35: character = 'h'; break;
+    case 23: character = 'i'; break;
+    case 36: character = 'j'; break;
+    case 37: character = 'k'; break;
+    case 38: character = 'l'; break;
+    case 50: character = 'm'; break;
+    case 49: character = 'n'; break;
+    case 24: character = 'o'; break;
+    case 25: character = 'p'; break;
+    case 16: character = 'q'; break;
+    case 19: character = 'r'; break;
+    case 31: character = 's'; break;
+    case 20: character = 't'; break;
+    case 22: character = 'u'; break;
+    case 47: character = 'v'; break;
+    case 17: character = 'w'; break;
+    case 45: character = 'x'; break;
+    case 21: character = 'y'; break;
+    case 44: character = 'z'; break;
+    default: break;
+    }
+    if (character != '\0')
+        return shifted ? (char)(character - 'a' + 'A') : character;
+    if (key >= 2 && key <= 10)
+        return (char)('1' + (key - 2));
+    if (key == 11)
+        return '0';
+    if (key == 57)
+        return ' ';
+    if (key == 12)
+        return shifted ? '_' : '-';
+    return '\0';
+}
 
 static const char *screen_title(const struct cp0_ui *ui)
 {
@@ -296,7 +452,7 @@ static void draw_setup_input(struct canvas *canvas, const char *value,
     visible[shown] = '\0';
     fill_rect(canvas, 12, 82, 296, 34, COLOR_SURFACE);
     stroke_rect(canvas, 12, 82, 296, 34, 2, COLOR_GREEN);
-    draw_text(canvas, 22, 95, visible, 1, COLOR_TEXT);
+    draw_text_exact(canvas, 22, 95, visible, 1, COLOR_TEXT);
     fill_rect(canvas, 22 + (int)shown * 6, 104, 5, 2, COLOR_GREEN);
 }
 

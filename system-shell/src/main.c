@@ -2084,53 +2084,6 @@ static bool translate_key(struct shell *shell, uint32_t key,
     return false;
 }
 
-static char search_character(uint32_t key, bool shifted)
-{
-    char character = '\0';
-    switch (key) {
-    case KEY_A: character = 'a'; break;
-    case KEY_B: character = 'b'; break;
-    case KEY_C: character = 'c'; break;
-    case KEY_D: character = 'd'; break;
-    case KEY_E: character = 'e'; break;
-    case KEY_F: character = 'f'; break;
-    case KEY_G: character = 'g'; break;
-    case KEY_H: character = 'h'; break;
-    case KEY_I: character = 'i'; break;
-    case KEY_J: character = 'j'; break;
-    case KEY_K: character = 'k'; break;
-    case KEY_L: character = 'l'; break;
-    case KEY_M: character = 'm'; break;
-    case KEY_N: character = 'n'; break;
-    case KEY_O: character = 'o'; break;
-    case KEY_P: character = 'p'; break;
-    case KEY_Q: character = 'q'; break;
-    case KEY_R: character = 'r'; break;
-    case KEY_S: character = 's'; break;
-    case KEY_T: character = 't'; break;
-    case KEY_U: character = 'u'; break;
-    case KEY_V: character = 'v'; break;
-    case KEY_W: character = 'w'; break;
-    case KEY_X: character = 'x'; break;
-    case KEY_Y: character = 'y'; break;
-    case KEY_Z: character = 'z'; break;
-    default: break;
-    }
-    if (character != '\0')
-        return shifted ? (char)(character - 'a' + 'A') : character;
-    if (key >= KEY_1 && key <= KEY_9)
-        return (char)('1' + (key - KEY_1));
-    if (key == KEY_0)
-        return '0';
-    if (key == KEY_SPACE)
-        return ' ';
-    if (key == KEY_DOT)
-        return '.';
-    if (key == KEY_MINUS)
-        return shifted ? '_' : '-';
-    return '\0';
-}
-
 static void handle_keyboard_keymap(void *data, struct wl_keyboard *keyboard,
                                    uint32_t format, int fd, uint32_t size)
 {
@@ -2187,7 +2140,7 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
         if (key == KEY_BACKSPACE)
             handled = cp0_ui_setup_backspace(&shell->ui);
         else {
-            char character = search_character(key, shell->shift_pressed);
+            char character = cp0_ui_key_character(key, shell->shift_pressed);
             if (character != '\0')
                 handled = cp0_ui_setup_input_ascii(&shell->ui, character);
         }
@@ -2204,7 +2157,7 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
             event = cp0_ui_store_backspace(&shell->ui);
             handled = true;
         } else {
-            char character = search_character(key, shell->shift_pressed);
+            char character = cp0_ui_key_character(key, shell->shift_pressed);
             if (character != '\0') {
                 event = cp0_ui_store_input_ascii(&shell->ui, character);
                 handled = true;
