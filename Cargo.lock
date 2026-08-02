@@ -483,6 +483,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp0-provision-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cp0-provisiond"
+version = "0.1.0"
+dependencies = [
+ "cp0-provision-protocol",
+ "libc",
+ "serde",
+ "serde_json",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "cp0-radio-protocol"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,15 @@
+[package]
+name = "cp0-provisiond"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+cp0-provision-protocol = { path = "../cp0-provision-protocol" }
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
