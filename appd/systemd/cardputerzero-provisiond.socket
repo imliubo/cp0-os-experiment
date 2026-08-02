@@ -1,0 +1,15 @@
+[Unit]
+Description=CardputerZero trusted first-boot provisioning socket
+
+[Socket]
+ListenSequentialPacket=/run/cardputerzero-provisiond/provision.sock
+FileDescriptorName=provision
+Service=cardputerzero-provisiond.service
+SocketUser=root
+SocketGroup=cp0-provision-control
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

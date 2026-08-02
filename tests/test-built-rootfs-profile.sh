@@ -40,6 +40,7 @@ required_executables=(
     usr/libexec/cardputerzero/cp0-documentd
     usr/libexec/cardputerzero/cp0-gpiod
     usr/libexec/cardputerzero/cp0-networkd
+    usr/libexec/cardputerzero/cp0-provisiond
     usr/libexec/cardputerzero/cp0-radiod
     usr/libexec/cardputerzero/cp0-storaged
     usr/libexec/cardputerzero/cp0-stored
@@ -106,6 +107,8 @@ if [[ $image_profile == product ]]; then
         sockets.target.wants/cardputerzero-documentd.socket
         sockets.target.wants/cardputerzero-gpiod.socket
         sockets.target.wants/cardputerzero-networkd.socket
+        sockets.target.wants/cardputerzero-provisiond.socket
+        multi-user.target.wants/cardputerzero-provision-apply.service
         sockets.target.wants/cardputerzero-radiod.socket
         sockets.target.wants/cardputerzero-storaged.socket
         sockets.target.wants/cardputerzero-stored.socket
@@ -118,8 +121,7 @@ for path in "${enabled_units[@]}"; do
     fi
 done
 if [[ $access_profile == production ]]; then
-    for unit in ssh.service ssh.socket ssh@.service sshd.service sshd@.service \
-        cardputerzero-ssh-prepare.service regenerate_ssh_host_keys.service \
+    for unit in regenerate_ssh_host_keys.service \
         getty@.service getty@tty1.service serial-getty@.service \
         serial-getty@serial0.service cardputerzero-recovery-console.service; do
         mask="$rootfs/etc/systemd/system/$unit"
@@ -128,24 +130,38 @@ if [[ $access_profile == production ]]; then
             exit 1
         fi
     done
-    first_user_shadow=$(awk -F: '$1 == "pi" { print $2 }' "$rootfs/etc/shadow")
-    first_user_shell=$(awk -F: '$1 == "pi" { print $7 }' "$rootfs/etc/passwd")
-    if [[ $first_user_shadow != \!* || $first_user_shell != /usr/sbin/nologin ]]; then
-        echo "error: production operator account is not locked" >&2
+    if awk -F: '$3 >= 1000 && $3 < 20000 { found=1 } END { exit !found }' \
+        "$rootfs/etc/passwd"; then
+        echo "error: production image contains a human account" >&2
         exit 1
     fi
-    first_user_groups=$(chroot "$rootfs" /usr/bin/id -nG pi)
-    for privileged_group in sudo adm dialout audio video input gpio spi i2c \
-        netdev render; do
-        if grep -qw "$privileged_group" <<<"$first_user_groups"; then
-            echo "error: production operator retains group: $privileged_group" >&2
+    if grep -q '^cp0-build:' "$rootfs/etc/passwd" "$rootfs/etc/shadow" \
+        "$rootfs/etc/group" || find "$rootfs" -xdev -uid 1000 -print -quit | grep -q .; then
+        echo "error: production build identity residue remains" >&2
+        exit 1
+    fi
+    if [[ -e $rootfs/etc/systemd/system/multi-user.target.wants/ssh.service ]]; then
+        echo "error: production image enables SSH before owner consent" >&2
+        exit 1
+    fi
+    test -x "$rootfs/usr/lib/systemd/system-generators/cardputerzero-ssh-generator"
+    grep -qx 'AllowGroups cp0-ssh' \
+        "$rootfs/etc/ssh/sshd_config.d/40-cardputerzero-owner.conf"
+    for database in passwd group shadow; do
+        grep -Eq "^${database}:.*(^|[[:space:]])extrausers([[:space:]]|$)" \
+            "$rootfs/etc/nsswitch.conf"
+    done
+    test -e "$rootfs/lib/aarch64-linux-gnu/libnss_extrausers.so.2"
+    chroot "$rootfs" /usr/bin/dpkg-query -W -f='${Status}\n' \
+        libnss-extrausers | grep -qx 'install ok installed'
+    chroot "$rootfs" /usr/bin/locale -a | grep -qx 'en_US.utf8'
+    chroot "$rootfs" /usr/bin/locale -a | grep -qx 'zh_CN.utf8'
+    for database in passwd shadow group gshadow; do
+        if [[ -s $rootfs/var/lib/cardputerzero-persist/extrausers/$database ]]; then
+            echo "error: production image seeds an owner identity: $database" >&2
             exit 1
         fi
     done
-    if [[ -e $rootfs/home/pi/.ssh ]]; then
-        echo "error: production operator has an SSH directory" >&2
-        exit 1
-    fi
     chroot "$rootfs" /usr/bin/jq -e \
         '.developer_mode_allowed == false and .recovery_mode_allowed == false' \
         /etc/cardputerzero/device-policy.json >/dev/null
@@ -301,13 +317,13 @@ if [[ $(blkid -s LABEL -o value "$data_device") != cp0-data ]]; then
     echo "error: persistent filesystem label is not cp0-data" >&2
     exit 1
 fi
-grep -qx 'cp0-data-layout-v1' "$data_root/layout-version"
+grep -qx 'cp0-data-layout-v2' "$data_root/layout-version"
 grep -qx "$image_profile" \
     "$data_root/etc-cardputerzero/image-profile"
 grep -qx "$access_profile" \
     "$data_root/etc-cardputerzero/access-profile"
-for path in cardputerzero etc-cardputerzero network-connections \
-    network-state ssh; do
+for path in cardputerzero etc-cardputerzero extrausers home \
+    network-connections network-state ssh; do
     if [[ ! -d $data_root/$path || -L $data_root/$path ]]; then
         echo "error: persistent layout directory is invalid: $path" >&2
         exit 1
@@ -316,6 +332,13 @@ done
 for path in machine-id random-seed; do
     if [[ ! -f $data_root/$path || -L $data_root/$path ]]; then
         echo "error: persistent layout file is invalid: $path" >&2
+        exit 1
+    fi
+done
+for database in passwd group shadow gshadow; do
+    if [[ ! -f $data_root/extrausers/$database ||
+          -L $data_root/extrausers/$database ]]; then
+        echo "error: persistent owner database is invalid: $database" >&2
         exit 1
     fi
 done

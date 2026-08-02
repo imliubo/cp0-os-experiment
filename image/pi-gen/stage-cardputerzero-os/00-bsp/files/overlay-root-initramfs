@@ -63,8 +63,32 @@ chmod 0700 "$data" || overlay_fail "cannot protect persistent data mount"
 mount -n -t ext4 \
     -o rw,nodev,nosuid,noexec,noatime,errors=remount-ro \
     "$data_device" "$data" || overlay_fail "cannot mount persistent data"
-[ -f "$data/layout-version" ] && [ ! -L "$data/layout-version" ] && \
-    [ "$(cat "$data/layout-version")" = cp0-data-layout-v1 ] || \
+[ -f "$data/layout-version" ] && [ ! -L "$data/layout-version" ] || \
+    overlay_fail "persistent data layout marker is invalid"
+layout_version=$(cat "$data/layout-version")
+if [ "$layout_version" = cp0-data-layout-v1 ]; then
+    mkdir -p "$data/extrausers" "$data/home" || \
+        overlay_fail "cannot create provisioning persistence"
+    chmod 0755 "$data/extrausers" "$data/home" || \
+        overlay_fail "cannot protect provisioning persistence"
+    for database in passwd group; do
+        : >"$data/extrausers/$database" || overlay_fail "cannot create $database"
+        chmod 0644 "$data/extrausers/$database" || overlay_fail "cannot protect $database"
+    done
+    for database in shadow gshadow; do
+        : >"$data/extrausers/$database" || overlay_fail "cannot create $database"
+        chmod 0600 "$data/extrausers/$database" || overlay_fail "cannot protect $database"
+    done
+    printf '%s\n' cp0-data-layout-v2 >"$data/layout-version.new" || \
+        overlay_fail "cannot stage layout migration"
+    chmod 0644 "$data/layout-version.new" || overlay_fail "cannot protect layout marker"
+    sync || overlay_fail "cannot persist layout migration"
+    mv "$data/layout-version.new" "$data/layout-version" || \
+        overlay_fail "cannot commit layout migration"
+    sync || overlay_fail "cannot persist layout marker"
+    layout_version=cp0-data-layout-v2
+fi
+[ "$layout_version" = cp0-data-layout-v2 ] || \
     overlay_fail "persistent data layout is invalid"
 [ -f "$data/etc-cardputerzero/image-profile" ] && \
     [ ! -L "$data/etc-cardputerzero/image-profile" ] && \
@@ -119,6 +143,8 @@ bind_directory "$data/ssh" "$root_target/etc/ssh"
 bind_directory "$data/network-connections" \
     "$root_target/etc/NetworkManager/system-connections"
 bind_directory "$data/network-state" "$root_target/var/lib/NetworkManager"
+bind_directory "$data/extrausers" "$root_target/var/lib/extrausers"
+bind_directory "$data/home" "$root_target/home"
 bind_file "$data/machine-id" "$root_target/etc/machine-id" ro
 bind_file "$data/random-seed" "$root_target/var/lib/systemd/random-seed" rw
 

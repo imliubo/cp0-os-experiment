@@ -1,0 +1,34 @@
+[Unit]
+Description=Apply persistent CardputerZero owner configuration
+After=local-fs.target dbus.service
+Before=NetworkManager.service cardputerzero-compositor.service
+ConditionPathExists=/var/lib/cardputerzero/provisioning/complete
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/cardputerzero/cp0-provisiond apply
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/cardputerzero/provisioning
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

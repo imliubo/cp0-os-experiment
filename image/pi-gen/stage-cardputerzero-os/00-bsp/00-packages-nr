@@ -5,6 +5,7 @@ ca-certificates
 firmware-brcm80211
 iw
 jq
+libnss-extrausers
 libdrm-tests
 libseccomp2
 network-manager
@@ -14,4 +15,5 @@ raspberrypi-sys-mods
 rpi-swap
 sudo
 systemd-timesyncd
+whois
 wpasupplicant

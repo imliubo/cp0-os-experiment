@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+output=${1:?generator output directory is required}
+complete=/var/lib/cardputerzero/provisioning/complete
+enabled=/var/lib/cardputerzero/provisioning/ssh-enabled
+
+[ -f "$complete" ] && [ ! -L "$complete" ] || exit 0
+[ -f "$enabled" ] && [ ! -L "$enabled" ] || exit 0
+mkdir -p "$output/multi-user.target.wants"
+ln -s /usr/lib/systemd/system/ssh.service \
+    "$output/multi-user.target.wants/ssh.service"

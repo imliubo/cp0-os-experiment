@@ -242,6 +242,14 @@ if [ -n "${PUBKEY_SSH_FIRST_USER:-}" ]; then
 fi
 usermod --lock root
 
+sed -i -E \
+    -e 's/^#[[:space:]]*(en_US.UTF-8[[:space:]]+UTF-8)$/\1/' \
+    -e 's/^#[[:space:]]*(zh_CN.UTF-8[[:space:]]+UTF-8)$/\1/' \
+    /etc/locale.gen
+locale-gen en_US.UTF-8 zh_CN.UTF-8
+locale -a | grep -qx 'en_US.utf8'
+locale -a | grep -qx 'zh_CN.utf8'
+
 printf '%s\n' "$TIMEZONE_DEFAULT" >/etc/timezone
 ln -sf "/usr/share/zoneinfo/$TIMEZONE_DEFAULT" /etc/localtime
 if [ -n "${WPA_COUNTRY:-}" ]; then
@@ -321,18 +329,36 @@ CHROOT
 else
     on_chroot <<'CHROOT'
 set -e
-usermod --lock "$FIRST_USER_NAME"
-usermod --shell /usr/sbin/nologin "$FIRST_USER_NAME"
-usermod --groups users "$FIRST_USER_NAME"
-rm -rf "/home/$FIRST_USER_NAME/.ssh"
+test "$FIRST_USER_NAME" = cp0-build
+build_uid=$(id -u "$FIRST_USER_NAME")
+rm -f "/etc/sudoers.d/010_${FIRST_USER_NAME}-nopasswd" \
+    /etc/sudoers.d/010_pi-nopasswd
+userdel --remove "$FIRST_USER_NAME"
+if getent passwd "$FIRST_USER_NAME" >/dev/null 2>&1 ||
+   find / -xdev -uid "$build_uid" -print -quit 2>/dev/null | grep -q .; then
+    echo "error: temporary product build identity remains" >&2
+    exit 1
+fi
 systemctl disable ssh.service ssh.socket ssh@.service sshd.service \
     sshd@.service cardputerzero-ssh-prepare.service \
     regenerate_ssh_host_keys.service getty@tty1.service \
     serial-getty@serial0.service 2>/dev/null || true
-systemctl mask --force ssh.service ssh.socket ssh@.service sshd.service \
-    sshd@.service cardputerzero-ssh-prepare.service \
+systemctl mask --force \
     regenerate_ssh_host_keys.service getty@.service getty@tty1.service \
     serial-getty@.service serial-getty@serial0.service \
     cardputerzero-recovery-console.service
+CHROOT
+fi
+
+if [[ $image_profile == product ]]; then
+    on_chroot <<'CHROOT'
+set -e
+for database in passwd group shadow; do
+    if ! grep -Eq "^${database}:.*(^|[[:space:]])extrausers([[:space:]]|$)" "/etc/nsswitch.conf"; then
+        sed -i -E "s/^(${database}:[^#]*)$/\\1 extrausers/" /etc/nsswitch.conf
+    fi
+    grep -Eq "^${database}:.*extrausers" /etc/nsswitch.conf
+done
+test -e /lib/aarch64-linux-gnu/libnss_extrausers.so.2
 CHROOT
 fi

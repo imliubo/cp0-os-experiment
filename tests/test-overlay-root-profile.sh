@@ -64,7 +64,10 @@ grep -q "s/.*resize" "$stage"
 grep -q 'DATA_SIZE=.*256' "$export_prerun"
 grep -q 'DATA_DEV=.*p3' "$export_prerun"
 grep -q 'mkfs.ext4 -L cp0-data' "$export_prerun"
-grep -q 'cp0-data-layout-v1' "$export_prerun"
+grep -q 'cp0-data-layout-v2' "$export_prerun"
+grep -q 'cp0-data-layout-v1' "$init"
+grep -q 'bind_directory "$data/extrausers"' "$init"
+grep -q 'bind_directory "$data/home"' "$init"
 if grep -q 'cardputerzero-overlay-root-status.service rpi-resize.service' "$stage"; then
     echo "error: root resize must remain disabled with a third partition" >&2
     exit 1

@@ -23,6 +23,8 @@ install -D -m 0755 "${payload}/cp0-appd" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-appd"
 install -D -m 0755 "${payload}/cp0-networkd" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-networkd"
+install -D -m 0755 "${payload}/cp0-provisiond" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-provisiond"
 install -D -m 0755 "${payload}/cp0-documentd" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-documentd"
 install -D -m 0755 "${payload}/cp0-audiod" \
@@ -73,6 +75,18 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-connectivityd.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-connectivityd.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-connectivityd.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-connectivityd.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-provisiond.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-provisiond.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-provisiond.socket" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-provisiond.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-provision-apply.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-provision-apply.service"
+install -D -m 0755 "${payload}/systemd/cardputerzero-ssh-generator" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system-generators/cardputerzero-ssh-generator"
+install -D -m 0644 "${payload}/systemd/cardputerzero-ssh-gate.conf" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/ssh.service.d/cardputerzero-gate.conf"
+install -D -m 0600 "${payload}/systemd/cardputerzero-sshd.conf" \
+    "${ROOTFS_DIR}/etc/ssh/sshd_config.d/40-cardputerzero-owner.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-displayd.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-displayd.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-displayd.socket" \
@@ -99,6 +113,8 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-display.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-display.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-connectivity.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-connectivity.conf"
+install -D -m 0644 "${payload}/systemd/cardputerzero-provision.conf" \
+    "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-provision.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-appd.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-appd.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-storage.conf" \
@@ -167,6 +183,10 @@ if ! getent group cp0-connectivity-control >/dev/null 2>&1; then
     groupadd --system cp0-connectivity-control
 fi
 usermod -a -G cp0-connectivity-control cp0-shell
+if ! getent group cp0-provision-control >/dev/null 2>&1; then
+    groupadd --system cp0-provision-control
+fi
+usermod -a -G cp0-provision-control cp0-shell
 if ! getent group cp0-display >/dev/null 2>&1; then
     groupadd --system cp0-display
 fi
@@ -284,6 +304,8 @@ if [[ $image_profile == product ]]; then
         "$factory_root" \
         "$factory_root/cardputerzero" \
         "$factory_root/etc-cardputerzero" \
+        "$factory_root/extrausers" \
+        "$factory_root/home" \
         "$factory_root/network-connections" \
         "$factory_root/network-state" \
         "$factory_root/ssh"
@@ -291,7 +313,12 @@ if [[ $image_profile == product ]]; then
         "$factory_root/cardputerzero/"
     cp -a "${ROOTFS_DIR}/etc/cardputerzero/." \
         "$factory_root/etc-cardputerzero/"
-    printf '%s\n' cp0-data-layout-v1 >"$factory_root/layout-version"
+    for database in passwd group shadow gshadow; do
+        : >"$factory_root/extrausers/$database"
+    done
+    chmod 0644 "$factory_root/extrausers/passwd" "$factory_root/extrausers/group"
+    chmod 0600 "$factory_root/extrausers/shadow" "$factory_root/extrausers/gshadow"
+    printf '%s\n' cp0-data-layout-v2 >"$factory_root/layout-version"
     printf '%s\n' product >"$factory_root/etc-cardputerzero/image-profile"
     : >"$factory_root/machine-id"
     : >"$factory_root/random-seed"
@@ -313,6 +340,7 @@ systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
     cardputerzero-audiod.socket cardputerzero-camerad.socket \
     cardputerzero-connectivityd.socket cardputerzero-displayd.socket \
+    cardputerzero-provisiond.socket cardputerzero-provision-apply.service \
     cardputerzero-gpiod.socket cardputerzero-radiod.socket \
     cardputerzero-storaged.socket cardputerzero-stored.socket
 CHROOT
@@ -324,6 +352,8 @@ systemctl mask cardputerzero-appd.service \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
     cardputerzero-audiod.socket cardputerzero-camerad.socket \
     cardputerzero-connectivityd.service cardputerzero-connectivityd.socket \
+    cardputerzero-provisiond.service cardputerzero-provisiond.socket \
+    cardputerzero-provision-apply.service \
     cardputerzero-displayd.service cardputerzero-displayd.socket \
     cardputerzero-gpiod.socket cardputerzero-radiod.socket \
     cardputerzero-storaged.socket cardputerzero-stored.socket

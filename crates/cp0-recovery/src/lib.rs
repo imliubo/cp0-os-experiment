@@ -22,6 +22,8 @@ const COPY_BUFFER_BYTES: usize = 64 * 1024;
 const REQUIRED_DIRECTORIES: &[&str] = &[
     "cardputerzero",
     "etc-cardputerzero",
+    "extrausers",
+    "home",
     "network-connections",
     "network-state",
     "ssh",
@@ -449,7 +451,7 @@ fn validate_source_semantics(root: &Path, entries: &[EntrySource]) -> Result<(),
         .map(|entry| (entry.path.as_str(), entry.kind))
         .collect::<BTreeMap<_, _>>();
     validate_required_entries(&kinds)?;
-    if fs::read(root.join("layout-version"))? != b"cp0-data-layout-v1\n" {
+    if fs::read(root.join("layout-version"))? != b"cp0-data-layout-v2\n" {
         return Err(BackupError::Invalid(
             "persistent layout marker is invalid".into(),
         ));
@@ -697,7 +699,7 @@ fn parse_backup_reader<R: Read>(
                 }
             }
         }
-        if entry.path == "layout-version" && special_contents != b"cp0-data-layout-v1\n" {
+        if entry.path == "layout-version" && special_contents != b"cp0-data-layout-v2\n" {
             return Err(BackupError::Invalid(
                 "persistent layout marker is invalid".into(),
             ));
@@ -1045,7 +1047,7 @@ mod tests {
             fs::set_permissions(path.join(directory), fs::Permissions::from_mode(0o700))
                 .expect("protect required directory");
         }
-        fs::write(path.join("layout-version"), b"cp0-data-layout-v1\n").expect("write layout");
+        fs::write(path.join("layout-version"), b"cp0-data-layout-v2\n").expect("write layout");
         fs::write(
             path.join("machine-id"),
             b"0123456789abcdef0123456789abcdef\n",

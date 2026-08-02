@@ -3,6 +3,8 @@ Description=Prepare the persistent CardputerZero SSH host identity
 After=local-fs.target
 Before=ssh.service
 RequiresMountsFor=/etc/ssh
+ConditionPathExists=/var/lib/cardputerzero/provisioning/complete
+ConditionPathExists=/var/lib/cardputerzero/provisioning/ssh-enabled
 
 [Service]
 Type=oneshot

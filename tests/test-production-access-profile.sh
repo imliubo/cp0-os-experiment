@@ -47,17 +47,30 @@ jq -e \
 grep -Fq 'access_profile=${CP0_ACCESS_PROFILE:-development}' "$build"
 grep -Fq 'stage-cardputerzero-os/access-profile' "$build"
 grep -Fq 'openssl rand -hex 32' "$build"
+grep -Fq 'FIRST_USER_NAME=cp0-build' "$build"
 grep -Fq 'device-policy-production.json' "$build"
 grep -Fq '/etc/cardputerzero/access-profile' "$bsp"
-grep -Fq 'usermod --lock "$FIRST_USER_NAME"' "$bsp"
-grep -Fq 'usermod --shell /usr/sbin/nologin "$FIRST_USER_NAME"' "$bsp"
-grep -Fq 'systemctl mask --force ssh.service ssh.socket' "$bsp"
+grep -Fq 'userdel --remove "$FIRST_USER_NAME"' "$bsp"
+grep -Fq 'temporary product build identity remains' "$bsp"
+grep -Fq 'libnss_extrausers.so.2' "$bsp"
+grep -Fq 'locale-gen en_US.UTF-8 zh_CN.UTF-8' "$bsp"
+if grep -Fq 'libpam-extrausers' \
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/00-packages-nr"; then
+    echo "error: unavailable Debian package libpam-extrausers is requested" >&2
+    exit 1
+fi
+if grep -Fq 'systemctl mask --force ssh.service ssh.socket' "$bsp"; then
+    echo "error: owner-controlled SSH cannot be permanently masked" >&2
+    exit 1
+fi
 grep -Fq 'serial-getty@.service' "$bsp"
 grep -Fq 'cardputerzero-recovery-console.service' "$bsp"
 grep -Fq 'device-policy-production.json' "$platform"
 grep -Fq 'product:production) IMG_SUFFIX="-cp0-os-production"' \
     "$export_profile"
-grep -Fq 'production operator account is not locked' "$verifier"
+grep -Fq 'production image contains a human account' "$verifier"
+grep -Fq 'production build identity residue remains' "$verifier"
+grep -Fq 'production image enables SSH before owner consent' "$verifier"
 grep -Fq 'production access unit is not masked' "$verifier"
 grep -Fq '.developer_mode_allowed == false' "$verifier"
 

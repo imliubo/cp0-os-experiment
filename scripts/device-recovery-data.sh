@@ -102,8 +102,8 @@ mount_data() {
 
 require_product_data() {
     if [[ $(cat "$mount_root/etc-cardputerzero/image-profile" 2>/dev/null || true) != product ]] ||
-        [[ $(cat "$mount_root/layout-version" 2>/dev/null || true) != cp0-data-layout-v1 ]]; then
-        echo "error: target is not a product cp0-data v1 filesystem" >&2
+        [[ $(cat "$mount_root/layout-version" 2>/dev/null || true) != cp0-data-layout-v2 ]]; then
+        echo "error: target is not a product cp0-data v2 filesystem" >&2
         exit 1
     fi
 }

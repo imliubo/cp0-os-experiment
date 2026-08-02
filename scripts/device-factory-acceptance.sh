@@ -131,8 +131,8 @@ else
         "filesystem=${filesystem_bytes:-unknown} partition=${partition_bytes:-unknown}"
 fi
 if [[ $(cat /run/cardputerzero-data/layout-version 2>/dev/null || true) == \
-    cp0-data-layout-v1 ]]; then
-    record PASS data-layout cp0-data-layout-v1
+    cp0-data-layout-v2 ]]; then
+    record PASS data-layout cp0-data-layout-v2
 else
     record FAIL data-layout "missing or unsupported layout marker"
 fi

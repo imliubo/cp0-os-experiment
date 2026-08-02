@@ -18,11 +18,16 @@ bundle="$work_root/round-trip.cp0backup"
 install -d -m 0700 \
     "$source_root/cardputerzero/private/dev.example" \
     "$source_root/etc-cardputerzero" \
+    "$source_root/extrausers" \
+    "$source_root/home" \
     "$source_root/network-connections" \
     "$source_root/network-state" \
     "$source_root/ssh" \
     "$restore_root"
-printf 'cp0-data-layout-v1\n' >"$source_root/layout-version"
+printf 'cp0-data-layout-v2\n' >"$source_root/layout-version"
+for database in passwd group shadow gshadow; do
+    : >"$source_root/extrausers/$database"
+done
 printf 'product\n' >"$source_root/etc-cardputerzero/image-profile"
 printf '0123456789abcdef0123456789abcdef\n' >"$source_root/machine-id"
 printf 'random-seed-fixture' >"$source_root/random-seed"

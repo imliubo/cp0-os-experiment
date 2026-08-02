@@ -86,6 +86,8 @@ install -d -o root -g root -m 0700 "$DATA_ROOT"
 install -d -o root -g root -m 0755 \
     "$DATA_ROOT/cardputerzero" \
     "$DATA_ROOT/etc-cardputerzero" \
+    "$DATA_ROOT/extrausers" \
+    "$DATA_ROOT/home" \
     "$DATA_ROOT/ssh"
 install -d -o root -g root -m 0700 \
     "$DATA_ROOT/network-connections" \
@@ -103,7 +105,15 @@ if [[ -d ${ROOTFS_DIR}/var/lib/NetworkManager ]]; then
     rsync -aHAXx "${ROOTFS_DIR}/var/lib/NetworkManager/" \
         "$DATA_ROOT/network-state/"
 fi
-printf 'cp0-data-layout-v1\n' >"$DATA_ROOT/layout-version"
+for database in passwd group; do
+    : >"$DATA_ROOT/extrausers/$database"
+    chmod 0644 "$DATA_ROOT/extrausers/$database"
+done
+for database in shadow gshadow; do
+    : >"$DATA_ROOT/extrausers/$database"
+    chmod 0600 "$DATA_ROOT/extrausers/$database"
+done
+printf 'cp0-data-layout-v2\n' >"$DATA_ROOT/layout-version"
 : >"$DATA_ROOT/machine-id"
 : >"$DATA_ROOT/random-seed"
 chmod 0644 "$DATA_ROOT/layout-version" "$DATA_ROOT/machine-id"
