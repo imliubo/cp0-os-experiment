@@ -65,7 +65,7 @@ applications and application-owned data are untrusted.
 | DOS-01 | App consumes all RAM/CPU/processes | one foreground slot, cgroup memory/process limits, WAMR bounds and service restart policy | Sustained kernel-level I/O contention needs hardware soak testing |
 | BOOT-01 | SD attacker replaces kernel/initramfs/root | OverlayFS limits runtime writes only | OverlayFS is not an integrity control; verified boot and dm-verity remain release blockers |
 | UPDATE-01 | Interrupted or malicious OS update bricks device | no remote OS updater is enabled | Adopt the signed A/B design in ADR 0006 only after boot-chain hardware validation |
-| MGMT-01 | Shared development credential exposes SSH/sudo | password is explicit at build time; key-only SSH is supported | Development images with SSH are not production artifacts; production provisioning is unresolved |
+| MGMT-01 | Shared development credential or fixed human identity exposes SSH/sudo | production plan removes the pi-gen human account, creates one owner locally through trusted Setup and keeps SSH/sudo off by default | ADR 0007 is proposed only; extrausers/PAM, provisioning daemon, secret handling and hardware acceptance remain unimplemented release gates |
 | SUPPLY-01 | Dependency/build compromise | pinned BSP/pi-gen revisions, locked Rust dependencies and image gates | Reproducible build comparison, SBOM signing and independent review remain open |
 
 ## Release gates
@@ -75,10 +75,13 @@ development image passes functional tests:
 
 1. Any artifact named or configured as development may contain an operator-set
    password and enabled SSH. It must not be redistributed as a production
-   image. The production access profile instead locks all product login paths
-   and uses a separate operator-provisioned recovery SD as the physical
-   maintenance ceremony; removing that media revokes maintenance access. Its
-   final hardware acceptance remains a release gate.
+   image. The current production access profile locks all product login paths,
+   but still carries a fixed build-stage human identity and is therefore an
+   interim profile rather than the final product account model. ADR 0007 and
+   `FIRST-BOOT-PROVISIONING.md` propose removing that identity, creating one
+   owner locally and enabling no remote access by default. The implementation,
+   secret-leak tests and hardware acceptance remain release gates. A separate
+   operator-provisioned recovery SD remains the physical maintenance ceremony.
 2. The mutable FAT boot partition and unsigned root hash mean the current image
    cannot resist physical SD modification. The verified-update decision and
    limitations are in ADR 0006.

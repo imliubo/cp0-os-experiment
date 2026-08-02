@@ -1,5 +1,10 @@
 # Phase 6G: production access profile
 
+> This is the currently implemented interim profile. The proposed first-boot
+> owner model in `FIRST-BOOT-PROVISIONING.md` and ADR 0007 will replace its
+> fixed, locked pi-gen identity after product approval and implementation. No
+> first-boot behavior has changed yet.
+
 ## Boundary
 
 The normal `product:development` image intentionally enables SSH and accepts an
@@ -68,4 +73,3 @@ Final acceptance still requires booting a production-access artifact on
 disposable media and confirming that the System Shell works while SSH and all
 local login paths remain unavailable. It must not replace the active V0.6
 development image before its RAM-backed stability evidence is retrieved.
-
