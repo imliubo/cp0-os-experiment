@@ -126,10 +126,13 @@ image:
 
 verify-image:
 	@cd deploy && shasum -a 256 -c SHA256SUMS
-	@found=0; \
-	for info_file in deploy/*.info; do \
-		if [ ! -e "$$info_file" ]; then continue; fi; \
-		found=1; \
-		./tests/test-built-image-profile.sh "$$info_file"; \
-	done; \
-	if [ "$$found" -ne 1 ]; then echo "error: no deploy/*.info found" >&2; exit 1; fi
+	@info_file="$${IMAGE_INFO:-}"; \
+	if [ -z "$$info_file" ]; then \
+		info_file=$$(ls -1t deploy/*.info 2>/dev/null | head -n 1); \
+	fi; \
+	if [ -z "$$info_file" ] || [ ! -f "$$info_file" ]; then \
+		echo "error: no image info selected" >&2; \
+		exit 1; \
+	fi; \
+	echo "Verifying image profile: $$info_file"; \
+	./tests/test-built-image-profile.sh "$$info_file"

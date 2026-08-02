@@ -10,6 +10,7 @@ firmware_hook="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardp
 ssh_prepare="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/prepare-ssh.sh"
 ssh_prepare_unit="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardputerzero-ssh-prepare.service"
 rootfs_verifier="$repo_root/tests/test-built-rootfs-profile.sh"
+makefile="$repo_root/Makefile"
 
 grep -q '^PI_GEN_BRANCH=arm64$' "$repo_root/image/pi-gen/upstream.env"
 grep -Eq '^PI_GEN_COMMIT=[0-9a-f]{40}$' "$repo_root/image/pi-gen/upstream.env"
@@ -77,6 +78,9 @@ grep -q 'Acquire::https' "$build_script"
 grep -q 'export-image/01-user-rename/SKIP' "$build_script"
 grep -q 'CP0_RESUME_BUILD' "$build_script"
 grep -q -- '--volumes-from' "$build_script"
+grep -Fq 'info_file="$${IMAGE_INFO:-}"' "$makefile"
+grep -Fq 'ls -1t deploy/*.info' "$makefile"
+grep -Fq './tests/test-built-image-profile.sh "$$info_file"' "$makefile"
 if grep -q '/pi-gen/stage2' "$build_script"; then
     echo "error: stage2 must not be part of the minimal image" >&2
     exit 1
