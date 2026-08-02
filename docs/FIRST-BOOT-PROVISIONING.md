@@ -353,6 +353,16 @@ socket unavailability without leaving Setup stuck. The daemon also retains the
 minimal `CAP_CHOWN` needed to assign the persistent Owner home to UID 1000. A
 fresh-media burn is still required to close the hardware finding.
 
+The next V0.6 fresh-media run reached Owner creation but returned
+`provisioning state could not be updated`. The provisioning unit combined
+`ProtectHome=read-only` with a `ReadWritePaths=/home` exception. systemd keeps
+the protected home hierarchy read-only in this combination, so creating the
+Owner home failed even though the persistent data bind itself was writable.
+The unit now relies on `ProtectSystem=strict` plus the explicit `/home` writable
+allowlist and sets `ProtectHome=no`; no other home path is exposed to the
+daemon. Source and mounted-image gates reject a regression to the conflicting
+policy.
+
 ### Host and image tests
 
 - mounted product root contains no human UID, fixed username, password hash,

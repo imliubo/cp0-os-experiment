@@ -147,6 +147,8 @@ if [[ $access_profile == production ]]; then
     test -x "$rootfs/usr/lib/systemd/system-generators/cardputerzero-ssh-generator"
     grep -qx 'AllowGroups cp0-ssh' \
         "$rootfs/etc/ssh/sshd_config.d/40-cardputerzero-owner.conf"
+    grep -qx 'ProtectHome=no' \
+        "$rootfs/usr/lib/systemd/system/cardputerzero-provisiond.service"
     for database in passwd group shadow; do
         grep -Eq "^${database}:.*(^|[[:space:]])extrausers([[:space:]]|$)" \
             "$rootfs/etc/nsswitch.conf"
