@@ -84,6 +84,7 @@ pub struct ProvisioningPaths {
     pub localtime_file: PathBuf,
     pub zoneinfo_root: PathBuf,
     pub network_country_file: PathBuf,
+    pub wireless_phy_dir: PathBuf,
 }
 
 impl Default for ProvisioningPaths {
@@ -101,6 +102,7 @@ impl Default for ProvisioningPaths {
             localtime_file: "/etc/localtime".into(),
             zoneinfo_root: "/usr/share/zoneinfo".into(),
             network_country_file: "/etc/NetworkManager/conf.d/20-cardputerzero-country.conf".into(),
+            wireless_phy_dir: "/sys/class/ieee80211".into(),
         }
     }
 }
@@ -365,18 +367,39 @@ impl LinuxPlatformBackend {
         }
     }
 
-    fn command_ok(&self, program: &Path, arguments: &[&OsStr]) -> Result<(), ProvisioningError> {
-        let status = Command::new(program)
+    fn command_ok(
+        &self,
+        program: &Path,
+        arguments: &[&OsStr],
+        failure: &'static str,
+    ) -> Result<(), ProvisioningError> {
+        let output = Command::new(program)
             .args(arguments)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|_| ProvisioningError::Unavailable("required system tool is unavailable"))?;
-        if status.success() {
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| {
+                eprintln!(
+                    "provisioning tool could not start: tool={} error={error}",
+                    program.display()
+                );
+                ProvisioningError::Unavailable("required system tool is unavailable")
+            })?;
+        if output.status.success() {
             Ok(())
         } else {
-            Err(ProvisioningError::Operation("system tool returned failure"))
+            let stderr: String = String::from_utf8_lossy(&output.stderr)
+                .trim()
+                .chars()
+                .take(512)
+                .collect();
+            eprintln!(
+                "provisioning command failed: tool={} status={} step={failure} stderr={stderr:?}",
+                program.display(),
+                output.status
+            );
+            Err(ProvisioningError::Operation(failure))
         }
     }
 }
@@ -482,6 +505,7 @@ impl PlatformBackend for LinuxPlatformBackend {
             .command_ok(
                 &self.nmcli,
                 &[OsStr::new("connection"), OsStr::new("load"), path_argument],
+                "Wi-Fi profile could not be loaded",
             )
             .and_then(|()| {
                 self.command_ok(
@@ -492,6 +516,7 @@ impl PlatformBackend for LinuxPlatformBackend {
                         OsStr::new("uuid"),
                         OsStr::new(&uuid),
                     ],
+                    "Wi-Fi connection could not be activated",
                 )
             });
         if let Err(error) = connection_result {
@@ -548,20 +573,32 @@ impl PlatformBackend for LinuxPlatformBackend {
         self.command_ok(
             &self.hostnamectl,
             &[OsStr::new("set-hostname"), OsStr::new(hostname)],
+            "device name could not be configured",
         )?;
         let locale_argument = format!("LANG={locale}");
         self.command_ok(
             &self.localectl,
             &[OsStr::new("set-locale"), OsStr::new(&locale_argument)],
+            "system locale could not be configured",
         )?;
         self.command_ok(
             &self.timedatectl,
             &[OsStr::new("set-timezone"), OsStr::new(timezone)],
+            "time zone could not be configured",
         )?;
-        self.command_ok(
-            &self.iw,
-            &[OsStr::new("reg"), OsStr::new("set"), OsStr::new(country)],
-        )
+        let has_wireless_phy = match fs::read_dir(&self.paths.wireless_phy_dir) {
+            Ok(mut entries) => entries.next().transpose()?.is_some(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        };
+        if has_wireless_phy {
+            self.command_ok(
+                &self.iw,
+                &[OsStr::new("reg"), OsStr::new("set"), OsStr::new(country)],
+                "wireless regulatory country could not be configured",
+            )?;
+        }
+        Ok(())
     }
 
     fn configure_ssh(&mut self, enabled: bool) -> Result<(), ProvisioningError> {
@@ -580,6 +617,7 @@ impl PlatformBackend for LinuxPlatformBackend {
         self.command_ok(
             &self.systemctl,
             &[OsStr::new(action), OsStr::new("ssh.service")],
+            "SSH service state could not be changed",
         )
     }
 }
@@ -941,10 +979,7 @@ fn error_response(request_id: u64, error: ProvisioningError) -> ProvisioningResp
             ProvisioningErrorCode::Unavailable,
             "required hardware or service is unavailable",
         ),
-        ProvisioningError::Operation(_) => (
-            ProvisioningErrorCode::Operation,
-            "provisioning operation failed",
-        ),
+        ProvisioningError::Operation(message) => (ProvisioningErrorCode::Operation, message),
         ProvisioningError::Io(_) | ProvisioningError::Json(_) => (
             ProvisioningErrorCode::Internal,
             "provisioning state could not be updated",
@@ -1122,6 +1157,7 @@ mod tests {
             localtime_file: root.join("etc/localtime"),
             zoneinfo_root: root.join("zoneinfo"),
             network_country_file: root.join("etc/NetworkManager/country.conf"),
+            wireless_phy_dir: root.join("sys/class/ieee80211"),
         };
         (root, paths)
     }
@@ -1139,6 +1175,81 @@ mod tests {
             ProvisioningOutcome::State { state } => state,
             other => panic!("expected state, got {other:?}"),
         }
+    }
+
+    fn region_state() -> ProvisioningStatus {
+        ProvisioningStatus {
+            locale: Some("en_US.UTF-8".into()),
+            country: Some("CN".into()),
+            timezone: Some("Asia/Shanghai".into()),
+            hostname: Some("cp0-test".into()),
+            ..ProvisioningStatus::default()
+        }
+    }
+
+    fn make_tool(path: &Path, script: &[u8]) {
+        atomic_write(path, script, 0o755).unwrap();
+    }
+
+    fn region_backend(paths: ProvisioningPaths, tool: &Path) -> LinuxPlatformBackend {
+        let mut backend = LinuxPlatformBackend::new(paths);
+        backend.hostnamectl = tool.into();
+        backend.localectl = tool.into();
+        backend.timedatectl = tool.into();
+        backend.iw = tool.into();
+        backend
+    }
+
+    #[test]
+    fn applies_region_without_wireless_phy() {
+        let (root, paths) = fixture();
+        let zone = paths.zoneinfo_root.join("Asia/Shanghai");
+        fs::create_dir_all(zone.parent().unwrap()).unwrap();
+        fs::write(&zone, b"test zone").unwrap();
+        let success = root.join("bin/success");
+        make_tool(&success, b"#!/bin/sh\nexit 0\n");
+        let mut backend = region_backend(paths.clone(), &success);
+        backend.iw = root.join("bin/iw-must-not-run");
+
+        backend.apply_region(&region_state()).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reports_wireless_regulatory_failure_when_phy_exists() {
+        let (root, paths) = fixture();
+        let zone = paths.zoneinfo_root.join("Asia/Shanghai");
+        fs::create_dir_all(zone.parent().unwrap()).unwrap();
+        fs::write(&zone, b"test zone").unwrap();
+        fs::create_dir_all(paths.wireless_phy_dir.join("phy0")).unwrap();
+        let success = root.join("bin/success");
+        let failure = root.join("bin/failure");
+        make_tool(&success, b"#!/bin/sh\nexit 0\n");
+        make_tool(
+            &failure,
+            b"#!/bin/sh\necho 'test regulatory failure' >&2\nexit 1\n",
+        );
+        let mut backend = region_backend(paths, &success);
+        backend.iw = failure;
+
+        assert!(matches!(
+            backend.apply_region(&region_state()),
+            Err(ProvisioningError::Operation(
+                "wireless regulatory country could not be configured"
+            ))
+        ));
+        let response = error_response(
+            7,
+            ProvisioningError::Operation("wireless regulatory country could not be configured"),
+        );
+        assert!(matches!(
+            response.outcome,
+            ProvisioningOutcome::Error {
+                code: ProvisioningErrorCode::Operation,
+                message,
+            } if message == "wireless regulatory country could not be configured"
+        ));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

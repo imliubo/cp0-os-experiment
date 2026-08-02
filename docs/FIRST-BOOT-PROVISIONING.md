@@ -363,6 +363,16 @@ allowlist and sets `ProtectHome=no`; no other home path is exposed to the
 daemon. Source and mounted-image gates reject a regression to the conflicting
 policy.
 
+The following fresh-media run failed when Device Name was submitted. Region
+setup also applies the hostname, locale, time zone, and wireless regulatory
+country. The service had `ProtectHostname=yes`, which conflicts with its
+hostname-management responsibility, and an absent wireless PHY made `iw reg
+set` fail the entire operation. The unit now uses `ProtectHostname=no`, while
+retaining its other sandbox controls. Regulatory configuration is skipped only
+when `/sys/class/ieee80211` has no PHY. Failed system commands record the tool,
+exit status, fixed operation label, and bounded stderr in the service journal;
+the Setup UI receives only the fixed operation label.
+
 ### Host and image tests
 
 - mounted product root contains no human UID, fixed username, password hash,
