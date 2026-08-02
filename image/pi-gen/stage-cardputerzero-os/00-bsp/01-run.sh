@@ -233,12 +233,14 @@ apt-get autoremove -y --purge
 for group in input spi i2c gpio; do
     groupadd -f -r "$group"
 done
-for group in adm dialout audio users sudo video input gpio spi i2c netdev render; do
-    adduser "$FIRST_USER_NAME" "$group"
-done
-if [ -n "${PUBKEY_SSH_FIRST_USER:-}" ]; then
-    chown -R "$FIRST_USER_NAME:$FIRST_USER_NAME" \
-        "/home/$FIRST_USER_NAME/.ssh"
+if id -u "$FIRST_USER_NAME" >/dev/null 2>&1; then
+    for group in adm dialout audio users sudo video input gpio spi i2c netdev render; do
+        adduser "$FIRST_USER_NAME" "$group"
+    done
+    if [ -n "${PUBKEY_SSH_FIRST_USER:-}" ]; then
+        chown -R "$FIRST_USER_NAME:$FIRST_USER_NAME" \
+            "/home/$FIRST_USER_NAME/.ssh"
+    fi
 fi
 usermod --lock root
 
@@ -253,7 +255,11 @@ locale -a | grep -qx 'zh_CN.utf8'
 printf '%s\n' "$TIMEZONE_DEFAULT" >/etc/timezone
 ln -sf "/usr/share/zoneinfo/$TIMEZONE_DEFAULT" /etc/localtime
 if [ -n "${WPA_COUNTRY:-}" ]; then
-    SUDO_USER="$FIRST_USER_NAME" raspi-config nonint do_wifi_country "$WPA_COUNTRY"
+    raspi_config_user=$FIRST_USER_NAME
+    if ! id -u "$raspi_config_user" >/dev/null 2>&1; then
+        raspi_config_user=root
+    fi
+    SUDO_USER="$raspi_config_user" raspi-config nonint do_wifi_country "$WPA_COUNTRY"
 fi
 
 systemctl disable \
@@ -330,10 +336,13 @@ else
     on_chroot <<'CHROOT'
 set -e
 test "$FIRST_USER_NAME" = cp0-build
-build_uid=$(id -u "$FIRST_USER_NAME")
+build_uid=1000
 rm -f "/etc/sudoers.d/010_${FIRST_USER_NAME}-nopasswd" \
     /etc/sudoers.d/010_pi-nopasswd
-userdel --remove "$FIRST_USER_NAME"
+if getent passwd "$FIRST_USER_NAME" >/dev/null 2>&1; then
+    test "$(id -u "$FIRST_USER_NAME")" = "$build_uid"
+    userdel --remove "$FIRST_USER_NAME"
+fi
 if getent passwd "$FIRST_USER_NAME" >/dev/null 2>&1 ||
    find / -xdev -uid "$build_uid" -print -quit 2>/dev/null | grep -q .; then
     echo "error: temporary product build identity remains" >&2
