@@ -110,8 +110,18 @@ else
     record FAIL data-expanded "cp0-data does not reach the final 1 MiB"
 fi
 partition_bytes=$(blockdev --getsize64 /dev/mmcblk0p3 2>/dev/null || true)
-filesystem_bytes=$(findmnt -b -n -o FS-SIZE \
-    --target /run/cardputerzero-data 2>/dev/null || true)
+filesystem_header=$(dumpe2fs -h /dev/mmcblk0p3 2>/dev/null || true)
+filesystem_block_count=$(awk -F: \
+    '$1 == "Block count" { gsub(/[[:space:]]/, "", $2); print $2 }' \
+    <<<"$filesystem_header")
+filesystem_block_size=$(awk -F: \
+    '$1 == "Block size" { gsub(/[[:space:]]/, "", $2); print $2 }' \
+    <<<"$filesystem_header")
+filesystem_bytes=unknown
+if [[ $filesystem_block_count =~ ^[0-9]+$ &&
+    $filesystem_block_size =~ ^[0-9]+$ ]]; then
+    filesystem_bytes=$((filesystem_block_count * filesystem_block_size))
+fi
 if [[ $partition_bytes =~ ^[0-9]+$ && $filesystem_bytes =~ ^[0-9]+$ ]] &&
     ((filesystem_bytes >= partition_bytes - 16 * 1024 * 1024)); then
     record PASS data-filesystem-expanded \
@@ -147,6 +157,7 @@ for unit in \
     cardputerzero-documentd.socket \
     cardputerzero-audiod.socket \
     cardputerzero-camerad.socket \
+    cardputerzero-displayd.socket \
     cardputerzero-gpiod.socket \
     cardputerzero-radiod.socket \
     cardputerzero-storaged.socket \
@@ -158,8 +169,9 @@ require_socket appd /run/cardputerzero-appd/control.sock 660:root:cp0-control
 require_socket runtime /run/cardputerzero-broker/runtime.sock 666:root:root
 require_socket network /run/cardputerzero-networkd/network.sock 600:root:root
 require_socket documents /run/cardputerzero-documentd/documents.sock 600:root:root
-require_socket audio /run/cardputerzero-audiod/audio.sock 600:root:root
+require_socket audio /run/cardputerzero-audiod/audio.sock 660:root:cp0-audio-control
 require_socket camera /run/cardputerzero-camerad/camera.sock 600:root:root
+require_socket display /run/cardputerzero-displayd/display.sock 660:root:cp0-display-control
 require_socket gpio /run/cardputerzero-gpiod/gpio.sock 600:root:root
 require_socket radio /run/cardputerzero-radiod/radio.sock 600:root:root
 require_socket storage /run/cardputerzero-storaged/storage.sock 600:root:root

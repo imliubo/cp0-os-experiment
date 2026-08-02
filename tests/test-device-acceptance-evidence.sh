@@ -54,12 +54,13 @@ for unit in cardputerzero-overlay-root-status.service \
     cardputerzero-appd.service seatd.service cardputerzero-appd.socket \
     cardputerzero-broker.socket cardputerzero-networkd.socket \
     cardputerzero-documentd.socket cardputerzero-audiod.socket \
-    cardputerzero-camerad.socket cardputerzero-gpiod.socket \
+    cardputerzero-camerad.socket cardputerzero-displayd.socket \
+    cardputerzero-gpiod.socket \
     cardputerzero-radiod.socket cardputerzero-storaged.socket \
     cardputerzero-stored.socket; do
     check "$factory" PASS "unit:$unit"
 done
-for socket in appd runtime network documents audio camera gpio radio storage store; do
+for socket in appd runtime network documents audio camera display gpio radio storage store; do
     check "$factory" PASS "socket:$socket"
 done
 "$verifier" factory "$factory" >/dev/null

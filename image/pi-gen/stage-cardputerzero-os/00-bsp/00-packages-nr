@@ -2,6 +2,7 @@ alsa-utils
 apparmor
 bubblewrap
 ca-certificates
+firmware-brcm80211
 iw
 jq
 libdrm-tests

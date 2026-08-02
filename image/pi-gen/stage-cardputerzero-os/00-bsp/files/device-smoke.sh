@@ -112,7 +112,20 @@ else
     fail battery "bq27220 power supply missing"
 fi
 
-for node in /dev/i2c-1 /dev/spidev0.1 /dev/video0; do
+i2c_device_count=$(find /sys/bus/i2c/devices -maxdepth 1 -type l -name '1-*' |
+    wc -l)
+if [[ -d /sys/bus/i2c/devices/i2c-1 ]]; then
+    if [[ -e /dev/i2c-1 ]]; then
+        i2c_access="raw node present"
+    else
+        i2c_access="raw access disabled"
+    fi
+    pass i2c-bus "i2c-1 registered, devices=$i2c_device_count, $i2c_access"
+else
+    fail i2c-bus "kernel i2c-1 bus missing"
+fi
+
+for node in /dev/spidev0.1 /dev/video0; do
     if [[ -e "$node" ]]; then
         pass "device-${node##*/}" "$node"
     else

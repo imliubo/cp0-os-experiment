@@ -9,9 +9,26 @@
 
 - appd 应用详情、安装时间、包/数据大小、卸载协议，以及 Settings 分组、应用管理、
   硬件诊断和官方 Fn 快捷键的本地实现与像素回归已完成；
+- Shell-only `cp0-displayd`、固定背光 sysfs、5%-100% 安全范围、Fn+U/Fn+I 和
+  Settings 统一控制路径已完成；真机发现并修复了 sysfs 属性被拆成两次写入时的错误误报，
+  broker 的 65/75 写入与回读已通过，实体 Fn 浮层和输入延迟仍待人工门禁；
+- 2026-08-02 真机已确认普通登录用户不能直接读取受保护的 brightness 属性；
+  `cp0-displayd`、Shell、appd 和 audiod 均为 active 且重启计数为 0；
+- ES8389 真机已通过 DACL/DACR/Speaker 音量与静音回读、角色拒绝、单声道 SDK 播放到
+  双声道硬件转换，以及显式启动 capture 后的双声道到单声道录音；实体 Fn 键与 LCD 浮层
+  仍需人工观察确认；
+- factory gate 已在 V0.6 通过并由本地验证器独立复核；LCD、键盘、音频、电池、I2C-1
+  的 6 个从设备、不可变根、数据分区和全部 broker 均通过，唯一警告是未连接相机；
+- 真机发现并修复 factory ext4 容量统计、音频 socket 旧权限、compositor 安装组前置条件、
+  app-platform 无效 systemctl wait 门禁及 socket 未重建五个部署问题；
+- SDIO BCM43439 已被内核探测，但已烧录镜像遗漏 `firmware-brcm80211`；镜像包清单和
+  成品门禁已修正，Wi-Fi 与候选冷启动必须在下次烧录后验收；
 - ARM64 compositor 构建现由仓库内 builder 定义复现，`make check` 与 AArch64 构建仍须在
   每个本地里程碑通过；
-- 真实硬件写入、LCD 覆盖层、输入延迟和持久性仍由 X4 真机门禁确认。
+- 最终 RAM-overlay 候选的 60 秒采样为核心进程 CPU 1.306%、SD 写入 0、最低可用内存
+  212.7 MiB；202.1 MiB 派生已用内存仍超过 180 MiB 产品上限，Shell 激活时间也受热重启
+  影响，因此不能替代下次烧录后的冷启动性能证据；
+- LCD 覆盖层、输入延迟和持久性仍由 X4 真机门禁确认。
 
 ### Store 产品化
 
@@ -69,7 +86,7 @@
 - 部署最新 Home、稳定性硬互锁、Phase 6F 限制和 Store 本地改动；
 - 正常重启并确认 Home、开机时序和服务连续性；
 - 执行 factory、performance、capability full 和 persistence-only 证据；
-- 完成音频播放/录音/拒绝权限真机验收；
+- [x] 完成音频播放/录音/拒绝权限真机验收；
 - 完成 GPIO 读写/拒绝权限/sysfs 收紧真机验收；
 - 完成私有存储持久化、配额和跨应用隔离真机验收；
 - 完成 Store 刷新、续传、安装、升级、离线和过期拒绝六步验收。

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-delay=${CP0_DISPLAY_RETRY_DELAY:-1}
+delay=${CP0_DISPLAY_RETRY_DELAY:-8}
 sleep "$delay"
 
 # The SPI panel can miss its early fbdev initialization. A compositor restart

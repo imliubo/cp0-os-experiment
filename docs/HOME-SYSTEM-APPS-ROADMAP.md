@@ -8,9 +8,12 @@ keyboard driven, and every view fits the fixed 320x170 framebuffer below the
 21-pixel trusted status bar.
 
 The first release exposes only data and operations with an existing trusted
-control path. Wi-Fi provisioning, saved-network management, display brightness
-and idle timeout need new privileged brokers and are intentionally not
-represented as working controls in this release.
+control path. Display brightness uses the Shell-only `cp0-displayd` path and
+its V0.6 sysfs control has passed physical readback. Wi-Fi provisioning,
+saved-network management and idle timeout still need new privileged providers
+and are intentionally not represented as working controls. The flashed image
+also lacks the BCM43439 firmware; the image package fix must be flashed before
+the future Wi-Fi broker can be accepted.
 
 ## View specification
 
@@ -87,10 +90,12 @@ represented as working controls in this release.
 
 ### H4: deferred device acceptance
 
-- [ ] After the no-deploy window, package the candidate without changing the
+- [x] After the no-deploy window, package the candidate without changing the
   current device first.
-- [ ] Deploy only with explicit approval, then validate LCD pixels, physical
-  keyboard navigation, live telemetry and service restart behavior.
+- [x] Deploy only with explicit approval, then validate LCD pixels, physical
+  keyboard navigation, live telemetry and service restart behavior. Physical
+  keys were operator-confirmed and the final trusted-capture run retained 116
+  exact 320x170 LCD frames; battery/I2C telemetry and service restart also pass.
 - [ ] Confirm memory/CPU/SD-write budgets and close any hardware-only defects.
 
 No H4 action is part of the local development window ending around

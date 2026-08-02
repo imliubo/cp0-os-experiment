@@ -52,8 +52,9 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
   像素回归；分项计划见 `HOME-SYSTEM-APPS-ROADMAP.md`，真机部署延后到
   2026-08-02 00:45 CST 之后。
 - [x] 在本机完成手机式系统设置、完整应用管理、硬件诊断和官方 Fn 快捷键所有权；
-  compositor 所有的 ESC 长按 Home 已完成本地实现和测试，受限硬件写服务及真机验收按
-  `SYSTEM-EXPERIENCE-ROADMAP.md` 的 X4 阶段继续，当前未部署真机。
+  compositor 所有的 ESC 长按 Home 和 Shell-only 背光 broker 已完成本地实现和测试，
+  其余受限硬件写服务及真机验收按 `SYSTEM-EXPERIENCE-ROADMAP.md` 的 X4 阶段继续，
+  当前未部署真机。
 - [x] 完成本地 Store Today/Apps/Search/Updates、小屏物理键盘搜索、最近查询、
   有界分页、stale 浏览门禁和严格 SemVer 更新计算；真机部署等待当前稳定性周期结束。
 - [ ] 完成 24 小时 compositor/Shell/appd 真机稳定性、内存泄漏及 SD 写入验收；

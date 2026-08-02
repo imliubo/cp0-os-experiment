@@ -39,7 +39,9 @@ profile:    CONFIG_CARDPUTERO_V0_5=y
 V0.6 冷启动真机还观察到早期 fbdev 初始化未被面板接受，而后续 compositor
 disable/enable 会可靠发送完整的 ST7789 soft-reset、sleep-out 和 display-on 序列。
 产品镜像因此在 System Shell 首次就绪后执行一次有界的 compositor 重启；服务为
-oneshot，不在 recovery 镜像启用，也不会形成重启循环。
+oneshot，不在 recovery 镜像启用，也不会形成重启循环。2026-08-02 摄像头复验发现
+1 秒重试仍可能早于面板稳定窗口，而稍后的手动 disable/enable 可立即恢复 Home；
+默认重试延迟因此调整为 8 秒，最终冷启动门禁须在包含该改动的新镜像上完成。
 
 ## 构建最小镜像
 
@@ -107,8 +109,10 @@ CP0_RESUME_BUILD=1 ./image/build-image.sh
   192 MiB；
 - 首次扩容启动到 `multi-user.target` 为 27.7 秒，后续稳定启动为 18.1 秒；
 - LCD、RGB565 framebuffer、TCA8418 键盘、ES8389 音频、电池、memory cgroup
-  和 AppArmor smoke test 全部通过，`failures=0`；未接相机与未暴露通用
-  `/dev/i2c-1` 记录为非阻塞警告；
+  和 AppArmor smoke test 全部通过，`failures=0`；未接相机记录为非阻塞警告；
+- 2026-08-02 复验确认内核 I2C-1 总线及 6 个从设备正常，产品不暴露通用
+  `/dev/i2c-1`；smoke 以 sysfs 总线存在为门禁，并把 raw access disabled 记录为
+  安全状态而不是硬件警告；
 - 首次扩容后 ext4 会运行一次 `ext4lazyinit` 初始化新增 inode table；该线程退出后，
   20 秒稳定采样窗口仅写入约 16 KiB，journald 保持 volatile；
 - 32 GB 卡的根分区和 ext4 在首次启动自动从 976 MiB 扩展到 28.2 GiB；服务完成后
@@ -183,5 +187,10 @@ cp cardputerzero-os-backup/20260730T075924Z/cmdline.txt ./cmdline.txt
 PipeWire、PackageKit、Cloud Init、Avahi、RPC/NFS、UDisks、ModemManager、
 Raspberry Pi Connect 和自动 apt 定时任务均不属于基础系统。Bluetooth 服务和工具
 暂不安装，后续由权限 broker 接管时再加入。
+
+2026-08-02 真机确认 SDIO BCM43439 可被 `brcmfmac` 探测，但旧镜像遗漏固件，
+导致 `wlan0` 未创建。产品镜像现在强制安装 Raspberry Pi 仓库的
+`firmware-brcm80211`，成品镜像门禁也要求该包存在；Wi-Fi 控制仍须通过后续的
+Shell-only network settings broker，不能直接暴露 NetworkManager 权限。
 
 设备使用 192 MB zram，禁止 zram writeback 和磁盘 swap，避免持续写 SD 卡。

@@ -147,12 +147,13 @@ validate_factory() {
         cardputerzero-appd.service seatd.service cardputerzero-appd.socket \
         cardputerzero-broker.socket cardputerzero-networkd.socket \
         cardputerzero-documentd.socket cardputerzero-audiod.socket \
-        cardputerzero-camerad.socket cardputerzero-gpiod.socket \
+        cardputerzero-camerad.socket cardputerzero-displayd.socket \
+        cardputerzero-gpiod.socket \
         cardputerzero-radiod.socket cardputerzero-storaged.socket \
         cardputerzero-stored.socket; do
         require_pass "unit:$item"
     done
-    for item in appd runtime network documents audio camera gpio radio storage store; do
+    for item in appd runtime network documents audio camera display gpio radio storage store; do
         require_pass "socket:$item"
     done
     [[ ${summary[warning_count]} == $((check_warnings + smoke_warnings)) ]] ||
