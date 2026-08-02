@@ -5,6 +5,7 @@
 #include "cp0_audio_settings_client.h"
 #include "cp0_connectivity_client.h"
 #include "cp0_display_client.h"
+#include "cp0_provision_client.h"
 #include "cp0_screenshot_store.h"
 #include "cp0_shell_settings.h"
 #include "cp0_store_client.h"
@@ -114,6 +115,175 @@ static unsigned int shm_serial;
 static void shell_redraw(struct shell *shell);
 static void begin_screenshot(struct shell *shell);
 static void maybe_create_capture_source(struct shell *shell);
+static void poll_app_catalog(struct shell *shell);
+static void poll_store_catalog(struct shell *shell);
+static void poll_display_state(struct shell *shell);
+static void poll_audio_output_state(struct shell *shell);
+static void poll_connectivity_state(struct shell *shell);
+
+static void apply_provision_status(struct shell *shell,
+                                   const struct cp0_provision_status *status,
+                                   bool show_complete)
+{
+    cp0_ui_setup_resume(&shell->ui, (unsigned int)status->phase,
+                        status->hostname, status->display_name,
+                        status->username, status->ssh_enabled);
+    if (strcmp(status->locale, "zh_CN.UTF-8") == 0)
+        shell->ui.setup_language = 1;
+    static const char *countries[] = {"CN", "US", "GB", "DE", "JP"};
+    static const char *timezones[] = {
+        "Asia/Shanghai", "America/Los_Angeles", "Europe/London",
+        "Europe/Berlin", "Asia/Tokyo",
+    };
+    for (unsigned int index = 0; index < 5; index++) {
+        if (strcmp(status->country, countries[index]) == 0)
+            shell->ui.setup_country = index;
+        if (strcmp(status->timezone, timezones[index]) == 0)
+            shell->ui.setup_timezone = index;
+    }
+    if (status->network_kind == CP0_PROVISION_NETWORK_ETHERNET)
+        shell->ui.setup_network = 0;
+    else if (status->network_kind == CP0_PROVISION_NETWORK_WIFI)
+        shell->ui.setup_network = 1;
+    else if (status->network_kind == CP0_PROVISION_NETWORK_OFFLINE)
+        shell->ui.setup_network = 2;
+    if (status->phase == CP0_PROVISION_COMPLETE && !show_complete)
+        shell->ui.setup_active = false;
+}
+
+static void initialize_provisioning(struct shell *shell)
+{
+    struct cp0_provision_status status = {0};
+    char error[CP0_PROVISION_ERROR_MAX + 1] = {0};
+    int result = cp0_provision_get_status(&status, error);
+    if (result == CP0_PROVISION_OK) {
+        apply_provision_status(shell, &status, false);
+        return;
+    }
+    cp0_ui_setup_begin(&shell->ui,
+                       result == CP0_PROVISION_REPAIR_REQUIRED
+                           ? CP0_UI_SETUP_REPAIR
+                           : CP0_UI_SETUP_ERROR);
+    snprintf(shell->ui.setup_error, sizeof(shell->ui.setup_error), "%s",
+             error[0] != '\0' ? error : "Provisioning service is unavailable");
+}
+
+static void begin_normal_shell(struct shell *shell)
+{
+    shell->ui.setup_active = false;
+    shell->ui.screen = CP0_UI_HOME;
+    shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+    cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                          shell->overlay_mode);
+    poll_app_catalog(shell);
+    poll_store_catalog(shell);
+    poll_display_state(shell);
+    poll_audio_output_state(shell);
+    poll_connectivity_state(shell);
+}
+
+static void handle_setup_event(struct shell *shell, enum cp0_ui_event event)
+{
+    struct cp0_provision_status status = {0};
+    struct cp0_provision_wifi_list wifi = {0};
+    char error[CP0_PROVISION_ERROR_MAX + 1] = {0};
+    int result = CP0_PROVISION_FAILED;
+
+    if (event == CP0_UI_EVENT_SETUP_RETRY) {
+        result = cp0_provision_get_status(&status, error);
+        if (result == CP0_PROVISION_OK)
+            apply_provision_status(shell, &status, true);
+        else if (result == CP0_PROVISION_REPAIR_REQUIRED)
+            cp0_ui_setup_begin(&shell->ui, CP0_UI_SETUP_REPAIR);
+        else
+            cp0_ui_setup_result(&shell->ui, event, false, error);
+        return;
+    }
+    if (event == CP0_UI_EVENT_SETUP_START) {
+        result = cp0_provision_get_status(&status, error);
+        if (result == CP0_PROVISION_OK &&
+            status.phase == CP0_PROVISION_COMPLETE)
+            begin_normal_shell(shell);
+        else
+            cp0_ui_setup_result(&shell->ui, event, false,
+                                error[0] != '\0' ? error
+                                                 : "Setup is not complete");
+        return;
+    }
+    if (event == CP0_UI_EVENT_SETUP_COMMIT ||
+        event == CP0_UI_EVENT_SETUP_CONNECT_WIFI) {
+        shell_redraw(shell);
+        wl_display_flush(shell->display);
+    }
+    switch (event) {
+    case CP0_UI_EVENT_SETUP_SET_REGION:
+        result = cp0_provision_set_region(
+            cp0_ui_setup_locale(&shell->ui),
+            cp0_ui_setup_country_code(&shell->ui),
+            cp0_ui_setup_timezone_name(&shell->ui), shell->ui.setup_hostname,
+            &status, error);
+        break;
+    case CP0_UI_EVENT_SETUP_SET_OWNER:
+        result = cp0_provision_set_owner(
+            shell->ui.setup_display_name, shell->ui.setup_username, &status,
+            error);
+        break;
+    case CP0_UI_EVENT_SETUP_SET_PASSWORD:
+        result = cp0_provision_set_password(shell->ui.setup_password, &status,
+                                            error);
+        memset(shell->ui.setup_password_confirm, 0,
+               sizeof(shell->ui.setup_password_confirm));
+        break;
+    case CP0_UI_EVENT_SETUP_LIST_WIFI:
+        result = cp0_provision_list_wifi(&wifi, error);
+        if (result == CP0_PROVISION_OK) {
+            struct cp0_ui_setup_wifi options[CP0_UI_SETUP_WIFI_MAX];
+            size_t count = wifi.count;
+            if (count > CP0_UI_SETUP_WIFI_MAX)
+                count = CP0_UI_SETUP_WIFI_MAX;
+            for (size_t index = 0; index < count; index++) {
+                options[index] = (struct cp0_ui_setup_wifi){
+                    .security = (unsigned int)wifi.networks[index].security,
+                    .signal_percent = wifi.networks[index].signal_percent,
+                    .connected = wifi.networks[index].connected,
+                    .ssid = wifi.networks[index].ssid,
+                };
+            }
+            cp0_ui_setup_set_wifi(&shell->ui, options, count);
+            return;
+        }
+        break;
+    case CP0_UI_EVENT_SETUP_CONNECT_WIFI: {
+        unsigned int selected = shell->ui.setup_wifi_selected;
+        if (selected >= shell->ui.setup_wifi_count) {
+            snprintf(error, sizeof(error), "Select a Wi-Fi network");
+            break;
+        }
+        result = cp0_provision_connect_wifi(
+            shell->ui.setup_wifi_ssids[selected],
+            (enum cp0_provision_wifi_security)
+                shell->ui.setup_wifi_security[selected],
+            shell->ui.setup_wifi_password, false, &status, error);
+        break;
+    }
+    case CP0_UI_EVENT_SETUP_USE_ETHERNET:
+        result = cp0_provision_use_ethernet(&status, error);
+        break;
+    case CP0_UI_EVENT_SETUP_USE_OFFLINE:
+        result = cp0_provision_use_offline(&status, error);
+        break;
+    case CP0_UI_EVENT_SETUP_SET_SSH:
+        result = cp0_provision_set_ssh_enabled(
+            shell->ui.setup_ssh_enabled, &status, error);
+        break;
+    case CP0_UI_EVENT_SETUP_COMMIT:
+        result = cp0_provision_commit(&status, error);
+        break;
+    default:
+        return;
+    }
+    cp0_ui_setup_result(&shell->ui, event, result == CP0_PROVISION_OK, error);
+}
 
 static void cancel_notification(struct shell *shell, bool restore_mode)
 {
@@ -1277,7 +1447,10 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
 {
     enum cp0_ui_screen previous_screen = shell->ui.screen;
     enum cp0_ui_event event = cp0_ui_handle_action(&shell->ui, action);
-    if (event == CP0_UI_EVENT_PERMISSION_ONCE ||
+    if (event >= CP0_UI_EVENT_SETUP_SET_REGION &&
+        event <= CP0_UI_EVENT_SETUP_START) {
+        handle_setup_event(shell, event);
+    } else if (event == CP0_UI_EVENT_PERMISSION_ONCE ||
         event == CP0_UI_EVENT_PERMISSION_ALWAYS ||
         event == CP0_UI_EVENT_PERMISSION_DENY) {
         static const enum cp0_permission_choice choices[] = {
@@ -1705,6 +1878,11 @@ static void handle_system_action(void *data,
     default:
         return;
     }
+    if (shell->ui.setup_active) {
+        if (action != CP0_SYSTEM_SHELL_V1_ACTION_SCREENSHOT)
+            handle_ui_action(shell, ui_action);
+        return;
+    }
     if (action == CP0_SYSTEM_SHELL_V1_ACTION_SCREENSHOT) {
         begin_screenshot(shell);
         return;
@@ -1971,10 +2149,25 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
         shell->shift_pressed = pressed;
         return;
     }
-    if (pressed && key != KEY_LEFTMETA && key != KEY_RIGHTMETA &&
+    if (pressed && !shell->ui.setup_active && key != KEY_LEFTMETA &&
+        key != KEY_RIGHTMETA &&
         shell->ui.key_sounds && shell->ui.volume_available &&
         !shell->ui.muted)
         (void)cp0_audio_play_key_click();
+    if (pressed && cp0_ui_setup_accepts_text(&shell->ui)) {
+        bool handled = false;
+        if (key == KEY_BACKSPACE)
+            handled = cp0_ui_setup_backspace(&shell->ui);
+        else {
+            char character = search_character(key, shell->shift_pressed);
+            if (character != '\0')
+                handled = cp0_ui_setup_input_ascii(&shell->ui, character);
+        }
+        if (handled) {
+            shell_redraw(shell);
+            return;
+        }
+    }
     if (pressed && cp0_ui_store_accepts_text(&shell->ui)) {
         enum cp0_ui_event event = CP0_UI_EVENT_NONE;
         bool handled = false;
@@ -2198,6 +2391,7 @@ static bool shell_connect(struct shell *shell)
     shell->height = CP0_UI_HEIGHT;
     cp0_ui_init(&shell->ui);
     load_shell_preferences(shell);
+    initialize_provisioning(shell);
     shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     shell->display = wl_display_connect(NULL);
     if (shell->display == NULL) {
@@ -2297,11 +2491,13 @@ static int shell_dispatch(struct shell *shell)
 {
     int display_fd = wl_display_get_fd(shell->display);
 
-    poll_app_catalog(shell);
-    poll_store_catalog(shell);
-    poll_display_state(shell);
-    poll_audio_output_state(shell);
-    poll_connectivity_state(shell);
+    if (!shell->ui.setup_active) {
+        poll_app_catalog(shell);
+        poll_store_catalog(shell);
+        poll_display_state(shell);
+        poll_audio_output_state(shell);
+        poll_connectivity_state(shell);
+    }
     shell_redraw(shell);
 
     while (!stop_requested) {
@@ -2358,6 +2554,10 @@ static int shell_dispatch(struct shell *shell)
                     shell->overlay_mode = shell->system_action_restore_mode;
                     cp0_system_shell_v1_set_overlay_mode(shell->system_control,
                                                           shell->overlay_mode);
+                }
+                if (shell->ui.setup_active) {
+                    shell_redraw(shell);
+                    continue;
                 }
                 poll_permission_prompt(shell);
                 poll_document_prompt(shell);

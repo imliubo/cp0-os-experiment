@@ -39,6 +39,13 @@
 #define CP0_UI_STORE_EDITORIAL_COLLECTION_APP_MAX 4
 #define CP0_UI_STORE_EDITORIAL_HEADLINE_MAX 192
 #define CP0_UI_STORE_EDITORIAL_TITLE_MAX 128
+#define CP0_UI_SETUP_TEXT_MAX 128
+#define CP0_UI_SETUP_DISPLAY_NAME_MAX 64
+#define CP0_UI_SETUP_USERNAME_MAX 32
+#define CP0_UI_SETUP_HOSTNAME_MAX 63
+#define CP0_UI_SETUP_PASSWORD_MAX 64
+#define CP0_UI_SETUP_WIFI_MAX 24
+#define CP0_UI_SETUP_ERROR_MAX 160
 
 enum cp0_ui_screen {
     CP0_UI_HOME,
@@ -122,6 +129,45 @@ enum cp0_ui_event {
     CP0_UI_EVENT_TIMEOUT_PREVIOUS,
     CP0_UI_EVENT_TIMEOUT_NEXT,
     CP0_UI_EVENT_KEY_SOUNDS_TOGGLE,
+    CP0_UI_EVENT_SETUP_SET_REGION,
+    CP0_UI_EVENT_SETUP_SET_OWNER,
+    CP0_UI_EVENT_SETUP_SET_PASSWORD,
+    CP0_UI_EVENT_SETUP_LIST_WIFI,
+    CP0_UI_EVENT_SETUP_CONNECT_WIFI,
+    CP0_UI_EVENT_SETUP_USE_ETHERNET,
+    CP0_UI_EVENT_SETUP_USE_OFFLINE,
+    CP0_UI_EVENT_SETUP_SET_SSH,
+    CP0_UI_EVENT_SETUP_COMMIT,
+    CP0_UI_EVENT_SETUP_RETRY,
+    CP0_UI_EVENT_SETUP_START,
+};
+
+enum cp0_ui_setup_page {
+    CP0_UI_SETUP_WELCOME,
+    CP0_UI_SETUP_LANGUAGE,
+    CP0_UI_SETUP_COUNTRY,
+    CP0_UI_SETUP_TIMEZONE,
+    CP0_UI_SETUP_HOSTNAME,
+    CP0_UI_SETUP_DISPLAY_NAME,
+    CP0_UI_SETUP_USERNAME,
+    CP0_UI_SETUP_PASSWORD,
+    CP0_UI_SETUP_PASSWORD_CONFIRM,
+    CP0_UI_SETUP_NETWORK,
+    CP0_UI_SETUP_WIFI_LIST,
+    CP0_UI_SETUP_WIFI_PASSWORD,
+    CP0_UI_SETUP_SSH,
+    CP0_UI_SETUP_REVIEW,
+    CP0_UI_SETUP_APPLYING,
+    CP0_UI_SETUP_COMPLETE,
+    CP0_UI_SETUP_ERROR,
+    CP0_UI_SETUP_REPAIR,
+};
+
+struct cp0_ui_setup_wifi {
+    unsigned int security;
+    unsigned int signal_percent;
+    bool connected;
+    const char *ssid;
 };
 
 enum cp0_ui_screenshot_status {
@@ -329,6 +375,30 @@ struct cp0_ui_document {
 };
 
 struct cp0_ui {
+    bool setup_active;
+    bool setup_show_password;
+    bool setup_ssh_enabled;
+    enum cp0_ui_setup_page setup_page;
+    enum cp0_ui_setup_page setup_error_return_page;
+    unsigned int setup_selected;
+    unsigned int setup_language;
+    unsigned int setup_country;
+    unsigned int setup_timezone;
+    unsigned int setup_network;
+    unsigned int setup_wifi_selected;
+    unsigned int setup_wifi_count;
+    char setup_hostname[CP0_UI_SETUP_HOSTNAME_MAX + 1];
+    char setup_display_name[CP0_UI_SETUP_DISPLAY_NAME_MAX + 1];
+    char setup_username[CP0_UI_SETUP_USERNAME_MAX + 1];
+    char setup_password[CP0_UI_SETUP_PASSWORD_MAX + 1];
+    char setup_password_confirm[CP0_UI_SETUP_PASSWORD_MAX + 1];
+    char setup_wifi_password[CP0_UI_SETUP_PASSWORD_MAX + 1];
+    char setup_error[CP0_UI_SETUP_ERROR_MAX + 1];
+    char setup_wifi_ssids[CP0_UI_SETUP_WIFI_MAX]
+                         [CP0_UI_SETUP_TEXT_MAX + 1];
+    uint8_t setup_wifi_security[CP0_UI_SETUP_WIFI_MAX];
+    uint8_t setup_wifi_signal[CP0_UI_SETUP_WIFI_MAX];
+    bool setup_wifi_connected[CP0_UI_SETUP_WIFI_MAX];
     enum cp0_ui_screen screen;
     unsigned int selected;
     unsigned int app_selected;
@@ -518,6 +588,21 @@ struct cp0_ui {
 };
 
 void cp0_ui_init(struct cp0_ui *ui);
+void cp0_ui_setup_begin(struct cp0_ui *ui, enum cp0_ui_setup_page page);
+void cp0_ui_setup_resume(struct cp0_ui *ui, unsigned int phase,
+                         const char *hostname, const char *display_name,
+                         const char *username, bool ssh_enabled);
+void cp0_ui_setup_set_wifi(struct cp0_ui *ui,
+                           const struct cp0_ui_setup_wifi *networks,
+                           size_t network_count);
+void cp0_ui_setup_result(struct cp0_ui *ui, enum cp0_ui_event event,
+                         bool success, const char *error);
+bool cp0_ui_setup_accepts_text(const struct cp0_ui *ui);
+bool cp0_ui_setup_input_ascii(struct cp0_ui *ui, char character);
+bool cp0_ui_setup_backspace(struct cp0_ui *ui);
+const char *cp0_ui_setup_locale(const struct cp0_ui *ui);
+const char *cp0_ui_setup_country_code(const struct cp0_ui *ui);
+const char *cp0_ui_setup_timezone_name(const struct cp0_ui *ui);
 void cp0_ui_set_status(struct cp0_ui *ui, const char *clock_text,
                        bool network_online, int battery_percent);
 void cp0_ui_set_device_info(struct cp0_ui *ui,

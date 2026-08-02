@@ -414,6 +414,35 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     write_snapshot(directory, "theme-light", ui, frame);
     ui->theme = 2;
     write_snapshot(directory, "theme-high-contrast", ui, frame);
+
+    cp0_ui_init(ui);
+    cp0_ui_setup_begin(ui, CP0_UI_SETUP_WELCOME);
+    write_snapshot(directory, "setup-welcome", ui, frame);
+    ui->setup_page = CP0_UI_SETUP_HOSTNAME;
+    snprintf(ui->setup_hostname, sizeof(ui->setup_hostname), "cp0-bedroom");
+    write_snapshot(directory, "setup-hostname", ui, frame);
+    ui->setup_page = CP0_UI_SETUP_PASSWORD;
+    snprintf(ui->setup_password, sizeof(ui->setup_password), "secret-pass-1");
+    write_snapshot(directory, "setup-password", ui, frame);
+    memset(ui->setup_password, 0, sizeof(ui->setup_password));
+    ui->setup_page = CP0_UI_SETUP_NETWORK;
+    ui->setup_network = 1;
+    write_snapshot(directory, "setup-network", ui, frame);
+    static const struct cp0_ui_setup_wifi setup_wifi[] = {
+        {.security = 2, .signal_percent = 91, .ssid = "Home WiFi"},
+        {.security = 1, .signal_percent = 67, .ssid = "Studio"},
+        {.security = 0, .signal_percent = 35, .ssid = "Guest"},
+    };
+    cp0_ui_setup_set_wifi(ui, setup_wifi, 3);
+    write_snapshot(directory, "setup-wifi", ui, frame);
+    snprintf(ui->setup_hostname, sizeof(ui->setup_hostname), "cp0-bedroom");
+    snprintf(ui->setup_username, sizeof(ui->setup_username), "owner");
+    ui->setup_network = 1;
+    ui->setup_ssh_enabled = false;
+    ui->setup_page = CP0_UI_SETUP_REVIEW;
+    write_snapshot(directory, "setup-review", ui, frame);
+    cp0_ui_setup_begin(ui, CP0_UI_SETUP_REPAIR);
+    write_snapshot(directory, "setup-repair", ui, frame);
 }
 
 int main(int argc, char **argv)
@@ -1351,6 +1380,55 @@ int main(int argc, char **argv)
     cp0_ui_clear_documents(&ui);
     assert(!ui.document_prompt && ui.document_prompt_id == 0);
     assert(cp0_ui_selected_document_id(&ui) == NULL);
+
+    cp0_ui_init(&ui);
+    cp0_ui_setup_begin(&ui, CP0_UI_SETUP_WELCOME);
+    assert(ui.setup_active);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_GO_HOME) == CP0_UI_EVENT_NONE);
+    assert(ui.setup_page == CP0_UI_SETUP_WELCOME);
+    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    assert(ui.setup_page == CP0_UI_SETUP_LANGUAGE);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    assert(strcmp(cp0_ui_setup_locale(&ui), "zh_CN.UTF-8") == 0);
+    ui.setup_page = CP0_UI_SETUP_HOSTNAME;
+    assert(cp0_ui_setup_accepts_text(&ui));
+    assert(!cp0_ui_setup_input_ascii(&ui, ' '));
+    static const char hostname[] = "cp0-test";
+    for (size_t index = 0; index < strlen(hostname); index++)
+        assert(cp0_ui_setup_input_ascii(&ui, hostname[index]));
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_SETUP_SET_REGION);
+    cp0_ui_setup_result(&ui, CP0_UI_EVENT_SETUP_SET_REGION, true, NULL);
+    assert(ui.setup_page == CP0_UI_SETUP_DISPLAY_NAME);
+    snprintf(ui.setup_display_name, sizeof(ui.setup_display_name), "Owner");
+    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    snprintf(ui.setup_username, sizeof(ui.setup_username), "owner");
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_SETUP_SET_OWNER);
+    cp0_ui_setup_result(&ui, CP0_UI_EVENT_SETUP_SET_OWNER, true, NULL);
+    snprintf(ui.setup_password, sizeof(ui.setup_password), "long-password");
+    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    snprintf(ui.setup_password_confirm, sizeof(ui.setup_password_confirm),
+             "long-password");
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_SETUP_SET_PASSWORD);
+    cp0_ui_setup_result(&ui, CP0_UI_EVENT_SETUP_SET_PASSWORD, true, NULL);
+    assert(ui.setup_password[0] == '\0' &&
+           ui.setup_password_confirm[0] == '\0');
+    assert(cp0_ui_handle_action(&ui, CP0_UI_GO_HOME) == CP0_UI_EVENT_NONE);
+    assert(ui.setup_page == CP0_UI_SETUP_NETWORK);
+    static const struct cp0_ui_setup_wifi wifi[] = {
+        {.security = 1, .signal_percent = 80, .ssid = "Lab"},
+    };
+    cp0_ui_setup_set_wifi(&ui, wifi, 1);
+    assert(ui.setup_page == CP0_UI_SETUP_WIFI_LIST && ui.setup_wifi_count == 1);
+    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    assert(ui.setup_page == CP0_UI_SETUP_WIFI_PASSWORD);
+    cp0_ui_setup_result(&ui, CP0_UI_EVENT_SETUP_CONNECT_WIFI, false,
+                        "Connection failed");
+    assert(ui.setup_page == CP0_UI_SETUP_ERROR);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_SETUP_RETRY);
 
     render(&ui, frame);
     if (argc == 2)

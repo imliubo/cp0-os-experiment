@@ -181,6 +181,8 @@ static void format_bytes(char output[16], uint64_t bytes);
 
 static const char *screen_title(const struct cp0_ui *ui)
 {
+    if (ui->setup_active)
+        return "SETUP";
     if (ui->permission_prompt)
         return "PERMISSION";
     if (ui->document_prompt)
@@ -256,6 +258,232 @@ static void draw_status_bar(struct canvas *canvas, const struct cp0_ui *ui)
     draw_text(canvas, 145, 7, ui->clock_text, 1, COLOR_MUTED);
     draw_network_icon(canvas, ui->network_online);
     draw_battery(canvas, ui->battery_percent);
+}
+
+static void draw_setup_footer(struct canvas *canvas, const char *left,
+                              const char *right)
+{
+    fill_rect(canvas, 0, 148, CP0_UI_WIDTH, 22, COLOR_BAR);
+    draw_text(canvas, 8, 156, left, 1, COLOR_MUTED);
+    if (right != NULL)
+        draw_text(canvas, 220, 156, right, 1, COLOR_GREEN);
+}
+
+static void draw_setup_choice(struct canvas *canvas, int y, const char *text,
+                              bool selected)
+{
+    fill_rect(canvas, 12, y, 296, 25,
+              selected ? COLOR_SELECTED : COLOR_SURFACE);
+    stroke_rect(canvas, 12, y, 296, 25, selected ? 2 : 1,
+                selected ? COLOR_GREEN : COLOR_BAR);
+    draw_text(canvas, 22, y + 9, text, 1,
+              selected ? COLOR_TEXT : COLOR_MUTED);
+}
+
+static void draw_setup_input(struct canvas *canvas, const char *value,
+                             bool masked)
+{
+    char visible[45];
+    size_t length = strlen(value);
+    size_t first = length > sizeof(visible) - 2U
+                       ? length - (sizeof(visible) - 2U)
+                       : 0;
+    size_t shown = length - first;
+    if (shown >= sizeof(visible))
+        shown = sizeof(visible) - 1U;
+    for (size_t index = 0; index < shown; index++)
+        visible[index] = masked ? '*' : value[first + index];
+    visible[shown] = '\0';
+    fill_rect(canvas, 12, 82, 296, 34, COLOR_SURFACE);
+    stroke_rect(canvas, 12, 82, 296, 34, 2, COLOR_GREEN);
+    draw_text(canvas, 22, 95, visible, 1, COLOR_TEXT);
+    fill_rect(canvas, 22 + (int)shown * 6, 104, 5, 2, COLOR_GREEN);
+}
+
+static void draw_setup(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    static const char *country_names[] = {
+        "CHINA", "UNITED STATES", "UNITED KINGDOM", "GERMANY", "JAPAN",
+    };
+    static const char *timezone_names[] = {
+        "ASIA/SHANGHAI", "AMERICA/LOS ANGELES", "EUROPE/LONDON",
+        "EUROPE/BERLIN", "ASIA/TOKYO",
+    };
+    char line[64];
+    draw_text(canvas, 12, 31, "CARDPUTERZERO", 2, COLOR_TEXT);
+    switch (ui->setup_page) {
+    case CP0_UI_SETUP_WELCOME:
+        draw_text(canvas, 12, 63, "WELCOME", 2, COLOR_GREEN);
+        draw_text(canvas, 12, 91, "SET UP YOUR DEVICE", 1, COLOR_MUTED);
+        draw_text(canvas, 12, 112, "OWNER AND NETWORK ARE NOT PRESET", 1,
+                  COLOR_MUTED);
+        draw_setup_footer(canvas, "PRIVATE BY DEFAULT", "ENTER START");
+        break;
+    case CP0_UI_SETUP_LANGUAGE:
+        draw_text(canvas, 12, 58, "REGIONAL LOCALE", 1, COLOR_MUTED);
+        draw_setup_choice(canvas, 78, "ENGLISH (US)",
+                          ui->setup_language == 0);
+        draw_setup_choice(canvas, 108, "CHINESE (SIMPLIFIED)",
+                          ui->setup_language == 1);
+        draw_setup_footer(canvas, "LEFT/RIGHT CHANGE", "ENTER NEXT");
+        break;
+    case CP0_UI_SETUP_COUNTRY:
+        draw_text(canvas, 12, 58, "WI-FI REGULATORY COUNTRY", 1, COLOR_MUTED);
+        draw_setup_choice(canvas, 82, country_names[ui->setup_country], true);
+        draw_text(canvas, 12, 121, "UP/DOWN CHANGES LEGAL CHANNELS", 1,
+                  COLOR_YELLOW);
+        draw_setup_footer(canvas, "ESC BACK", "ENTER NEXT");
+        break;
+    case CP0_UI_SETUP_TIMEZONE:
+        draw_text(canvas, 12, 58, "TIME ZONE", 1, COLOR_MUTED);
+        draw_setup_choice(canvas, 82, timezone_names[ui->setup_timezone], true);
+        draw_setup_footer(canvas, "LEFT/RIGHT CHANGE", "ENTER NEXT");
+        break;
+    case CP0_UI_SETUP_HOSTNAME:
+        draw_text(canvas, 12, 58, "DEVICE NAME", 1, COLOR_MUTED);
+        draw_setup_input(canvas, ui->setup_hostname, false);
+        draw_text(canvas, 12, 127, "EXAMPLE: CP0-MYNAME", 1, COLOR_MUTED);
+        draw_setup_footer(canvas, "BACKSPACE EDIT", "ENTER NEXT");
+        break;
+    case CP0_UI_SETUP_DISPLAY_NAME:
+        draw_text(canvas, 12, 58, "OWNER DISPLAY NAME", 1, COLOR_MUTED);
+        draw_setup_input(canvas, ui->setup_display_name, false);
+        draw_setup_footer(canvas, "BACKSPACE EDIT", "ENTER NEXT");
+        break;
+    case CP0_UI_SETUP_USERNAME:
+        draw_text(canvas, 12, 58, "OWNER USERNAME", 1, COLOR_MUTED);
+        draw_setup_input(canvas, ui->setup_username, false);
+        draw_text(canvas, 12, 127, "LOWERCASE LETTERS, NUMBERS, - OR _", 1,
+                  COLOR_MUTED);
+        draw_setup_footer(canvas, "BACKSPACE EDIT", "ENTER NEXT");
+        break;
+    case CP0_UI_SETUP_PASSWORD:
+    case CP0_UI_SETUP_PASSWORD_CONFIRM:
+        draw_text(canvas, 12, 58,
+                  ui->setup_page == CP0_UI_SETUP_PASSWORD ? "OWNER PASSWORD"
+                                                         : "CONFIRM PASSWORD",
+                  1, COLOR_MUTED);
+        draw_setup_input(canvas,
+                         ui->setup_page == CP0_UI_SETUP_PASSWORD
+                             ? ui->setup_password
+                             : ui->setup_password_confirm,
+                         !ui->setup_show_password);
+        snprintf(line, sizeof(line), "%s  %u/10 MIN",
+                 ui->setup_show_password ? "VISIBLE" : "HIDDEN",
+                 (unsigned int)strlen(
+                     ui->setup_page == CP0_UI_SETUP_PASSWORD
+                         ? ui->setup_password
+                         : ui->setup_password_confirm));
+        draw_text(canvas, 12, 127, line, 1, COLOR_MUTED);
+        draw_setup_footer(canvas, "RIGHT SHOW/HIDE", "ENTER NEXT");
+        break;
+    case CP0_UI_SETUP_NETWORK: {
+        static const char *choices[] = {"ETHERNET", "WI-FI", "USE OFFLINE"};
+        draw_text(canvas, 12, 55, "CONNECT THIS DEVICE", 1, COLOR_MUTED);
+        for (unsigned int index = 0; index < 3; index++)
+            draw_setup_choice(canvas, 70 + (int)index * 27, choices[index],
+                              index == ui->setup_network);
+        draw_setup_footer(canvas, "OFFLINE IS ALLOWED", "ENTER SELECT");
+        break;
+    }
+    case CP0_UI_SETUP_WIFI_LIST: {
+        draw_text(canvas, 12, 52, "WI-FI NETWORKS", 1, COLOR_MUTED);
+        if (ui->setup_wifi_count == 0) {
+            draw_text(canvas, 12, 82, "NO NETWORKS FOUND", 1, COLOR_YELLOW);
+            draw_text(canvas, 12, 104, "PRESS RIGHT TO REFRESH", 1,
+                      COLOR_MUTED);
+        } else {
+            unsigned int first = ui->setup_wifi_selected > 2
+                                     ? ui->setup_wifi_selected - 2
+                                     : 0;
+            unsigned int visible = ui->setup_wifi_count - first;
+            if (visible > 3)
+                visible = 3;
+            for (unsigned int row = 0; row < visible; row++) {
+                unsigned int index = first + row;
+                snprintf(line, sizeof(line), "%.35s  %u%% %s",
+                         ui->setup_wifi_ssids[index],
+                         ui->setup_wifi_signal[index],
+                         ui->setup_wifi_security[index] == 0 ? "OPEN" : "LOCK");
+                draw_setup_choice(canvas, 66 + (int)row * 27, line,
+                                  index == ui->setup_wifi_selected);
+            }
+        }
+        draw_setup_footer(canvas, "RIGHT REFRESH", "ENTER CONNECT");
+        break;
+    }
+    case CP0_UI_SETUP_WIFI_PASSWORD:
+        draw_text(canvas, 12, 52, "WI-FI PASSWORD", 1, COLOR_MUTED);
+        snprintf(line, sizeof(line), "%.44s", ui->setup_wifi_count > 0
+                                                   ? ui->setup_wifi_ssids
+                                                         [ui->setup_wifi_selected]
+                                                   : "NETWORK");
+        draw_text(canvas, 12, 66, line, 1, COLOR_TEXT);
+        draw_setup_input(canvas, ui->setup_wifi_password,
+                         !ui->setup_show_password);
+        draw_text(canvas, 12, 127, "8 TO 63 CHARACTERS", 1, COLOR_MUTED);
+        draw_setup_footer(canvas, "RIGHT SHOW/HIDE", "ENTER CONNECT");
+        break;
+    case CP0_UI_SETUP_SSH:
+        draw_text(canvas, 12, 58, "REMOTE ACCESS (SSH)", 1, COLOR_MUTED);
+        draw_setup_choice(canvas, 82,
+                          ui->setup_ssh_enabled ? "ON" : "OFF (RECOMMENDED)",
+                          true);
+        draw_text(canvas, 12, 121, "PASSWORD LOGIN ON YOUR LOCAL NETWORK", 1,
+                  COLOR_YELLOW);
+        draw_setup_footer(canvas, "LEFT/RIGHT CHANGE", "ENTER NEXT");
+        break;
+    case CP0_UI_SETUP_REVIEW:
+        draw_text(canvas, 12, 54, "REVIEW", 1, COLOR_GREEN);
+        snprintf(line, sizeof(line), "OWNER  %.31s", ui->setup_username);
+        draw_text(canvas, 12, 72, line, 1, COLOR_TEXT);
+        snprintf(line, sizeof(line), "DEVICE %.38s", ui->setup_hostname);
+        draw_text(canvas, 12, 90, line, 1, COLOR_TEXT);
+        snprintf(line, sizeof(line), "NETWORK %s",
+                 ui->setup_network == 0
+                     ? "ETHERNET"
+                     : (ui->setup_network == 1 ? "WI-FI" : "OFFLINE"));
+        draw_text(canvas, 12, 108, line, 1, COLOR_TEXT);
+        snprintf(line, sizeof(line), "SSH     %s",
+                 ui->setup_ssh_enabled ? "ON" : "OFF");
+        draw_text(canvas, 12, 126, line, 1, COLOR_TEXT);
+        draw_setup_footer(canvas, "ESC CHANGE", "ENTER APPLY");
+        break;
+    case CP0_UI_SETUP_APPLYING:
+        draw_text(canvas, 12, 64, "APPLYING", 2, COLOR_GREEN);
+        draw_text(canvas, 12, 99, "VERIFYING OWNER AND SYSTEM SETTINGS", 1,
+                  COLOR_MUTED);
+        draw_setup_footer(canvas, "DO NOT POWER OFF", NULL);
+        break;
+    case CP0_UI_SETUP_COMPLETE:
+        draw_text(canvas, 12, 62, "SETUP COMPLETE", 2, COLOR_GREEN);
+        snprintf(line, sizeof(line), "DEVICE %.42s", ui->setup_hostname);
+        draw_text(canvas, 12, 98, line, 1, COLOR_TEXT);
+        draw_text(canvas, 12, 119,
+                  ui->setup_ssh_enabled ? "SSH ENABLED" : "SSH DISABLED", 1,
+                  COLOR_MUTED);
+        draw_setup_footer(canvas, "READY", "ENTER START");
+        break;
+    case CP0_UI_SETUP_ERROR:
+        draw_text(canvas, 12, 55, "SETUP NEEDS ATTENTION", 1, COLOR_RED);
+        draw_wrapped_line(canvas, 12, 80, ui->setup_error, 0, 48, COLOR_TEXT);
+        draw_wrapped_line(canvas, 12, 96, ui->setup_error, 1, 48, COLOR_TEXT);
+        draw_setup_footer(canvas, "CHECK AND RETRY", "ENTER RETRY");
+        break;
+    case CP0_UI_SETUP_REPAIR:
+        draw_text(canvas, 12, 55, "RECOVERY REQUIRED", 1, COLOR_RED);
+        draw_text(canvas, 12, 82, "SETUP DATA IS INCONSISTENT", 1, COLOR_TEXT);
+        draw_text(canvas, 12, 103, "USE THE RECOVERY IMAGE OR FACTORY RESET", 1,
+                  COLOR_MUTED);
+        draw_setup_footer(canvas, "OWNER DATA IS LOCKED", NULL);
+        break;
+    }
+    if (ui->setup_error[0] != '\0' &&
+        ui->setup_page != CP0_UI_SETUP_ERROR &&
+        ui->setup_page != CP0_UI_SETUP_REPAIR) {
+        fill_rect(canvas, 8, 133, 304, 14, COLOR_BG);
+        draw_text_slice(canvas, 12, 136, ui->setup_error, 0, 48, COLOR_RED);
+    }
 }
 
 static void draw_apps_icon(struct canvas *canvas, int x, int y,
@@ -2027,6 +2255,419 @@ void cp0_ui_init(struct cp0_ui *ui)
     memcpy(ui->clock_text, "--:--", sizeof(ui->clock_text));
 }
 
+void cp0_ui_setup_begin(struct cp0_ui *ui, enum cp0_ui_setup_page page)
+{
+    if (ui == NULL || page > CP0_UI_SETUP_REPAIR)
+        return;
+    ui->setup_active = true;
+    ui->setup_page = page;
+    ui->setup_error_return_page = page;
+    ui->setup_show_password = false;
+    ui->setup_error[0] = '\0';
+    ui->power_dialog = false;
+    ui->help_overlay = false;
+    ui->system_action_overlay = false;
+    ui->notification_banner = false;
+}
+
+void cp0_ui_setup_resume(struct cp0_ui *ui, unsigned int phase,
+                         const char *hostname, const char *display_name,
+                         const char *username, bool ssh_enabled)
+{
+    static const enum cp0_ui_setup_page pages[] = {
+        CP0_UI_SETUP_WELCOME,      CP0_UI_SETUP_WELCOME,
+        CP0_UI_SETUP_DISPLAY_NAME, CP0_UI_SETUP_PASSWORD,
+        CP0_UI_SETUP_NETWORK,      CP0_UI_SETUP_SSH,
+        CP0_UI_SETUP_REVIEW,       CP0_UI_SETUP_APPLYING,
+        CP0_UI_SETUP_COMPLETE,     CP0_UI_SETUP_REPAIR,
+    };
+    if (ui == NULL || phase >= sizeof(pages) / sizeof(pages[0]))
+        return;
+    cp0_ui_setup_begin(ui, pages[phase]);
+    copy_optional_text(ui->setup_hostname, sizeof(ui->setup_hostname),
+                       hostname);
+    copy_optional_text(ui->setup_display_name,
+                       sizeof(ui->setup_display_name), display_name);
+    copy_optional_text(ui->setup_username, sizeof(ui->setup_username),
+                       username);
+    ui->setup_ssh_enabled = ssh_enabled;
+}
+
+void cp0_ui_setup_set_wifi(struct cp0_ui *ui,
+                           const struct cp0_ui_setup_wifi *networks,
+                           size_t network_count)
+{
+    if (ui == NULL || (networks == NULL && network_count > 0))
+        return;
+    if (network_count > CP0_UI_SETUP_WIFI_MAX)
+        network_count = CP0_UI_SETUP_WIFI_MAX;
+    memset(ui->setup_wifi_ssids, 0, sizeof(ui->setup_wifi_ssids));
+    memset(ui->setup_wifi_security, 0, sizeof(ui->setup_wifi_security));
+    memset(ui->setup_wifi_signal, 0, sizeof(ui->setup_wifi_signal));
+    memset(ui->setup_wifi_connected, 0, sizeof(ui->setup_wifi_connected));
+    ui->setup_wifi_count = 0;
+    for (size_t index = 0; index < network_count; index++) {
+        unsigned int destination = ui->setup_wifi_count;
+        if (networks[index].security > 2 ||
+            networks[index].signal_percent > 100 ||
+            !copy_optional_text(ui->setup_wifi_ssids[destination],
+                                sizeof(ui->setup_wifi_ssids[destination]),
+                                networks[index].ssid) ||
+            ui->setup_wifi_ssids[destination][0] == '\0')
+            continue;
+        ui->setup_wifi_security[destination] =
+            (uint8_t)networks[index].security;
+        ui->setup_wifi_signal[destination] =
+            (uint8_t)networks[index].signal_percent;
+        ui->setup_wifi_connected[destination] = networks[index].connected;
+        ui->setup_wifi_count++;
+    }
+    ui->setup_wifi_selected = 0;
+    ui->setup_page = CP0_UI_SETUP_WIFI_LIST;
+    ui->setup_error[0] = '\0';
+}
+
+void cp0_ui_setup_result(struct cp0_ui *ui, enum cp0_ui_event event,
+                         bool success, const char *error)
+{
+    if (ui == NULL)
+        return;
+    if (!success) {
+        ui->setup_error_return_page = ui->setup_page;
+        ui->setup_page = CP0_UI_SETUP_ERROR;
+        copy_optional_text(ui->setup_error, sizeof(ui->setup_error), error);
+        if (ui->setup_error[0] == '\0')
+            copy_optional_text(ui->setup_error, sizeof(ui->setup_error),
+                               "Operation failed");
+        return;
+    }
+    ui->setup_error[0] = '\0';
+    switch (event) {
+    case CP0_UI_EVENT_SETUP_SET_REGION:
+        ui->setup_page = CP0_UI_SETUP_DISPLAY_NAME;
+        break;
+    case CP0_UI_EVENT_SETUP_SET_OWNER:
+        ui->setup_page = CP0_UI_SETUP_PASSWORD;
+        break;
+    case CP0_UI_EVENT_SETUP_SET_PASSWORD:
+        memset(ui->setup_password, 0, sizeof(ui->setup_password));
+        memset(ui->setup_password_confirm, 0,
+               sizeof(ui->setup_password_confirm));
+        ui->setup_page = CP0_UI_SETUP_NETWORK;
+        break;
+    case CP0_UI_EVENT_SETUP_CONNECT_WIFI:
+        memset(ui->setup_wifi_password, 0,
+               sizeof(ui->setup_wifi_password));
+        ui->setup_page = CP0_UI_SETUP_SSH;
+        break;
+    case CP0_UI_EVENT_SETUP_USE_ETHERNET:
+    case CP0_UI_EVENT_SETUP_USE_OFFLINE:
+        ui->setup_page = CP0_UI_SETUP_SSH;
+        break;
+    case CP0_UI_EVENT_SETUP_SET_SSH:
+        ui->setup_page = CP0_UI_SETUP_REVIEW;
+        break;
+    case CP0_UI_EVENT_SETUP_COMMIT:
+        ui->setup_page = CP0_UI_SETUP_COMPLETE;
+        break;
+    default:
+        break;
+    }
+}
+
+bool cp0_ui_setup_accepts_text(const struct cp0_ui *ui)
+{
+    if (ui == NULL || !ui->setup_active)
+        return false;
+    return ui->setup_page == CP0_UI_SETUP_HOSTNAME ||
+           ui->setup_page == CP0_UI_SETUP_DISPLAY_NAME ||
+           ui->setup_page == CP0_UI_SETUP_USERNAME ||
+           ui->setup_page == CP0_UI_SETUP_PASSWORD ||
+           ui->setup_page == CP0_UI_SETUP_PASSWORD_CONFIRM ||
+           ui->setup_page == CP0_UI_SETUP_WIFI_PASSWORD;
+}
+
+static char *setup_input_buffer(struct cp0_ui *ui, size_t *capacity)
+{
+    switch (ui->setup_page) {
+    case CP0_UI_SETUP_HOSTNAME:
+        *capacity = sizeof(ui->setup_hostname);
+        return ui->setup_hostname;
+    case CP0_UI_SETUP_DISPLAY_NAME:
+        *capacity = sizeof(ui->setup_display_name);
+        return ui->setup_display_name;
+    case CP0_UI_SETUP_USERNAME:
+        *capacity = sizeof(ui->setup_username);
+        return ui->setup_username;
+    case CP0_UI_SETUP_PASSWORD:
+        *capacity = sizeof(ui->setup_password);
+        return ui->setup_password;
+    case CP0_UI_SETUP_PASSWORD_CONFIRM:
+        *capacity = sizeof(ui->setup_password_confirm);
+        return ui->setup_password_confirm;
+    case CP0_UI_SETUP_WIFI_PASSWORD:
+        *capacity = sizeof(ui->setup_wifi_password);
+        return ui->setup_wifi_password;
+    default:
+        *capacity = 0;
+        return NULL;
+    }
+}
+
+bool cp0_ui_setup_input_ascii(struct cp0_ui *ui, char character)
+{
+    size_t capacity;
+    char *buffer;
+    size_t length;
+    if (!cp0_ui_setup_accepts_text(ui) || character < ' ' ||
+        character > '~')
+        return false;
+    buffer = setup_input_buffer(ui, &capacity);
+    length = strlen(buffer);
+    if (length + 1U >= capacity)
+        return false;
+    if (ui->setup_page == CP0_UI_SETUP_HOSTNAME) {
+        if (character >= 'A' && character <= 'Z')
+            character = (char)(character - 'A' + 'a');
+        if (!((character >= 'a' && character <= 'z') ||
+              (character >= '0' && character <= '9') || character == '-') ||
+            (length == 0 && character == '-'))
+            return false;
+    } else if (ui->setup_page == CP0_UI_SETUP_USERNAME) {
+        if (character >= 'A' && character <= 'Z')
+            character = (char)(character - 'A' + 'a');
+        if (!((character >= 'a' && character <= 'z') ||
+              (length > 0 && character >= '0' && character <= '9') ||
+              (length > 0 && (character == '-' || character == '_'))))
+            return false;
+    } else if (ui->setup_page == CP0_UI_SETUP_DISPLAY_NAME &&
+               character == ':') {
+        return false;
+    }
+    buffer[length] = character;
+    buffer[length + 1U] = '\0';
+    ui->setup_error[0] = '\0';
+    return true;
+}
+
+bool cp0_ui_setup_backspace(struct cp0_ui *ui)
+{
+    size_t capacity;
+    char *buffer;
+    size_t length;
+    if (!cp0_ui_setup_accepts_text(ui))
+        return false;
+    buffer = setup_input_buffer(ui, &capacity);
+    (void)capacity;
+    length = strlen(buffer);
+    if (length == 0)
+        return false;
+    buffer[length - 1U] = '\0';
+    ui->setup_error[0] = '\0';
+    return true;
+}
+
+const char *cp0_ui_setup_locale(const struct cp0_ui *ui)
+{
+    return ui != NULL && ui->setup_language == 1 ? "zh_CN.UTF-8"
+                                                  : "en_US.UTF-8";
+}
+
+const char *cp0_ui_setup_country_code(const struct cp0_ui *ui)
+{
+    static const char *values[] = {"CN", "US", "GB", "DE", "JP"};
+    return ui != NULL && ui->setup_country < 5 ? values[ui->setup_country]
+                                                : "US";
+}
+
+const char *cp0_ui_setup_timezone_name(const struct cp0_ui *ui)
+{
+    static const char *values[] = {
+        "Asia/Shanghai", "America/Los_Angeles", "Europe/London",
+        "Europe/Berlin", "Asia/Tokyo",
+    };
+    return ui != NULL && ui->setup_timezone < 5 ? values[ui->setup_timezone]
+                                                 : "UTC";
+}
+
+static enum cp0_ui_event handle_setup_action(struct cp0_ui *ui,
+                                              enum cp0_ui_action action)
+{
+    ui->setup_error[0] = '\0';
+    if (action == CP0_UI_GO_HOME || action == CP0_UI_SHOW_TASKS ||
+        action == CP0_UI_SHOW_POWER || action == CP0_UI_SCREENSHOT ||
+        action == CP0_UI_HELP)
+        return CP0_UI_EVENT_NONE;
+    switch (ui->setup_page) {
+    case CP0_UI_SETUP_WELCOME:
+        if (action == CP0_UI_ACCEPT)
+            ui->setup_page = CP0_UI_SETUP_LANGUAGE;
+        break;
+    case CP0_UI_SETUP_LANGUAGE:
+        if (action == CP0_UI_LEFT || action == CP0_UI_RIGHT ||
+            action == CP0_UI_UP || action == CP0_UI_DOWN)
+            ui->setup_language = ui->setup_language == 0 ? 1 : 0;
+        else if (action == CP0_UI_ACCEPT)
+            ui->setup_page = CP0_UI_SETUP_COUNTRY;
+        else if (action == CP0_UI_BACK)
+            ui->setup_page = CP0_UI_SETUP_WELCOME;
+        break;
+    case CP0_UI_SETUP_COUNTRY:
+        if (action == CP0_UI_UP)
+            ui->setup_country = (ui->setup_country + 4U) % 5U;
+        else if (action == CP0_UI_DOWN)
+            ui->setup_country = (ui->setup_country + 1U) % 5U;
+        else if (action == CP0_UI_ACCEPT) {
+            ui->setup_timezone = ui->setup_country;
+            ui->setup_page = CP0_UI_SETUP_TIMEZONE;
+        } else if (action == CP0_UI_BACK)
+            ui->setup_page = CP0_UI_SETUP_LANGUAGE;
+        break;
+    case CP0_UI_SETUP_TIMEZONE:
+        if (action == CP0_UI_LEFT)
+            ui->setup_timezone = (ui->setup_timezone + 4U) % 5U;
+        else if (action == CP0_UI_RIGHT)
+            ui->setup_timezone = (ui->setup_timezone + 1U) % 5U;
+        else if (action == CP0_UI_ACCEPT)
+            ui->setup_page = CP0_UI_SETUP_HOSTNAME;
+        else if (action == CP0_UI_BACK)
+            ui->setup_page = CP0_UI_SETUP_COUNTRY;
+        break;
+    case CP0_UI_SETUP_HOSTNAME: {
+        size_t length = strlen(ui->setup_hostname);
+        if (action == CP0_UI_ACCEPT && length > 0 &&
+            ui->setup_hostname[length - 1U] != '-')
+            return CP0_UI_EVENT_SETUP_SET_REGION;
+        if (action == CP0_UI_ACCEPT)
+            copy_optional_text(ui->setup_error, sizeof(ui->setup_error),
+                               "Enter a valid device name");
+        else if (action == CP0_UI_BACK)
+            ui->setup_page = CP0_UI_SETUP_TIMEZONE;
+        break;
+    }
+    case CP0_UI_SETUP_DISPLAY_NAME:
+        if (action == CP0_UI_ACCEPT && ui->setup_display_name[0] != '\0')
+            ui->setup_page = CP0_UI_SETUP_USERNAME;
+        else if (action == CP0_UI_ACCEPT)
+            copy_optional_text(ui->setup_error, sizeof(ui->setup_error),
+                               "Enter the owner name");
+        else if (action == CP0_UI_BACK)
+            ui->setup_page = CP0_UI_SETUP_HOSTNAME;
+        break;
+    case CP0_UI_SETUP_USERNAME:
+        if (action == CP0_UI_ACCEPT && strlen(ui->setup_username) >= 2U &&
+            strcmp(ui->setup_username, "root") != 0 &&
+            strncmp(ui->setup_username, "cp0-", 4) != 0)
+            return CP0_UI_EVENT_SETUP_SET_OWNER;
+        if (action == CP0_UI_ACCEPT)
+            copy_optional_text(ui->setup_error, sizeof(ui->setup_error),
+                               "Username is too short or reserved");
+        else if (action == CP0_UI_BACK)
+            ui->setup_page = CP0_UI_SETUP_DISPLAY_NAME;
+        break;
+    case CP0_UI_SETUP_PASSWORD:
+        if (action == CP0_UI_RIGHT)
+            ui->setup_show_password = !ui->setup_show_password;
+        else if (action == CP0_UI_ACCEPT && strlen(ui->setup_password) >= 10U) {
+            ui->setup_show_password = false;
+            ui->setup_page = CP0_UI_SETUP_PASSWORD_CONFIRM;
+        } else if (action == CP0_UI_ACCEPT)
+            copy_optional_text(ui->setup_error, sizeof(ui->setup_error),
+                               "Password must have at least 10 characters");
+        else if (action == CP0_UI_BACK)
+            ui->setup_page = CP0_UI_SETUP_USERNAME;
+        break;
+    case CP0_UI_SETUP_PASSWORD_CONFIRM:
+        if (action == CP0_UI_RIGHT)
+            ui->setup_show_password = !ui->setup_show_password;
+        else if (action == CP0_UI_ACCEPT &&
+                 strcmp(ui->setup_password, ui->setup_password_confirm) == 0)
+            return CP0_UI_EVENT_SETUP_SET_PASSWORD;
+        else if (action == CP0_UI_ACCEPT)
+            copy_optional_text(ui->setup_error, sizeof(ui->setup_error),
+                               "Passwords do not match");
+        else if (action == CP0_UI_BACK) {
+            memset(ui->setup_password_confirm, 0,
+                   sizeof(ui->setup_password_confirm));
+            ui->setup_page = CP0_UI_SETUP_PASSWORD;
+        }
+        break;
+    case CP0_UI_SETUP_NETWORK:
+        if (action == CP0_UI_UP && ui->setup_network > 0)
+            ui->setup_network--;
+        else if (action == CP0_UI_DOWN && ui->setup_network < 2)
+            ui->setup_network++;
+        else if (action == CP0_UI_ACCEPT && ui->setup_network == 0)
+            return CP0_UI_EVENT_SETUP_USE_ETHERNET;
+        else if (action == CP0_UI_ACCEPT && ui->setup_network == 1)
+            return CP0_UI_EVENT_SETUP_LIST_WIFI;
+        else if (action == CP0_UI_ACCEPT)
+            return CP0_UI_EVENT_SETUP_USE_OFFLINE;
+        else if (action == CP0_UI_BACK)
+            ui->setup_page = CP0_UI_SETUP_PASSWORD;
+        break;
+    case CP0_UI_SETUP_WIFI_LIST:
+        if (action == CP0_UI_UP && ui->setup_wifi_selected > 0)
+            ui->setup_wifi_selected--;
+        else if (action == CP0_UI_DOWN &&
+                 ui->setup_wifi_selected + 1U < ui->setup_wifi_count)
+            ui->setup_wifi_selected++;
+        else if (action == CP0_UI_RIGHT)
+            return CP0_UI_EVENT_SETUP_LIST_WIFI;
+        else if (action == CP0_UI_ACCEPT && ui->setup_wifi_count > 0) {
+            if (ui->setup_wifi_security[ui->setup_wifi_selected] == 0)
+                return CP0_UI_EVENT_SETUP_CONNECT_WIFI;
+            ui->setup_page = CP0_UI_SETUP_WIFI_PASSWORD;
+        } else if (action == CP0_UI_BACK)
+            ui->setup_page = CP0_UI_SETUP_NETWORK;
+        break;
+    case CP0_UI_SETUP_WIFI_PASSWORD:
+        if (action == CP0_UI_RIGHT)
+            ui->setup_show_password = !ui->setup_show_password;
+        else if (action == CP0_UI_ACCEPT &&
+                 strlen(ui->setup_wifi_password) >= 8U)
+            return CP0_UI_EVENT_SETUP_CONNECT_WIFI;
+        else if (action == CP0_UI_ACCEPT)
+            copy_optional_text(ui->setup_error, sizeof(ui->setup_error),
+                               "Wi-Fi password must have 8 characters");
+        else if (action == CP0_UI_BACK) {
+            memset(ui->setup_wifi_password, 0,
+                   sizeof(ui->setup_wifi_password));
+            ui->setup_page = CP0_UI_SETUP_WIFI_LIST;
+        }
+        break;
+    case CP0_UI_SETUP_SSH:
+        if (action == CP0_UI_LEFT || action == CP0_UI_RIGHT ||
+            action == CP0_UI_UP || action == CP0_UI_DOWN)
+            ui->setup_ssh_enabled = !ui->setup_ssh_enabled;
+        else if (action == CP0_UI_ACCEPT)
+            return CP0_UI_EVENT_SETUP_SET_SSH;
+        else if (action == CP0_UI_BACK)
+            ui->setup_page = CP0_UI_SETUP_NETWORK;
+        break;
+    case CP0_UI_SETUP_REVIEW:
+        if (action == CP0_UI_ACCEPT) {
+            ui->setup_page = CP0_UI_SETUP_APPLYING;
+            return CP0_UI_EVENT_SETUP_COMMIT;
+        }
+        if (action == CP0_UI_BACK)
+            ui->setup_page = CP0_UI_SETUP_SSH;
+        break;
+    case CP0_UI_SETUP_COMPLETE:
+        if (action == CP0_UI_ACCEPT)
+            return CP0_UI_EVENT_SETUP_START;
+        break;
+    case CP0_UI_SETUP_ERROR:
+        if (action == CP0_UI_ACCEPT)
+            return CP0_UI_EVENT_SETUP_RETRY;
+        break;
+    case CP0_UI_SETUP_APPLYING:
+    case CP0_UI_SETUP_REPAIR:
+        break;
+    }
+    return CP0_UI_EVENT_NONE;
+}
+
 void cp0_ui_set_device_info(struct cp0_ui *ui,
                             const struct cp0_ui_device_info *info)
 {
@@ -3505,6 +4146,10 @@ bool cp0_ui_tick(struct cp0_ui *ui)
 enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                                         enum cp0_ui_action action)
 {
+    if (ui == NULL)
+        return CP0_UI_EVENT_NONE;
+    if (ui->setup_active)
+        return handle_setup_action(ui, action);
     if (action == CP0_UI_BRIGHTNESS_DOWN || action == CP0_UI_BRIGHTNESS_UP) {
         if (ui->local_simulation && action == CP0_UI_BRIGHTNESS_DOWN)
             ui->brightness_percent = ui->brightness_percent >= 10
@@ -4334,7 +4979,12 @@ void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
     };
     fill_rect(&canvas, 0, 0, width, height, COLOR_BG);
     draw_status_bar(&canvas, ui);
-    draw_page(&canvas, ui);
+    if (ui->setup_active)
+        draw_setup(&canvas, ui);
+    else
+        draw_page(&canvas, ui);
+    if (ui->setup_active)
+        goto apply_theme;
     if (ui->notification_banner && !ui->power_dialog &&
         !ui->settings_confirm && !ui->permission_prompt &&
         !ui->document_prompt && !ui->store_install_prompt)
@@ -4356,6 +5006,7 @@ void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
     else if (ui->system_action_overlay)
         draw_system_action_overlay(&canvas, ui);
 
+apply_theme:
     if (ui->theme != 0) {
         static const uint32_t source[] = {
             COLOR_BG, COLOR_BAR, COLOR_SURFACE, COLOR_SELECTED, COLOR_TEXT,

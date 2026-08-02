@@ -109,6 +109,8 @@ cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$repo_root/system-shell/include/cp0_appd_client.h" \
     "$repo_root/system-shell/include/cp0_audio_settings_client.h" \
     "$repo_root/system-shell/include/cp0_connectivity_client.h" \
+    "$repo_root/system-shell/include/cp0_provision_client.h" \
+    "$repo_root/system-shell/include/cp0_shell_settings.h" \
     "$repo_root/system-shell/include/cp0_display_client.h" \
     "$repo_root/system-shell/include/cp0_screenshot_store.h" \
     "$repo_root/system-shell/include/cp0_store_client.h" \
@@ -118,6 +120,8 @@ cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$repo_root/system-shell/src/appd_client.c" \
     "$repo_root/system-shell/src/audio_settings_client.c" \
     "$repo_root/system-shell/src/connectivity_client.c" \
+    "$repo_root/system-shell/src/provision_client.c" \
+    "$repo_root/system-shell/src/shell_settings.c" \
     "$repo_root/system-shell/src/display_client.c" \
     "$repo_root/system-shell/src/screenshot_store.c" \
     "$repo_root/system-shell/src/store_client.c" \
@@ -146,6 +150,7 @@ cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-documentd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-gpiod" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-networkd" \
+    "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-provisiond" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-radiod" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-recovery" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-storaged" \
@@ -218,6 +223,10 @@ cleanup() {
 trap cleanup EXIT
 
 cp "$repo_root/image/pi-gen/config.example" "$config_file"
+if [[ $access_profile == production ]]; then
+    sed -i.bak 's/^FIRST_USER_NAME=.*/FIRST_USER_NAME=cp0-build/' "$config_file"
+    rm -f "${config_file}.bak"
+fi
 if [[ -n "$image_name" ]]; then
     if [[ ! "$image_name" =~ ^[a-zA-Z0-9._-]+$ ]]; then
         echo "error: CP0_IMAGE_NAME contains unsupported characters" >&2
