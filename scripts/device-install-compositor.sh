@@ -37,6 +37,13 @@ if systemctl --quiet is-active 'cardputerzero-app-*.service'; then
     exit 1
 fi
 
+for group in cp0-control cp0-display-control cp0-audio-control cp0-connectivity-control; do
+    if ! getent group "$group" >/dev/null 2>&1; then
+        groupadd --system "$group"
+    fi
+    usermod -a -G "$group" cp0-shell
+done
+
 systemctl stop cardputerzero-compositor.service
 install -o root -g root -m 0644 \
     "$staging/cardputerzero-compositor.service" \

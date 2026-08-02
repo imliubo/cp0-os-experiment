@@ -69,9 +69,10 @@ up both Weston and the System Shell with zero initial restarts. Weston used
 the Pixman renderer, selected `320x170@30`, and attached the `tca8418c`
 keyboard through libinput. Its cgroup used about 9.8 MiB. The device smoke
 test passed the model, memory, cgroup, AppArmor, LCD, framebuffer, keyboard,
-audio, battery and boot-time checks with no failures. The absent `/dev/i2c-1`
-and `/dev/video0` interfaces remain warnings from the Phase 1 hardware
-baseline rather than Phase 2 regressions.
+audio, battery and boot-time checks with no failures. The optional
+`/dev/video0` interface remains a warning from the Phase 1 hardware baseline
+rather than a Phase 2 regression. The I2C-1 kernel bus is now checked through
+sysfs because the product deliberately does not expose raw `/dev/i2c-1` access.
 
 The first compositor activation also exposed a V0.6-specific handoff issue:
 the framebuffer console could remain in `FB_BLANK_POWERDOWN` even though the

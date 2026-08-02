@@ -21,6 +21,15 @@ install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/cp0_appd_client.h" \
     "${shell_source}/cp0_appd_client.h"
 install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/cp0_audio_settings_client.h" \
+    "${shell_source}/cp0_audio_settings_client.h"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/cp0_connectivity_client.h" \
+    "${shell_source}/cp0_connectivity_client.h"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/cp0_display_client.h" \
+    "${shell_source}/cp0_display_client.h"
+install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/cp0_screenshot_store.h" \
     "${shell_source}/cp0_screenshot_store.h"
 install -D -m 0644 \
@@ -35,6 +44,14 @@ install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/json.c" \
     "${shell_source}/json.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/appd_client.c" \
     "${shell_source}/appd_client.c"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/audio_settings_client.c" \
+    "${shell_source}/audio_settings_client.c"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/connectivity_client.c" \
+    "${shell_source}/connectivity_client.c"
+install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/display_client.c" \
+    "${shell_source}/display_client.c"
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/screenshot_store.c" \
     "${shell_source}/screenshot_store.c"
@@ -169,6 +186,9 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     /tmp/cardputerzero-system-shell/screenshot_store.c \
     /tmp/cardputerzero-system-shell/json.c \
     /tmp/cardputerzero-system-shell/appd_client.c \
+    /tmp/cardputerzero-system-shell/audio_settings_client.c \
+    /tmp/cardputerzero-system-shell/connectivity_client.c \
+    /tmp/cardputerzero-system-shell/display_client.c \
     /tmp/cardputerzero-system-shell/store_client.c \
     /tmp/cardputerzero-system-shell/system_info.c \
     /tmp/cardputerzero-policy/cardputerzero-system-shell-protocol.c \

@@ -5,6 +5,8 @@ use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 use cp0_manifest::AppManifest;
 
@@ -15,6 +17,7 @@ const SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
 const SYSTEMCTL_PATH: &str = "/usr/bin/systemctl";
 const COMPOSITOR_USER: &str = "cp0-compositor";
 const MAX_USAGE_TREE_ENTRIES: usize = 16_384;
+const UNIT_STOP_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagerPaths {
@@ -291,6 +294,20 @@ impl AppManager {
     }
 
     pub fn app_usage(&self, app_id: &str) -> Result<AppUsage, AppManagerError> {
+        let package_bytes = self.package_usage(app_id)?;
+        let data_root = self.paths.layout.data_root.join(app_id);
+        Ok(AppUsage {
+            package_bytes,
+            data_bytes: match fs::symlink_metadata(&data_root) {
+                Ok(_) => tree_bytes(&data_root)
+                    .map_err(|error| AppManagerError::PackageIo("measure data", error))?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+                Err(error) => return Err(AppManagerError::PackageIo("measure data", error)),
+            },
+        })
+    }
+
+    pub fn package_usage(&self, app_id: &str) -> Result<u64, AppManagerError> {
         if !cp0_manifest::is_valid_app_id(app_id) {
             return Err(AppManagerError::NotInstalled(app_id.into()));
         }
@@ -299,17 +316,7 @@ impl AppManager {
             .filter(|account| account.installed_version.is_some())
             .ok_or_else(|| AppManagerError::NotInstalled(app_id.into()))?;
         let package_root = self.paths.layout.apps_root.join(app_id);
-        let data_root = self.paths.layout.data_root.join(app_id);
-        Ok(AppUsage {
-            package_bytes: tree_bytes(&package_root)
-                .map_err(|error| AppManagerError::PackageIo("measure", error))?,
-            data_bytes: match fs::symlink_metadata(&data_root) {
-                Ok(_) => tree_bytes(&data_root)
-                    .map_err(|error| AppManagerError::PackageIo("measure data", error))?,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
-                Err(error) => return Err(AppManagerError::PackageIo("measure data", error)),
-            },
-        })
+        tree_bytes(&package_root).map_err(|error| AppManagerError::PackageIo("measure", error))
     }
 
     pub fn uninstall(&mut self, app_id: &str) -> Result<UninstalledApp, AppManagerError> {
@@ -615,12 +622,8 @@ fn unit_is_active(unit: &str) -> Result<bool, AppManagerError> {
 }
 
 pub(crate) fn wait_for_unit_stopped(unit: &str) -> Result<(), AppManagerError> {
-    let status = Command::new(SYSTEMCTL_PATH)
-        .args(["--quiet", "wait", unit])
-        .status()
-        .map_err(|error| AppManagerError::CommandIo("systemctl", error))?;
-    if !status.success() && unit_is_active(unit)? {
-        return Err(AppManagerError::UnitFailed("wait"));
+    while unit_is_active(unit)? {
+        thread::sleep(UNIT_STOP_POLL_INTERVAL);
     }
     Ok(())
 }

@@ -1283,7 +1283,7 @@ static void draw_device_page(struct canvas *canvas, const struct cp0_ui *ui)
         draw_labeled_value(canvas, 137, "POWER", value, COLOR_MUTED);
     } else {
         static const char *bus_states[] = {"UNKNOWN", "UNAVAILABLE",
-                                           "INACCESSIBLE", "READY"};
+                                           "RESTRICTED", "READY"};
         draw_labeled_value(canvas, 41, "DISPLAY",
                            capability_state(ui->display_state),
                            ui->display_state == 2 ? COLOR_GREEN : COLOR_MUTED);
@@ -1394,18 +1394,30 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
         static const char *labels[] = {"WI-FI", "AIRPLANE MODE", "NETWORK DETAILS",
                                        "BLUETOOTH", "HOTSPOT", "VPN"};
         *label = labels[item];
-        if (item == 0)
-            snprintf(value, 24, "%s", ui->wifi_enabled ? "ON" : "OFF");
-        else if (item == 1)
-            snprintf(value, 24, "%s", ui->airplane_mode ? "ON" : "OFF");
+        if (item == 0) {
+            if (!ui->local_simulation && !ui->connectivity_available)
+                snprintf(value, 24, "UNAVAILABLE");
+            else if (!ui->local_simulation && !ui->wifi_available)
+                snprintf(value, 24, "NO ADAPTER");
+            else
+                snprintf(value, 24, "%s", ui->wifi_enabled ? "ON" : "OFF");
+        } else if (item == 1) {
+            if (!ui->local_simulation && !ui->connectivity_available)
+                snprintf(value, 24, "UNAVAILABLE");
+            else
+                snprintf(value, 24, "%s", ui->airplane_mode ? "ON" : "OFF");
+        }
         else if (item == 2)
             snprintf(value, 24, "%s", ui->network_online ? "CONNECTED" : "OFFLINE");
         else {
-            snprintf(value, 24, "UNAVAILABLE");
+            snprintf(value, 24, "NOT SUPPORTED");
             *available = false;
         }
-        if (item <= 1 && !ui->local_simulation) {
-            snprintf(value, 24, "UNAVAILABLE");
+        if (item == 0 && !ui->local_simulation &&
+            (!ui->connectivity_available || !ui->wifi_available)) {
+            *available = false;
+        } else if (item == 1 && !ui->local_simulation &&
+                   !ui->connectivity_available) {
             *available = false;
         }
         break;
@@ -1419,7 +1431,8 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
             snprintf(value, 24, "%s", themes[ui->theme % 3]);
         else
             snprintf(value, 24, "%s", timeouts[ui->screen_timeout % 4]);
-        if (!ui->local_simulation) {
+        if (item == 0 && !ui->local_simulation &&
+            !ui->brightness_available) {
             snprintf(value, 24, "UNAVAILABLE");
             *available = false;
         }
@@ -1438,7 +1451,7 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
             snprintf(value, 24, "%s", capability_state(ui->audio_state));
             *available = ui->audio_state == 2;
         }
-        if (item <= 2 && !ui->local_simulation) {
+        if (item <= 1 && !ui->local_simulation && !ui->volume_available) {
             snprintf(value, 24, "UNAVAILABLE");
             *available = false;
         }
@@ -1447,16 +1460,19 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
     case 3: {
         static const char *labels[] = {"RESOLUTION", "ROTATION", "MIRROR", "CAMERA ACCESS"};
         *label = labels[item];
-        if (item == 0)
-            snprintf(value, 24, "320 X 170");
+        if (ui->camera_state != 2) {
+            snprintf(value, 24, "NO CAMERA");
+            *available = false;
+        } else if (item == 0)
+            snprintf(value, 24, "NOT CONFIGURED");
         else if (item == 1)
             snprintf(value, 24, "%s", rotations[ui->camera_rotation % 4]);
         else if (item == 2)
             snprintf(value, 24, "%s", ui->camera_mirror ? "ON" : "OFF");
         else
             snprintf(value, 24, "%s", capability_state(ui->camera_state));
-        if (item <= 2 && !ui->local_simulation) {
-            snprintf(value, 24, "UNAVAILABLE");
+        if (item <= 2 && !ui->local_simulation && ui->camera_state == 2) {
+            snprintf(value, 24, "NOT SUPPORTED");
             *available = false;
         }
         break;
@@ -1470,7 +1486,7 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
         else if (item == 3 || item == 4)
             snprintf(value, 24, "ACTION");
         else {
-            snprintf(value, 24, "UNAVAILABLE");
+            snprintf(value, 24, "NOT SUPPORTED");
             *available = false;
         }
         break;
@@ -1488,7 +1504,7 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
         else if (item == 2)
             snprintf(value, 24, "DETAILS");
         else if (item == 3) {
-            snprintf(value, 24, "UNAVAILABLE");
+            snprintf(value, 24, "NOT SUPPORTED");
             *available = false;
         } else if (item == 4 && !ui->auto_update_available) {
             snprintf(value, 24, "UNKNOWN");
@@ -1540,7 +1556,7 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
         else if (item == 4)
             snprintf(value, 24, "DEFAULT");
         else {
-            snprintf(value, 24, "UNAVAILABLE");
+            snprintf(value, 24, "NOT SUPPORTED");
             *available = false;
         }
         break;
@@ -1560,7 +1576,7 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
             snprintf(value, 24, "%s",
                      settings_state(ui->recovery_mode, ui->recovery_mode_allowed));
         else {
-            snprintf(value, 24, "UNAVAILABLE");
+            snprintf(value, 24, "NOT SUPPORTED");
             *available = false;
         }
         break;
@@ -1756,7 +1772,10 @@ static void draw_system_action_overlay(struct canvas *canvas,
     fill_rect(canvas, 62, 25, 196, 60, 0x00090b0cu);
     stroke_rect(canvas, 62, 25, 196, 60, 2, COLOR_GREEN);
     draw_text(canvas, 82, 38, labels[kind], 1, COLOR_TEXT);
-    if (!ui->local_simulation && kind <= 2)
+    if (kind == 0 && !ui->local_simulation && !ui->brightness_available)
+        snprintf(value, sizeof(value), "UNAVAILABLE");
+    else if (!ui->local_simulation && (kind == 1 || kind == 2) &&
+             !ui->volume_available)
         snprintf(value, sizeof(value), "UNAVAILABLE");
     else if (kind == 0)
         snprintf(value, sizeof(value), "%u%%", ui->brightness_percent);
@@ -1801,20 +1820,20 @@ static void draw_help_overlay(struct canvas *canvas)
 
 static void draw_power_dialog(struct canvas *canvas, const struct cp0_ui *ui)
 {
-    static const char *labels[] = {"SLEEP", "RESTART", "CANCEL"};
+    static const char *labels[] = {"SLEEP", "RESTART", "POWER OFF", "CANCEL"};
     fill_rect(canvas, 0, 21, CP0_UI_WIDTH, CP0_UI_HEIGHT - 21, 0x00090b0cu);
     fill_rect(canvas, 36, 35, 248, 105, COLOR_SURFACE);
     stroke_rect(canvas, 36, 35, 248, 105, 2, COLOR_GREEN);
     draw_text(canvas, 54, 52, "POWER", 2, COLOR_TEXT);
 
-    for (unsigned int index = 0; index < 3; index++) {
-        int x = 50 + (int)index * 76;
+    for (unsigned int index = 0; index < 4; index++) {
+        int x = 43 + (int)index * 59;
         bool selected = index == ui->dialog_selected;
-        fill_rect(canvas, x, 101, 68, 24,
+        fill_rect(canvas, x, 101, 54, 24,
                   selected ? COLOR_SELECTED : COLOR_BAR);
-        stroke_rect(canvas, x, 101, 68, 24, selected ? 2 : 1,
+        stroke_rect(canvas, x, 101, 54, 24, selected ? 2 : 1,
                     selected ? COLOR_GREEN : COLOR_MUTED);
-        draw_text(canvas, x + 7, 110, labels[index], 1,
+        draw_text_slice(canvas, x + 4, 110, labels[index], 0, 8,
                   selected ? COLOR_TEXT : COLOR_MUTED);
     }
 }
@@ -2034,6 +2053,53 @@ void cp0_ui_set_device_info(struct cp0_ui *ui,
     ui->storage_available_bytes = info->storage_available_bytes;
     copy_optional_text(ui->device_model, sizeof(ui->device_model), info->model);
     copy_optional_text(ui->os_version, sizeof(ui->os_version), info->os_version);
+}
+
+void cp0_ui_set_display_state(struct cp0_ui *ui, bool available,
+                              unsigned int brightness_percent)
+{
+    if (ui == NULL || (available && brightness_percent > 100U))
+        return;
+    ui->brightness_available = available;
+    if (available)
+        ui->brightness_percent = brightness_percent;
+}
+
+void cp0_ui_set_audio_output_state(struct cp0_ui *ui, bool available,
+                                   unsigned int volume_percent, bool muted)
+{
+    if (ui == NULL || (available && volume_percent > 100U))
+        return;
+    ui->volume_available = available;
+    if (available) {
+        ui->volume_percent = volume_percent;
+        ui->muted = muted;
+    }
+}
+
+void cp0_ui_set_connectivity_state(struct cp0_ui *ui, bool available,
+                                   bool wifi_available, bool wifi_enabled,
+                                   bool airplane_mode)
+{
+    if (ui == NULL || (!available && (wifi_available || wifi_enabled ||
+                                      airplane_mode)) ||
+        (!wifi_available && wifi_enabled) ||
+        (airplane_mode && wifi_enabled))
+        return;
+    ui->connectivity_available = available;
+    ui->wifi_available = wifi_available;
+    ui->wifi_enabled = wifi_enabled;
+    ui->airplane_mode = airplane_mode;
+}
+
+void cp0_ui_set_preferences(struct cp0_ui *ui, unsigned int theme,
+                            unsigned int screen_timeout, bool key_sounds)
+{
+    if (ui == NULL || theme >= 3U || screen_timeout >= 4U)
+        return;
+    ui->theme = theme;
+    ui->screen_timeout = screen_timeout;
+    ui->key_sounds = key_sounds;
 }
 
 void cp0_ui_set_network_info(struct cp0_ui *ui,
@@ -3451,6 +3517,10 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         ui->system_action_kind = 0;
         ui->system_action_overlay = true;
         ui->system_action_ticks = 2;
+        if (!ui->local_simulation)
+            return action == CP0_UI_BRIGHTNESS_DOWN
+                       ? CP0_UI_EVENT_BRIGHTNESS_DOWN
+                       : CP0_UI_EVENT_BRIGHTNESS_UP;
         return CP0_UI_EVENT_NONE;
     }
     if (action == CP0_UI_VOLUME_DOWN || action == CP0_UI_VOLUME_UP ||
@@ -3471,6 +3541,13 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         ui->system_action_kind = action == CP0_UI_MUTE ? 2 : 1;
         ui->system_action_overlay = true;
         ui->system_action_ticks = 2;
+        if (!ui->local_simulation) {
+            if (action == CP0_UI_VOLUME_DOWN)
+                return CP0_UI_EVENT_VOLUME_DOWN;
+            if (action == CP0_UI_VOLUME_UP)
+                return CP0_UI_EVENT_VOLUME_UP;
+            return CP0_UI_EVENT_MUTE;
+        }
         return CP0_UI_EVENT_NONE;
     }
     if (action == CP0_UI_MEDIA_PLAY_PAUSE || action == CP0_UI_MEDIA_PREVIOUS ||
@@ -3579,7 +3656,7 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     if (ui->power_dialog) {
         if (action == CP0_UI_LEFT && ui->dialog_selected > 0)
             ui->dialog_selected--;
-        else if (action == CP0_UI_RIGHT && ui->dialog_selected < 2)
+        else if (action == CP0_UI_RIGHT && ui->dialog_selected < 3)
             ui->dialog_selected++;
         else if (action == CP0_UI_BACK) {
             ui->power_dialog = false;
@@ -3590,6 +3667,8 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 return CP0_UI_EVENT_SLEEP;
             if (selected == 1)
                 return CP0_UI_EVENT_RESTART;
+            if (selected == 2)
+                return CP0_UI_EVENT_POWER_OFF;
         }
         return CP0_UI_EVENT_NONE;
     }
@@ -4031,56 +4110,82 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 ui->settings_item_selected--;
             else if (action == CP0_UI_DOWN && item + 1 < count)
                 ui->settings_item_selected++;
-            else if (ui->local_simulation && ui->settings_selected == 0 &&
+            else if ((ui->local_simulation ||
+                      (ui->connectivity_available && ui->wifi_available)) &&
+                     ui->settings_selected == 0 &&
                      item == 0 &&
                      (action == CP0_UI_ACCEPT || action == CP0_UI_LEFT ||
                       action == CP0_UI_RIGHT)) {
-                ui->wifi_enabled = !ui->wifi_enabled;
-                if (ui->wifi_enabled)
-                    ui->airplane_mode = false;
-            } else if (ui->local_simulation && ui->settings_selected == 0 &&
+                if (ui->local_simulation) {
+                    ui->wifi_enabled = !ui->wifi_enabled;
+                    if (ui->wifi_enabled)
+                        ui->airplane_mode = false;
+                } else {
+                    return ui->wifi_enabled ? CP0_UI_EVENT_WIFI_DISABLE
+                                            : CP0_UI_EVENT_WIFI_ENABLE;
+                }
+            } else if ((ui->local_simulation || ui->connectivity_available) &&
+                       ui->settings_selected == 0 &&
                        item == 1 &&
                        (action == CP0_UI_ACCEPT || action == CP0_UI_LEFT ||
                         action == CP0_UI_RIGHT)) {
-                ui->airplane_mode = !ui->airplane_mode;
-                if (ui->airplane_mode)
-                    ui->wifi_enabled = false;
+                if (ui->local_simulation) {
+                    ui->airplane_mode = !ui->airplane_mode;
+                    if (ui->airplane_mode)
+                        ui->wifi_enabled = false;
+                } else {
+                    return ui->airplane_mode
+                               ? CP0_UI_EVENT_AIRPLANE_DISABLE
+                               : CP0_UI_EVENT_AIRPLANE_ENABLE;
+                }
             } else if (ui->settings_selected == 0 && item == 2 &&
                        action == CP0_UI_ACCEPT) {
                 ui->screen = CP0_UI_NETWORK;
                 ui->network_page = 0;
                 ui->settings_detail = false;
-            } else if (ui->local_simulation && ui->settings_selected == 1 &&
+            } else if ((ui->local_simulation || ui->brightness_available) &&
+                       ui->settings_selected == 1 &&
                        item == 0 &&
                        (action == CP0_UI_LEFT || action == CP0_UI_RIGHT)) {
-                cp0_ui_handle_action(ui, action == CP0_UI_LEFT
-                                             ? CP0_UI_BRIGHTNESS_DOWN
-                                             : CP0_UI_BRIGHTNESS_UP);
-            } else if (ui->local_simulation && ui->settings_selected == 1 &&
-                       item == 1 &&
+                return cp0_ui_handle_action(ui, action == CP0_UI_LEFT
+                                                    ? CP0_UI_BRIGHTNESS_DOWN
+                                                    : CP0_UI_BRIGHTNESS_UP);
+            } else if (ui->settings_selected == 1 && item == 1 &&
                        (action == CP0_UI_LEFT || action == CP0_UI_RIGHT ||
                         action == CP0_UI_ACCEPT)) {
-                ui->theme = (ui->theme + (action == CP0_UI_LEFT ? 2U : 1U)) % 3U;
-            } else if (ui->local_simulation && ui->settings_selected == 1 &&
-                       item == 2 &&
+                if (ui->local_simulation)
+                    ui->theme =
+                        (ui->theme + (action == CP0_UI_LEFT ? 2U : 1U)) % 3U;
+                else
+                    return action == CP0_UI_LEFT ? CP0_UI_EVENT_THEME_PREVIOUS
+                                                : CP0_UI_EVENT_THEME_NEXT;
+            } else if (ui->settings_selected == 1 && item == 2 &&
                        (action == CP0_UI_LEFT || action == CP0_UI_RIGHT ||
                         action == CP0_UI_ACCEPT)) {
-                ui->screen_timeout =
-                    (ui->screen_timeout + (action == CP0_UI_LEFT ? 3U : 1U)) % 4U;
-            } else if (ui->local_simulation && ui->settings_selected == 2 &&
+                if (ui->local_simulation)
+                    ui->screen_timeout =
+                        (ui->screen_timeout + (action == CP0_UI_LEFT ? 3U : 1U)) % 4U;
+                else
+                    return action == CP0_UI_LEFT ? CP0_UI_EVENT_TIMEOUT_PREVIOUS
+                                                : CP0_UI_EVENT_TIMEOUT_NEXT;
+            } else if ((ui->local_simulation || ui->volume_available) &&
+                       ui->settings_selected == 2 &&
                        item == 0 &&
                        (action == CP0_UI_LEFT || action == CP0_UI_RIGHT)) {
-                cp0_ui_handle_action(ui, action == CP0_UI_LEFT
-                                             ? CP0_UI_VOLUME_DOWN
-                                             : CP0_UI_VOLUME_UP);
-            } else if (ui->local_simulation && ui->settings_selected == 2 &&
+                return cp0_ui_handle_action(ui, action == CP0_UI_LEFT
+                                                    ? CP0_UI_VOLUME_DOWN
+                                                    : CP0_UI_VOLUME_UP);
+            } else if ((ui->local_simulation || ui->volume_available) &&
+                       ui->settings_selected == 2 &&
                        item == 1 &&
                        action == CP0_UI_ACCEPT) {
-                cp0_ui_handle_action(ui, CP0_UI_MUTE);
-            } else if (ui->local_simulation && ui->settings_selected == 2 &&
-                       item == 2 &&
+                return cp0_ui_handle_action(ui, CP0_UI_MUTE);
+            } else if (ui->settings_selected == 2 && item == 2 &&
                        action == CP0_UI_ACCEPT) {
-                ui->key_sounds = !ui->key_sounds;
+                if (ui->local_simulation)
+                    ui->key_sounds = !ui->key_sounds;
+                else
+                    return CP0_UI_EVENT_KEY_SOUNDS_TOGGLE;
             } else if (ui->local_simulation && ui->settings_selected == 3 &&
                        item == 1 &&
                        (action == CP0_UI_LEFT || action == CP0_UI_RIGHT ||
@@ -4098,11 +4203,20 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 ui->settings_detail = false;
             } else if (ui->settings_selected == 4 && item == 3 &&
                        action == CP0_UI_ACCEPT) {
-                return CP0_UI_EVENT_RESTART;
+                ui->power_dialog = true;
+                ui->dialog_selected = 1;
+                ui->settings_detail = false;
             } else if (ui->settings_selected == 4 && item == 4 &&
                        action == CP0_UI_ACCEPT) {
-                return CP0_UI_EVENT_POWER_OFF;
+                ui->power_dialog = true;
+                ui->dialog_selected = 2;
+                ui->settings_detail = false;
             } else if (ui->settings_selected == 5 && item == 0 &&
+                       action == CP0_UI_ACCEPT) {
+                ui->screen = CP0_UI_APPS;
+                ui->app_detail = false;
+                ui->settings_detail = false;
+            } else if (ui->settings_selected == 5 && item == 1 &&
                        action == CP0_UI_ACCEPT) {
                 ui->screen = CP0_UI_APPS;
                 ui->app_detail = false;

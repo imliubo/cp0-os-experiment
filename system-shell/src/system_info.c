@@ -133,6 +133,58 @@ enum cp0_battery_status cp0_system_info_parse_battery_status(
 }
 #endif
 
+static enum cp0_bus_state classify_i2c_bus(bool sysfs_present,
+                                           bool device_present,
+                                           bool device_accessible)
+{
+    if (!sysfs_present && !device_present)
+        return CP0_BUS_UNAVAILABLE;
+    if (device_present && device_accessible)
+        return CP0_BUS_READY;
+    return CP0_BUS_INACCESSIBLE;
+}
+
+static bool directory_attribute_matches(const char *directory_path,
+                                        const char *entry_prefix,
+                                        const char *attribute,
+                                        const char *expected)
+{
+    DIR *directory = opendir(directory_path);
+    struct dirent *entry;
+    size_t prefix_length;
+    bool matched = false;
+    if (directory == NULL || entry_prefix == NULL || attribute == NULL ||
+        expected == NULL)
+        return false;
+    prefix_length = strlen(entry_prefix);
+    while ((entry = readdir(directory)) != NULL) {
+        char path[512];
+        char text[128];
+        int length;
+        if (strncmp(entry->d_name, entry_prefix, prefix_length) != 0)
+            continue;
+        length = snprintf(path, sizeof(path), "%s/%s/%s", directory_path,
+                          entry->d_name, attribute);
+        if (length < 0 || (size_t)length >= sizeof(path))
+            continue;
+        if (read_text(path, text, sizeof(text)) && strcmp(text, expected) == 0) {
+            matched = true;
+            break;
+        }
+    }
+    closedir(directory);
+    return matched;
+}
+
+#ifdef CP0_SYSTEM_INFO_TEST
+enum cp0_bus_state cp0_system_info_classify_i2c_bus(bool sysfs_present,
+                                                     bool device_present,
+                                                     bool device_accessible)
+{
+    return classify_i2c_bus(sysfs_present, device_present, device_accessible);
+}
+#endif
+
 static void collect_device(struct cp0_system_info *info)
 {
     char text[4096];
@@ -144,7 +196,9 @@ static void collect_device(struct cp0_system_info *info)
         info->device_available = true;
     if (read_text("/proc/uptime", text, sizeof(text)))
         parse_uptime(text, &info->uptime_seconds);
-    if (statvfs("/", &storage) == 0) {
+    if (statvfs("/var/lib/cardputerzero", &storage) != 0)
+        memset(&storage, 0, sizeof(storage));
+    if (storage.f_blocks != 0) {
         info->storage_total_bytes =
             (uint64_t)storage.f_blocks * (uint64_t)storage.f_frsize;
         info->storage_available_bytes =
@@ -230,12 +284,10 @@ static void collect_battery(struct cp0_system_info *info)
     closedir(directory);
 }
 
-static enum cp0_capability_state device_capability(const char *primary,
-                                                    const char *fallback)
+static enum cp0_capability_state path_capability(const char *path)
 {
     struct stat metadata;
-    if (stat(primary, &metadata) == 0 ||
-        (fallback != NULL && stat(fallback, &metadata) == 0))
+    if (stat(path, &metadata) == 0)
         return CP0_CAPABILITY_AVAILABLE;
     return CP0_CAPABILITY_UNAVAILABLE;
 }
@@ -243,18 +295,29 @@ static enum cp0_capability_state device_capability(const char *primary,
 static void collect_capabilities(struct cp0_system_info *info)
 {
     struct stat metadata;
-    if (stat("/dev/i2c-1", &metadata) != 0) {
-        info->i2c_bus_state = CP0_BUS_UNAVAILABLE;
-    } else if (access("/dev/i2c-1", R_OK | W_OK) == 0) {
-        info->i2c_bus_state = CP0_BUS_READY;
-    } else {
-        info->i2c_bus_state = CP0_BUS_INACCESSIBLE;
-    }
-    info->display_state = device_capability("/dev/dri/card0", "/dev/fb0");
+    bool sysfs_present =
+        stat("/sys/bus/i2c/devices/i2c-1", &metadata) == 0;
+    bool device_present = stat("/dev/i2c-1", &metadata) == 0;
+    bool device_accessible =
+        device_present && access("/dev/i2c-1", R_OK | W_OK) == 0;
+    info->i2c_bus_state = classify_i2c_bus(
+        sysfs_present, device_present, device_accessible);
+    info->display_state =
+        directory_attribute_matches("/sys/class/drm", "card0-SPI-", "status",
+                                    "connected")
+            ? CP0_CAPABILITY_AVAILABLE
+            : CP0_CAPABILITY_UNAVAILABLE;
     info->keyboard_state =
-        device_capability("/proc/bus/input/devices", NULL);
-    info->audio_state = device_capability("/proc/asound/cards", "/dev/snd");
-    info->camera_state = device_capability("/dev/video0", NULL);
+        directory_attribute_matches("/sys/class/input", "input", "name",
+                                    "tca8418c")
+            ? CP0_CAPABILITY_AVAILABLE
+            : CP0_CAPABILITY_UNAVAILABLE;
+    info->audio_state =
+        directory_attribute_matches("/sys/class/sound", "card", "id",
+                                    "ES8389Audio")
+            ? CP0_CAPABILITY_AVAILABLE
+            : CP0_CAPABILITY_UNAVAILABLE;
+    info->camera_state = path_capability("/sys/class/video4linux/video0");
 }
 
 static int interface_priority(const char *name)

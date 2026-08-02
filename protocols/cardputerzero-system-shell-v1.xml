@@ -18,7 +18,7 @@
     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
   </copyright>
 
-  <interface name="cp0_system_shell_v1" version="5">
+  <interface name="cp0_system_shell_v1" version="6">
     <description summary="trusted CardputerZero System Shell control">
       This global is restricted by the compositor to the dedicated cp0-shell
       Unix account. It registers the trusted system surface and carries global
@@ -138,5 +138,14 @@
       <arg name="token" type="uint" summary="opaque compositor app token"/>
       <arg name="mode" type="uint" enum="display_mode"/>
     </event>
+
+    <request name="set_idle_timeout" since="6">
+      <description summary="configure compositor-owned display idle timeout">
+        A timeout of 0 disables automatic display sleep. The trusted Shell may
+        otherwise select 30, 60 or 300 seconds. All compositor input resets
+        this timer, including input delivered directly to a foreground app.
+      </description>
+      <arg name="seconds" type="uint" summary="0, 30, 60 or 300 seconds"/>
+    </request>
   </interface>
 </protocol>

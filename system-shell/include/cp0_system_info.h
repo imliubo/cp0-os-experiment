@@ -65,6 +65,9 @@ bool cp0_system_info_parse_power_value(const char *document, int64_t minimum,
                                        int64_t maximum, int64_t *value);
 enum cp0_battery_status cp0_system_info_parse_battery_status(
     const char *status);
+enum cp0_bus_state cp0_system_info_classify_i2c_bus(bool sysfs_present,
+                                                     bool device_present,
+                                                     bool device_accessible);
 #endif
 
 #endif

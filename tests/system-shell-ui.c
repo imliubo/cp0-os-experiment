@@ -518,6 +518,11 @@ int main(int argc, char **argv)
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_RESTART);
     assert(!ui.power_dialog);
+    cp0_ui_handle_action(&ui, CP0_UI_SHOW_POWER);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_POWER_OFF);
 
     cp0_ui_init(&ui);
     cp0_ui_set_local_simulation(&ui, true);
@@ -1188,9 +1193,84 @@ int main(int argc, char **argv)
     struct cp0_ui production;
     cp0_ui_init(&production);
     unsigned int production_brightness = production.brightness_percent;
-    cp0_ui_handle_action(&production, CP0_UI_BRIGHTNESS_UP);
+    assert(cp0_ui_handle_action(&production, CP0_UI_BRIGHTNESS_UP) ==
+           CP0_UI_EVENT_BRIGHTNESS_UP);
     assert(production.brightness_percent == production_brightness);
     assert(production.system_action_overlay);
+    cp0_ui_set_display_state(&production, true, 75);
+    assert(production.brightness_available &&
+           production.brightness_percent == 75);
+    assert(cp0_ui_handle_action(&production, CP0_UI_BRIGHTNESS_DOWN) ==
+           CP0_UI_EVENT_BRIGHTNESS_DOWN);
+    cp0_ui_set_display_state(&production, false, 0);
+    assert(!production.brightness_available &&
+           production.brightness_percent == 75);
+    unsigned int production_volume = production.volume_percent;
+    assert(cp0_ui_handle_action(&production, CP0_UI_VOLUME_UP) ==
+           CP0_UI_EVENT_VOLUME_UP);
+    assert(production.volume_percent == production_volume);
+    cp0_ui_set_audio_output_state(&production, true, 75, false);
+    assert(production.volume_available && production.volume_percent == 75 &&
+           !production.muted);
+    assert(cp0_ui_handle_action(&production, CP0_UI_VOLUME_DOWN) ==
+           CP0_UI_EVENT_VOLUME_DOWN);
+    assert(cp0_ui_handle_action(&production, CP0_UI_MUTE) ==
+           CP0_UI_EVENT_MUTE);
+    cp0_ui_set_audio_output_state(&production, true, 65, true);
+    assert(production.volume_percent == 65 && production.muted);
+    cp0_ui_set_connectivity_state(&production, true, true, true, false);
+    assert(production.connectivity_available && production.wifi_available &&
+           production.wifi_enabled && !production.airplane_mode);
+    production.screen = CP0_UI_SETTINGS;
+    production.settings_available = true;
+    production.settings_detail = true;
+    production.settings_selected = 0;
+    production.settings_item_selected = 0;
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_WIFI_DISABLE);
+    assert(production.wifi_enabled);
+    cp0_ui_set_connectivity_state(&production, true, true, false, false);
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_WIFI_ENABLE);
+    production.settings_item_selected = 1;
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_AIRPLANE_ENABLE);
+    cp0_ui_set_connectivity_state(&production, true, true, false, true);
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_AIRPLANE_DISABLE);
+    cp0_ui_set_connectivity_state(&production, false, false, false, false);
+    assert(!production.connectivity_available && !production.wifi_available);
+    cp0_ui_set_audio_output_state(&production, false, 0, false);
+    assert(!production.volume_available && production.volume_percent == 65 &&
+           production.muted);
+    cp0_ui_set_audio_output_state(&production, true, 65, false);
+    production.screen = CP0_UI_SETTINGS;
+    production.settings_detail = true;
+    production.settings_selected = 2;
+    production.settings_item_selected = 0;
+    assert(cp0_ui_handle_action(&production, CP0_UI_LEFT) ==
+           CP0_UI_EVENT_VOLUME_DOWN);
+    production.settings_item_selected = 1;
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_MUTE);
+    production.settings_selected = 1;
+    production.settings_item_selected = 1;
+    assert(cp0_ui_handle_action(&production, CP0_UI_LEFT) ==
+           CP0_UI_EVENT_THEME_PREVIOUS);
+    assert(cp0_ui_handle_action(&production, CP0_UI_RIGHT) ==
+           CP0_UI_EVENT_THEME_NEXT);
+    production.settings_item_selected = 2;
+    assert(cp0_ui_handle_action(&production, CP0_UI_LEFT) ==
+           CP0_UI_EVENT_TIMEOUT_PREVIOUS);
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_TIMEOUT_NEXT);
+    production.settings_selected = 2;
+    production.settings_item_selected = 2;
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_KEY_SOUNDS_TOGGLE);
+    cp0_ui_set_preferences(&production, 2, 3, false);
+    assert(production.theme == 2 && production.screen_timeout == 3 &&
+           !production.key_sounds);
 
     struct cp0_ui uninstall_ui;
     cp0_ui_init(&uninstall_ui);

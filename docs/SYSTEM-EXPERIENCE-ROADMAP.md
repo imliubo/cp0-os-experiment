@@ -155,12 +155,39 @@ implemented as an unreliable userspace timer in each application.
 
 ### X4: deferred V0.6 acceptance
 
-- [ ] After the user-approved no-deploy window, inspect exact backlight, ALSA,
-  rfkill/network and camera controls before enabling hardware writes.
-- [ ] Deploy only with explicit approval and validate physical Fn combinations,
-  LCD overlays, battery telemetry, I2C diagnostics and uninstall persistence.
+- [x] Implement and locally validate the Shell-only display settings broker,
+  fixed V0.6 backlight path, safe percentage bounds and Fn+U/Fn+I integration.
+- [x] Implement and locally validate role-separated ES8389 output settings in
+  `cp0-audiod`, fixed DACL/DACR/Speaker controls, bounded volume/mute state and
+  Settings/Fn+A/S/D integration without exposing PCM authority to the Shell.
+- [x] Validate the V0.6 ES8389 broker on hardware: DACL/DACR volume and Speaker
+  mute round-trip through ALSA, root denial for output settings, Shell denial
+  for PCM, mono SDK playback converted to stereo hardware frames, and stereo
+  capture explicitly started then downmixed to mono SDK samples.
+- [x] Validate the pinned V0.6 backlight sysfs path on hardware, including
+  broker-controlled 65/75 write/readback, and confirm that the unprivileged
+  login user cannot read the protected control. A split sysfs attribute write
+  discovered during acceptance is fixed with one complete `write(2)` call.
+- [x] After the user-approved no-deploy window, inspect exact backlight, ALSA,
+  rfkill/network and camera controls. V0.6 exposes the pinned backlight and
+  ES8389 controls, an I2C-1 kernel bus without a raw device node, no camera
+  sensor, and a BCM43439 whose firmware is missing from the flashed image.
+- [x] Validate physical Fn combinations and LCD overlays. Operator-confirmed
+  physical combinations are supplemented by compositor-path injected input and
+  116 exact 320x170 trusted captures from the approved RAM-overlay deployment.
+  Battery telemetry, I2C-1 diagnostics and the factory gate also pass on V0.6.
+  Retained evidence is `target/device-evidence/20260802T033357Z-3730` and
+  `target/device-evidence/qa-system-apps-20260802`.
+- [ ] Validate uninstall persistence across a flashed-image reboot. The
+  confirmation/cancel path passes, but this run did not delete the installed
+  package or reboot the device.
 - [ ] Measure idle memory, input latency and SD writes before enabling settings
-  persistence by default.
+  persistence by default. The final 60-second RAM-overlay run measured 1.306%
+  core CPU, zero SD writes and 212.7 MiB minimum available memory. Its 202.1 MiB
+  derived used-memory value exceeds the 180 MiB product ceiling, and the Shell
+  activation timestamp reflects a late hot restart rather than boot readiness;
+  both cold-start gates require the next flashed image because RAM-overlay
+  deployments roll back on reboot.
 - [x] Implement and locally validate the compositor-owned ESC long-press Home
   gesture; `Fn+K` remains the foreground application's standard Home key.
 - [ ] Physically validate ESC short/long press in Home, standard and immersive

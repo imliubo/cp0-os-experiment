@@ -24,6 +24,13 @@ mkdir -p "$snapshot_dir"
 "$work_dir/system-shell-json-test"
 
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -I"$repo_root/system-shell/include" \
+    "$repo_root/system-shell/src/shell_settings.c" \
+    "$repo_root/tests/system-shell-settings.c" \
+    -o "$work_dir/system-shell-settings-test"
+"$work_dir/system-shell-settings-test"
+
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -DCP0_APPD_CLIENT_TEST \
     -I"$repo_root/system-shell/include" \
     "$repo_root/system-shell/src/json.c" \
@@ -31,6 +38,33 @@ mkdir -p "$snapshot_dir"
     "$repo_root/tests/system-shell-appd-client.c" \
     -o "$work_dir/system-shell-appd-client-test"
 "$work_dir/system-shell-appd-client-test"
+
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -DCP0_DISPLAY_CLIENT_TEST \
+    -I"$repo_root/system-shell/include" \
+    "$repo_root/system-shell/src/json.c" \
+    "$repo_root/system-shell/src/display_client.c" \
+    "$repo_root/tests/system-shell-display-client.c" \
+    -o "$work_dir/system-shell-display-client-test"
+"$work_dir/system-shell-display-client-test"
+
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -DCP0_AUDIO_SETTINGS_CLIENT_TEST \
+    -I"$repo_root/system-shell/include" \
+    "$repo_root/system-shell/src/json.c" \
+    "$repo_root/system-shell/src/audio_settings_client.c" \
+    "$repo_root/tests/system-shell-audio-settings-client.c" \
+    -o "$work_dir/system-shell-audio-settings-client-test"
+"$work_dir/system-shell-audio-settings-client-test"
+
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -DCP0_CONNECTIVITY_CLIENT_TEST \
+    -I"$repo_root/system-shell/include" \
+    "$repo_root/system-shell/src/json.c" \
+    "$repo_root/system-shell/src/connectivity_client.c" \
+    "$repo_root/tests/system-shell-connectivity-client.c" \
+    -o "$work_dir/system-shell-connectivity-client-test"
+"$work_dir/system-shell-connectivity-client-test"
 
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -DCP0_STORE_CLIENT_TEST \
@@ -84,17 +118,17 @@ d0f6c4fb530e418af657af2cf5297d52cbe42b612eb1005537fc855c63be6dae  network-detail
 b99153076a10fd8da5eb18448a195447a4b4dd65f1422403cc3a365bc889f738  network.ppm
 5f1f3520d8c70b18b52b98c845d0ee06390ac6f30de6d44c293dc5587bbdb213  notification.ppm
 3c9f90a8bcc0c5d5ffaad46d31748dd831fface44e7615083e1e8357b63256a6  permission.ppm
-a6e5f954c77d1512c6abdd25d2b28a836983423a3ceb0990d014282915eff406  power.ppm
-e7bf39828129a40842429b898a3878e3ca764da314a600570443db521b5e0933  settings-apps-privacy.ppm
-856d3687b40de09948f7f8877f1490fbcf4187406bd90dcfb8869707d722fd51  settings-auto-update.ppm
-a48887a13b1023ac784ed74828a2e54fb71b1fd36ca2a8d831dc4cb546e56098  settings-camera.ppm
+8b0cfe3da3a68f5c4ebd8138eb56c024a06c4261581430a1ab3bf5e0a62d082b  power.ppm
+9dea5d6751d3599470ede2c32490d2a6f56bb8558787e137034dd79bb7e899ce  settings-apps-privacy.ppm
+d459747a3a09723d70af2418aafd50bf6a84bdd394ce8a5e3821f9942ad43047  settings-auto-update.ppm
+699ca1a9ad4d58a27d64c6611f59aa31d9a21d1ea9d311fb68a0f1980ef46c24  settings-camera.ppm
 e215ec94d5623d91197c512594fb1b3543fe8bc483d9918c999ea9c3d12efa8f  settings-confirm.ppm
-8bf9615c80bc7bbbbda0b20323da7076db653936abfef0754d0ab77d880dbf5f  settings-connectivity.ppm
+e158ca788806ea1887c95e25e293c8b739526fcfb9c10e6e795e63e18afcc7b8  settings-connectivity.ppm
 4409d709a14a9021a4e681885996ccd59dc712967f31fa978cf008b139a3df6f  settings-display.ppm
 8e0f4ca92751e2aa7d9eb309f323f80f84f63e8c870fc1f582d334d9a3fac213  settings-metrics-confirm.ppm
-41dc647ab5c0d90ef580ea920f93ac35f5ee298ee474fd154eb43b8a7d8bbe9f  settings-metrics.ppm
-201fb57e7789ecd54d5fc9f09e56d63e46956aa12a09f06ba673c7e14653a234  settings-power.ppm
-6373e4850ceb18989705095fc2c6036788eb82978b7e83aa3dc9f97f4b1e1c97  settings-security.ppm
+a6a85b75eb936c509e68d1a1058035d1f4314cbe280aaff25bad014af3ba3840  settings-metrics.ppm
+524cee8a9b59415913a1be9b59d41b54477a2424fc31c8ab7c060d86660dc042  settings-power.ppm
+9462144536a8bb60a775e4647651a40c77eead37c3cd38d0cd3fe7722a5cfc76  settings-security.ppm
 f10e4e270371f6eaab38e4125f37e40f1fb9a17c3b5ef5473425e7b057fd3be4  settings-sound.ppm
 fb1ac2961e301b90c29719745d313c17910f4c938a7a03992abb4fc1e225e3ef  settings-system.ppm
 cc4e5bbf3f6dee26b0b6514661481c9217abe354a1dfa3459eac8cc7c7b27340  settings.ppm
@@ -116,16 +150,16 @@ d344743cfc5353d55fd0b61f282b88f8d10945520b1c17bca746035f6927c7eb  store-today-co
 f00d349cb5d000db552fe795a63df63738b9552d77e508758aadbc2216dd7689  store-today.ppm
 54f4f4baed4d74492ce1940a0864c66522b0215eebbb70719a826c4cc43c95cf  store-updates.ppm
 39decf80c4307bda7d53bd2b0764a1d943b75a0e60f2f49b0890573a650a9e2c  store.ppm
-c8f03c8a917c9dfb0cecd57f32df1e6e11d913a75480e5ca11c2a35b04b0d62e  system-brightness.ppm
+9a52db5f8e5467db7359d6ebd32df55813cf59d5f8c9f8867c418f6345a4f148  system-brightness.ppm
 34e659c664795fb8b2cef00fd6fd168c3fdf6e845421342b29cc41dc97b88558  system-help.ppm
-a641ba7ef7b270e0e5ef281e09c3be78fbc9e90a62d8fc94893e8cfca659f067  system-media-busy.ppm
-b4dc45841e08a5bfe478a5d51c12991123aa55238385e027ad0dd15a7c8ed94c  system-media-failed.ppm
-1444774b686e7b160fa9011d8402229f224e41405ca09c888a95ebb8b64098ce  system-media-sent.ppm
-8f99ff37bea474970e2093111c5a6cc44a79631df589f683a0a8be3ee628c5b8  system-media-unavailable.ppm
-08d6748d211276816be4ad5f8efa25f5dc4b05564a052e7f19eeece8df65407e  system-screenshot-saved.ppm
-2f8807c1c20445e5a4ee4b942ef01a656925c60ae479ff59db7f4433244b6ec5  system-screenshot-unavailable.ppm
-a6035c53a535cab44d6065cbd27f70a57d2655ee1e13baf24c87ef9176e40239  theme-high-contrast.ppm
-2bfce46d55e7ef494607fe0d42b7e0d698e2c7470427b62e3fa300462bf0f4cc  theme-light.ppm
+9b1c590e8e7aff595b86626357fb2ffb2bdd1ad8a68ae376cc501045904f1e48  system-media-busy.ppm
+7e2a6b81af55c982d532f174b09793c44ab1d888a72bfcd97b57ce7d1d29aec9  system-media-failed.ppm
+c497552015d055a898a1158098018f5187e34059af56dac7c032d05f76736749  system-media-sent.ppm
+3cddb79b7d2498e41a6491e67b85ef8ca71219d8c05457128d5f348936da75cb  system-media-unavailable.ppm
+8bf5bf610f2ecd6de34cf7989d52a09423f66bf15832a910e8033d711e418949  system-screenshot-saved.ppm
+eb4b2b4abe0a6fa2313e50ce97687729fed56cb00926ea03e85eb6799565c048  system-screenshot-unavailable.ppm
+62372b530eb295c015d33fd2af732fde1192f252950cf047fd7c6be73b2ce015  theme-high-contrast.ppm
+2577504ca415923cfc0b79e53ba0a3cebdd8881c634ee72f7c8480bf12a0307e  theme-light.ppm
 b382c359864c04060e4676c13c50e9578d241f132009a2840a3a9ed8324cfae2  tasks.ppm'
 
 if [ "$actual" != "$expected" ]; then

@@ -103,6 +103,9 @@ impl StorageService {
                         StorageResponse::deleted(request_id, existed, used_bytes)
                     })
             }
+            StorageCommand::Usage => self
+                .usage(&request.app_id)
+                .map(|used_bytes| StorageResponse::usage(request_id, used_bytes)),
         };
         result.unwrap_or_else(|error| storage_error_response(request_id, error))
     }
@@ -192,6 +195,13 @@ impl StorageService {
         sync_directory(&directory)?;
         let (used_bytes, _) = inspect_directory(&directory, self.owner_uid)?;
         Ok((true, used_bytes))
+    }
+
+    fn usage(&self, app_id: &str) -> Result<u64, StorageServiceError> {
+        let Some(directory) = self.app_directory(app_id)? else {
+            return Ok(0);
+        };
+        inspect_directory(&directory, self.owner_uid).map(|(used_bytes, _)| used_bytes)
     }
 
     fn ensure_app_directory(
@@ -519,6 +529,12 @@ mod tests {
                 used_bytes: 0
             }
         ));
+        assert_eq!(
+            service
+                .dispatch(StorageRequest::usage(5, "dev.cardputerzero.test", MIB,))
+                .outcome,
+            cp0_storage_protocol::StorageOutcome::Usage { used_bytes: 0 }
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -319,7 +319,7 @@ impl AppdServer {
             }
             AppdCommand::Ping => Ok(ResponseData::Pong),
             AppdCommand::List { offset, limit } => {
-                Self::list_apps(&state, offset, limit).map_err(CommandError::Manager)
+                self.list_apps(&state, request_id, offset, limit)
             }
             AppdCommand::StoreListInstalled { offset, limit } => {
                 Self::list_store_apps(&state, offset, limit).map_err(CommandError::Manager)
@@ -828,19 +828,36 @@ impl AppdServer {
     }
 
     fn list_apps(
+        &self,
         state: &ServerState,
+        request_id: u64,
         offset: u16,
         limit: u8,
-    ) -> Result<ResponseData, AppManagerError> {
+    ) -> Result<ResponseData, CommandError> {
         let installed_apps = state.manager.installed_apps();
         let mut apps = Vec::new();
-        for installed in installed_apps
+        for (index, installed) in installed_apps
             .iter()
             .skip(usize::from(offset))
             .take(usize::from(limit))
+            .enumerate()
         {
-            let manifest = state.manager.installed_manifest(&installed.app_id)?;
-            let usage = state.manager.app_usage(&installed.app_id)?;
+            let manifest = state
+                .manager
+                .installed_manifest(&installed.app_id)
+                .map_err(CommandError::Manager)?;
+            let package_bytes = state
+                .manager
+                .package_usage(&installed.app_id)
+                .map_err(CommandError::Manager)?;
+            let storage_request_id = request_id.wrapping_add(index as u64);
+            let storage_quota_bytes =
+                u64::from(manifest.resources.storage_mb) * cp0_storage_protocol::MIB;
+            let data_bytes = self
+                .capabilities
+                .storage
+                .usage(storage_request_id, &installed.app_id, storage_quota_bytes)
+                .map_err(CommandError::Storage)?;
             apps.push(AppSummary {
                 running: state.manager.is_running(&installed.app_id)?,
                 app_id: installed.app_id.clone(),
@@ -848,8 +865,8 @@ impl AppdServer {
                 version: installed.version.clone(),
                 display: manifest.display,
                 installed_at_unix_seconds: installed.installed_at_unix_seconds,
-                package_bytes: usage.package_bytes,
-                data_bytes: usage.data_bytes,
+                package_bytes,
+                data_bytes,
                 permissions: manifest
                     .permissions
                     .into_iter()
@@ -1855,6 +1872,7 @@ fn select_intent_target(
 #[derive(Debug)]
 enum CommandError {
     Manager(AppManagerError),
+    Storage(StorageClientError),
     Permission(PermissionPromptError),
     Document(DocumentPromptError),
     Policy(PolicyError),
@@ -1865,6 +1883,7 @@ impl fmt::Display for CommandError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Manager(error) => write!(formatter, "{error}"),
+            Self::Storage(error) => write!(formatter, "{error}"),
             Self::Permission(error) => write!(formatter, "{error}"),
             Self::Document(error) => write!(formatter, "{error}"),
             Self::Policy(error) => write!(formatter, "{error}"),
@@ -1888,6 +1907,11 @@ impl From<PermissionPromptError> for CommandError {
 fn command_error_response(request_id: u64, error: &CommandError) -> AppdResponse {
     match error {
         CommandError::Manager(error) => manager_error_response(request_id, error),
+        CommandError::Storage(_) => AppdResponse::error(
+            request_id,
+            ErrorCode::Unavailable,
+            "private storage usage is unavailable",
+        ),
         CommandError::Permission(PermissionPromptError::NoPendingPrompt)
         | CommandError::Permission(PermissionPromptError::StalePrompt) => AppdResponse::error(
             request_id,

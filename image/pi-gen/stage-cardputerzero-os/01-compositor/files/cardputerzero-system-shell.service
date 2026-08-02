@@ -9,7 +9,7 @@ ConditionPathExists=/usr/bin/cardputerzero-system-shell
 Type=simple
 User=cp0-shell
 Group=cp0-shell
-SupplementaryGroups=cp0-wayland cp0-control
+SupplementaryGroups=cp0-wayland cp0-control cp0-display-control cp0-audio-control cp0-connectivity-control
 Environment=XDG_RUNTIME_DIR=/run/cardputerzero
 Environment=WAYLAND_DISPLAY=wayland-0
 ExecStartPre=/usr/libexec/cardputerzero/wait-wayland.sh
@@ -27,7 +27,7 @@ PrivateDevices=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-StateDirectory=cardputerzero/screenshots
+StateDirectory=cardputerzero/screenshots cardputerzero/shell
 StateDirectoryMode=0750
 ProtectHostname=yes
 ProtectClock=yes
@@ -36,8 +36,7 @@ ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectProc=invisible
-ProcSubset=pid
-RestrictAddressFamilies=AF_UNIX
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

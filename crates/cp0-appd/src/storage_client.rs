@@ -126,6 +126,19 @@ impl StorageClient {
         }
     }
 
+    pub fn usage(
+        &self,
+        request_id: u64,
+        app_id: &str,
+        quota_bytes: u64,
+    ) -> Result<u64, StorageClientError> {
+        match self.exchange(&StorageRequest::usage(request_id, app_id, quota_bytes))? {
+            StorageOutcome::Usage { used_bytes } => Ok(used_bytes),
+            StorageOutcome::Error { code, .. } => Err(StorageClientError::Service(code)),
+            _ => Err(StorageClientError::MismatchedOutcome),
+        }
+    }
+
     fn exchange(&self, request: &StorageRequest) -> Result<StorageOutcome, StorageClientError> {
         let mut stream = UnixStream::connect(&self.socket_path)?;
         stream.set_read_timeout(Some(STORAGE_SERVICE_TIMEOUT))?;
@@ -170,5 +183,32 @@ mod tests {
         worker.join().unwrap();
         assert_eq!(response.request_id, 11);
         assert!(matches!(response.outcome, StorageOutcome::Value { .. }));
+    }
+
+    #[test]
+    fn returns_only_usage_bound_to_the_request() {
+        let (mut client, mut service) = UnixStream::pair().unwrap();
+        let worker = thread::spawn(move || {
+            let request = read_request(&mut BufReader::new(service.try_clone().unwrap()))
+                .unwrap()
+                .unwrap();
+            assert!(matches!(
+                request.command,
+                cp0_storage_protocol::StorageCommand::Usage
+            ));
+            write_response(
+                &mut service,
+                &StorageResponse::usage(request.request_id, 4096),
+            )
+            .unwrap();
+        });
+        let request = StorageRequest::usage(12, "dev.cardputerzero.test", MIB);
+        write_request(&mut client, &request).unwrap();
+        let response = read_response(&mut BufReader::new(client.try_clone().unwrap()))
+            .unwrap()
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(response.request_id, 12);
+        assert_eq!(response.outcome, StorageOutcome::Usage { used_bytes: 4096 });
     }
 }

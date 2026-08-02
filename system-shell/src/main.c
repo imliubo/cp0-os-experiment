@@ -2,7 +2,11 @@
 
 #include "cardputerzero-system-shell-client-protocol.h"
 #include "cp0_appd_client.h"
+#include "cp0_audio_settings_client.h"
+#include "cp0_connectivity_client.h"
+#include "cp0_display_client.h"
 #include "cp0_screenshot_store.h"
+#include "cp0_shell_settings.h"
 #include "cp0_store_client.h"
 #include "cp0_system_info.h"
 #include "cp0_ui.h"
@@ -29,6 +33,7 @@
 
 #define BUFFER_COUNT 2
 #define SCREENSHOT_RETRY_MAX 2U
+#define CP0_SHELL_SETTINGS_PATH "/var/lib/cardputerzero/shell/settings.conf"
 
 _Static_assert(CP0_STORE_INSTALL_BATCH_MAX == CP0_UI_STORE_UPDATE_BATCH_MAX,
                "Store batch limits must match");
@@ -273,6 +278,95 @@ static void poll_device_settings(struct shell *shell)
     struct cp0_device_settings settings;
     if (cp0_appd_get_device_settings(&settings) == 0)
         apply_device_settings(shell, &settings);
+}
+
+static void apply_display_state(struct shell *shell,
+                                const struct cp0_display_state *state)
+{
+    cp0_ui_set_display_state(&shell->ui, state->available,
+                             state->brightness_percent);
+}
+
+static void poll_display_state(struct shell *shell)
+{
+    struct cp0_display_state state = {0};
+    int result = cp0_display_get_state(&state);
+    if (result == CP0_DISPLAY_OK)
+        apply_display_state(shell, &state);
+    else
+        cp0_ui_set_display_state(&shell->ui, false, 0);
+}
+
+static void apply_audio_output_state(
+    struct shell *shell, const struct cp0_audio_output_state *state)
+{
+    cp0_ui_set_audio_output_state(&shell->ui, state->available,
+                                  state->volume_percent, state->muted);
+}
+
+static void poll_audio_output_state(struct shell *shell)
+{
+    struct cp0_audio_output_state state = {0};
+    int result = cp0_audio_get_output_state(&state);
+    if (result == CP0_AUDIO_SETTINGS_OK)
+        apply_audio_output_state(shell, &state);
+    else
+        cp0_ui_set_audio_output_state(&shell->ui, false, 0, false);
+}
+
+static void apply_connectivity_state(
+    struct shell *shell, const struct cp0_connectivity_state *state)
+{
+    cp0_ui_set_connectivity_state(
+        &shell->ui, state->available, state->wifi_available,
+        state->wifi_enabled, state->airplane_mode);
+}
+
+static void poll_connectivity_state(struct shell *shell)
+{
+    struct cp0_connectivity_state state = {0};
+    int result = cp0_connectivity_get_state(&state);
+    if (result == CP0_CONNECTIVITY_OK)
+        apply_connectivity_state(shell, &state);
+    else
+        cp0_ui_set_connectivity_state(&shell->ui, false, false, false, false);
+}
+
+static unsigned int screen_timeout_seconds(unsigned int selection)
+{
+    static const unsigned int values[] = {30U, 60U, 300U, 0U};
+    return selection < CP0_SHELL_TIMEOUT_COUNT ? values[selection] : 60U;
+}
+
+static void load_shell_preferences(struct shell *shell)
+{
+    struct cp0_shell_settings settings;
+    cp0_shell_settings_defaults(&settings);
+    if (!cp0_shell_settings_load(CP0_SHELL_SETTINGS_PATH, &settings))
+        fprintf(stderr, "system-shell: using default shell preferences\n");
+    cp0_ui_set_preferences(&shell->ui, settings.theme,
+                           settings.screen_timeout, settings.key_sounds);
+}
+
+static void save_shell_preferences(struct shell *shell)
+{
+    const struct cp0_shell_settings settings = {
+        .theme = shell->ui.theme,
+        .screen_timeout = shell->ui.screen_timeout,
+        .key_sounds = shell->ui.key_sounds,
+    };
+    if (!cp0_shell_settings_save(CP0_SHELL_SETTINGS_PATH, &settings))
+        fprintf(stderr, "system-shell: cannot persist shell preferences\n");
+}
+
+static void apply_screen_timeout(struct shell *shell)
+{
+    unsigned int seconds = screen_timeout_seconds(shell->ui.screen_timeout);
+    if (shell->system_control == NULL ||
+        wl_proxy_get_version((struct wl_proxy *)shell->system_control) < 6U)
+        return;
+    cp0_system_shell_v1_set_idle_timeout(shell->system_control, seconds);
+    fprintf(stderr, "system-shell: display idle timeout=%u seconds\n", seconds);
 }
 
 static void apply_auto_update_status(
@@ -1309,6 +1403,87 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                         app_id);
             }
         }
+    } else if (event == CP0_UI_EVENT_WIFI_ENABLE ||
+               event == CP0_UI_EVENT_WIFI_DISABLE ||
+               event == CP0_UI_EVENT_AIRPLANE_ENABLE ||
+               event == CP0_UI_EVENT_AIRPLANE_DISABLE) {
+        struct cp0_connectivity_state state = {0};
+        bool airplane = event == CP0_UI_EVENT_AIRPLANE_ENABLE ||
+                        event == CP0_UI_EVENT_AIRPLANE_DISABLE;
+        bool enabled = event == CP0_UI_EVENT_WIFI_ENABLE ||
+                       event == CP0_UI_EVENT_AIRPLANE_ENABLE;
+        int result = airplane
+                         ? cp0_connectivity_set_airplane_mode(enabled, &state)
+                         : cp0_connectivity_set_wifi_enabled(enabled, &state);
+        if (result == CP0_CONNECTIVITY_OK) {
+            apply_connectivity_state(shell, &state);
+            fprintf(stderr,
+                    "system-shell: %s changed to %s\n",
+                    airplane ? "airplane mode" : "Wi-Fi",
+                    enabled ? "enabled" : "disabled");
+        } else {
+            fprintf(stderr, "system-shell: connectivity update failed\n");
+            poll_connectivity_state(shell);
+        }
+    } else if (event == CP0_UI_EVENT_BRIGHTNESS_DOWN ||
+               event == CP0_UI_EVENT_BRIGHTNESS_UP) {
+        struct cp0_display_state state = {0};
+        enum cp0_display_direction direction =
+            event == CP0_UI_EVENT_BRIGHTNESS_DOWN ? CP0_DISPLAY_DECREASE
+                                                  : CP0_DISPLAY_INCREASE;
+        int result = cp0_display_adjust_brightness(direction, &state);
+        if (result == CP0_DISPLAY_OK) {
+            apply_display_state(shell, &state);
+            fprintf(stderr, "system-shell: brightness changed to %u%%\n",
+                    state.brightness_percent);
+        } else {
+            cp0_ui_set_display_state(&shell->ui, false, 0);
+            fprintf(stderr, "system-shell: brightness control unavailable\n");
+        }
+    } else if (event == CP0_UI_EVENT_THEME_PREVIOUS ||
+               event == CP0_UI_EVENT_THEME_NEXT) {
+        shell->ui.theme =
+            (shell->ui.theme +
+             (event == CP0_UI_EVENT_THEME_PREVIOUS ? 2U : 1U)) %
+            CP0_SHELL_THEME_COUNT;
+        save_shell_preferences(shell);
+        fprintf(stderr, "system-shell: theme changed to %u\n", shell->ui.theme);
+    } else if (event == CP0_UI_EVENT_TIMEOUT_PREVIOUS ||
+               event == CP0_UI_EVENT_TIMEOUT_NEXT) {
+        shell->ui.screen_timeout =
+            (shell->ui.screen_timeout +
+             (event == CP0_UI_EVENT_TIMEOUT_PREVIOUS ? 3U : 1U)) %
+            CP0_SHELL_TIMEOUT_COUNT;
+        save_shell_preferences(shell);
+        apply_screen_timeout(shell);
+    } else if (event == CP0_UI_EVENT_KEY_SOUNDS_TOGGLE) {
+        shell->ui.key_sounds = !shell->ui.key_sounds;
+        save_shell_preferences(shell);
+        fprintf(stderr, "system-shell: key sounds %s\n",
+                shell->ui.key_sounds ? "enabled" : "disabled");
+    } else if (event == CP0_UI_EVENT_VOLUME_DOWN ||
+               event == CP0_UI_EVENT_VOLUME_UP ||
+               event == CP0_UI_EVENT_MUTE) {
+        struct cp0_audio_output_state state = {0};
+        int result;
+        if (event == CP0_UI_EVENT_MUTE) {
+            result = cp0_audio_set_output_muted(!shell->ui.muted, &state);
+        } else {
+            enum cp0_audio_settings_direction direction =
+                event == CP0_UI_EVENT_VOLUME_DOWN
+                    ? CP0_AUDIO_SETTINGS_DECREASE
+                    : CP0_AUDIO_SETTINGS_INCREASE;
+            result = cp0_audio_adjust_output_volume(direction, &state);
+        }
+        if (result == CP0_AUDIO_SETTINGS_OK) {
+            apply_audio_output_state(shell, &state);
+            fprintf(stderr,
+                    "system-shell: audio output changed to %u%% muted=%s\n",
+                    state.volume_percent, state.muted ? "true" : "false");
+        } else {
+            cp0_ui_set_audio_output_state(&shell->ui, false, 0, false);
+            fprintf(stderr, "system-shell: audio output control unavailable\n");
+        }
     } else if (event == CP0_UI_EVENT_MEDIA_PLAY_PAUSE ||
                event == CP0_UI_EVENT_MEDIA_PREVIOUS ||
                event == CP0_UI_EVENT_MEDIA_NEXT) {
@@ -1466,6 +1641,9 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
     }
     if (previous_screen != CP0_UI_SETTINGS &&
         shell->ui.screen == CP0_UI_SETTINGS) {
+        poll_display_state(shell);
+        poll_audio_output_state(shell);
+        poll_connectivity_state(shell);
         poll_device_settings(shell);
         poll_auto_update_status(shell);
         poll_metrics_status(shell);
@@ -1793,6 +1971,10 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
         shell->shift_pressed = pressed;
         return;
     }
+    if (pressed && key != KEY_LEFTMETA && key != KEY_RIGHTMETA &&
+        shell->ui.key_sounds && shell->ui.volume_available &&
+        !shell->ui.muted)
+        (void)cp0_audio_play_key_click();
     if (pressed && cp0_ui_store_accepts_text(&shell->ui)) {
         enum cp0_ui_event event = CP0_UI_EVENT_NONE;
         bool handled = false;
@@ -1903,7 +2085,7 @@ static void handle_registry_global(void *data, struct wl_registry *registry,
         xdg_wm_base_add_listener(shell->wm_base, &wm_base_listener, shell);
     } else if (strcmp(interface, cp0_system_shell_v1_interface.name) == 0 &&
                version >= 4) {
-        uint32_t bind_version = version < 5 ? version : 5;
+        uint32_t bind_version = version < 6 ? version : 6;
         shell->system_control = wl_registry_bind(
             registry, name, &cp0_system_shell_v1_interface, bind_version);
         cp0_system_shell_v1_add_listener(shell->system_control,
@@ -2015,6 +2197,7 @@ static bool shell_connect(struct shell *shell)
     shell->width = CP0_UI_WIDTH;
     shell->height = CP0_UI_HEIGHT;
     cp0_ui_init(&shell->ui);
+    load_shell_preferences(shell);
     shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     shell->display = wl_display_connect(NULL);
     if (shell->display == NULL) {
@@ -2033,6 +2216,7 @@ static bool shell_connect(struct shell *shell)
         fprintf(stderr, "system-shell: required Wayland globals unavailable\n");
         return false;
     }
+    apply_screen_timeout(shell);
 
     shell->surface = wl_compositor_create_surface(shell->compositor);
     shell->xdg_surface =
@@ -2115,6 +2299,9 @@ static int shell_dispatch(struct shell *shell)
 
     poll_app_catalog(shell);
     poll_store_catalog(shell);
+    poll_display_state(shell);
+    poll_audio_output_state(shell);
+    poll_connectivity_state(shell);
     shell_redraw(shell);
 
     while (!stop_requested) {
@@ -2192,6 +2379,9 @@ static int shell_dispatch(struct shell *shell)
                     poll_store_catalog(shell);
                     show_store_completion_notification(shell);
                     if (shell->ui.screen == CP0_UI_SETTINGS) {
+                        poll_display_state(shell);
+                        poll_audio_output_state(shell);
+                        poll_connectivity_state(shell);
                         poll_device_settings(shell);
                         poll_auto_update_status(shell);
                         poll_metrics_status(shell);

@@ -108,6 +108,20 @@ enum cp0_ui_event {
     CP0_UI_EVENT_MEDIA_PREVIOUS,
     CP0_UI_EVENT_MEDIA_NEXT,
     CP0_UI_EVENT_SCREENSHOT,
+    CP0_UI_EVENT_BRIGHTNESS_DOWN,
+    CP0_UI_EVENT_BRIGHTNESS_UP,
+    CP0_UI_EVENT_VOLUME_DOWN,
+    CP0_UI_EVENT_VOLUME_UP,
+    CP0_UI_EVENT_MUTE,
+    CP0_UI_EVENT_WIFI_ENABLE,
+    CP0_UI_EVENT_WIFI_DISABLE,
+    CP0_UI_EVENT_AIRPLANE_ENABLE,
+    CP0_UI_EVENT_AIRPLANE_DISABLE,
+    CP0_UI_EVENT_THEME_PREVIOUS,
+    CP0_UI_EVENT_THEME_NEXT,
+    CP0_UI_EVENT_TIMEOUT_PREVIOUS,
+    CP0_UI_EVENT_TIMEOUT_NEXT,
+    CP0_UI_EVENT_KEY_SOUNDS_TOGGLE,
 };
 
 enum cp0_ui_screenshot_status {
@@ -387,10 +401,14 @@ struct cp0_ui {
     uint64_t store_preflight_available_bytes;
     bool wifi_enabled;
     bool airplane_mode;
+    bool connectivity_available;
+    bool wifi_available;
     bool muted;
     bool key_sounds;
     bool camera_mirror;
     bool local_simulation;
+    bool brightness_available;
+    bool volume_available;
     unsigned int brightness_percent;
     unsigned int volume_percent;
     unsigned int theme;
@@ -504,6 +522,15 @@ void cp0_ui_set_status(struct cp0_ui *ui, const char *clock_text,
                        bool network_online, int battery_percent);
 void cp0_ui_set_device_info(struct cp0_ui *ui,
                             const struct cp0_ui_device_info *info);
+void cp0_ui_set_display_state(struct cp0_ui *ui, bool available,
+                              unsigned int brightness_percent);
+void cp0_ui_set_audio_output_state(struct cp0_ui *ui, bool available,
+                                   unsigned int volume_percent, bool muted);
+void cp0_ui_set_connectivity_state(struct cp0_ui *ui, bool available,
+                                   bool wifi_available, bool wifi_enabled,
+                                   bool airplane_mode);
+void cp0_ui_set_preferences(struct cp0_ui *ui, unsigned int theme,
+                            unsigned int screen_timeout, bool key_sounds);
 void cp0_ui_set_network_info(struct cp0_ui *ui,
                              const struct cp0_ui_network_info *info);
 void cp0_ui_set_device_settings(

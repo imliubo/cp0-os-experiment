@@ -3,7 +3,7 @@ use std::io::{self, BufRead, Write};
 
 use serde::{Deserialize, Serialize};
 
-pub const STORAGE_PROTOCOL_VERSION: u32 = 1;
+pub const STORAGE_PROTOCOL_VERSION: u32 = 2;
 pub const MAX_STORAGE_KEY_BYTES: usize = 64;
 pub const MAX_STORAGE_VALUE_BYTES: usize = 8 * 1024;
 pub const MAX_STORAGE_FRAME_BYTES: usize = 16 * 1024;
@@ -27,6 +27,7 @@ pub enum StorageCommand {
     Put { key: String, value_base64: String },
     Get { key: String },
     Delete { key: String },
+    Usage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +50,9 @@ pub enum StorageOutcome {
     NotFound,
     Deleted {
         existed: bool,
+        used_bytes: u64,
+    },
+    Usage {
         used_bytes: u64,
     },
     Error {
@@ -157,6 +161,16 @@ impl StorageRequest {
         }
     }
 
+    pub fn usage(request_id: u64, app_id: &str, quota_bytes: u64) -> Self {
+        Self {
+            protocol_version: STORAGE_PROTOCOL_VERSION,
+            request_id,
+            app_id: app_id.into(),
+            quota_bytes,
+            command: StorageCommand::Usage,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), StorageProtocolError> {
         validate_version(self.protocol_version)?;
         if !cp0_manifest::is_valid_app_id(&self.app_id) {
@@ -174,6 +188,7 @@ impl StorageRequest {
                 decode_value(value_base64).map(|_| ())
             }
             StorageCommand::Get { key } | StorageCommand::Delete { key } => validate_key(key),
+            StorageCommand::Usage => Ok(()),
         }
     }
 }
@@ -216,6 +231,14 @@ impl StorageResponse {
         }
     }
 
+    pub const fn usage(request_id: u64, used_bytes: u64) -> Self {
+        Self {
+            protocol_version: STORAGE_PROTOCOL_VERSION,
+            request_id,
+            outcome: StorageOutcome::Usage { used_bytes },
+        }
+    }
+
     pub fn error(request_id: u64, code: StorageErrorCode, message: impl Into<String>) -> Self {
         Self {
             protocol_version: STORAGE_PROTOCOL_VERSION,
@@ -230,7 +253,9 @@ impl StorageResponse {
     pub fn validate(&self) -> Result<(), StorageProtocolError> {
         validate_version(self.protocol_version)?;
         match &self.outcome {
-            StorageOutcome::Stored { used_bytes } | StorageOutcome::Deleted { used_bytes, .. }
+            StorageOutcome::Stored { used_bytes }
+            | StorageOutcome::Deleted { used_bytes, .. }
+            | StorageOutcome::Usage { used_bytes }
                 if *used_bytes > MAX_STORAGE_QUOTA_BYTES =>
             {
                 Err(StorageProtocolError::InvalidUsage)
@@ -451,6 +476,10 @@ mod tests {
             read_request(&mut Cursor::new(frame)).unwrap(),
             Some(request)
         );
+        let usage = StorageRequest::usage(2, "dev.cardputerzero.test", MIB);
+        let mut frame = Vec::new();
+        write_request(&mut frame, &usage).unwrap();
+        assert_eq!(read_request(&mut Cursor::new(frame)).unwrap(), Some(usage));
         for key in ["", ".hidden", "../escape", "with/slash", "bad key"] {
             assert!(validate_key(key).is_err(), "accepted {key:?}");
         }

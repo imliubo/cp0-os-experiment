@@ -40,8 +40,12 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     "$repo_root/system-shell/src/main.c" \
     "$repo_root/system-shell/src/ui.c" \
     "$repo_root/system-shell/src/screenshot_store.c" \
+    "$repo_root/system-shell/src/shell_settings.c" \
     "$repo_root/system-shell/src/json.c" \
     "$repo_root/system-shell/src/appd_client.c" \
+    "$repo_root/system-shell/src/audio_settings_client.c" \
+    "$repo_root/system-shell/src/connectivity_client.c" \
+    "$repo_root/system-shell/src/display_client.c" \
     "$repo_root/system-shell/src/store_client.c" \
     "$repo_root/system-shell/src/system_info.c" \
     "$output/cardputerzero-system-shell-protocol.c" \

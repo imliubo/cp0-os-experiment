@@ -46,6 +46,7 @@ struct cp0_policy {
     struct weston_layer hidden_layer;
     struct wl_listener compositor_destroy_listener;
     struct wl_listener compositor_wake_listener;
+    struct wl_listener compositor_idle_listener;
     struct wl_listener create_surface_listener;
     struct wl_listener screenshot_authority_listener;
     struct wl_list surface_watches;
@@ -503,6 +504,26 @@ shell_sleep_display(struct wl_client *client, struct wl_resource *resource)
 }
 
 static void
+shell_set_idle_timeout(struct wl_client *client, struct wl_resource *resource,
+                       uint32_t seconds)
+{
+    struct cp0_policy *policy = wl_resource_get_user_data(resource);
+    (void)client;
+
+    if (seconds != 0 && seconds != 30 && seconds != 60 && seconds != 300) {
+        wl_resource_post_error(resource,
+                               CP0_SYSTEM_SHELL_V1_ERROR_INVALID_VISIBILITY,
+                               "display idle timeout is invalid");
+        return;
+    }
+    policy->compositor->idle_time = (int)seconds;
+    wl_event_source_timer_update(policy->compositor->idle_source,
+                                 (int)seconds * 1000);
+    weston_log("cardputerzero-policy: display idle timeout=%u seconds\n",
+               seconds);
+}
+
+static void
 shell_activate_app(struct wl_client *client, struct wl_resource *resource,
                    uint32_t token)
 {
@@ -558,6 +579,7 @@ static const struct cp0_system_shell_v1_interface shell_implementation = {
     .activate_app = shell_activate_app,
     .set_overlay_mode = shell_set_overlay_mode,
     .sleep_display = shell_sleep_display,
+    .set_idle_timeout = shell_set_idle_timeout,
 };
 
 static void
@@ -581,7 +603,7 @@ bind_system_shell(struct wl_client *client, void *data, uint32_t version,
     }
 
     resource = wl_resource_create(client, &cp0_system_shell_v1_interface,
-                                  version < 5 ? version : 5, id);
+                                  version < 6 ? version : 6, id);
     if (resource == NULL) {
         wl_client_post_no_memory(client);
         return;
@@ -768,6 +790,21 @@ compositor_woke(struct wl_listener *listener, void *data)
 }
 
 static void
+compositor_became_idle(struct wl_listener *listener, void *data)
+{
+    struct cp0_policy *policy =
+        wl_container_of(listener, policy, compositor_idle_listener);
+    (void)data;
+
+    if (policy->compositor->idle_time <= 0)
+        return;
+    set_overlay_mode(policy, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL,
+                     first_keyboard(policy->compositor));
+    weston_compositor_sleep(policy->compositor);
+    weston_log("cardputerzero-policy: idle timeout put display to sleep\n");
+}
+
+static void
 policy_destroyed(struct wl_listener *listener, void *data)
 {
     struct cp0_policy *policy =
@@ -787,6 +824,7 @@ policy_destroyed(struct wl_listener *listener, void *data)
     }
     wl_list_remove(&policy->create_surface_listener.link);
     wl_list_remove(&policy->compositor_wake_listener.link);
+    wl_list_remove(&policy->compositor_idle_listener.link);
     wl_list_remove(&policy->screenshot_authority_listener.link);
     wl_list_remove(&policy->compositor_destroy_listener.link);
     if (policy->global != NULL)
@@ -853,14 +891,18 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
     policy->compositor_wake_listener.notify = compositor_woke;
     wl_signal_add(&compositor->wake_signal,
                   &policy->compositor_wake_listener);
+    policy->compositor_idle_listener.notify = compositor_became_idle;
+    wl_signal_add(&compositor->idle_signal,
+                  &policy->compositor_idle_listener);
 
     policy->global = wl_global_create(
-        compositor->wl_display, &cp0_system_shell_v1_interface, 5, policy,
+        compositor->wl_display, &cp0_system_shell_v1_interface, 6, policy,
         bind_system_shell);
     if (policy->global == NULL) {
         wl_event_source_remove(policy->esc_timer);
         wl_list_remove(&policy->create_surface_listener.link);
         wl_list_remove(&policy->compositor_wake_listener.link);
+        wl_list_remove(&policy->compositor_idle_listener.link);
         wl_list_remove(&policy->screenshot_authority_listener.link);
         wl_list_remove(&policy->compositor_destroy_listener.link);
         weston_layer_fini(&policy->trusted_layer);

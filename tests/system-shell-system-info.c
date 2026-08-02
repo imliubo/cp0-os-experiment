@@ -40,6 +40,14 @@ int main(void)
            CP0_BATTERY_DISCHARGING);
     assert(cp0_system_info_parse_battery_status("unsupported") ==
            CP0_BATTERY_UNKNOWN);
+    assert(cp0_system_info_classify_i2c_bus(false, false, false) ==
+           CP0_BUS_UNAVAILABLE);
+    assert(cp0_system_info_classify_i2c_bus(true, false, false) ==
+           CP0_BUS_INACCESSIBLE);
+    assert(cp0_system_info_classify_i2c_bus(false, true, false) ==
+           CP0_BUS_INACCESSIBLE);
+    assert(cp0_system_info_classify_i2c_bus(false, true, true) ==
+           CP0_BUS_READY);
 
     cp0_system_info_collect(&info);
     assert(info.battery_percent >= -1 && info.battery_percent <= 100);
