@@ -290,6 +290,7 @@ systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-appd.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-display.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-connectivity.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-gpio.conf
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-provision.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-storage.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-trust.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-store.conf

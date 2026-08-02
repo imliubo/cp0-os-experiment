@@ -1,7 +1,8 @@
 [Unit]
 Description=CardputerZero trusted System Shell
 BindsTo=cardputerzero-compositor.service
-After=cardputerzero-compositor.service
+Wants=cardputerzero-provisiond.socket
+After=cardputerzero-compositor.service cardputerzero-provisiond.socket
 PartOf=cardputerzero-compositor.service
 ConditionPathExists=/usr/bin/cardputerzero-system-shell
 

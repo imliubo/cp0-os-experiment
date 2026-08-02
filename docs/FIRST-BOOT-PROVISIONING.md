@@ -337,6 +337,22 @@ This product decision requires explicit approval.
 
 Production acceptance is not complete until all of the following pass:
 
+### V0.6 finding: missing persistent service directory
+
+The first production candidate booted the trusted Setup surface on V0.6 but
+reported `Provisioning service is unavailable`. Inspection of the exact image
+showed that the factory `cp0-data` payload omitted
+`/var/lib/cardputerzero/provisioning`, while the daemon's systemd sandbox named
+that path as a required `ReadWritePaths` entry. systemd therefore rejected the
+service before executing it.
+
+The corrected image creates the root-owned mode `0700` directory both in the
+factory payload and through tmpfiles, verifies it in the mounted-rootfs gate,
+orders the System Shell after the provisioning socket, and retries transient
+socket unavailability without leaving Setup stuck. The daemon also retains the
+minimal `CAP_CHOWN` needed to assign the persistent Owner home to UID 1000. A
+fresh-media burn is still required to close the hardware finding.
+
 ### Host and image tests
 
 - mounted product root contains no human UID, fixed username, password hash,

@@ -162,6 +162,15 @@ if [[ $access_profile == production ]]; then
             exit 1
         fi
     done
+    if [[ ! -d $rootfs/var/lib/cardputerzero-persist/cardputerzero/provisioning ]]; then
+        echo "error: production image omits the persistent provisioning directory" >&2
+        exit 1
+    fi
+    if [[ $(stat -c '%a:%u:%g' \
+        "$rootfs/var/lib/cardputerzero-persist/cardputerzero/provisioning") != 700:0:0 ]]; then
+        echo "error: persistent provisioning directory ownership or mode is unsafe" >&2
+        exit 1
+    fi
     chroot "$rootfs" /usr/bin/jq -e \
         '.developer_mode_allowed == false and .recovery_mode_allowed == false' \
         /etc/cardputerzero/device-policy.json >/dev/null

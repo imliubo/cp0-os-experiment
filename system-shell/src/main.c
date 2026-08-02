@@ -89,6 +89,7 @@ struct shell {
     bool capture_busy;
     struct screenshot_buffer screenshot_buffer;
     int timer_fd;
+    bool provision_retry_pending;
     int width;
     int height;
     bool configured;
@@ -157,9 +158,11 @@ static void initialize_provisioning(struct shell *shell)
     char error[CP0_PROVISION_ERROR_MAX + 1] = {0};
     int result = cp0_provision_get_status(&status, error);
     if (result == CP0_PROVISION_OK) {
+        shell->provision_retry_pending = false;
         apply_provision_status(shell, &status, false);
         return;
     }
+    shell->provision_retry_pending = result == CP0_PROVISION_UNAVAILABLE;
     cp0_ui_setup_begin(&shell->ui,
                        result == CP0_PROVISION_REPAIR_REQUIRED
                            ? CP0_UI_SETUP_REPAIR
@@ -191,12 +194,16 @@ static void handle_setup_event(struct shell *shell, enum cp0_ui_event event)
 
     if (event == CP0_UI_EVENT_SETUP_RETRY) {
         result = cp0_provision_get_status(&status, error);
-        if (result == CP0_PROVISION_OK)
+        shell->provision_retry_pending = result == CP0_PROVISION_UNAVAILABLE;
+        if (result == CP0_PROVISION_OK) {
+            shell->provision_retry_pending = false;
             apply_provision_status(shell, &status, true);
-        else if (result == CP0_PROVISION_REPAIR_REQUIRED)
+        } else if (result == CP0_PROVISION_REPAIR_REQUIRED) {
+            shell->provision_retry_pending = false;
             cp0_ui_setup_begin(&shell->ui, CP0_UI_SETUP_REPAIR);
-        else
+        } else {
             cp0_ui_setup_result(&shell->ui, event, false, error);
+        }
         return;
     }
     if (event == CP0_UI_EVENT_SETUP_START) {
@@ -282,7 +289,28 @@ static void handle_setup_event(struct shell *shell, enum cp0_ui_event event)
     default:
         return;
     }
+    shell->provision_retry_pending = result == CP0_PROVISION_UNAVAILABLE;
     cp0_ui_setup_result(&shell->ui, event, result == CP0_PROVISION_OK, error);
+}
+
+static void retry_unavailable_provisioning(struct shell *shell)
+{
+    struct cp0_provision_status status = {0};
+    char error[CP0_PROVISION_ERROR_MAX + 1] = {0};
+
+    if (!shell->provision_retry_pending || !shell->ui.setup_active)
+        return;
+    int result = cp0_provision_get_status(&status, error);
+    if (result == CP0_PROVISION_UNAVAILABLE)
+        return;
+    shell->provision_retry_pending = false;
+    if (result == CP0_PROVISION_OK)
+        apply_provision_status(shell, &status, true);
+    else if (result == CP0_PROVISION_REPAIR_REQUIRED)
+        cp0_ui_setup_begin(&shell->ui, CP0_UI_SETUP_REPAIR);
+    else
+        cp0_ui_setup_result(&shell->ui, CP0_UI_EVENT_SETUP_RETRY, false,
+                            error);
 }
 
 static void cancel_notification(struct shell *shell, bool restore_mode)
@@ -2547,6 +2575,7 @@ static int shell_dispatch(struct shell *shell)
             uint64_t expirations;
             if (read(shell->timer_fd, &expirations, sizeof(expirations)) > 0) {
                 update_notification_timer(shell);
+                retry_unavailable_provisioning(shell);
                 if (cp0_ui_tick(&shell->ui) &&
                     shell->overlay_mode ==
                         CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION &&
