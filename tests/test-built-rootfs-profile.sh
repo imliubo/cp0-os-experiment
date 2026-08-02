@@ -151,7 +151,7 @@ if [[ $access_profile == production ]]; then
         grep -Eq "^${database}:.*(^|[[:space:]])extrausers([[:space:]]|$)" \
             "$rootfs/etc/nsswitch.conf"
     done
-    test -e "$rootfs/lib/aarch64-linux-gnu/libnss_extrausers.so.2"
+    test -e "$rootfs/usr/lib/libnss_extrausers.so.2"
     chroot "$rootfs" /usr/bin/dpkg-query -W -f='${Status}\n' \
         libnss-extrausers | grep -qx 'install ok installed'
     chroot "$rootfs" /usr/bin/locale -a | grep -qx 'en_US.utf8'

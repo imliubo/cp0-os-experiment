@@ -359,6 +359,6 @@ for database in passwd group shadow; do
     fi
     grep -Eq "^${database}:.*extrausers" /etc/nsswitch.conf
 done
-test -e /lib/aarch64-linux-gnu/libnss_extrausers.so.2
+test -e /usr/lib/libnss_extrausers.so.2
 CHROOT
 fi

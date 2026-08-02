@@ -52,7 +52,7 @@ grep -Fq 'device-policy-production.json' "$build"
 grep -Fq '/etc/cardputerzero/access-profile' "$bsp"
 grep -Fq 'userdel --remove "$FIRST_USER_NAME"' "$bsp"
 grep -Fq 'temporary product build identity remains' "$bsp"
-grep -Fq 'libnss_extrausers.so.2' "$bsp"
+grep -Fq 'test -e /usr/lib/libnss_extrausers.so.2' "$bsp"
 grep -Fq 'locale-gen en_US.UTF-8 zh_CN.UTF-8' "$bsp"
 if grep -Fq 'libpam-extrausers' \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/00-packages-nr"; then
