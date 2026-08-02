@@ -26,14 +26,20 @@ int main(void)
         "\"display_name\":\"Test Owner\",\"username\":\"owner\","
         "\"password_configured\":true,\"network_choice\":{"
         "\"kind\":\"wifi\",\"profile_id\":\"cp0-setup\","
-        "\"ssid\":\"Lab WiFi\"},\"ssh_enabled\":true}}}";
+        "\"ssid\":\"Lab WiFi\"},\"ssh_enabled\":true,"
+        "\"network_runtime\":{\"network_manager_available\":true,"
+        "\"ethernet_connected\":true,\"ethernet_ipv4\":\"192.168.20.146\","
+        "\"wifi_available\":true,\"wifi_connected\":false,"
+        "\"wifi_ipv4\":null}}}}";
     static const char wifi_response[] =
         "{\"protocol_version\":1,\"request_id\":8,\"outcome\":{"
         "\"status\":\"wifi-list\",\"networks\":[{\"ssid\":\"Lab\","
         "\"signal_percent\":91,\"security\":\"wpa3\","
         "\"connected\":false},{\"ssid\":\"Guest\","
         "\"signal_percent\":40,\"security\":\"open\","
-        "\"connected\":true}]}}";
+        "\"connected\":true},{\"ssid\":\"Corp\","
+        "\"signal_percent\":60,\"security\":\"unsupported\","
+        "\"connected\":false}]}}";
     static const char error_response[] =
         "{\"protocol_version\":1,\"request_id\":9,\"outcome\":{"
         "\"status\":\"error\",\"code\":\"repair-required\","
@@ -43,6 +49,16 @@ int main(void)
         "\"status\":\"wifi-list\",\"networks\":[{\"ssid\":\"Lab\","
         "\"signal_percent\":101,\"security\":\"wpa2\","
         "\"connected\":false}]}}";
+    static const char invalid_runtime[] =
+        "{\"protocol_version\":1,\"request_id\":11,\"outcome\":{"
+        "\"status\":\"state\",\"state\":{\"phase\":\"unprovisioned\","
+        "\"locale\":null,\"country\":null,\"timezone\":null,"
+        "\"hostname\":null,\"display_name\":null,\"username\":null,"
+        "\"password_configured\":false,\"network_choice\":null,"
+        "\"ssh_enabled\":false,\"network_runtime\":{"
+        "\"network_manager_available\":true,\"ethernet_connected\":true,"
+        "\"ethernet_ipv4\":\"not-an-ip\",\"wifi_available\":false,"
+        "\"wifi_connected\":false,\"wifi_ipv4\":null}}}}";
     struct cp0_provision_status status;
     struct cp0_provision_wifi_list wifi;
     char error[CP0_PROVISION_ERROR_MAX + 1];
@@ -56,11 +72,15 @@ int main(void)
     assert(status.network_kind == CP0_PROVISION_NETWORK_WIFI);
     assert(strcmp(status.username, "owner") == 0);
     assert(strcmp(status.network_ssid, "Lab WiFi") == 0);
+    assert(status.network_manager_available && status.ethernet_connected);
+    assert(strcmp(status.ethernet_ipv4, "192.168.20.146") == 0);
+    assert(status.wifi_available && !status.wifi_connected);
     assert(cp0_provision_test_parse_wifi(wifi_response, strlen(wifi_response),
                                          8, &wifi, error) == CP0_PROVISION_OK);
-    assert(wifi.count == 2 && wifi.networks[0].signal_percent == 91);
+    assert(wifi.count == 3 && wifi.networks[0].signal_percent == 91);
     assert(wifi.networks[0].security == CP0_PROVISION_WIFI_WPA3);
     assert(wifi.networks[1].connected);
+    assert(wifi.networks[2].security == CP0_PROVISION_WIFI_UNSUPPORTED);
     assert(cp0_provision_test_parse_state(
                error_response, strlen(error_response), 9, &status, error) ==
            CP0_PROVISION_REPAIR_REQUIRED);
@@ -70,6 +90,9 @@ int main(void)
            CP0_PROVISION_FAILED);
     assert(cp0_provision_test_parse_state(
                state_response, strlen(state_response), 6, &status, error) ==
+           CP0_PROVISION_FAILED);
+    assert(cp0_provision_test_parse_state(
+               invalid_runtime, strlen(invalid_runtime), 11, &status, error) ==
            CP0_PROVISION_FAILED);
     assert(cp0_provision_test_escape("a\"b\\c\n", escaped,
                                      sizeof(escaped)));

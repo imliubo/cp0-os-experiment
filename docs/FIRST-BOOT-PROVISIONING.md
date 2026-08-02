@@ -86,7 +86,9 @@ one concise help/error area. Long lists scroll without resizing the surface.
 6. **Password**: masked input, strength/length feedback and a Show toggle.
 7. **Confirm password**: exact re-entry; neither value is persisted as setup
    state.
-8. **Network**: Ethernet status, Wi-Fi, or `Use offline`.
+8. **Network**: live Ethernet state and IPv4 address, Wi-Fi adapter state, or
+   `Use offline`. A connected link without DHCP is shown as `Waiting for IP`
+   and cannot be accepted as configured Ethernet.
 9. **Wi-Fi network**: scan results, signal/security indicators and Refresh.
    Hidden SSID entry is deferred until its keyboard and error states have pixel
    coverage; it is not silently treated as an empty scan result.
@@ -98,11 +100,16 @@ one concise help/error area. Long lists scroll without resizing the surface.
     represented only as `Configured`.
 13. **Applying**: deterministic progress for identity, regional settings,
     network, remote access and verification.
-14. **Complete**: hostname, remote-access status and a single `Start` action.
-   Current IP remains available from the Network system app after Setup.
+14. **Complete**: hostname, current IPv4 (or Offline), remote-access status and
+   a single `Start` action. Current IP remains available from the Network system
+   app after Setup.
 
 Keyboard behavior is consistent on every page: Up/Down moves focus, Left/Right
 changes a value, Enter activates, Backspace edits, and ESC goes back when safe.
+The Shell derives held Shift from the compositor-provided XKB keymap and
+depressed/latched/locked modifier masks, with the raw key event retained as a
+fallback for the V0.6 ASMUX keyboard state machine. This keeps unshifted letters
+lower-case, held-Shift letters upper-case and the BSP's Sym layer independent.
 Password pages disable key-click sound, mask text by default and must never
 appear with cleartext in screenshots, crash reports or support bundles.
 
@@ -181,9 +188,11 @@ through the ordinary Settings broker.
 
 ### Resource bounds
 
-The setup renderer stays inside the existing 32 MiB Shell cgroup. The new
-daemon receives a 16 MiB memory limit, zero swap and a small task limit, and is
-allowed to exit when idle or after completion. Protocol frames are at most
+The setup renderer stays inside the existing 32 MiB Shell cgroup. The daemon
+receives a 64 MiB memory limit, zero swap and a small task limit, and is allowed
+to exit when idle or after completion. The one-shot ceiling includes the daemon
+and its yescrypt child in the same cgroup; the previous 16 MiB ceiling could
+kill password hashing on CM0. Protocol frames are at most
 16 KiB, Wi-Fi results are capped at 64 entries, and only one scan or connection
 attempt runs at a time. No downloaded asset, WebView, desktop toolkit or
 additional long-running UI process is introduced. Hardware acceptance must
@@ -260,6 +269,15 @@ Missing identity prerequisites or contradictory completion records enter
 `REPAIR_REQUIRED`; they must not bypass Setup, create a second owner or erase
 data automatically.
 
+Final commit applies and verifies regional settings, the SSH consent marker,
+owner group membership and the live SSH service before persisting `COMMITTING`.
+It then atomically writes the completion marker and finally persists
+`COMPLETE`. Restart with `COMMITTING` but no completion marker returns safely to
+`REVIEW`; restart with both final side effects and the marker completes the
+transaction automatically. `REVIEW` accepts either pre-commit or idempotently
+applied SSH membership so an SSH start failure remains retryable instead of
+being misclassified as identity corruption.
+
 If `cp0-data` cannot be mounted safely, the Shell displays a persistent-storage
 error with shutdown/retry guidance. It must not create credentials in the
 volatile overlay.
@@ -269,9 +287,21 @@ volatile overlay.
 The country selection is committed before enabling a Wi-Fi connection. Wi-Fi
 profiles remain in the existing persistent NetworkManager keyfile path with
 mode `0600`, root ownership and no secret exposure to the Shell. Setup supports
-scan, refresh, connection retry and an explicit offline choice. Ethernet counts
-as configured only after NetworkManager has obtained a
-usable local configuration during Setup.
+scan, refresh, connection retry and an explicit offline choice. The live setup
+status distinguishes NetworkManager unavailable, no Wi-Fi adapter, Ethernet
+carrier without DHCP, and a usable IPv4 address. Ethernet counts as configured
+only after NetworkManager has obtained a usable IPv4 configuration during
+Setup. Open, WPA2 and WPA3 networks are selectable; WEP, 802.1X/EAP and other
+unsupported security modes remain visible but are rejected before asking for
+an incompatible password.
+
+Shell request timeouts are operation-specific rather than a single three-second
+deadline: system mutations and status operations use 20 seconds because their
+responses include live network probes, scans use 45 seconds, and CM0 password
+hashing, Wi-Fi activation and final commit use 75 seconds. NetworkManager itself
+is bounded to 30 seconds for scan and 45 seconds for activation. The UI renders
+explicit `Securing password`, `Scanning Wi-Fi` and `Connecting Wi-Fi` wait states
+before blocking on these bounded calls.
 
 `state.json` records only the network decision type and stable profile ID, not
 the SSID password. Network availability after setup is informational. Forgetting
@@ -373,19 +403,33 @@ when `/sys/class/ieee80211` has no PHY. Failed system commands record the tool,
 exit status, fixed operation label, and bounded stderr in the service journal;
 the Setup UI receives only the fixed operation label.
 
+The next candidate accepted lower-case and Sym input but held Shift did not
+produce upper-case letters, and password confirmation returned
+`Provisioning service is unavailable`. The fixed V0.6 BSP implements Shift in
+its ASMUX state machine and the Shell previously discarded the compositor's XKB
+modifier masks. The Shell now consumes the XKB Shift modifier explicitly.
+Password hashing and later network operations also shared a three-second Shell
+socket deadline, while yescrypt ran inside an undersized 16 MiB cgroup. The
+candidate now uses the bounded operation-specific deadlines and 64 MiB
+setup-only daemon ceiling described above. The same audit added live Ethernet
+IPv4 reporting, bounded NetworkManager waits, unsupported Wi-Fi security
+classification, system-identity collision rejection and SSH-On commit recovery.
+
 ### Host and image tests
 
 - mounted product root contains no human UID, fixed username, password hash,
   authorized key or build-user residue;
 - development/recovery artifacts cannot be mislabeled as product artifacts;
-- state-machine tests cover every legal and illegal transition and restart;
+- state-machine tests cover every legal and illegal transition, password/SSH
+  backend failure, and both sides of the final completion-marker transaction;
 - fault injection interrupts every durable write before/after write, `fsync`
   and rename, then proves resume or `REPAIR_REQUIRED` behavior;
 - protocol tests and fuzzing cover caller identity, frame bounds, duplicate
   fields, invalid Unicode/bytes and secret redaction;
 - account tests prove fixed UID ranges, reserved-name rejection, PAM/NSS login,
   group membership, owner-home isolation and OS rollback compatibility;
-- NetworkManager tests cover Ethernet, open/WPA2/WPA3 Wi-Fi, hidden SSID,
+- NetworkManager tests cover Ethernet IPv4 readiness, open/WPA2/WPA3 Wi-Fi,
+  unsupported enterprise/WEP classification, hidden SSID,
   incorrect password, DHCP failure, offline mode and later link loss;
 - SSH tests prove Off has no listener/host keys, enabled modes admit only the
   owner, root and applications are rejected, and disabling removes the listener;

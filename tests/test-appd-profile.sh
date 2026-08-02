@@ -136,7 +136,7 @@ grep -qx 'd /run/cardputerzero-connectivityd 0750 root cp0-connectivity-control 
 grep -q 'trusted_uids.contains' "$repo_root/crates/cp0-connectivityd/src/lib.rs"
 grep -q 'DEFAULT_NMCLI_PATH.*"/usr/bin/nmcli"' "$repo_root/crates/cp0-connectivityd/src/lib.rs"
 grep -qx 'User=root' "$provision_service"
-grep -qx 'MemoryMax=16M' "$provision_service"
+grep -qx 'MemoryMax=64M' "$provision_service"
 grep -qx 'CapabilityBoundingSet=CAP_CHOWN CAP_NET_ADMIN' "$provision_service"
 grep -qx 'AmbientCapabilities=CAP_CHOWN CAP_NET_ADMIN' "$provision_service"
 grep -qx 'ProtectHome=no' "$provision_service"

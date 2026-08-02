@@ -427,7 +427,13 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     memset(ui->setup_password, 0, sizeof(ui->setup_password));
     ui->setup_page = CP0_UI_SETUP_NETWORK;
     ui->setup_network = 1;
+    cp0_ui_setup_set_network_status(ui, true, true, "192.168.31.121", true,
+                                    false, NULL);
     write_snapshot(directory, "setup-network", ui, frame);
+    cp0_ui_setup_set_busy(ui, "SCANNING WI-FI",
+                          "SEARCHING FOR NEARBY NETWORKS");
+    write_snapshot(directory, "setup-busy", ui, frame);
+    cp0_ui_setup_set_busy(ui, NULL, NULL);
     static const struct cp0_ui_setup_wifi setup_wifi[] = {
         {.security = 2, .signal_percent = 91, .ssid = "Home WiFi"},
         {.security = 1, .signal_percent = 67, .ssid = "Studio"},
@@ -441,6 +447,10 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     ui->setup_ssh_enabled = false;
     ui->setup_page = CP0_UI_SETUP_REVIEW;
     write_snapshot(directory, "setup-review", ui, frame);
+    cp0_ui_setup_set_network_status(ui, true, false, NULL, true, true,
+                                    "192.168.31.122");
+    ui->setup_page = CP0_UI_SETUP_COMPLETE;
+    write_snapshot(directory, "setup-complete", ui, frame);
     cp0_ui_setup_begin(ui, CP0_UI_SETUP_REPAIR);
     write_snapshot(directory, "setup-repair", ui, frame);
 }
@@ -470,6 +480,17 @@ int main(int argc, char **argv)
                symbol_keys[index].character);
     assert(cp0_ui_key_character(30, false) == 'a');
     assert(cp0_ui_key_character(30, true) == 'A');
+    static const uint32_t letter_keys[] = {
+        30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, 50,
+        49, 24, 25, 16, 19, 31, 20, 22, 47, 17, 45, 21, 44,
+    };
+    for (size_t index = 0;
+         index < sizeof(letter_keys) / sizeof(letter_keys[0]); index++) {
+        char lowercase = cp0_ui_key_character(letter_keys[index], false);
+        assert(lowercase >= 'a' && lowercase <= 'z');
+        assert(cp0_ui_key_character(letter_keys[index], true) ==
+               (char)(lowercase - 'a' + 'A'));
+    }
     assert(cp0_ui_key_character(2, false) == '1');
     assert(cp0_ui_key_character(11, false) == '0');
     assert(cp0_ui_key_character(12, false) == '-');
@@ -1442,6 +1463,18 @@ int main(int argc, char **argv)
            ui.setup_password_confirm[0] == '\0');
     assert(cp0_ui_handle_action(&ui, CP0_UI_GO_HOME) == CP0_UI_EVENT_NONE);
     assert(ui.setup_page == CP0_UI_SETUP_NETWORK);
+    cp0_ui_setup_set_network_status(&ui, true, true, "192.168.20.146", true,
+                                    false, NULL);
+    assert(ui.setup_network_manager_available && ui.setup_ethernet_connected);
+    assert(strcmp(ui.setup_ethernet_ipv4, "192.168.20.146") == 0);
+    cp0_ui_setup_set_busy(&ui, "SCANNING WI-FI", "SEARCHING");
+    assert(ui.setup_busy);
+    cp0_ui_setup_result(&ui, CP0_UI_EVENT_SETUP_RETRY, true, NULL);
+    assert(!ui.setup_busy);
+    ui.setup_page = CP0_UI_SETUP_WIFI_PASSWORD;
+    memset(ui.setup_wifi_password, 'x', 63);
+    ui.setup_wifi_password[63] = '\0';
+    assert(!cp0_ui_setup_input_ascii(&ui, 'x'));
     static const struct cp0_ui_setup_wifi wifi[] = {
         {.security = 1, .signal_percent = 80, .ssid = "Lab"},
     };
@@ -1454,6 +1487,13 @@ int main(int argc, char **argv)
     assert(ui.setup_page == CP0_UI_SETUP_ERROR);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_SETUP_RETRY);
+    static const struct cp0_ui_setup_wifi unsupported_wifi[] = {
+        {.security = 3, .signal_percent = 70, .ssid = "Enterprise"},
+    };
+    cp0_ui_setup_set_wifi(&ui, unsupported_wifi, 1);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+    assert(ui.setup_page == CP0_UI_SETUP_WIFI_LIST);
+    assert(strstr(ui.setup_error, "not supported") != NULL);
 
     render(&ui, frame);
     if (argc == 2)

@@ -11,6 +11,7 @@
 #define CP0_PROVISION_SSID_MAX 32
 #define CP0_PROVISION_ERROR_MAX 160
 #define CP0_PROVISION_WIFI_MAX 64
+#define CP0_PROVISION_IPV4_MAX 15
 
 enum cp0_provision_result {
     CP0_PROVISION_FAILED = -1,
@@ -45,6 +46,7 @@ enum cp0_provision_wifi_security {
     CP0_PROVISION_WIFI_OPEN,
     CP0_PROVISION_WIFI_WPA2,
     CP0_PROVISION_WIFI_WPA3,
+    CP0_PROVISION_WIFI_UNSUPPORTED,
 };
 
 struct cp0_provision_status {
@@ -52,6 +54,10 @@ struct cp0_provision_status {
     enum cp0_provision_network_kind network_kind;
     bool password_configured;
     bool ssh_enabled;
+    bool network_manager_available;
+    bool ethernet_connected;
+    bool wifi_available;
+    bool wifi_connected;
     char locale[CP0_PROVISION_TEXT_MAX + 1];
     char country[3];
     char timezone[CP0_PROVISION_TEXT_MAX + 1];
@@ -59,6 +65,8 @@ struct cp0_provision_status {
     char display_name[CP0_PROVISION_TEXT_MAX + 1];
     char username[CP0_PROVISION_USERNAME_MAX + 1];
     char network_ssid[CP0_PROVISION_SSID_MAX * 4 + 1];
+    char ethernet_ipv4[CP0_PROVISION_IPV4_MAX + 1];
+    char wifi_ipv4[CP0_PROVISION_IPV4_MAX + 1];
 };
 
 struct cp0_provision_wifi_network {

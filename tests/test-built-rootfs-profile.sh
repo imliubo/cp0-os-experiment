@@ -151,6 +151,8 @@ if [[ $access_profile == production ]]; then
         "$rootfs/usr/lib/systemd/system/cardputerzero-provisiond.service"
     grep -qx 'ProtectHostname=no' \
         "$rootfs/usr/lib/systemd/system/cardputerzero-provisiond.service"
+    grep -qx 'MemoryMax=64M' \
+        "$rootfs/usr/lib/systemd/system/cardputerzero-provisiond.service"
     for database in passwd group shadow; do
         grep -Eq "^${database}:.*(^|[[:space:]])extrausers([[:space:]]|$)" \
             "$rootfs/etc/nsswitch.conf"

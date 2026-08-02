@@ -208,7 +208,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     /tmp/cardputerzero-policy/cardputerzero-system-shell-protocol.c \
     /tmp/cardputerzero-weston-build/protocol/xdg-shell-protocol.c \
     /tmp/cardputerzero-weston-build/protocol/weston-output-capture-protocol.c \
-    \$(pkg-config --cflags --libs wayland-client libpng libdrm) \
+    \$(pkg-config --cflags --libs wayland-client libpng libdrm xkbcommon) \
     -o /tmp/cardputerzero-system-shell/cardputerzero-system-shell
 
 cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \

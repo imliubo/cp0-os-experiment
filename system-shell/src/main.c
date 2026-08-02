@@ -31,6 +31,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <wayland-client.h>
+#include <xkbcommon/xkbcommon.h>
 
 #define BUFFER_COUNT 2
 #define SCREENSHOT_RETRY_MAX 2U
@@ -96,6 +97,8 @@ struct shell {
     bool has_argb;
     bool meta_pressed;
     bool shift_pressed;
+    bool shift_modifier_active;
+    uint32_t shift_modifier_mask;
     bool redraw_pending;
     bool has_installed_apps;
     unsigned int catalog_ticks;
@@ -122,6 +125,15 @@ static void poll_display_state(struct shell *shell);
 static void poll_audio_output_state(struct shell *shell);
 static void poll_connectivity_state(struct shell *shell);
 
+static void apply_provision_network_status(
+    struct shell *shell, const struct cp0_provision_status *status)
+{
+    cp0_ui_setup_set_network_status(
+        &shell->ui, status->network_manager_available,
+        status->ethernet_connected, status->ethernet_ipv4,
+        status->wifi_available, status->wifi_connected, status->wifi_ipv4);
+}
+
 static void apply_provision_status(struct shell *shell,
                                    const struct cp0_provision_status *status,
                                    bool show_complete)
@@ -129,6 +141,7 @@ static void apply_provision_status(struct shell *shell,
     cp0_ui_setup_resume(&shell->ui, (unsigned int)status->phase,
                         status->hostname, status->display_name,
                         status->username, status->ssh_enabled);
+    apply_provision_network_status(shell, status);
     if (strcmp(status->locale, "zh_CN.UTF-8") == 0)
         shell->ui.setup_language = 1;
     static const char *countries[] = {"CN", "US", "GB", "DE", "JP"};
@@ -217,8 +230,31 @@ static void handle_setup_event(struct shell *shell, enum cp0_ui_event event)
                                                  : "Setup is not complete");
         return;
     }
-    if (event == CP0_UI_EVENT_SETUP_COMMIT ||
-        event == CP0_UI_EVENT_SETUP_CONNECT_WIFI) {
+    switch (event) {
+    case CP0_UI_EVENT_SETUP_SET_REGION:
+        cp0_ui_setup_set_busy(&shell->ui, "SAVING REGION",
+                              "APPLYING DEVICE AND TIME SETTINGS");
+        break;
+    case CP0_UI_EVENT_SETUP_SET_OWNER:
+        cp0_ui_setup_set_busy(&shell->ui, "CREATING OWNER",
+                              "PREPARING PRIVATE OWNER STORAGE");
+        break;
+    case CP0_UI_EVENT_SETUP_SET_PASSWORD:
+        cp0_ui_setup_set_busy(&shell->ui, "SECURING PASSWORD",
+                              "GENERATING A YESCRYPT PASSWORD HASH");
+        break;
+    case CP0_UI_EVENT_SETUP_LIST_WIFI:
+        cp0_ui_setup_set_busy(&shell->ui, "SCANNING WI-FI",
+                              "SEARCHING FOR NEARBY NETWORKS");
+        break;
+    case CP0_UI_EVENT_SETUP_CONNECT_WIFI:
+        cp0_ui_setup_set_busy(&shell->ui, "CONNECTING WI-FI",
+                              "AUTHENTICATING AND REQUESTING AN IP");
+        break;
+    default:
+        break;
+    }
+    if (shell->ui.setup_busy || event == CP0_UI_EVENT_SETUP_COMMIT) {
         shell_redraw(shell);
         wl_display_flush(shell->display);
     }
@@ -290,6 +326,8 @@ static void handle_setup_event(struct shell *shell, enum cp0_ui_event event)
         return;
     }
     shell->provision_retry_pending = result == CP0_PROVISION_UNAVAILABLE;
+    if (result == CP0_PROVISION_OK)
+        apply_provision_network_status(shell, &status);
     cp0_ui_setup_result(&shell->ui, event, result == CP0_PROVISION_OK, error);
 }
 
@@ -2087,10 +2125,39 @@ static bool translate_key(struct shell *shell, uint32_t key,
 static void handle_keyboard_keymap(void *data, struct wl_keyboard *keyboard,
                                    uint32_t format, int fd, uint32_t size)
 {
-    (void)data;
+    struct shell *shell = data;
+    struct xkb_context *context = NULL;
+    struct xkb_keymap *keymap = NULL;
+    void *mapping = MAP_FAILED;
+    xkb_mod_index_t shift_index;
     (void)keyboard;
-    (void)format;
-    (void)size;
+
+    shell->shift_modifier_mask = 0;
+    shell->shift_modifier_active = false;
+    if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 || size == 0)
+        goto cleanup;
+    mapping = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (mapping == MAP_FAILED)
+        goto cleanup;
+    context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    if (context == NULL)
+        goto cleanup;
+    keymap = xkb_keymap_new_from_string(context, mapping,
+                                         XKB_KEYMAP_FORMAT_TEXT_V1,
+                                         XKB_KEYMAP_COMPILE_NO_FLAGS);
+    if (keymap == NULL)
+        goto cleanup;
+    shift_index = xkb_keymap_mod_get_index(keymap, XKB_MOD_NAME_SHIFT);
+    if (shift_index != XKB_MOD_INVALID && shift_index < 32U)
+        shell->shift_modifier_mask = 1U << shift_index;
+
+cleanup:
+    if (keymap != NULL)
+        xkb_keymap_unref(keymap);
+    if (context != NULL)
+        xkb_context_unref(context);
+    if (mapping != MAP_FAILED)
+        munmap(mapping, size);
     close(fd);
 }
 
@@ -2114,6 +2181,12 @@ static void handle_keyboard_leave(void *data, struct wl_keyboard *keyboard,
     (void)surface;
     shell->meta_pressed = false;
     shell->shift_pressed = false;
+    shell->shift_modifier_active = false;
+}
+
+static bool shell_shift_active(const struct shell *shell)
+{
+    return shell->shift_pressed || shell->shift_modifier_active;
 }
 
 static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
@@ -2140,7 +2213,7 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
         if (key == KEY_BACKSPACE)
             handled = cp0_ui_setup_backspace(&shell->ui);
         else {
-            char character = cp0_ui_key_character(key, shell->shift_pressed);
+            char character = cp0_ui_key_character(key, shell_shift_active(shell));
             if (character != '\0')
                 handled = cp0_ui_setup_input_ascii(&shell->ui, character);
         }
@@ -2157,7 +2230,7 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
             event = cp0_ui_store_backspace(&shell->ui);
             handled = true;
         } else {
-            char character = cp0_ui_key_character(key, shell->shift_pressed);
+            char character = cp0_ui_key_character(key, shell_shift_active(shell));
             if (character != '\0') {
                 event = cp0_ui_store_input_ascii(&shell->ui, character);
                 handled = true;
@@ -2180,13 +2253,14 @@ static void handle_keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
                                       uint32_t mods_latched,
                                       uint32_t mods_locked, uint32_t group)
 {
-    (void)data;
+    struct shell *shell = data;
     (void)keyboard;
     (void)serial;
-    (void)mods_depressed;
-    (void)mods_latched;
-    (void)mods_locked;
     (void)group;
+    shell->shift_modifier_active =
+        shell->shift_modifier_mask != 0 &&
+        ((mods_depressed | mods_latched | mods_locked) &
+         shell->shift_modifier_mask) != 0;
 }
 
 static const struct wl_keyboard_listener keyboard_listener = {

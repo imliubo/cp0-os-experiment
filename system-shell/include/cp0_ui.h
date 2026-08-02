@@ -46,6 +46,7 @@
 #define CP0_UI_SETUP_PASSWORD_MAX 64
 #define CP0_UI_SETUP_WIFI_MAX 24
 #define CP0_UI_SETUP_ERROR_MAX 160
+#define CP0_UI_SETUP_IPV4_MAX 15
 
 enum cp0_ui_screen {
     CP0_UI_HOME,
@@ -387,12 +388,21 @@ struct cp0_ui {
     unsigned int setup_network;
     unsigned int setup_wifi_selected;
     unsigned int setup_wifi_count;
+    bool setup_network_manager_available;
+    bool setup_ethernet_connected;
+    bool setup_wifi_available;
+    bool setup_wifi_link_connected;
+    bool setup_busy;
     char setup_hostname[CP0_UI_SETUP_HOSTNAME_MAX + 1];
     char setup_display_name[CP0_UI_SETUP_DISPLAY_NAME_MAX + 1];
     char setup_username[CP0_UI_SETUP_USERNAME_MAX + 1];
     char setup_password[CP0_UI_SETUP_PASSWORD_MAX + 1];
     char setup_password_confirm[CP0_UI_SETUP_PASSWORD_MAX + 1];
     char setup_wifi_password[CP0_UI_SETUP_PASSWORD_MAX + 1];
+    char setup_ethernet_ipv4[CP0_UI_SETUP_IPV4_MAX + 1];
+    char setup_wifi_ipv4[CP0_UI_SETUP_IPV4_MAX + 1];
+    char setup_busy_title[CP0_UI_SETUP_TEXT_MAX + 1];
+    char setup_busy_detail[CP0_UI_SETUP_TEXT_MAX + 1];
     char setup_error[CP0_UI_SETUP_ERROR_MAX + 1];
     char setup_wifi_ssids[CP0_UI_SETUP_WIFI_MAX]
                          [CP0_UI_SETUP_TEXT_MAX + 1];
@@ -596,6 +606,15 @@ void cp0_ui_setup_resume(struct cp0_ui *ui, unsigned int phase,
 void cp0_ui_setup_set_wifi(struct cp0_ui *ui,
                            const struct cp0_ui_setup_wifi *networks,
                            size_t network_count);
+void cp0_ui_setup_set_network_status(struct cp0_ui *ui,
+                                     bool manager_available,
+                                     bool ethernet_connected,
+                                     const char *ethernet_ipv4,
+                                     bool wifi_available,
+                                     bool wifi_connected,
+                                     const char *wifi_ipv4);
+void cp0_ui_setup_set_busy(struct cp0_ui *ui, const char *title,
+                           const char *detail);
 void cp0_ui_setup_result(struct cp0_ui *ui, enum cp0_ui_event event,
                          bool success, const char *error);
 bool cp0_ui_setup_accepts_text(const struct cp0_ui *ui);

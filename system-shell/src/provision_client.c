@@ -3,6 +3,7 @@
 #include "cp0_provision_client.h"
 #include "cp0_json.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stddef.h>
@@ -21,6 +22,11 @@
 #define CP0_PROVISION_FRAME_BYTES (16U * 1024U)
 #define CP0_PROVISION_JSON_TOKENS 768U
 #define CP0_PROVISION_ERROR_SENTINEL 100
+#define CP0_PROVISION_TIMEOUT_SYSTEM 20
+#define CP0_PROVISION_TIMEOUT_PASSWORD 75
+#define CP0_PROVISION_TIMEOUT_WIFI_SCAN 45
+#define CP0_PROVISION_TIMEOUT_WIFI_CONNECT 75
+#define CP0_PROVISION_TIMEOUT_COMMIT 75
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -77,9 +83,13 @@ static bool append_json_string(char *output, size_t capacity, size_t *offset,
 }
 
 static int exchange(const char *request, size_t request_length, char *response,
-                    size_t response_capacity, size_t *response_length)
+                    size_t response_capacity, size_t *response_length,
+                    unsigned int timeout_seconds)
 {
-    const struct timeval timeout = {.tv_sec = 3, .tv_usec = 0};
+    const struct timeval timeout = {
+        .tv_sec = (time_t)timeout_seconds,
+        .tv_usec = 0,
+    };
     struct sockaddr_un address = {.sun_family = AF_UNIX};
     socklen_t address_length =
         (socklen_t)(offsetof(struct sockaddr_un, sun_path) +
@@ -91,6 +101,7 @@ static int exchange(const char *request, size_t request_length, char *response,
     if (request == NULL || response == NULL || response_length == NULL ||
         request_length == 0 || request_length > CP0_PROVISION_FRAME_BYTES ||
         response_capacity < CP0_PROVISION_FRAME_BYTES + 1U ||
+        timeout_seconds == 0 ||
         strlen(CP0_PROVISION_SOCKET) >= sizeof(address.sun_path))
         return -1;
     descriptor = socket(AF_UNIX, SOCK_SEQPACKET, 0);
@@ -244,6 +255,7 @@ static int parse_state_response(const char *document, size_t length,
     int password;
     int ssh;
     int network;
+    int runtime;
     if (count <= 0)
         return count <= -(CP0_PROVISION_ERROR_SENTINEL + 1)
                    ? -count - CP0_PROVISION_ERROR_SENTINEL
@@ -304,6 +316,55 @@ static int parse_state_response(const char *document, size_t length,
         } else {
             return CP0_PROVISION_FAILED;
         }
+    }
+    runtime = cp0_json_object_get(document, tokens, (size_t)count, state_token,
+                                  "network_runtime");
+    if (runtime >= 0) {
+        int manager;
+        int ethernet;
+        int wifi_available;
+        int wifi_connected;
+        if (tokens[runtime].type != CP0_JSON_OBJECT ||
+            (manager = cp0_json_object_get(document, tokens, (size_t)count,
+                                           runtime,
+                                           "network_manager_available")) < 0 ||
+            (ethernet = cp0_json_object_get(document, tokens, (size_t)count,
+                                            runtime,
+                                            "ethernet_connected")) < 0 ||
+            (wifi_available = cp0_json_object_get(
+                 document, tokens, (size_t)count, runtime, "wifi_available")) <
+                0 ||
+            (wifi_connected = cp0_json_object_get(
+                 document, tokens, (size_t)count, runtime, "wifi_connected")) <
+                0 ||
+            !cp0_json_get_bool(document, &tokens[manager],
+                               &parsed.network_manager_available) ||
+            !cp0_json_get_bool(document, &tokens[ethernet],
+                               &parsed.ethernet_connected) ||
+            !cp0_json_get_bool(document, &tokens[wifi_available],
+                               &parsed.wifi_available) ||
+            !cp0_json_get_bool(document, &tokens[wifi_connected],
+                               &parsed.wifi_connected) ||
+            !copy_optional(document, tokens, (size_t)count, runtime,
+                           "ethernet_ipv4", parsed.ethernet_ipv4,
+                           sizeof(parsed.ethernet_ipv4)) ||
+            !copy_optional(document, tokens, (size_t)count, runtime,
+                           "wifi_ipv4", parsed.wifi_ipv4,
+                           sizeof(parsed.wifi_ipv4)))
+            return CP0_PROVISION_FAILED;
+        if ((!parsed.network_manager_available &&
+             (parsed.ethernet_connected || parsed.wifi_available ||
+              parsed.wifi_connected || parsed.ethernet_ipv4[0] != '\0' ||
+              parsed.wifi_ipv4[0] != '\0')) ||
+            (parsed.ethernet_ipv4[0] != '\0' &&
+             (!parsed.ethernet_connected ||
+              inet_pton(AF_INET, parsed.ethernet_ipv4, &(struct in_addr){0}) !=
+                  1)) ||
+            (parsed.wifi_connected && !parsed.wifi_available) ||
+            (parsed.wifi_ipv4[0] != '\0' &&
+             (!parsed.wifi_connected ||
+              inet_pton(AF_INET, parsed.wifi_ipv4, &(struct in_addr){0}) != 1)))
+            return CP0_PROVISION_FAILED;
     }
     *state = parsed;
     return CP0_PROVISION_OK;
@@ -367,6 +428,9 @@ static int parse_wifi_response(const char *document, size_t length,
             parsed.networks[index].security = CP0_PROVISION_WIFI_WPA2;
         else if (cp0_json_string_equals(document, &tokens[security], "wpa3"))
             parsed.networks[index].security = CP0_PROVISION_WIFI_WPA3;
+        else if (cp0_json_string_equals(document, &tokens[security],
+                                        "unsupported"))
+            parsed.networks[index].security = CP0_PROVISION_WIFI_UNSUPPORTED;
         else
             return CP0_PROVISION_FAILED;
     }
@@ -377,14 +441,14 @@ static int parse_wifi_response(const char *document, size_t length,
 static int run_request(char *request, size_t length,
                        struct cp0_provision_status *status,
                        struct cp0_provision_wifi_list *wifi,
-                       uint64_t request_id,
+                       uint64_t request_id, unsigned int timeout_seconds,
                        char error[CP0_PROVISION_ERROR_MAX + 1])
 {
     char response[CP0_PROVISION_FRAME_BYTES + 1U];
     size_t response_length;
     int result;
-    if (exchange(request, length, response, sizeof(response),
-                 &response_length) != 0) {
+    if (exchange(request, length, response, sizeof(response), &response_length,
+                 timeout_seconds) != 0) {
         if (error != NULL)
             snprintf(error, CP0_PROVISION_ERROR_MAX + 1U,
                      "Provisioning service is unavailable");
@@ -402,6 +466,7 @@ static int run_request(char *request, size_t length,
 static int command_no_fields(const char *name,
                              struct cp0_provision_status *status,
                              struct cp0_provision_wifi_list *wifi,
+                             unsigned int timeout_seconds,
                              char error[CP0_PROVISION_ERROR_MAX + 1])
 {
     char request[256];
@@ -413,7 +478,7 @@ static int command_no_fields(const char *name,
     if (count <= 0 || (size_t)count >= sizeof(request))
         return CP0_PROVISION_FAILED;
     return run_request(request, (size_t)count, status, wifi, request_id,
-                       error);
+                       timeout_seconds, error);
 }
 
 static bool begin_command(char *request, size_t capacity, size_t *offset,
@@ -448,7 +513,8 @@ int cp0_provision_get_status(struct cp0_provision_status *status,
 {
     return status == NULL
                ? CP0_PROVISION_FAILED
-               : command_no_fields("get-status", status, NULL, error);
+               : command_no_fields("get-status", status, NULL,
+                                   CP0_PROVISION_TIMEOUT_SYSTEM, error);
 }
 
 int cp0_provision_set_region(const char *locale, const char *country,
@@ -468,7 +534,8 @@ int cp0_provision_set_region(const char *locale, const char *country,
         !append_member(request, sizeof(request), &offset, "hostname", hostname) ||
         !finish_command(request, sizeof(request), &offset))
         return CP0_PROVISION_FAILED;
-    return run_request(request, offset, status, NULL, request_id, error);
+    return run_request(request, offset, status, NULL, request_id,
+                       CP0_PROVISION_TIMEOUT_SYSTEM, error);
 }
 
 int cp0_provision_set_owner(const char *display_name, const char *username,
@@ -486,7 +553,8 @@ int cp0_provision_set_owner(const char *display_name, const char *username,
         !append_member(request, sizeof(request), &offset, "username", username) ||
         !finish_command(request, sizeof(request), &offset))
         return CP0_PROVISION_FAILED;
-    return run_request(request, offset, status, NULL, request_id, error);
+    return run_request(request, offset, status, NULL, request_id,
+                       CP0_PROVISION_TIMEOUT_SYSTEM, error);
 }
 
 int cp0_provision_set_password(
@@ -503,7 +571,8 @@ int cp0_provision_set_password(
                       "set-password") &&
         append_member(request, sizeof(request), &offset, "password", password) &&
         finish_command(request, sizeof(request), &offset))
-        result = run_request(request, offset, status, NULL, request_id, error);
+        result = run_request(request, offset, status, NULL, request_id,
+                             CP0_PROVISION_TIMEOUT_PASSWORD, error);
     clear_secret(request, sizeof(request));
     if (password != NULL)
         clear_secret(password, password_length);
@@ -515,7 +584,8 @@ int cp0_provision_list_wifi(struct cp0_provision_wifi_list *list,
 {
     return list == NULL
                ? CP0_PROVISION_FAILED
-               : command_no_fields("list-wifi", NULL, list, error);
+               : command_no_fields("list-wifi", NULL, list,
+                                   CP0_PROVISION_TIMEOUT_WIFI_SCAN, error);
 }
 
 int cp0_provision_connect_wifi(
@@ -530,7 +600,7 @@ int cp0_provision_connect_wifi(
     size_t password_length = password == NULL ? 0 : strlen(password);
     int result = CP0_PROVISION_FAILED;
     if (ssid != NULL && password != NULL && status != NULL &&
-        security <= CP0_PROVISION_WIFI_WPA3 &&
+        security < CP0_PROVISION_WIFI_UNSUPPORTED &&
         begin_command(request, sizeof(request), &offset, request_id,
                       "connect-wifi") &&
         append_member(request, sizeof(request), &offset, "ssid", ssid) &&
@@ -542,7 +612,8 @@ int cp0_provision_connect_wifi(
                      strlen(hidden ? ",\"hidden\":true"
                                    : ",\"hidden\":false")) &&
         finish_command(request, sizeof(request), &offset))
-        result = run_request(request, offset, status, NULL, request_id, error);
+        result = run_request(request, offset, status, NULL, request_id,
+                             CP0_PROVISION_TIMEOUT_WIFI_CONNECT, error);
     clear_secret(request, sizeof(request));
     if (password != NULL)
         clear_secret(password, password_length);
@@ -554,7 +625,8 @@ int cp0_provision_use_ethernet(struct cp0_provision_status *status,
 {
     return status == NULL
                ? CP0_PROVISION_FAILED
-               : command_no_fields("use-ethernet", status, NULL, error);
+               : command_no_fields("use-ethernet", status, NULL,
+                                   CP0_PROVISION_TIMEOUT_SYSTEM, error);
 }
 
 int cp0_provision_use_offline(struct cp0_provision_status *status,
@@ -562,7 +634,8 @@ int cp0_provision_use_offline(struct cp0_provision_status *status,
 {
     return status == NULL
                ? CP0_PROVISION_FAILED
-               : command_no_fields("use-offline", status, NULL, error);
+               : command_no_fields("use-offline", status, NULL,
+                                   CP0_PROVISION_TIMEOUT_SYSTEM, error);
 }
 
 int cp0_provision_set_ssh_enabled(
@@ -580,7 +653,7 @@ int cp0_provision_set_ssh_enabled(
     if (status == NULL || count <= 0 || (size_t)count >= sizeof(request))
         return CP0_PROVISION_FAILED;
     return run_request(request, (size_t)count, status, NULL, request_id,
-                       error);
+                       CP0_PROVISION_TIMEOUT_SYSTEM, error);
 }
 
 int cp0_provision_commit(struct cp0_provision_status *status,
@@ -588,7 +661,8 @@ int cp0_provision_commit(struct cp0_provision_status *status,
 {
     return status == NULL
                ? CP0_PROVISION_FAILED
-               : command_no_fields("commit", status, NULL, error);
+               : command_no_fields("commit", status, NULL,
+                                   CP0_PROVISION_TIMEOUT_COMMIT, error);
 }
 
 #ifdef CP0_PROVISION_CLIENT_TEST

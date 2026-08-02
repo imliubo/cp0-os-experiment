@@ -1,5 +1,6 @@
 use std::fmt;
 use std::io::{self, BufRead, Write};
+use std::net::Ipv4Addr;
 
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +32,7 @@ pub enum WifiSecurity {
     Open,
     Wpa2,
     Wpa3,
+    Unsupported,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +41,17 @@ pub enum NetworkChoice {
     Ethernet {},
     Wifi { profile_id: String, ssid: String },
     Offline {},
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkRuntimeStatus {
+    pub network_manager_available: bool,
+    pub ethernet_connected: bool,
+    pub ethernet_ipv4: Option<String>,
+    pub wifi_available: bool,
+    pub wifi_connected: bool,
+    pub wifi_ipv4: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +67,8 @@ pub struct ProvisioningStatus {
     pub password_configured: bool,
     pub network_choice: Option<NetworkChoice>,
     pub ssh_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_runtime: Option<NetworkRuntimeStatus>,
 }
 
 impl Default for ProvisioningStatus {
@@ -69,6 +84,7 @@ impl Default for ProvisioningStatus {
             password_configured: false,
             network_choice: None,
             ssh_enabled: false,
+            network_runtime: None,
         }
     }
 }
@@ -246,6 +262,9 @@ impl ProvisioningRequest {
                     {
                         Ok(())
                     }
+                    WifiSecurity::Unsupported => {
+                        Err(ProvisioningProtocolError::InvalidValue("Wi-Fi security"))
+                    }
                     _ => Err(ProvisioningProtocolError::InvalidValue("Wi-Fi password")),
                 }
             }
@@ -283,6 +302,9 @@ impl ProvisioningStatus {
             }
             validate_ssid(ssid)?;
         }
+        if let Some(runtime) = &self.network_runtime {
+            runtime.validate()?;
+        }
         let region_complete = self.locale.is_some()
             && self.country.is_some()
             && self.timezone.is_some()
@@ -294,6 +316,31 @@ impl ProvisioningStatus {
             || self.phase >= ProvisioningPhase::RemoteAccess && self.network_choice.is_none()
         {
             return Err(ProvisioningProtocolError::InvalidValue("state"));
+        }
+        Ok(())
+    }
+}
+
+impl NetworkRuntimeStatus {
+    pub fn validate(&self) -> Result<(), ProvisioningProtocolError> {
+        for address in [&self.ethernet_ipv4, &self.wifi_ipv4].into_iter().flatten() {
+            address
+                .parse::<Ipv4Addr>()
+                .map_err(|_| ProvisioningProtocolError::InvalidValue("network address"))?;
+        }
+        if !self.network_manager_available
+            && (self.ethernet_connected
+                || self.ethernet_ipv4.is_some()
+                || self.wifi_available
+                || self.wifi_connected
+                || self.wifi_ipv4.is_some())
+            || self.ethernet_ipv4.is_some() && !self.ethernet_connected
+            || self.wifi_connected && !self.wifi_available
+            || self.wifi_ipv4.is_some() && !self.wifi_connected
+        {
+            return Err(ProvisioningProtocolError::InvalidValue(
+                "network runtime state",
+            ));
         }
         Ok(())
     }
@@ -600,6 +647,16 @@ mod tests {
         assert!(validate_username("Owner").is_err());
         assert!(validate_password("short").is_err());
         assert!(validate_password("ten-chars!").is_ok());
+        assert!(
+            request(ProvisioningCommand::ConnectWifi {
+                ssid: "Corp".into(),
+                security: WifiSecurity::Unsupported,
+                password: String::new(),
+                hidden: false,
+            })
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]
@@ -615,9 +672,45 @@ mod tests {
 
     #[test]
     fn never_serializes_passwords_in_status_responses() {
-        let response = ProvisioningResponse::state(1, ProvisioningStatus::default());
+        let response = ProvisioningResponse::state(
+            1,
+            ProvisioningStatus {
+                network_runtime: Some(NetworkRuntimeStatus {
+                    network_manager_available: true,
+                    ethernet_connected: true,
+                    ethernet_ipv4: Some("192.168.20.146".into()),
+                    wifi_available: true,
+                    ..NetworkRuntimeStatus::default()
+                }),
+                ..ProvisioningStatus::default()
+            },
+        );
         let encoded = serde_json::to_string(&response).unwrap();
         assert!(!encoded.contains("password\":"));
         assert!(encoded.contains("password_configured"));
+        assert!(encoded.contains("192.168.20.146"));
+    }
+
+    #[test]
+    fn validates_runtime_network_consistency() {
+        let valid = NetworkRuntimeStatus {
+            network_manager_available: true,
+            ethernet_connected: true,
+            ethernet_ipv4: Some("192.168.31.121".into()),
+            wifi_available: true,
+            wifi_connected: true,
+            wifi_ipv4: Some("192.168.31.122".into()),
+        };
+        assert!(valid.validate().is_ok());
+        assert!(
+            NetworkRuntimeStatus {
+                network_manager_available: true,
+                ethernet_connected: false,
+                ethernet_ipv4: Some("192.168.31.121".into()),
+                ..NetworkRuntimeStatus::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

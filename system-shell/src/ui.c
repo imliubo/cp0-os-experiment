@@ -467,6 +467,12 @@ static void draw_setup(struct canvas *canvas, const struct cp0_ui *ui)
     };
     char line[64];
     draw_text(canvas, 12, 31, "CARDPUTERZERO", 2, COLOR_TEXT);
+    if (ui->setup_busy) {
+        draw_text(canvas, 12, 64, ui->setup_busy_title, 2, COLOR_GREEN);
+        draw_text(canvas, 12, 99, ui->setup_busy_detail, 1, COLOR_MUTED);
+        draw_setup_footer(canvas, "PLEASE WAIT", NULL);
+        return;
+    }
     switch (ui->setup_page) {
     case CP0_UI_SETUP_WELCOME:
         draw_text(canvas, 12, 63, "WELCOME", 2, COLOR_GREEN);
@@ -534,12 +540,32 @@ static void draw_setup(struct canvas *canvas, const struct cp0_ui *ui)
         draw_setup_footer(canvas, "RIGHT SHOW/HIDE", "ENTER NEXT");
         break;
     case CP0_UI_SETUP_NETWORK: {
-        static const char *choices[] = {"ETHERNET", "WI-FI", "USE OFFLINE"};
+        char choices[3][48] = {{0}};
+        const char *wifi_state = ui->setup_wifi_link_connected
+                                     ? (ui->setup_wifi_ipv4[0] != '\0'
+                                            ? ui->setup_wifi_ipv4
+                                            : "CONNECTED")
+                                     : (ui->setup_wifi_available ? "READY"
+                                                                 : "UNAVAILABLE");
+        if (!ui->setup_network_manager_available) {
+            snprintf(choices[0], sizeof(choices[0]), "ETHERNET UNAVAILABLE");
+            snprintf(choices[1], sizeof(choices[1]), "WI-FI UNAVAILABLE");
+        } else if (ui->setup_ethernet_connected) {
+            snprintf(choices[0], sizeof(choices[0]), "ETHERNET %s",
+                     ui->setup_ethernet_ipv4[0] != '\0'
+                         ? ui->setup_ethernet_ipv4
+                         : "WAITING FOR IP");
+            snprintf(choices[1], sizeof(choices[1]), "WI-FI %s", wifi_state);
+        } else {
+            snprintf(choices[0], sizeof(choices[0]), "ETHERNET NOT CONNECTED");
+            snprintf(choices[1], sizeof(choices[1]), "WI-FI %s", wifi_state);
+        }
+        snprintf(choices[2], sizeof(choices[2]), "USE OFFLINE");
         draw_text(canvas, 12, 55, "CONNECT THIS DEVICE", 1, COLOR_MUTED);
         for (unsigned int index = 0; index < 3; index++)
             draw_setup_choice(canvas, 70 + (int)index * 27, choices[index],
                               index == ui->setup_network);
-        draw_setup_footer(canvas, "OFFLINE IS ALLOWED", "ENTER SELECT");
+        draw_setup_footer(canvas, "LIVE NETWORK STATUS", "ENTER SELECT");
         break;
     }
     case CP0_UI_SETUP_WIFI_LIST: {
@@ -557,10 +583,14 @@ static void draw_setup(struct canvas *canvas, const struct cp0_ui *ui)
                 visible = 3;
             for (unsigned int row = 0; row < visible; row++) {
                 unsigned int index = first + row;
-                snprintf(line, sizeof(line), "%.35s  %u%% %s",
+                const char *security =
+                    ui->setup_wifi_security[index] == 0
+                        ? "OPEN"
+                        : (ui->setup_wifi_security[index] == 3 ? "UNSUPPORTED"
+                                                              : "LOCK");
+                snprintf(line, sizeof(line), "%.28s  %u%% %s",
                          ui->setup_wifi_ssids[index],
-                         ui->setup_wifi_signal[index],
-                         ui->setup_wifi_security[index] == 0 ? "OPEN" : "LOCK");
+                         ui->setup_wifi_signal[index], security);
                 draw_setup_choice(canvas, 66 + (int)row * 27, line,
                                   index == ui->setup_wifi_selected);
             }
@@ -614,8 +644,16 @@ static void draw_setup(struct canvas *canvas, const struct cp0_ui *ui)
     case CP0_UI_SETUP_COMPLETE:
         draw_text(canvas, 12, 62, "SETUP COMPLETE", 2, COLOR_GREEN);
         snprintf(line, sizeof(line), "DEVICE %.42s", ui->setup_hostname);
-        draw_text(canvas, 12, 98, line, 1, COLOR_TEXT);
-        draw_text(canvas, 12, 119,
+        draw_text(canvas, 12, 91, line, 1, COLOR_TEXT);
+        if (ui->setup_network == 0 && ui->setup_ethernet_ipv4[0] != '\0')
+            snprintf(line, sizeof(line), "IP     %s", ui->setup_ethernet_ipv4);
+        else if (ui->setup_network == 1 && ui->setup_wifi_ipv4[0] != '\0')
+            snprintf(line, sizeof(line), "IP     %s", ui->setup_wifi_ipv4);
+        else
+            snprintf(line, sizeof(line), "NETWORK %s",
+                     ui->setup_network == 2 ? "OFFLINE" : "NO IPv4");
+        draw_text(canvas, 12, 109, line, 1, COLOR_TEXT);
+        draw_text(canvas, 12, 127,
                   ui->setup_ssh_enabled ? "SSH ENABLED" : "SSH DISABLED", 1,
                   COLOR_MUTED);
         draw_setup_footer(canvas, "READY", "ENTER START");
@@ -2419,6 +2457,7 @@ void cp0_ui_setup_begin(struct cp0_ui *ui, enum cp0_ui_setup_page page)
     ui->setup_page = page;
     ui->setup_error_return_page = page;
     ui->setup_show_password = false;
+    ui->setup_busy = false;
     ui->setup_error[0] = '\0';
     ui->power_dialog = false;
     ui->help_overlay = false;
@@ -2464,7 +2503,7 @@ void cp0_ui_setup_set_wifi(struct cp0_ui *ui,
     ui->setup_wifi_count = 0;
     for (size_t index = 0; index < network_count; index++) {
         unsigned int destination = ui->setup_wifi_count;
-        if (networks[index].security > 2 ||
+        if (networks[index].security > 3 ||
             networks[index].signal_percent > 100 ||
             !copy_optional_text(ui->setup_wifi_ssids[destination],
                                 sizeof(ui->setup_wifi_ssids[destination]),
@@ -2480,7 +2519,40 @@ void cp0_ui_setup_set_wifi(struct cp0_ui *ui,
     }
     ui->setup_wifi_selected = 0;
     ui->setup_page = CP0_UI_SETUP_WIFI_LIST;
+    ui->setup_busy = false;
     ui->setup_error[0] = '\0';
+}
+
+void cp0_ui_setup_set_busy(struct cp0_ui *ui, const char *title,
+                           const char *detail)
+{
+    if (ui == NULL)
+        return;
+    ui->setup_busy = title != NULL && title[0] != '\0';
+    copy_optional_text(ui->setup_busy_title, sizeof(ui->setup_busy_title),
+                       title);
+    copy_optional_text(ui->setup_busy_detail, sizeof(ui->setup_busy_detail),
+                       detail);
+}
+
+void cp0_ui_setup_set_network_status(struct cp0_ui *ui,
+                                     bool manager_available,
+                                     bool ethernet_connected,
+                                     const char *ethernet_ipv4,
+                                     bool wifi_available,
+                                     bool wifi_connected,
+                                     const char *wifi_ipv4)
+{
+    if (ui == NULL)
+        return;
+    ui->setup_network_manager_available = manager_available;
+    ui->setup_ethernet_connected = ethernet_connected;
+    ui->setup_wifi_available = wifi_available;
+    ui->setup_wifi_link_connected = wifi_connected;
+    copy_optional_text(ui->setup_ethernet_ipv4,
+                       sizeof(ui->setup_ethernet_ipv4), ethernet_ipv4);
+    copy_optional_text(ui->setup_wifi_ipv4, sizeof(ui->setup_wifi_ipv4),
+                       wifi_ipv4);
 }
 
 void cp0_ui_setup_result(struct cp0_ui *ui, enum cp0_ui_event event,
@@ -2488,6 +2560,7 @@ void cp0_ui_setup_result(struct cp0_ui *ui, enum cp0_ui_event event,
 {
     if (ui == NULL)
         return;
+    ui->setup_busy = false;
     if (!success) {
         ui->setup_error_return_page = ui->setup_page;
         ui->setup_page = CP0_UI_SETUP_ERROR;
@@ -2581,6 +2654,8 @@ bool cp0_ui_setup_input_ascii(struct cp0_ui *ui, char character)
     buffer = setup_input_buffer(ui, &capacity);
     length = strlen(buffer);
     if (length + 1U >= capacity)
+        return false;
+    if (ui->setup_page == CP0_UI_SETUP_WIFI_PASSWORD && length >= 63U)
         return false;
     if (ui->setup_page == CP0_UI_SETUP_HOSTNAME) {
         if (character >= 'A' && character <= 'Z')
@@ -2773,7 +2848,11 @@ static enum cp0_ui_event handle_setup_action(struct cp0_ui *ui,
         else if (action == CP0_UI_ACCEPT && ui->setup_wifi_count > 0) {
             if (ui->setup_wifi_security[ui->setup_wifi_selected] == 0)
                 return CP0_UI_EVENT_SETUP_CONNECT_WIFI;
-            ui->setup_page = CP0_UI_SETUP_WIFI_PASSWORD;
+            if (ui->setup_wifi_security[ui->setup_wifi_selected] == 3)
+                copy_optional_text(ui->setup_error, sizeof(ui->setup_error),
+                                   "This Wi-Fi security is not supported");
+            else
+                ui->setup_page = CP0_UI_SETUP_WIFI_PASSWORD;
         } else if (action == CP0_UI_BACK)
             ui->setup_page = CP0_UI_SETUP_NETWORK;
         break;

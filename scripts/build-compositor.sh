@@ -52,7 +52,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     "$output/cardputerzero-system-shell-protocol.c" \
     "$weston_build/protocol/xdg-shell-protocol.c" \
     "$weston_build/protocol/weston-output-capture-protocol.c" \
-    $(pkg-config --cflags --libs wayland-client libpng libdrm) \
+    $(pkg-config --cflags --libs wayland-client libpng libdrm xkbcommon) \
     -o "$output/cardputerzero-system-shell"
 
 cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \

@@ -1,8 +1,10 @@
 use std::collections::BTreeSet;
-use std::ffi::OsStr;
+use std::ffi::{CString, OsStr};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Write};
+use std::mem::MaybeUninit;
+use std::net::Ipv4Addr;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
@@ -11,12 +13,14 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::ptr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cp0_provision_protocol::{
-    NetworkChoice, ProvisioningCommand, ProvisioningErrorCode, ProvisioningOutcome,
-    ProvisioningPhase, ProvisioningProtocolError, ProvisioningRequest, ProvisioningResponse,
-    ProvisioningStatus, WifiNetwork, WifiSecurity, read_request, write_response,
+    NetworkChoice, NetworkRuntimeStatus, ProvisioningCommand, ProvisioningErrorCode,
+    ProvisioningOutcome, ProvisioningPhase, ProvisioningProtocolError, ProvisioningRequest,
+    ProvisioningResponse, ProvisioningStatus, WifiNetwork, WifiSecurity, read_request,
+    write_response,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -153,9 +157,11 @@ impl StateStore {
         state
             .validate()
             .map_err(|_| ProvisioningError::InvalidState("state validation failed"))?;
+        let mut persistent_state = state.clone();
+        persistent_state.network_runtime = None;
         let document = StateDocument {
             schema_version: STATE_SCHEMA_VERSION,
-            state: state.clone(),
+            state: persistent_state,
         };
         let mut bytes = serde_json::to_vec(&document)?;
         bytes.push(b'\n');
@@ -288,10 +294,20 @@ impl ExtrausersIdentityStore {
         let shadow = fs::read_to_string(self.path("shadow")).unwrap_or_default();
         let group = fs::read_to_string(self.path("group")).unwrap_or_default();
         let gshadow = fs::read_to_string(self.path("gshadow")).unwrap_or_default();
-        let members = if state.phase == ProvisioningPhase::Complete && state.ssh_enabled {
-            username
+        let empty_group = format!("{username}:x:{OWNER_UID}:\ncp0-ssh:x:{SSH_GROUP_GID}:\n");
+        let member_group =
+            format!("{username}:x:{OWNER_UID}:\ncp0-ssh:x:{SSH_GROUP_GID}:{username}\n");
+        let empty_gshadow = format!("{username}:!::\ncp0-ssh:!::\n");
+        let member_gshadow = format!("{username}:!::\ncp0-ssh:!::{username}\n");
+        let membership_valid = if !state.ssh_enabled {
+            group == empty_group && gshadow == empty_gshadow
+        } else if state.phase == ProvisioningPhase::Review {
+            (group == empty_group && gshadow == empty_gshadow)
+                || (group == member_group && gshadow == member_gshadow)
+        } else if state.phase >= ProvisioningPhase::Committing {
+            group == member_group && gshadow == member_gshadow
         } else {
-            ""
+            group == empty_group && gshadow == empty_gshadow
         };
         let home = self.home_root.join(username);
         let Ok(home_metadata) = fs::symlink_metadata(&home) else {
@@ -304,8 +320,7 @@ impl ExtrausersIdentityStore {
             home_valid && home_metadata.uid() == OWNER_UID && home_metadata.gid() == OWNER_UID;
         passwd.starts_with(&format!("{username}:x:{OWNER_UID}:{OWNER_UID}:"))
             && (!state.password_configured || shadow.starts_with(&format!("{username}:$y$")))
-            && group == format!("{username}:x:{OWNER_UID}:\ncp0-ssh:x:{SSH_GROUP_GID}:{members}\n")
-            && gshadow == format!("{username}:!::\ncp0-ssh:!::{members}\n")
+            && membership_valid
             && home_valid
     }
 }
@@ -325,6 +340,26 @@ fn ensure_empty_or_owner_file(path: &Path, username: &str) -> Result<(), Provisi
     }
 }
 
+fn system_identity_uid(username: &str) -> Result<Option<u32>, ProvisioningError> {
+    let name = CString::new(username).map_err(|_| ProvisioningError::InvalidValue("username"))?;
+    let mut record = MaybeUninit::<libc::passwd>::uninit();
+    let mut result = ptr::null_mut();
+    let mut buffer = [0_u8; 16 * 1024];
+    let status = unsafe {
+        libc::getpwnam_r(
+            name.as_ptr(),
+            record.as_mut_ptr(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status).into());
+    }
+    Ok((!result.is_null()).then(|| unsafe { record.assume_init() }.pw_uid))
+}
+
 pub trait PlatformBackend {
     fn hash_password(&mut self, password: &str) -> Result<String, ProvisioningError>;
     fn list_wifi(&mut self) -> Result<Vec<WifiNetwork>, ProvisioningError>;
@@ -335,6 +370,7 @@ pub trait PlatformBackend {
         password: &str,
         hidden: bool,
     ) -> Result<String, ProvisioningError>;
+    fn network_status(&mut self) -> NetworkRuntimeStatus;
     fn ethernet_ready(&mut self) -> Result<bool, ProvisioningError>;
     fn apply_region(&mut self, state: &ProvisioningStatus) -> Result<(), ProvisioningError>;
     fn configure_ssh(&mut self, enabled: bool) -> Result<(), ProvisioningError>;
@@ -375,6 +411,7 @@ impl LinuxPlatformBackend {
     ) -> Result<(), ProvisioningError> {
         let output = Command::new(program)
             .args(arguments)
+            .env("LC_ALL", "C")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -402,12 +439,37 @@ impl LinuxPlatformBackend {
             Err(ProvisioningError::Operation(failure))
         }
     }
+
+    fn device_ipv4(&self, device: &str) -> Option<String> {
+        let output = Command::new(&self.nmcli)
+            .args([
+                "--wait",
+                "5",
+                "--get-values",
+                "IP4.ADDRESS",
+                "device",
+                "show",
+                device,
+            ])
+            .env("LC_ALL", "C")
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.split('/').next())
+            .find_map(|address| address.parse::<Ipv4Addr>().ok())
+            .map(|address| address.to_string())
+    }
 }
 
 impl PlatformBackend for LinuxPlatformBackend {
     fn hash_password(&mut self, password: &str) -> Result<String, ProvisioningError> {
         let mut child = Command::new(&self.mkpasswd)
             .args(["--method=yescrypt", "--stdin"])
+            .env("LC_ALL", "C")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -445,8 +507,21 @@ impl PlatformBackend for LinuxPlatformBackend {
     }
 
     fn list_wifi(&mut self) -> Result<Vec<WifiNetwork>, ProvisioningError> {
+        let runtime = self.network_status();
+        if !runtime.network_manager_available {
+            return Err(ProvisioningError::Unavailable(
+                "NetworkManager is unavailable",
+            ));
+        }
+        if !runtime.wifi_available {
+            return Err(ProvisioningError::Unavailable(
+                "No Wi-Fi adapter is available",
+            ));
+        }
         let output = Command::new(&self.nmcli)
             .args([
+                "--wait",
+                "30",
                 "--terse",
                 "--escape",
                 "yes",
@@ -458,6 +533,7 @@ impl PlatformBackend for LinuxPlatformBackend {
                 "--rescan",
                 "yes",
             ])
+            .env("LC_ALL", "C")
             .output()
             .map_err(|_| ProvisioningError::Unavailable("NetworkManager is unavailable"))?;
         if !output.status.success() {
@@ -495,6 +571,11 @@ impl PlatformBackend for LinuxPlatformBackend {
                 "\n[wifi-security]\nkey-mgmt=sae\npsk={}\n",
                 keyfile_escape(password)
             )),
+            WifiSecurity::Unsupported => {
+                return Err(ProvisioningError::InvalidValue(
+                    "Wi-Fi security is unsupported",
+                ));
+            }
         }
         keyfile.push_str("\n[ipv4]\nmethod=auto\n\n[ipv6]\nmethod=auto\n");
         let write_result = atomic_write(&path, keyfile.as_bytes(), 0o600);
@@ -511,6 +592,8 @@ impl PlatformBackend for LinuxPlatformBackend {
                 self.command_ok(
                     &self.nmcli,
                     &[
+                        OsStr::new("--wait"),
+                        OsStr::new("45"),
                         OsStr::new("connection"),
                         OsStr::new("up"),
                         OsStr::new("uuid"),
@@ -522,6 +605,7 @@ impl PlatformBackend for LinuxPlatformBackend {
         if let Err(error) = connection_result {
             let _ = Command::new(&self.nmcli)
                 .args(["connection", "delete", "uuid", &uuid])
+                .env("LC_ALL", "C")
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -532,19 +616,66 @@ impl PlatformBackend for LinuxPlatformBackend {
         Ok(profile_id)
     }
 
-    fn ethernet_ready(&mut self) -> Result<bool, ProvisioningError> {
-        let output = Command::new(&self.nmcli)
-            .args(["--terse", "--fields", "TYPE,STATE", "device", "status"])
+    fn network_status(&mut self) -> NetworkRuntimeStatus {
+        let output = match Command::new(&self.nmcli)
+            .args([
+                "--wait",
+                "5",
+                "--terse",
+                "--escape",
+                "yes",
+                "--fields",
+                "DEVICE,TYPE,STATE",
+                "device",
+                "status",
+            ])
+            .env("LC_ALL", "C")
             .output()
-            .map_err(|_| ProvisioningError::Unavailable("NetworkManager is unavailable"))?;
-        if !output.status.success() {
+        {
+            Ok(output) if output.status.success() => output,
+            _ => return NetworkRuntimeStatus::default(),
+        };
+        let devices = match parse_nmcli_devices(&output.stdout) {
+            Ok(devices) => devices,
+            Err(error) => {
+                eprintln!("provisioning network status is invalid: {error}");
+                return NetworkRuntimeStatus::default();
+            }
+        };
+        let mut runtime = NetworkRuntimeStatus {
+            network_manager_available: true,
+            ..NetworkRuntimeStatus::default()
+        };
+        for device in devices {
+            if device.kind == "wifi" {
+                runtime.wifi_available = true;
+                runtime.wifi_connected |= device.connected;
+            } else if device.kind == "ethernet" {
+                runtime.ethernet_connected |= device.connected;
+            } else {
+                continue;
+            }
+            if !device.connected {
+                continue;
+            }
+            let address = self.device_ipv4(&device.name);
+            if device.kind == "wifi" && runtime.wifi_ipv4.is_none() {
+                runtime.wifi_ipv4 = address;
+            } else if device.kind == "ethernet" && runtime.ethernet_ipv4.is_none() {
+                runtime.ethernet_ipv4 = address;
+            }
+        }
+        runtime
+    }
+
+    fn ethernet_ready(&mut self) -> Result<bool, ProvisioningError> {
+        let runtime = self.network_status();
+        if !runtime.network_manager_available {
             return Err(ProvisioningError::Unavailable(
-                "Ethernet state is unavailable",
+                "NetworkManager is unavailable",
             ));
         }
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .any(|line| line == "ethernet:connected"))
+        Ok(runtime.ethernet_connected && runtime.ethernet_ipv4.is_some())
     }
 
     fn apply_region(&mut self, state: &ProvisioningStatus) -> Result<(), ProvisioningError> {
@@ -650,6 +781,35 @@ fn split_nmcli(line: &str) -> Option<Vec<String>> {
     Some(fields)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct NmcliDevice {
+    name: String,
+    kind: String,
+    connected: bool,
+}
+
+fn parse_nmcli_devices(bytes: &[u8]) -> Result<Vec<NmcliDevice>, ProvisioningError> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| ProvisioningError::Operation("network status output is invalid"))?;
+    let mut devices = Vec::new();
+    for line in text.lines() {
+        let Some(fields) = split_nmcli(line) else {
+            return Err(ProvisioningError::Operation(
+                "network status output is invalid",
+            ));
+        };
+        if fields.len() != 3 || fields[0].is_empty() {
+            continue;
+        }
+        devices.push(NmcliDevice {
+            name: fields[0].clone(),
+            kind: fields[1].clone(),
+            connected: fields[2] == "connected" || fields[2].starts_with("connected ("),
+        });
+    }
+    Ok(devices)
+}
+
 fn parse_nmcli_wifi(bytes: &[u8]) -> Result<Vec<WifiNetwork>, ProvisioningError> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| ProvisioningError::Operation("Wi-Fi scan output is invalid"))?;
@@ -669,12 +829,17 @@ fn parse_nmcli_wifi(bytes: &[u8]) -> Result<Vec<WifiNetwork>, ProvisioningError>
             return Err(ProvisioningError::Operation("Wi-Fi signal is invalid"));
         }
         let upper = fields[3].to_ascii_uppercase();
-        let security = if upper.contains("SAE") || upper.contains("WPA3") {
+        let security = if upper.contains("802.1X") || upper.contains("EAP") || upper.contains("WEP")
+        {
+            WifiSecurity::Unsupported
+        } else if upper.contains("SAE") || upper.contains("WPA3") {
             WifiSecurity::Wpa3
         } else if upper.contains("WPA") {
             WifiSecurity::Wpa2
-        } else {
+        } else if upper.is_empty() || upper == "--" {
             WifiSecurity::Open
+        } else {
+            WifiSecurity::Unsupported
         };
         networks.push(WifiNetwork {
             ssid: fields[1].clone(),
@@ -708,11 +873,28 @@ impl<B: PlatformBackend> ProvisioningService<B> {
     pub fn status(&self) -> Result<ProvisioningStatus, ProvisioningError> {
         let mut state = self.state_store.load()?;
         let marker = self.state_store.complete_marker_exists();
-        if state.phase == ProvisioningPhase::Committing
-            || (state.phase == ProvisioningPhase::Complete) != marker
-            || (state.phase == ProvisioningPhase::Complete
-                && state.ssh_enabled != self.state_store.ssh_marker_exists())
-            || !self.identity_store.verify(&state)
+        let ssh_marker_matches = state.ssh_enabled == self.state_store.ssh_marker_exists();
+        if !self.identity_store.verify(&state) {
+            state.phase = ProvisioningPhase::RepairRequired;
+        } else if state.phase == ProvisioningPhase::Committing {
+            // All platform work is complete before Committing is persisted.
+            // Recover either side of the final two-file marker transaction.
+            state.phase = if marker && ssh_marker_matches {
+                ProvisioningPhase::Complete
+            } else if !marker {
+                ProvisioningPhase::Review
+            } else {
+                ProvisioningPhase::RepairRequired
+            };
+            if state.phase != ProvisioningPhase::RepairRequired {
+                self.state_store.save(&state)?;
+            }
+        } else if state.phase == ProvisioningPhase::Complete && !marker {
+            // Recover images written by the previous Complete-then-marker order.
+            state.phase = ProvisioningPhase::Review;
+            self.state_store.save(&state)?;
+        } else if (state.phase == ProvisioningPhase::Complete && !ssh_marker_matches)
+            || (state.phase != ProvisioningPhase::Complete && marker)
         {
             state.phase = ProvisioningPhase::RepairRequired;
         }
@@ -722,7 +904,12 @@ impl<B: PlatformBackend> ProvisioningService<B> {
     pub fn dispatch(&mut self, request: ProvisioningRequest) -> ProvisioningResponse {
         let request_id = request.request_id;
         match self.dispatch_command(request.command) {
-            Ok(ProvisioningOutcome::State { state }) => {
+            Ok(ProvisioningOutcome::State { mut state }) => {
+                if state.phase >= ProvisioningPhase::Network
+                    && state.phase != ProvisioningPhase::RepairRequired
+                {
+                    state.network_runtime = Some(self.backend.network_status());
+                }
                 ProvisioningResponse::state(request_id, state)
             }
             Ok(ProvisioningOutcome::WifiList { networks }) => {
@@ -780,6 +967,13 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                 {
                     return Err(ProvisioningError::InvalidState(
                         "owner username cannot change after creation",
+                    ));
+                }
+                if let Some(uid) = system_identity_uid(&username)?
+                    && uid != OWNER_UID
+                {
+                    return Err(ProvisioningError::InvalidValue(
+                        "username is already in use",
                     ));
                 }
                 self.identity_store
@@ -842,7 +1036,9 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                     ));
                 }
                 if !self.backend.ethernet_ready()? {
-                    return Err(ProvisioningError::Unavailable("Ethernet is not connected"));
+                    return Err(ProvisioningError::Unavailable(
+                        "Ethernet is not ready; wait for an IPv4 address",
+                    ));
                 }
                 state.network_choice = Some(NetworkChoice::Ethernet {});
                 state.phase = ProvisioningPhase::RemoteAccess;
@@ -885,14 +1081,14 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                 self.backend.configure_ssh(state.ssh_enabled)?;
                 self.identity_store
                     .set_ssh_membership(username, state.ssh_enabled)?;
+                self.backend.activate_ssh(state.ssh_enabled)?;
                 // Backend work is idempotent. Keep the durable state at Review
                 // until it succeeds so a failed commit remains retryable.
                 state.phase = ProvisioningPhase::Committing;
                 self.state_store.save(&state)?;
+                self.state_store.mark_complete()?;
                 state.phase = ProvisioningPhase::Complete;
                 self.state_store.save(&state)?;
-                self.state_store.mark_complete()?;
-                self.backend.activate_ssh(state.ssh_enabled)?;
                 Ok(ProvisioningOutcome::State { state })
             }
         }
@@ -1094,11 +1290,19 @@ mod tests {
     #[derive(Default)]
     struct MockBackend {
         ssh: bool,
+        fail_hash_once: bool,
         fail_configure_once: bool,
+        fail_activate_once: bool,
     }
 
     impl PlatformBackend for MockBackend {
         fn hash_password(&mut self, _password: &str) -> Result<String, ProvisioningError> {
+            if self.fail_hash_once {
+                self.fail_hash_once = false;
+                return Err(ProvisioningError::Operation(
+                    "injected password hashing failure",
+                ));
+            }
             Ok("$y$j9T$testsalt$testhash".into())
         }
         fn list_wifi(&mut self) -> Result<Vec<WifiNetwork>, ProvisioningError> {
@@ -1118,6 +1322,16 @@ mod tests {
         ) -> Result<String, ProvisioningError> {
             Ok("cp0-test-profile".into())
         }
+        fn network_status(&mut self) -> NetworkRuntimeStatus {
+            NetworkRuntimeStatus {
+                network_manager_available: true,
+                ethernet_connected: true,
+                ethernet_ipv4: Some("192.168.20.146".into()),
+                wifi_available: true,
+                wifi_connected: false,
+                wifi_ipv4: None,
+            }
+        }
         fn ethernet_ready(&mut self) -> Result<bool, ProvisioningError> {
             Ok(true)
         }
@@ -1133,6 +1347,12 @@ mod tests {
             Ok(())
         }
         fn activate_ssh(&mut self, _enabled: bool) -> Result<(), ProvisioningError> {
+            if self.fail_activate_once {
+                self.fail_activate_once = false;
+                return Err(ProvisioningError::Operation(
+                    "injected SSH activation failure",
+                ));
+            }
             Ok(())
         }
     }
@@ -1200,6 +1420,38 @@ mod tests {
         backend
     }
 
+    fn advance_to_review(service: &mut ProvisioningService<MockBackend>, ssh_enabled: bool) {
+        state(service.dispatch(request(
+            1,
+            ProvisioningCommand::SetRegion {
+                locale: "en_US.UTF-8".into(),
+                country: "CN".into(),
+                timezone: "Asia/Shanghai".into(),
+                hostname: "cp0-test".into(),
+            },
+        )));
+        state(service.dispatch(request(
+            2,
+            ProvisioningCommand::SetOwner {
+                display_name: "Owner".into(),
+                username: "owner".into(),
+            },
+        )));
+        state(service.dispatch(request(
+            3,
+            ProvisioningCommand::SetPassword {
+                password: "correct horse".into(),
+            },
+        )));
+        state(service.dispatch(request(4, ProvisioningCommand::UseOffline {})));
+        state(service.dispatch(request(
+            5,
+            ProvisioningCommand::SetSshEnabled {
+                enabled: ssh_enabled,
+            },
+        )));
+    }
+
     #[test]
     fn applies_region_without_wireless_phy() {
         let (root, paths) = fixture();
@@ -1212,6 +1464,39 @@ mod tests {
         backend.iw = root.join("bin/iw-must-not-run");
 
         backend.apply_region(&region_state()).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_existing_system_identity_as_owner() {
+        assert_eq!(system_identity_uid("root").unwrap(), Some(0));
+        let (root, paths) = fixture();
+        let mut service = ProvisioningService::new(&paths, MockBackend::default());
+        state(service.dispatch(request(
+            1,
+            ProvisioningCommand::SetRegion {
+                locale: "en_US.UTF-8".into(),
+                country: "CN".into(),
+                timezone: "Asia/Shanghai".into(),
+                hostname: "cp0-test".into(),
+            },
+        )));
+        assert!(matches!(
+            service
+                .dispatch(request(
+                    2,
+                    ProvisioningCommand::SetOwner {
+                        display_name: "System User".into(),
+                        username: "nobody".into(),
+                    },
+                ))
+                .outcome,
+            ProvisioningOutcome::Error {
+                code: ProvisioningErrorCode::InvalidValue,
+                ..
+            }
+        ));
+        assert_eq!(service.status().unwrap().phase, ProvisioningPhase::Owner);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1289,6 +1574,7 @@ mod tests {
         let persisted = fs::read_to_string(&paths.state_file).unwrap();
         assert!(!persisted.contains("correct horse"));
         assert!(!persisted.contains("$y$"));
+        assert!(!persisted.contains("network_runtime"));
         assert!(
             fs::read_to_string(paths.extrausers_dir.join("shadow"))
                 .unwrap()
@@ -1310,6 +1596,66 @@ mod tests {
     }
 
     #[test]
+    fn failed_password_hash_remains_retryable_without_persisting_secret() {
+        let (root, paths) = fixture();
+        let backend = MockBackend {
+            fail_hash_once: true,
+            ..MockBackend::default()
+        };
+        let mut service = ProvisioningService::new(&paths, backend);
+        state(service.dispatch(request(
+            1,
+            ProvisioningCommand::SetRegion {
+                locale: "en_US.UTF-8".into(),
+                country: "CN".into(),
+                timezone: "Asia/Shanghai".into(),
+                hostname: "cp0-test".into(),
+            },
+        )));
+        state(service.dispatch(request(
+            2,
+            ProvisioningCommand::SetOwner {
+                display_name: "Owner".into(),
+                username: "owner".into(),
+            },
+        )));
+        assert!(matches!(
+            service
+                .dispatch(request(
+                    3,
+                    ProvisioningCommand::SetPassword {
+                        password: "first password".into(),
+                    },
+                ))
+                .outcome,
+            ProvisioningOutcome::Error {
+                code: ProvisioningErrorCode::Operation,
+                ..
+            }
+        ));
+        assert_eq!(
+            service.status().unwrap().phase,
+            ProvisioningPhase::PasswordReady
+        );
+        assert!(
+            !fs::read_to_string(&paths.state_file)
+                .unwrap()
+                .contains("first password")
+        );
+        assert_eq!(
+            state(service.dispatch(request(
+                4,
+                ProvisioningCommand::SetPassword {
+                    password: "second password".into(),
+                },
+            )))
+            .phase,
+            ProvisioningPhase::Network
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn detects_torn_completion_and_refuses_mutation() {
         let (root, paths) = fixture();
         let status = ProvisioningStatus {
@@ -1323,6 +1669,7 @@ mod tests {
             password_configured: true,
             network_choice: Some(NetworkChoice::Offline {}),
             ssh_enabled: false,
+            network_runtime: None,
         };
         let store = StateStore::new(&paths);
         store.save(&status).unwrap();
@@ -1396,14 +1743,95 @@ mod tests {
     }
 
     #[test]
+    fn failed_ssh_activation_remains_reviewable_and_can_be_retried() {
+        let (root, paths) = fixture();
+        let backend = MockBackend {
+            fail_activate_once: true,
+            ..MockBackend::default()
+        };
+        let mut service = ProvisioningService::new(&paths, backend);
+        advance_to_review(&mut service, true);
+        assert!(matches!(
+            service
+                .dispatch(request(6, ProvisioningCommand::Commit {}))
+                .outcome,
+            ProvisioningOutcome::Error {
+                code: ProvisioningErrorCode::Operation,
+                ..
+            }
+        ));
+        assert_eq!(service.status().unwrap().phase, ProvisioningPhase::Review);
+        assert_eq!(
+            state(service.dispatch(request(7, ProvisioningCommand::Commit {}))).phase,
+            ProvisioningPhase::Complete
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovers_both_sides_of_completion_marker_transaction() {
+        let (root, paths) = fixture();
+        let mut service = ProvisioningService::new(&paths, MockBackend::default());
+        advance_to_review(&mut service, true);
+
+        let mut interrupted = service.status().unwrap();
+        service.backend.configure_ssh(true).unwrap();
+        service
+            .identity_store
+            .set_ssh_membership("owner", true)
+            .unwrap();
+        service.backend.activate_ssh(true).unwrap();
+        interrupted.phase = ProvisioningPhase::Committing;
+        service.state_store.save(&interrupted).unwrap();
+        assert_eq!(service.status().unwrap().phase, ProvisioningPhase::Review);
+
+        atomic_write(&paths.ssh_marker, b"password\n", 0o600).unwrap();
+        interrupted.phase = ProvisioningPhase::Committing;
+        service.state_store.save(&interrupted).unwrap();
+        service.state_store.mark_complete().unwrap();
+        assert_eq!(service.status().unwrap().phase, ProvisioningPhase::Complete);
+        assert_eq!(
+            service.state_store.load().unwrap().phase,
+            ProvisioningPhase::Complete
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn parses_and_bounds_nmcli_wifi_results() {
-        let networks =
-            parse_nmcli_wifi(b"*:Office\\:5G:92:WPA2\n:Open:31:--\n:Office\\:5G:40:WPA2\n")
-                .unwrap();
-        assert_eq!(networks.len(), 2);
+        let networks = parse_nmcli_wifi(
+            b"*:Office\\:5G:92:WPA2\n:Corp:70:WPA2 802.1X\n:Legacy:50:WEP\n:Open:31:--\n:Office\\:5G:40:WPA2\n",
+        )
+        .unwrap();
+        assert_eq!(networks.len(), 4);
         assert_eq!(networks[0].ssid, "Office:5G");
         assert!(networks[0].connected);
-        assert_eq!(networks[1].security, WifiSecurity::Open);
+        assert_eq!(networks[1].security, WifiSecurity::Unsupported);
+        assert_eq!(networks[2].security, WifiSecurity::Unsupported);
+        assert_eq!(networks[3].security, WifiSecurity::Open);
+        assert_eq!(
+            parse_nmcli_devices(
+                b"eth0:ethernet:connected\nwlan0:wifi:disconnected\nusb\\:0:ethernet:connected (externally)\n"
+            )
+            .unwrap(),
+            vec![
+                NmcliDevice {
+                    name: "eth0".into(),
+                    kind: "ethernet".into(),
+                    connected: true,
+                },
+                NmcliDevice {
+                    name: "wlan0".into(),
+                    kind: "wifi".into(),
+                    connected: false,
+                },
+                NmcliDevice {
+                    name: "usb:0".into(),
+                    kind: "ethernet".into(),
+                    connected: true,
+                },
+            ]
+        );
     }
 
     #[cfg(target_os = "linux")]
