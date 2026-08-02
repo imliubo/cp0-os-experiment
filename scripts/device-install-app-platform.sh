@@ -15,14 +15,18 @@ case "$staging" in
         ;;
 esac
 
-for file in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-gpiod cp0-networkd cp0-radiod cp0-storaged cp0-stored cp0ctl cardputerzero-app-runtime app.json hello-card.wasm \
+for file in cp0-appd cp0-audiod cp0-camerad cp0-connectivityd cp0-displayd cp0-documentd cp0-gpiod cp0-networkd cp0-radiod cp0-storaged cp0-stored cp0ctl cardputerzero-app-runtime app.json hello-card.wasm \
     cardputerzero-appd.service cardputerzero-documentd.service \
     cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-appd.conf \
     cardputerzero-documentd.socket cardputerzero-networkd.service \
     cardputerzero-networkd.socket cardputerzero-audiod.service \
     cardputerzero-audiod.socket cardputerzero-camerad.service \
-    cardputerzero-camerad.socket cardputerzero-gpiod.service \
+    cardputerzero-camerad.socket cardputerzero-connectivityd.service \
+    cardputerzero-connectivityd.socket cardputerzero-connectivity.conf \
+    cardputerzero-displayd.service \
+    cardputerzero-displayd.socket cardputerzero-display.conf \
+    cardputerzero-gpiod.service \
     cardputerzero-gpiod.socket cardputerzero-gpio.conf \
     cardputerzero-radiod.service cardputerzero-radiod.socket lora.conf \
     cardputerzero-storaged.service cardputerzero-storaged.socket \
@@ -33,28 +37,30 @@ for file in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-gpiod cp0-networkd
     device-capability-acceptance.sh device-core-recovery.sh \
     device-factory-acceptance.sh \
     device-performance-acceptance.sh device-stability-monitor.sh \
-    device-store-acceptance.sh; do
+    device-store-acceptance.sh device-smoke.sh; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
         echo "error: invalid staged file: $file" >&2
         exit 1
     fi
 done
 
-if ! systemctl --help 2>&1 | grep -Eq '^[[:space:]]+wait[[:space:]]'; then
-    echo "error: target systemctl does not support the required wait command" >&2
-    exit 1
-fi
-
 systemctl stop cardputerzero-system-shell.service 2>/dev/null || :
 systemctl stop 'cardputerzero-app-*.service' 2>/dev/null || :
 systemctl stop cardputerzero-appd.service 2>/dev/null || :
 systemctl stop cardputerzero-appd.socket cardputerzero-broker.socket \
+    cardputerzero-networkd.socket cardputerzero-documentd.socket \
+    cardputerzero-audiod.socket cardputerzero-camerad.socket \
+    cardputerzero-connectivityd.socket \
+    cardputerzero-displayd.socket cardputerzero-gpiod.socket \
+    cardputerzero-radiod.socket cardputerzero-storaged.socket \
     cardputerzero-stored.socket \
     2>/dev/null || :
 systemctl stop cardputerzero-networkd.service 2>/dev/null || :
 systemctl stop cardputerzero-documentd.service 2>/dev/null || :
 systemctl stop cardputerzero-audiod.service 2>/dev/null || :
 systemctl stop cardputerzero-camerad.service 2>/dev/null || :
+systemctl stop cardputerzero-connectivityd.service 2>/dev/null || :
+systemctl stop cardputerzero-displayd.service 2>/dev/null || :
 systemctl stop cardputerzero-gpiod.service 2>/dev/null || :
 systemctl stop cardputerzero-radiod.service 2>/dev/null || :
 systemctl stop cardputerzero-storaged.service 2>/dev/null || :
@@ -63,6 +69,25 @@ if ! getent group cp0-control >/dev/null 2>&1; then
     groupadd --system cp0-control
 fi
 usermod -a -G cp0-control cp0-shell
+if ! getent group cp0-display-control >/dev/null 2>&1; then
+    groupadd --system cp0-display-control
+fi
+usermod -a -G cp0-display-control cp0-shell
+if ! getent group cp0-audio-control >/dev/null 2>&1; then
+    groupadd --system cp0-audio-control
+fi
+usermod -a -G cp0-audio-control cp0-shell
+if ! getent group cp0-connectivity-control >/dev/null 2>&1; then
+    groupadd --system cp0-connectivity-control
+fi
+usermod -a -G cp0-connectivity-control cp0-shell
+if ! getent group cp0-display >/dev/null 2>&1; then
+    groupadd --system cp0-display
+fi
+if ! id cp0-display >/dev/null 2>&1; then
+    useradd --system --gid cp0-display --home-dir /nonexistent \
+        --shell /usr/sbin/nologin cp0-display
+fi
 if ! getent group cp0-store >/dev/null 2>&1; then
     groupadd --system cp0-store
 fi
@@ -156,6 +181,10 @@ install -o root -g root -m 0755 "$staging/cp0-audiod" \
     /usr/libexec/cardputerzero/cp0-audiod
 install -o root -g root -m 0755 "$staging/cp0-camerad" \
     /usr/libexec/cardputerzero/cp0-camerad
+install -o root -g root -m 0755 "$staging/cp0-connectivityd" \
+    /usr/libexec/cardputerzero/cp0-connectivityd
+install -o root -g root -m 0755 "$staging/cp0-displayd" \
+    /usr/libexec/cardputerzero/cp0-displayd
 install -o root -g root -m 0755 "$staging/cp0-gpiod" \
     /usr/libexec/cardputerzero/cp0-gpiod
 install -o root -g root -m 0755 "$staging/cp0-radiod" \
@@ -193,6 +222,14 @@ install -o root -g root -m 0644 "$staging/cardputerzero-camerad.service" \
     /etc/systemd/system/cardputerzero-camerad.service
 install -o root -g root -m 0644 "$staging/cardputerzero-camerad.socket" \
     /etc/systemd/system/cardputerzero-camerad.socket
+install -o root -g root -m 0644 "$staging/cardputerzero-connectivityd.service" \
+    /etc/systemd/system/cardputerzero-connectivityd.service
+install -o root -g root -m 0644 "$staging/cardputerzero-connectivityd.socket" \
+    /etc/systemd/system/cardputerzero-connectivityd.socket
+install -o root -g root -m 0644 "$staging/cardputerzero-displayd.service" \
+    /etc/systemd/system/cardputerzero-displayd.service
+install -o root -g root -m 0644 "$staging/cardputerzero-displayd.socket" \
+    /etc/systemd/system/cardputerzero-displayd.socket
 install -o root -g root -m 0644 "$staging/cardputerzero-gpiod.service" \
     /etc/systemd/system/cardputerzero-gpiod.service
 install -o root -g root -m 0644 "$staging/cardputerzero-gpiod.socket" \
@@ -221,6 +258,12 @@ systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-trust.conf
 install -o root -g root -m 0644 "$staging/cardputerzero-appd.conf" \
     /etc/tmpfiles.d/cardputerzero-appd.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-appd.conf
+install -o root -g root -m 0644 "$staging/cardputerzero-display.conf" \
+    /etc/tmpfiles.d/cardputerzero-display.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-display.conf
+install -o root -g root -m 0644 "$staging/cardputerzero-connectivity.conf" \
+    /etc/tmpfiles.d/cardputerzero-connectivity.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-connectivity.conf
 install -D -o root -g root -m 0644 "$staging/lora.conf" \
     /etc/cardputerzero/lora.conf
 if [ ! -e /etc/cardputerzero/store.conf ]; then
@@ -246,12 +289,16 @@ install -o root -g root -m 0755 "$staging/device-stability-monitor.sh" \
     /usr/libexec/cardputerzero/device-stability-monitor
 install -o root -g root -m 0755 "$staging/device-store-acceptance.sh" \
     /usr/libexec/cardputerzero/device-store-acceptance
+install -o root -g root -m 0755 "$staging/device-smoke.sh" \
+    /usr/libexec/cardputerzero/device-smoke.sh
 systemctl daemon-reload
 systemctl enable --now cardputerzero-appd.socket cardputerzero-broker.socket
 systemctl enable --now cardputerzero-networkd.socket
 systemctl enable --now cardputerzero-documentd.socket
 systemctl enable --now cardputerzero-audiod.socket
 systemctl enable --now cardputerzero-camerad.socket
+systemctl enable --now cardputerzero-connectivityd.socket
+systemctl enable --now cardputerzero-displayd.socket
 systemctl enable --now cardputerzero-gpiod.socket
 systemctl enable --now cardputerzero-radiod.socket
 systemctl enable --now cardputerzero-storaged.socket
@@ -266,6 +313,8 @@ systemctl is-active --quiet cardputerzero-networkd.socket
 systemctl is-active --quiet cardputerzero-documentd.socket
 systemctl is-active --quiet cardputerzero-audiod.socket
 systemctl is-active --quiet cardputerzero-camerad.socket
+systemctl is-active --quiet cardputerzero-connectivityd.socket
+systemctl is-active --quiet cardputerzero-displayd.socket
 systemctl is-active --quiet cardputerzero-gpiod.socket
 systemctl is-active --quiet cardputerzero-radiod.socket
 systemctl is-active --quiet cardputerzero-storaged.socket
@@ -277,6 +326,8 @@ sha256sum \
     /usr/libexec/cardputerzero/cp0-documentd \
     /usr/libexec/cardputerzero/cp0-audiod \
     /usr/libexec/cardputerzero/cp0-camerad \
+    /usr/libexec/cardputerzero/cp0-connectivityd \
+    /usr/libexec/cardputerzero/cp0-displayd \
     /usr/libexec/cardputerzero/cp0-gpiod \
     /usr/libexec/cardputerzero/cp0-radiod \
     /usr/libexec/cardputerzero/cp0-storaged \

@@ -27,11 +27,14 @@ required=(
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-generator"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-recovery-console.service"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-system-shell.service"
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/device-smoke.sh"
     "$hello/app.json"
     "$hello/bin/hello-card.wasm"
     "$release/cp0-appd"
     "$release/cp0-audiod"
     "$release/cp0-camerad"
+    "$release/cp0-connectivityd"
+    "$release/cp0-displayd"
     "$release/cp0-documentd"
     "$release/cp0-gpiod"
     "$release/cp0-networkd"
@@ -55,6 +58,8 @@ install -m 0755 \
     "$release/cp0-appd" \
     "$release/cp0-audiod" \
     "$release/cp0-camerad" \
+    "$release/cp0-connectivityd" \
+    "$release/cp0-displayd" \
     "$release/cp0-documentd" \
     "$release/cp0-gpiod" \
     "$release/cp0-networkd" \
@@ -70,6 +75,7 @@ install -m 0755 \
     "$repo_root/scripts/device-performance-acceptance.sh" \
     "$repo_root/scripts/device-stability-monitor.sh" \
     "$repo_root/scripts/device-store-acceptance.sh" \
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/device-smoke.sh" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-generator" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/retry-display-once.sh" \
     "$output/"

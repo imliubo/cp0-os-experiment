@@ -375,6 +375,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp0-connectivity-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cp0-connectivityd"
+version = "0.1.0"
+dependencies = [
+ "cp0-connectivity-protocol",
+ "libc",
+]
+
+[[package]]
+name = "cp0-display-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cp0-displayd"
+version = "0.1.0"
+dependencies = [
+ "cp0-display-protocol",
+ "libc",
+]
+
+[[package]]
 name = "cp0-document-protocol"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,15 @@
+[Unit]
+Description=CardputerZero trusted connectivity settings socket
+
+[Socket]
+ListenStream=/run/cardputerzero-connectivityd/connectivity.sock
+FileDescriptorName=connectivity
+Service=cardputerzero-connectivityd.service
+SocketUser=root
+SocketGroup=cp0-connectivity-control
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

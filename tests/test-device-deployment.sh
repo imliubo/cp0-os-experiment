@@ -16,10 +16,23 @@ if grep -q 'wait_active cardputerzero-appd.service' "$compositor"; then
     exit 1
 fi
 grep -q 'systemctl stop cardputerzero-system-shell.service' "$platform"
-grep -q 'target systemctl does not support the required wait command' "$platform"
+if grep -q 'systemctl.*wait command' "$platform"; then
+    echo 'error: app-platform installer rejects supported systemctl versions using an unused wait subcommand' >&2
+    exit 1
+fi
 grep -q 'cardputerzero-appd.socket cardputerzero-broker.socket' "$platform"
 grep -q 'cardputerzero-stored.socket' "$platform"
+grep -q 'cardputerzero-audiod.socket cardputerzero-camerad.socket' "$platform"
+grep -q 'cardputerzero-radiod.socket cardputerzero-storaged.socket' "$platform"
 grep -q 'cp0-stored' "$prepare"
+grep -q 'cp0-displayd' "$prepare"
+grep -q 'cp0-connectivityd' "$prepare"
+grep -q 'cardputerzero-connectivityd.socket' "$platform"
+grep -q 'cardputerzero-displayd.socket' "$platform"
+grep -q 'for group in cp0-control cp0-display-control cp0-audio-control cp0-connectivity-control' "$compositor"
+grep -q 'usermod -a -G "$group" cp0-shell' "$compositor"
+grep -q 'usermod -a -G cp0-display-control cp0-shell' "$platform"
+grep -q 'usermod -a -G cp0-connectivity-control cp0-shell' "$platform"
 grep -q 'store.conf' "$prepare"
 grep -q 'device-policy.json' "$prepare"
 grep -q '/etc/cardputerzero/device-policy.json' "$platform"
@@ -30,6 +43,9 @@ grep -q 'device-capability-acceptance.sh' "$platform"
 grep -q 'device-capability-acceptance.sh' "$prepare"
 grep -q 'device-factory-acceptance.sh' "$platform"
 grep -q 'device-factory-acceptance.sh' "$prepare"
+grep -q 'device-smoke.sh' "$platform"
+grep -q 'device-smoke.sh' "$prepare"
+grep -q '/usr/libexec/cardputerzero/device-smoke.sh' "$platform"
 grep -q '/usr/libexec/cardputerzero/device-factory-acceptance' "$platform"
 grep -q 'device-performance-acceptance.sh' "$platform"
 grep -q 'device-performance-acceptance.sh' "$prepare"

@@ -82,7 +82,9 @@ impl AudioClient {
             }
             AudioOutcome::Played { .. } => Err(AudioClientError::MismatchedFrameCount),
             AudioOutcome::Error { code, .. } => Err(AudioClientError::Service(code)),
-            AudioOutcome::Captured { .. } => Err(AudioClientError::MismatchedFrameCount),
+            AudioOutcome::Captured { .. } | AudioOutcome::OutputState { .. } => {
+                Err(AudioClientError::MismatchedFrameCount)
+            }
         }
     }
 
@@ -97,7 +99,9 @@ impl AudioClient {
                 Ok(samples)
             }
             AudioOutcome::Error { code, .. } => Err(AudioClientError::Service(code)),
-            AudioOutcome::Played { .. } => Err(AudioClientError::MismatchedFrameCount),
+            AudioOutcome::Played { .. } | AudioOutcome::OutputState { .. } => {
+                Err(AudioClientError::MismatchedFrameCount)
+            }
         }
     }
 

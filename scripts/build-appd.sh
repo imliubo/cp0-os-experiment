@@ -11,6 +11,8 @@ cargo build \
     -p cp0-appd \
     -p cp0-audiod \
     -p cp0-camerad \
+    -p cp0-connectivityd \
+    -p cp0-displayd \
     -p cp0-documentd \
     -p cp0-gpiod \
     -p cp0-networkd \
@@ -20,7 +22,7 @@ cargo build \
     -p cp0-stored \
     -p cp0ctl
 
-for binary in cp0-appd cp0-audiod cp0-camerad cp0-documentd cp0-gpiod cp0-networkd cp0-radiod cp0-recovery cp0-storaged cp0-stored cp0ctl; do
+for binary in cp0-appd cp0-audiod cp0-camerad cp0-connectivityd cp0-displayd cp0-documentd cp0-gpiod cp0-networkd cp0-radiod cp0-recovery cp0-storaged cp0-stored cp0ctl; do
     path="$repo_root/target/$target/release/$binary"
     test -x "$path"
     file "$path" | grep -q 'ELF 64-bit LSB.*ARM aarch64'

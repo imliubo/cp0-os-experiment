@@ -17,6 +17,19 @@ path. Longer sounds and recordings are built from repeated bounded calls. Raw
 ALSA ioctls, mixer changes, arbitrary sample formats and HDMI audio are not SDK
 features.
 
+The V0.6 ES8389 hardware PCM endpoint requires exactly two interleaved channels.
+Audiod preserves the mono SDK contract by duplicating playback samples to both
+hardware channels and averaging captured left/right samples back to one mono
+sample. Applications cannot select or observe the hardware channel layout.
+The capture stream is explicitly started before its first read because the
+V0.6 driver returns `EIO` instead of performing ALSA's usual implicit start.
+
+The trusted System Shell separately uses protocol v2 output-setting commands.
+They are fixed to the ES8389 `DACL`, `DACR` and `Speaker` simple mixer elements;
+no card, element or route name is accepted from a request. Volume is bounded to
+0 through 100 percent, shortcut adjustments use a fixed 10-percent step, and
+every write returns observed volume and mute state.
+
 ## Trust Flow
 
 ```text
@@ -54,6 +67,11 @@ Busy devices map to the stable SDK resource-limit result. Missing ALSA support,
 device failures and a pending permission prompt map to unavailable. Denied or
 undeclared permissions map to denied. Native ALSA error strings and host device
 details never cross into the application.
+
+The audiod socket is traversable only by `cp0-audio-control`. `cp0-audiod`
+then uses `SO_PEERCRED` to authorize root/appd only for PCM and `cp0-shell` only
+for output settings. The two roles are mutually exclusive and covered by a
+server authorization test; socket membership alone never grants a command.
 
 ## Verification
 

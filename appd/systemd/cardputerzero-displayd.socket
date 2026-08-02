@@ -1,0 +1,15 @@
+[Unit]
+Description=CardputerZero trusted display settings socket
+
+[Socket]
+ListenStream=/run/cardputerzero-displayd/display.sock
+FileDescriptorName=display
+Service=cardputerzero-displayd.service
+SocketUser=root
+SocketGroup=cp0-display-control
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

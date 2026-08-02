@@ -1,0 +1,10 @@
+[package]
+name = "cp0-connectivityd"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+cp0-connectivity-protocol = { path = "../cp0-connectivity-protocol" }
+libc.workspace = true

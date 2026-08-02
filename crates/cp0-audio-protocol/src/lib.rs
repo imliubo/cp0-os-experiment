@@ -3,7 +3,7 @@ use std::io::{self, BufRead, Write};
 
 use serde::{Deserialize, Serialize};
 
-pub const AUDIO_PROTOCOL_VERSION: u32 = 1;
+pub const AUDIO_PROTOCOL_VERSION: u32 = 3;
 pub const AUDIO_SAMPLE_RATE_HZ: u32 = 16_000;
 pub const AUDIO_CHANNELS: u8 = 1;
 pub const AUDIO_SAMPLE_BYTES: usize = 2;
@@ -25,6 +25,26 @@ pub struct AudioRequest {
 pub enum AudioCommand {
     PlayPcmS16le { samples_base64: String },
     CapturePcmS16le { frames: u16 },
+    GetOutputState {},
+    SetOutputVolume { percent: u8 },
+    AdjustOutputVolume { direction: AudioDirection },
+    SetOutputMuted { muted: bool },
+    PlayKeyClick {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioDirection {
+    Decrease,
+    Increase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AudioOutputState {
+    pub available: bool,
+    pub volume_percent: Option<u8>,
+    pub muted: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +63,9 @@ pub enum AudioOutcome {
     },
     Captured {
         samples_base64: String,
+    },
+    OutputState {
+        state: AudioOutputState,
     },
     Error {
         code: AudioErrorCode,
@@ -70,6 +93,8 @@ pub enum AudioProtocolError {
     UnsupportedVersion(u32),
     InvalidSamples,
     InvalidFrameCount,
+    InvalidOutputState,
+    InvalidVolume,
     InvalidErrorMessage,
 }
 
@@ -93,6 +118,12 @@ impl fmt::Display for AudioProtocolError {
             ),
             Self::InvalidFrameCount => {
                 formatter.write_str("audio frame count is outside the supported range")
+            }
+            Self::InvalidOutputState => {
+                formatter.write_str("audio output availability and values are inconsistent")
+            }
+            Self::InvalidVolume => {
+                formatter.write_str("audio output volume is outside the supported range")
             }
             Self::InvalidErrorMessage => {
                 formatter.write_str("audio error message is empty, too long or contains controls")
@@ -134,6 +165,46 @@ impl AudioRequest {
         }
     }
 
+    pub const fn get_output_state(request_id: u64) -> Self {
+        Self {
+            protocol_version: AUDIO_PROTOCOL_VERSION,
+            request_id,
+            command: AudioCommand::GetOutputState {},
+        }
+    }
+
+    pub const fn set_output_volume(request_id: u64, percent: u8) -> Self {
+        Self {
+            protocol_version: AUDIO_PROTOCOL_VERSION,
+            request_id,
+            command: AudioCommand::SetOutputVolume { percent },
+        }
+    }
+
+    pub const fn adjust_output_volume(request_id: u64, direction: AudioDirection) -> Self {
+        Self {
+            protocol_version: AUDIO_PROTOCOL_VERSION,
+            request_id,
+            command: AudioCommand::AdjustOutputVolume { direction },
+        }
+    }
+
+    pub const fn set_output_muted(request_id: u64, muted: bool) -> Self {
+        Self {
+            protocol_version: AUDIO_PROTOCOL_VERSION,
+            request_id,
+            command: AudioCommand::SetOutputMuted { muted },
+        }
+    }
+
+    pub const fn play_key_click(request_id: u64) -> Self {
+        Self {
+            protocol_version: AUDIO_PROTOCOL_VERSION,
+            request_id,
+            command: AudioCommand::PlayKeyClick {},
+        }
+    }
+
     pub fn validate(&self) -> Result<(), AudioProtocolError> {
         validate_version(self.protocol_version)?;
         match &self.command {
@@ -146,6 +217,14 @@ impl AudioRequest {
                 Err(AudioProtocolError::InvalidFrameCount)
             }
             AudioCommand::CapturePcmS16le { .. } => Ok(()),
+            AudioCommand::SetOutputVolume { percent } if *percent > 100 => {
+                Err(AudioProtocolError::InvalidVolume)
+            }
+            AudioCommand::GetOutputState {}
+            | AudioCommand::SetOutputVolume { .. }
+            | AudioCommand::AdjustOutputVolume { .. }
+            | AudioCommand::SetOutputMuted { .. }
+            | AudioCommand::PlayKeyClick {} => Ok(()),
         }
     }
 }
@@ -169,6 +248,14 @@ impl AudioResponse {
         }
     }
 
+    pub const fn output_state(request_id: u64, state: AudioOutputState) -> Self {
+        Self {
+            protocol_version: AUDIO_PROTOCOL_VERSION,
+            request_id,
+            outcome: AudioOutcome::OutputState { state },
+        }
+    }
+
     pub fn error(request_id: u64, code: AudioErrorCode, message: impl Into<String>) -> Self {
         Self {
             protocol_version: AUDIO_PROTOCOL_VERSION,
@@ -189,6 +276,7 @@ impl AudioResponse {
                 Err(AudioProtocolError::InvalidFrameCount)
             }
             AudioOutcome::Captured { samples_base64 } => decode_samples(samples_base64).map(|_| ()),
+            AudioOutcome::OutputState { state } => state.validate(),
             AudioOutcome::Error { message, .. }
                 if message.is_empty()
                     || message.chars().count() > MAX_AUDIO_ERROR_CHARS
@@ -197,6 +285,32 @@ impl AudioResponse {
                 Err(AudioProtocolError::InvalidErrorMessage)
             }
             _ => Ok(()),
+        }
+    }
+}
+
+impl AudioOutputState {
+    pub const fn available(volume_percent: u8, muted: bool) -> Self {
+        Self {
+            available: true,
+            volume_percent: Some(volume_percent),
+            muted: Some(muted),
+        }
+    }
+
+    pub const fn unavailable() -> Self {
+        Self {
+            available: false,
+            volume_percent: None,
+            muted: None,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), AudioProtocolError> {
+        match (self.available, self.volume_percent, self.muted) {
+            (true, Some(percent), Some(_)) if percent <= 100 => Ok(()),
+            (false, None, None) => Ok(()),
+            _ => Err(AudioProtocolError::InvalidOutputState),
         }
     }
 }
@@ -394,6 +508,52 @@ mod tests {
             panic!("expected captured samples");
         };
         assert_eq!(decode_samples(&samples_base64).unwrap(), samples);
+    }
+
+    #[test]
+    fn round_trips_bounded_output_settings() {
+        let requests = [
+            AudioRequest::get_output_state(1),
+            AudioRequest::set_output_volume(2, 75),
+            AudioRequest::adjust_output_volume(3, AudioDirection::Decrease),
+            AudioRequest::set_output_muted(4, true),
+            AudioRequest::play_key_click(5),
+        ];
+        for request in requests {
+            let mut frame = Vec::new();
+            write_request(&mut frame, &request).unwrap();
+            assert_eq!(
+                read_request(&mut Cursor::new(frame)).unwrap(),
+                Some(request)
+            );
+        }
+
+        for state in [
+            AudioOutputState::available(75, false),
+            AudioOutputState::unavailable(),
+        ] {
+            let response = AudioResponse::output_state(5, state);
+            let mut frame = Vec::new();
+            write_response(&mut frame, &response).unwrap();
+            assert_eq!(
+                read_response(&mut Cursor::new(frame)).unwrap(),
+                Some(response)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_output_settings() {
+        assert!(AudioRequest::set_output_volume(1, 101).validate().is_err());
+        assert!(
+            AudioOutputState {
+                available: false,
+                volume_percent: Some(0),
+                muted: None,
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]

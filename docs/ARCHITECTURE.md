@@ -102,6 +102,11 @@ Weston 的 XRGB8888 SHM buffer。标准应用只能提交 320x150，沉浸应用
 经过 `SO_PEERCRED` 认证的控制 socket 读取和解决单个待处理提示；诊断控制器可将
 持久决策原子重置为“下次询问”，第三方应用没有此管理接口。
 
+系统设置使用与应用能力分离的 Shell-only provider。首个 `cp0-displayd` 只接受
+`cp0-shell` 的 socket DAC 与 `SO_PEERCRED` 双重身份，固定读写 V0.6
+`/sys/class/backlight/backlight` 的亮度属性。请求范围为 5% 到 100%，全局快捷键只
+执行固定 10% 步进并回读实际值；应用、Runtime 和 Store 均没有对应 SDK 或控制路径。
+
 通知 broker 同样从 `SO_PEERCRED` 和当前 systemd cgroup 绑定应用身份。`appd` 只
 向可信 Shell 返回规范应用名称和有界内容；Shell 决定横幅布局与四秒显示周期。
 权限提示优先于通知，Home、Tasks、Power 和应用退出会撤销当前横幅。
@@ -123,7 +128,10 @@ Shell 显示单前台选择器；应用请求不包含路径或文档 ID。选�
 固定打开 ES8389 的 `hw:ES8389Audio,0`，只接受 16 kHz、单声道、S16_LE PCM。
 `audio.playback` 和 `audio.capture` 分别授权，每次最多 1024 帧（64 ms、2048 字节）；
 协议、appd broker、Runtime 线性内存和 SDK 四层都重复验证长度与偶数字节边界。
-服务使用专用账户、root-only Unix socket、空 capability 集和 systemd 设备白名单。
+服务使用专用账户、空 capability 集和 systemd 设备白名单。同一服务还提供与应用 PCM
+能力分离的 Shell-only 输出设置角色：只允许 `cp0-shell` 读取/调整 DACL、DACR 音量和
+Speaker 静音，固定 10% 步进并回读实际值。socket DAC 允许 Shell 建连，但服务按
+`SO_PEERCRED` 和命令类别分权，因此 Shell 不能播放/录音，appd 也不能修改系统音量。
 
 相机能力不暴露 V4L2、Media Controller、dma-heap、VideoCore 设备或捕获进程。
 `cp0-camerad` 以专用账户运行并通过 systemd 白名单独占这些设备类，固定调用系统

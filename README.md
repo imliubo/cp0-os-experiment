@@ -39,6 +39,8 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
   键盘焦点保持、权限提示优先级、四秒生命周期和 320x170 像素回归。
 - Phase 2G 核心恢复与稳定性工具：固定单元 SIGKILL/PID/重绑验证、RAM-backed
   24 小时状态与内存采样、appd ping 和 socket 健康检查。
+- System Experience display broker：独立 `cp0-displayd`、Shell peer UID 双重认证、
+  V0.6 固定背光 sysfs、5%-100% 安全范围和 Fn+U/Fn+I 硬件回读覆盖层。
 - Phase 3A 静态 WAMR App Runtime、每应用稳定 UID、bubblewrap namespace、runtime
   seccomp、systemd cgroup 硬限制及资源耗尽真机负向测试。
 - Phase 3B socket-activated `appd`、可信安装注册表、Shell peer UID 认证、单运行槽

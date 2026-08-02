@@ -29,6 +29,10 @@ install -D -m 0755 "${payload}/cp0-audiod" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-audiod"
 install -D -m 0755 "${payload}/cp0-camerad" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-camerad"
+install -D -m 0755 "${payload}/cp0-connectivityd" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-connectivityd"
+install -D -m 0755 "${payload}/cp0-displayd" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-displayd"
 install -D -m 0755 "${payload}/cp0-gpiod" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-gpiod"
 install -D -m 0755 "${payload}/cp0-radiod" \
@@ -65,6 +69,14 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-camerad.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-camerad.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-camerad.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-camerad.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-connectivityd.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-connectivityd.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-connectivityd.socket" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-connectivityd.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-displayd.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-displayd.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-displayd.socket" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-displayd.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-gpiod.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-gpiod.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-gpiod.socket" \
@@ -83,6 +95,10 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-stored.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-stored.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-gpio.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-gpio.conf"
+install -D -m 0644 "${payload}/systemd/cardputerzero-display.conf" \
+    "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-display.conf"
+install -D -m 0644 "${payload}/systemd/cardputerzero-connectivity.conf" \
+    "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-connectivity.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-appd.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-appd.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-storage.conf" \
@@ -139,6 +155,25 @@ if ! getent group cp0-control >/dev/null 2>&1; then
     groupadd --system cp0-control
 fi
 usermod -a -G cp0-control cp0-shell
+if ! getent group cp0-display-control >/dev/null 2>&1; then
+    groupadd --system cp0-display-control
+fi
+usermod -a -G cp0-display-control cp0-shell
+if ! getent group cp0-audio-control >/dev/null 2>&1; then
+    groupadd --system cp0-audio-control
+fi
+usermod -a -G cp0-audio-control cp0-shell
+if ! getent group cp0-connectivity-control >/dev/null 2>&1; then
+    groupadd --system cp0-connectivity-control
+fi
+usermod -a -G cp0-connectivity-control cp0-shell
+if ! getent group cp0-display >/dev/null 2>&1; then
+    groupadd --system cp0-display
+fi
+if ! id cp0-display >/dev/null 2>&1; then
+    useradd --system --gid cp0-display --home-dir /nonexistent \
+        --shell /usr/sbin/nologin cp0-display
+fi
 if ! getent group cp0-store >/dev/null 2>&1; then
     groupadd --system cp0-store
 fi
@@ -232,6 +267,8 @@ chmod -R go-w /var/lib/cardputerzero/apps/dev.cardputerzero.hello
     dev.cardputerzero.hello 0.1.0
 
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-appd.conf
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-display.conf
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-connectivity.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-gpio.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-storage.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-trust.conf
@@ -275,6 +312,7 @@ set -e
 systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
     cardputerzero-audiod.socket cardputerzero-camerad.socket \
+    cardputerzero-connectivityd.socket cardputerzero-displayd.socket \
     cardputerzero-gpiod.socket cardputerzero-radiod.socket \
     cardputerzero-storaged.socket cardputerzero-stored.socket
 CHROOT
@@ -285,6 +323,8 @@ systemctl mask cardputerzero-appd.service \
     cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
     cardputerzero-audiod.socket cardputerzero-camerad.socket \
+    cardputerzero-connectivityd.service cardputerzero-connectivityd.socket \
+    cardputerzero-displayd.service cardputerzero-displayd.socket \
     cardputerzero-gpiod.socket cardputerzero-radiod.socket \
     cardputerzero-storaged.socket cardputerzero-stored.socket
 CHROOT

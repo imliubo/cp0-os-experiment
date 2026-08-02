@@ -6,9 +6,9 @@ ListenStream=/run/cardputerzero-audiod/audio.sock
 FileDescriptorName=audio
 Service=cardputerzero-audiod.service
 SocketUser=root
-SocketGroup=root
-SocketMode=0600
-DirectoryMode=0755
+SocketGroup=cp0-audio-control
+SocketMode=0660
+DirectoryMode=0750
 RemoveOnStop=yes
 
 [Install]

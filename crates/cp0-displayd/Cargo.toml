@@ -1,0 +1,10 @@
+[package]
+name = "cp0-displayd"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+cp0-display-protocol = { path = "../cp0-display-protocol" }
+libc.workspace = true

@@ -1,0 +1,41 @@
+[Unit]
+Description=CardputerZero restricted display settings broker
+Requires=cardputerzero-displayd.socket
+After=cardputerzero-displayd.socket systemd-tmpfiles-setup.service
+
+[Service]
+Type=simple
+ExecStartPre=-+/usr/bin/systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-display.conf
+ExecStart=/usr/libexec/cardputerzero/cp0-displayd serve
+User=cp0-display
+Group=cp0-display
+UMask=0077
+Restart=on-failure
+RestartSec=500ms
+TimeoutStopSec=3
+MemoryMax=8M
+MemorySwapMax=0
+TasksMax=8
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+ReadWritePaths=-/sys/class/backlight/backlight/brightness
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
