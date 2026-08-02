@@ -1,6 +1,6 @@
 # ADR 0007: first-boot identity and provisioning
 
-- Status: proposed; awaiting product approval
+- Status: accepted; implemented behind fresh-media acceptance gate
 - Date: 2026-08-02
 
 ## Context
@@ -16,7 +16,7 @@ first-boot implementation therefore cannot safely mutate only `/etc/passwd` in
 the OverlayFS upper layer. Setup also handles passwords and Wi-Fi credentials,
 so it cannot be an untrusted SDK application or receive root authority.
 
-## Proposed decision
+## Decision
 
 1. A product image contains no human account. pi-gen may use a temporary
    `cp0-build` staging identity, but export removes the account, home, group and
@@ -80,11 +80,11 @@ The detailed UI, storage, secret-handling and test contract is in
 - **Enable SSH or sudo automatically**: creates an undocumented remote or local
   privilege path contrary to the product security model.
 
-## Approval and enablement gates
+## Implementation and enablement gates
 
-This ADR is not accepted and changes no implementation until the product owner
-approves the decisions recorded in the detailed plan. Enablement then requires
-mounted-image credential gates, protocol/secret tests, state fault injection,
-all Setup pixel tests and fresh-media V0.6 acceptance before any production
-claim.
-
+The product owner approved all six decisions on 2026-08-02. The bounded
+protocol, authenticated daemon, extrausers identity, `cp0-data-layout-v2`,
+marker-controlled SSH and trusted Setup UI are implemented. Host `make check`,
+Linux/arm64 `SOCK_SEQPACKET`/`SO_PEERCRED`, PAM/NSS and complete compositor
+build checks pass. A newly built product image and fresh-media V0.6 acceptance
+remain mandatory before any production claim or deployment to the device.

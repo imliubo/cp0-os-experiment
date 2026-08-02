@@ -21,7 +21,8 @@ length, one SHA-256 per regular file and a SHA-256 over the complete payload.
 The parser rejects:
 
 - absolute paths, `.`/`..`, paths deeper than 32 components and paths outside
-  the fixed `cp0-data-layout-v1` top-level allowlist;
+  the fixed `cp0-data-layout-v2` top-level allowlist, including the local Owner
+  identity database and persistent home;
 - duplicate or unsorted paths, unknown types/flags and inconsistent lengths;
 - symbolic links, hard links, devices, sockets, setuid/setgid/sticky bits and
   world-writable entries;
@@ -37,7 +38,7 @@ successful.
 
 ## Data sensitivity
 
-A full backup contains installed applications, permission policy, private app
+A full backup contains the local Owner identity and password hash, installed applications, permission policy, private app
 storage, documents, Store trust state, Wi-Fi credentials, SSH host keys, machine
 identity and random seed. Version 1 is deliberately offline and provides
 corruption detection, not encryption or proof of who created the backup. Store

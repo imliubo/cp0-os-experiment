@@ -59,13 +59,17 @@ only on an edited command line; see `docs/PHASE6C-RECOVERY-IMAGE.md`.
 
 ## Persistent allowlist
 
-The exported image seeds a versioned `cp0-data-layout-v1` layout. Only these
+The exported image seeds a versioned `cp0-data-layout-v2` layout. Existing v1
+media is migrated in initramfs by adding the owner identity/home roots before
+the v2 marker is committed. Only these
 paths survive reboot:
 
 | Persistent source | Runtime path |
 |---|---|
 | `cardputerzero/` | `/var/lib/cardputerzero` |
 | `etc-cardputerzero/` | `/etc/cardputerzero` |
+| `extrausers/` | `/var/lib/extrausers` |
+| `home/` | `/home` |
 | `ssh/` | `/etc/ssh` |
 | `network-connections/` | `/etc/NetworkManager/system-connections` |
 | `network-state/` | `/var/lib/NetworkManager` |
@@ -73,7 +77,7 @@ paths survive reboot:
 | `random-seed` | `/var/lib/systemd/random-seed` |
 
 This covers installed applications, the registry and permission decisions,
-private app data, trust/revocation policy, LoRa policy, Wi-Fi credentials,
+private app data, owner identity/home, trust/revocation policy, LoRa policy, Wi-Fi credentials,
 NetworkManager state, SSH host keys, machine identity and the random seed.
 The initramfs creates the persistent machine identity before systemd starts, so SSH
 host-key provisioning must not use `ConditionFirstBoot=yes`. The

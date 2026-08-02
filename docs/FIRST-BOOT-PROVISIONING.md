@@ -1,7 +1,7 @@
 # CardputerZero OS first-boot provisioning plan
 
-> Status: proposed; documentation only. No implementation or image behavior has
-> changed yet. Product approval is required before Phase 6I starts.
+> Status: approved and implemented for host/image acceptance. Fresh-media V0.6
+> burn and hardware acceptance are still required before release or deployment.
 
 ## Goals
 
@@ -73,10 +73,12 @@ recoverable page.
 Each page uses a fixed header, at most four visible rows, one primary action and
 one concise help/error area. Long lists scroll without resizing the surface.
 
-1. **Welcome and language**: language used by Setup and the resulting locale.
-2. **Country, time zone and clock**: regulatory country first, then compatible
-   time zones. Explain that country controls legal Wi-Fi channels. Use network
-   time when available; the offline path permits a manual date/time correction.
+1. **Welcome and regional locale**: the first release renders Setup in English
+   and selects either the generated `en_US` or `zh_CN` system locale. Full Shell
+   localization remains part of the long-translation pixel acceptance gate.
+2. **Country and time zone**: regulatory country first, then a bounded time-zone
+   list. Country controls legal Wi-Fi channels. Network time is used when
+   available; manual clock correction is deferred to post-setup Settings.
 3. **Device name**: editable hostname with an example and inline validation.
 4. **Owner name**: display name used by trusted system UI.
 5. **Username**: interactive account name, availability and reserved-name
@@ -85,8 +87,9 @@ one concise help/error area. Long lists scroll without resizing the surface.
 7. **Confirm password**: exact re-entry; neither value is persisted as setup
    state.
 8. **Network**: Ethernet status, Wi-Fi, or `Use offline`.
-9. **Wi-Fi network**: scan results, signal/security indicators, Refresh and
-   `Hidden network`.
+9. **Wi-Fi network**: scan results, signal/security indicators and Refresh.
+   Hidden SSID entry is deferred until its keyboard and error states have pixel
+   coverage; it is not silently treated as an empty scan result.
 10. **Wi-Fi credentials**: masked passphrase and connection progress. DHCP is
     the initial supported IP mode; advanced static addressing belongs in
     Settings after initial release.
@@ -95,8 +98,8 @@ one concise help/error area. Long lists scroll without resizing the surface.
     represented only as `Configured`.
 13. **Applying**: deterministic progress for identity, regional settings,
     network, remote access and verification.
-14. **Complete**: hostname, current IP when available, remote-access status and
-    a single `Start` action.
+14. **Complete**: hostname, remote-access status and a single `Start` action.
+   Current IP remains available from the Network system app after Setup.
 
 Keyboard behavior is consistent on every page: Up/Down moves focus, Left/Right
 changes a value, Enter activates, Backspace edits, and ESC goes back when safe.
@@ -114,7 +117,7 @@ feedback use conservative defaults until the owner can change them in Settings.
   allocated from the controlled owner range `1000-1999`; application UIDs remain
   at `20000` and above.
 - Hostname: 1-63 lower-case RFC 1123 characters, no leading/trailing hyphen.
-- Password: proposed first-release policy is 10-64 printable characters, exact
+- Password: first-release policy is 10-64 printable ASCII characters, exact
   confirmation and no truncation. This is a local minimum, not a claim of
   password strength.
 - Wi-Fi: validate SSID byte length and security-specific credential bounds;
@@ -151,20 +154,19 @@ SSH files directly.
 
 ### Root provisioning service
 
-`cp0-provisiond` is a root-owned, socket-activated service available only while
-setup is incomplete or in an explicitly designed repair flow. Its Unix socket
+`cp0-provisiond` is a root-owned, socket-activated service. Its Unix socket
 uses DAC permissions for the `cp0-shell` identity and every connection is also
 checked with `SO_PEERCRED`. UID 0, the owner UID and all application UIDs are
 rejected as callers; root manages the service through local files and systemd,
 not through the Shell protocol.
 
 The service uses bounded `SOCK_SEQPACKET` messages with strict versioned JSON.
-The proposed commands are:
+The implemented commands are:
 
-- `GetStatus`, `SetLocale`, `SetDeviceName` and `CheckUsername`;
-- `SetOwnerIdentity` and `SetPassword`;
-- `ListNetworks`, `RefreshNetworks`, `ConnectWifi` and `SetOfflineMode`;
-- `SetRemoteAccess`, `Review` and `Commit`.
+- `GetStatus` and `SetRegion` (locale, country, time zone and hostname);
+- `SetOwner` and `SetPassword`;
+- `ListWifi`, `ConnectWifi`, `UseEthernet` and `UseOffline`;
+- `SetSshEnabled` and `Commit`.
 
 Responses never echo password or Wi-Fi secrets. Unknown fields, duplicate
 fields, oversized frames, invalid state transitions and calls from the wrong
@@ -172,10 +174,10 @@ peer fail closed. After `COMPLETE`, mutating provisioning commands are
 permanently unavailable. Normal post-setup changes use the existing Settings
 brokers; factory reset remains a separate physical/recovery ceremony.
 
-The NetworkManager operations should share a small internal backend with
-`cp0-connectivityd`, whose current radio/airplane API is insufficient for scan,
-connect and forget. There must be one implementation of SSID validation,
-keyfile permissions and connection-state translation.
+The daemon owns the setup-only NetworkManager keyfile/connection path;
+`cp0-connectivityd` continues to own post-setup radio and airplane toggles.
+Both remain separate least-authority services rather than exposing scan secrets
+through the ordinary Settings broker.
 
 ### Resource bounds
 
@@ -185,7 +187,7 @@ allowed to exit when idle or after completion. Protocol frames are at most
 16 KiB, Wi-Fi results are capped at 64 entries, and only one scan or connection
 attempt runs at a time. No downloaded asset, WebView, desktop toolkit or
 additional long-running UI process is introduced. Hardware acceptance must
-measure actual peak memory before these proposed limits are accepted.
+retain measured peak-memory evidence when the candidate image is accepted.
 
 ### Human identity without a mutable `/etc`
 
@@ -196,7 +198,7 @@ ordinary interactive UID in the final image. Root remains locked and fixed
 service accounts retain `nologin` shells.
 
 Runtime owner records are stored on `cp0-data`, separate from immutable OS
-service identities. The proposed backend is `libnss-extrausers`, with:
+service identities. The implemented backend is `libnss-extrausers`, with:
 
 ```text
 /var/lib/extrausers/passwd
@@ -206,9 +208,10 @@ service identities. The proposed backend is `libnss-extrausers`, with:
 ```
 
 NSS resolves immutable service accounts from `/etc` and the owner from this
-persistent database. The implementation spike must verify password
-authentication on the target Debian release; use `libpam-extrausers` where PAM
-does not authenticate the extrausers shadow entry through `pam_unix` alone.
+persistent database. Debian 13's standard `pam_unix` authenticates the shadow
+record exposed by `libnss-extrausers`; this was verified with a target-container
+password authentication test and avoids the unavailable `libpam-extrausers`
+package.
 Persisting the complete `/etc/passwd`, `/etc/shadow` or `/etc/group` is rejected
 because an OS rollback/update could conflict with service accounts.
 
@@ -220,8 +223,9 @@ daemon. Cleartext secrets are never passed in argv or environment variables,
 written to a temporary file, logged or stored in `state.json`; their buffers
 are explicitly cleared after use.
 
-The proposed owner home is a quota-controlled directory on `cp0-data`, mounted
-at `/home/<username>` with mode `0700`. SSH authorized keys should instead use
+The owner home is stored on `cp0-data` and mounted at `/home/<username>` with
+mode `0700`. The first release relies on the existing `cp0-data` capacity rather
+than a separate owner-home quota. SSH authorized keys should instead use
 the root-controlled `/etc/cardputerzero/authorized_keys/<username>` path so a
 compromised owner shell cannot silently rewrite policy-managed keys. The home
 is still required if an interactive SSH shell is enabled and must be included
@@ -236,19 +240,23 @@ Non-secret state lives at:
 ```
 
 It is root-owned, mode `0600`, schema-versioned, strictly parsed and atomically
-replaced using temp-write, file `fsync`, rename and directory `fsync`. Proposed
-states are:
+replaced using temp-write, file `fsync`, rename and directory `fsync`.
+Implemented durable states are:
 
 ```text
-UNPROVISIONED -> LOCALE -> OWNER -> PASSWORD_READY -> NETWORK
+UNPROVISIONED -> OWNER -> PASSWORD_READY -> NETWORK
               -> REMOTE_ACCESS -> REVIEW -> COMMITTING -> COMPLETE
                                                      \-> REPAIR_REQUIRED
 ```
 
+`SetRegion` performs the `UNPROVISIONED -> OWNER` transition; the protocol's
+`REGION` value is reserved for a future independently persisted locale page.
 Each transition is idempotent. `PASSWORD_READY` records only that a password
 hash was committed, never the secret. At startup the service cross-checks the
-state against NSS records, regional configuration, the network-decision record
-and remote-access marker. Missing prerequisites or contradictory records enter
+state against owner passwd/shadow/group/home records, the completion marker and
+the SSH-consent marker. Regional settings are idempotently reapplied at boot;
+the explicit network decision remains valid after later link/profile changes.
+Missing identity prerequisites or contradictory completion records enter
 `REPAIR_REQUIRED`; they must not bypass Setup, create a second owner or erase
 data automatically.
 
@@ -261,11 +269,11 @@ volatile overlay.
 The country selection is committed before enabling a Wi-Fi connection. Wi-Fi
 profiles remain in the existing persistent NetworkManager keyfile path with
 mode `0600`, root ownership and no secret exposure to the Shell. Setup supports
-scan, refresh, hidden SSID, connection progress, retry and an explicit offline
-choice. Ethernet counts as configured only after NetworkManager has obtained a
+scan, refresh, connection retry and an explicit offline choice. Ethernet counts
+as configured only after NetworkManager has obtained a
 usable local configuration during Setup.
 
-`network-choice.json` records only the decision type and stable profile ID, not
+`state.json` records only the network decision type and stable profile ID, not
 the SSID password. Network availability after setup is informational. Forgetting
 the last Wi-Fi profile later does not destroy the owner identity or reopen the
 wizard; Settings can offer a deliberate `Run network setup` action instead.
@@ -291,9 +299,8 @@ authentication. Host keys are generated only after SSH is enabled and are
 written to the already persistent `/etc/ssh` bind. Setup completion never opens
 a port unless the owner selected it.
 
-The current production profile statically masks SSH, which cannot represent a
-later owner choice. Phase 6I will replace that production behavior with a
-root-only marker such as:
+The production profile disables SSH initially without permanently masking it.
+The implemented owner choice uses this root-only marker:
 
 ```text
 /var/lib/cardputerzero/provisioning/ssh-enabled
@@ -328,7 +335,7 @@ This product decision requires explicit approval.
 
 ## Verification plan and release gates
 
-Implementation is not complete until all of the following pass:
+Production acceptance is not complete until all of the following pass:
 
 ### Host and image tests
 
@@ -383,9 +390,9 @@ tests pass and the owner approves the burn/test window.
    acceptance.
 7. **6I-G, hardware**: fresh-media burn and full V0.6 acceptance report.
 
-## Approval decisions
+## Approved decisions
 
-Before implementation, the product owner must approve or change these points:
+The product owner approved these points on 2026-08-02:
 
 1. Owner has no sudo by default; Developer Mode is a separate constrained
    escalation path.

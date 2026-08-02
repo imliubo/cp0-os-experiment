@@ -177,18 +177,21 @@ Shell 和其他应用数据。
   SSH/getty 与产品内开发/恢复模式，并以独立 recovery SD 作为物理维护入口。
 - [ ] 在可擦写介质上启动 production access 候选，确认 System Shell 正常且 SSH、
   tty 登录、sudo 与产品内恢复入口全部不可用。
-- [ ] Phase 6I-A：冻结首次开机状态机、`cp0-provisiond` 有界协议、320x170 Setup
+- [x] Phase 6I-A：冻结首次开机状态机、`cp0-provisiond` 有界协议、320x170 Setup
   页面及像素测试；详细方案见 `FIRST-BOOT-PROVISIONING.md` 和 ADR 0007。
-- [ ] Phase 6I-B：从最终 product rootfs 清除 pi-gen 临时人类账户，引入位于
+- [x] Phase 6I-B：从最终 product rootfs 清除 pi-gen 临时人类账户，引入位于
   `cp0-data` 的 extrausers/PAM owner 身份、持久 home，并增加零固定凭据镜像门禁。
-- [ ] Phase 6I-C：实现仅接受精确 Shell UID 的 root provisioning daemon、原子状态机、
+- [x] Phase 6I-C：实现仅接受精确 Shell UID 的 root provisioning daemon、原子状态机、
   yescrypt 密码处理、断电恢复和 `REPAIR_REQUIRED` 一致性检查。
-- [ ] Phase 6I-D：实现以太网/Wi-Fi/明确离线三种网络决策、NetworkManager 扫描连接
+- [x] Phase 6I-D：实现以太网/Wi-Fi/明确离线三种网络决策、NetworkManager 扫描连接
   后端，以及默认关闭、由持久 marker 控制的 owner-only SSH。
-- [ ] Phase 6I-E：在 trusted System Shell 实现全图形化开机引导；未完成时阻止 Home、
+- [x] Phase 6I-E：在 trusted System Shell 实现全图形化开机引导；未完成时阻止 Home、
   Tasks 和普通 App 激活，完成后临时断网不得重新进入引导。
 - [ ] Phase 6I-F：通过协议 fuzz、秘密泄漏检查、每个原子写入点的断电故障注入、全部
   页面像素回归、PAM/NSS 和 product/development/recovery 镜像分类门禁。
+  当前 `make check`、代表性 Setup 像素、Linux/arm64 顺序包/peer credential、完整
+  Shell 链接及 Debian 13 NSS/PAM 密码认证已通过；全写入点故障矩阵、最终 product
+  rootfs 挂载检查和全部页面/长文本像素仍待候选镜像阶段关闭。
 - [ ] Phase 6I-G：在全新 SD 卡完成无 HDMI/SSH 的 V0.6 首次启动、全部键盘路径、
   三类网络、SSH 拒绝/允许、逐阶段断电、十次冷启动和出厂重置验收报告。
 - [x] 实现不接入当前启动链的 OS 发布元数据策略、rootfs/hash tree/FIT 摘要门禁、
