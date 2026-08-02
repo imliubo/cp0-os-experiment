@@ -7,12 +7,14 @@ use std::os::unix::net::UnixStream;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DeviceMode, DeviceSettings, DocumentPrompt, Notification, PermissionChoice, PermissionPrompt,
+    CheckpointStatus, DeviceMode, DeviceSettings, DocumentPrompt, Notification, PermissionChoice,
+    PermissionPrompt, TaskState,
 };
 
-pub const APPD_PROTOCOL_VERSION: u32 = 1;
+pub const APPD_PROTOCOL_VERSION: u32 = 2;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024;
 pub const MAX_APP_LIST_PAGE: u8 = 8;
+pub const MAX_TASK_LIST_PAGE: u8 = 10;
 pub const MAX_LOG_LINES: u16 = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +32,16 @@ pub enum AppdCommand {
     List {
         offset: u16,
         limit: u8,
+    },
+    ListTasks {
+        offset: u8,
+        limit: u8,
+    },
+    ActivateTask {
+        task_id: u64,
+    },
+    CloseTask {
+        task_id: u64,
     },
     StoreListInstalled {
         offset: u16,
@@ -109,6 +121,19 @@ pub enum ResponseData {
     Applications {
         apps: Vec<AppSummary>,
         next_offset: Option<u16>,
+    },
+    Tasks {
+        tasks: Vec<TaskSummary>,
+        next_offset: Option<u8>,
+    },
+    TaskActivated {
+        task_id: u64,
+        app_id: String,
+        runtime_generation: u64,
+    },
+    TaskClosed {
+        task_id: u64,
+        app_id: String,
     },
     StoreApplications {
         apps: Vec<StoreInstalledApp>,
@@ -192,6 +217,23 @@ pub struct AppSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TaskSummary {
+    pub task_id: u64,
+    pub account_uid: u32,
+    pub app_id: String,
+    pub name: String,
+    pub version: String,
+    pub display: cp0_manifest::DisplayMode,
+    pub state: TaskState,
+    pub created_sequence: u64,
+    pub last_activated_sequence: u64,
+    pub checkpoint: CheckpointStatus,
+    pub runtime_generation: Option<u64>,
+    pub thumbnail_generation: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StoreInstalledApp {
     pub app_id: String,
     pub version: String,
@@ -222,6 +264,7 @@ pub enum ProtocolError {
     UnsupportedVersion(u32),
     InvalidAppId,
     InvalidPagination,
+    InvalidTaskId,
     InvalidPromptId,
     InvalidDocumentId,
     InvalidPackageName,
@@ -253,6 +296,7 @@ impl fmt::Display for ProtocolError {
             Self::InvalidPagination => {
                 formatter.write_str("application list limit must be between 1 and 8")
             }
+            Self::InvalidTaskId => formatter.write_str("task ID must be non-zero"),
             Self::InvalidPromptId => formatter.write_str("permission prompt ID must be non-zero"),
             Self::InvalidDocumentId => formatter.write_str("invalid document ID"),
             Self::InvalidPackageName => formatter.write_str("invalid incoming package name"),
@@ -295,6 +339,12 @@ impl AppdRequest {
                 if !(1..=MAX_APP_LIST_PAGE).contains(limit) =>
             {
                 Err(ProtocolError::InvalidPagination)
+            }
+            AppdCommand::ListTasks { limit, .. } if !(1..=MAX_TASK_LIST_PAGE).contains(limit) => {
+                Err(ProtocolError::InvalidPagination)
+            }
+            AppdCommand::ActivateTask { task_id: 0 } | AppdCommand::CloseTask { task_id: 0 } => {
+                Err(ProtocolError::InvalidTaskId)
             }
             AppdCommand::Start { app_id }
             | AppdCommand::Stop { app_id }
@@ -711,7 +761,7 @@ mod tests {
     #[test]
     fn rejects_unknown_fields_version_and_invalid_app_id() {
         let mut unknown = Cursor::new(
-            b"{\"protocol_version\":1,\"request_id\":1,\"command\":{\"name\":\"ping\"},\"extra\":true}\n",
+            b"{\"protocol_version\":2,\"request_id\":1,\"command\":{\"name\":\"ping\"},\"extra\":true}\n",
         );
         assert!(matches!(
             read_request(&mut unknown),
@@ -719,10 +769,10 @@ mod tests {
         ));
 
         let mut wrong_version = start_request();
-        wrong_version.protocol_version = 2;
+        wrong_version.protocol_version = 3;
         assert!(matches!(
             wrong_version.validate(),
-            Err(ProtocolError::UnsupportedVersion(2))
+            Err(ProtocolError::UnsupportedVersion(3))
         ));
 
         let mut invalid_app = start_request();
@@ -858,5 +908,90 @@ mod tests {
         let mut encoded = Vec::new();
         write_response(&mut encoded, &response).unwrap();
         assert!(encoded.len() <= MAX_FRAME_BYTES);
+    }
+
+    #[test]
+    fn round_trips_multitasking_commands_and_task_metadata() {
+        for command in [
+            AppdCommand::ListTasks {
+                offset: 0,
+                limit: MAX_TASK_LIST_PAGE,
+            },
+            AppdCommand::ActivateTask { task_id: 7 },
+            AppdCommand::CloseTask { task_id: 7 },
+        ] {
+            let request = AppdRequest {
+                protocol_version: APPD_PROTOCOL_VERSION,
+                request_id: 93,
+                command,
+            };
+            let mut encoded = Vec::new();
+            write_request(&mut encoded, &request).unwrap();
+            assert_eq!(
+                read_request(&mut Cursor::new(encoded)).unwrap(),
+                Some(request)
+            );
+        }
+
+        let task = TaskSummary {
+            task_id: 7,
+            account_uid: 20_003,
+            app_id: "dev.cardputerzero.notes".into(),
+            name: "Notes".into(),
+            version: "1.2.0".into(),
+            display: cp0_manifest::DisplayMode::Standard,
+            state: TaskState::Frozen,
+            created_sequence: 2,
+            last_activated_sequence: 9,
+            checkpoint: CheckpointStatus::Available {
+                schema_version: 1,
+                bytes: 512,
+            },
+            runtime_generation: Some(14),
+            thumbnail_generation: Some(22),
+        };
+        let response = AppdResponse::success(
+            93,
+            ResponseData::Tasks {
+                tasks: vec![task],
+                next_offset: None,
+            },
+        );
+        let mut encoded = Vec::new();
+        write_response(&mut encoded, &response).unwrap();
+        assert_eq!(
+            read_response(&mut Cursor::new(encoded)).unwrap(),
+            Some(response)
+        );
+    }
+
+    #[test]
+    fn rejects_zero_task_ids_and_oversized_task_pages() {
+        for command in [
+            AppdCommand::ActivateTask { task_id: 0 },
+            AppdCommand::CloseTask { task_id: 0 },
+        ] {
+            let request = AppdRequest {
+                protocol_version: APPD_PROTOCOL_VERSION,
+                request_id: 94,
+                command,
+            };
+            assert!(matches!(
+                request.validate(),
+                Err(ProtocolError::InvalidTaskId)
+            ));
+        }
+        let request = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 95,
+            command: AppdCommand::ListTasks {
+                offset: 0,
+                limit: MAX_TASK_LIST_PAGE + 1,
+            },
+        };
+        assert!(matches!(
+            request.validate(),
+            Err(ProtocolError::InvalidPagination)
+        ));
     }
 }

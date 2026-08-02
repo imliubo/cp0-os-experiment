@@ -33,6 +33,7 @@
 #define CP0_MAX_STORAGE_VALUE_BYTES (8U * 1024U)
 #define CP0_MAX_INTENT_ACTION_BYTES 96U
 #define CP0_MAX_INTENT_PAYLOAD_BYTES 1024U
+#define CP0_MAX_CHECKPOINT_BYTES (8U * 1024U)
 
 #if !defined(__wasm32__)
 #error "CardputerZero applications must target wasm32"
@@ -41,6 +42,7 @@
 #if defined(__clang__)
 #define CP0_IMPORT(name)                                                       \
     __attribute__((import_module("cardputerzero"), import_name(name)))
+#define CP0_EXPORT(name) __attribute__((export_name(name)))
 #else
 #error "CardputerZero C/C++ SDK 1.0 requires a Clang-compatible wasm compiler"
 #endif
@@ -112,6 +114,14 @@ typedef enum cp0_media_action {
     CP0_MEDIA_PREVIOUS = 2,
     CP0_MEDIA_NEXT = 3,
 } cp0_media_action_t;
+
+/* Optional multitasking lifecycle exports. */
+CP0_EXPORT("cp0_app_checkpoint")
+int32_t cp0_app_checkpoint(uint8_t *output, uint32_t output_capacity,
+                           uint32_t *schema_version);
+CP0_EXPORT("cp0_app_restore")
+cp0_result_t cp0_app_restore(uint32_t schema_version, const uint8_t *payload,
+                             uint32_t payload_length);
 
 #define CP0_MEDIA_SUPPORT_PLAY_PAUSE (1U << 0)
 #define CP0_MEDIA_SUPPORT_PREVIOUS (1U << 1)

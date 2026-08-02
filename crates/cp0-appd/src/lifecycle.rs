@@ -378,13 +378,6 @@ impl AppManager {
         if unit_is_active(&plan.unit)? {
             return Err(AppManagerError::AlreadyRunning(app_id.into()));
         }
-        for installed in self.installed_apps() {
-            if installed.app_id != app_id && unit_is_active(&self.unit_for_app(&installed.app_id)?)?
-            {
-                return Err(AppManagerError::ForegroundBusy(installed.app_id));
-            }
-        }
-
         let status = Command::new(SYSTEMD_RUN_PATH)
             .args(crate::systemd_run_arguments(&plan))
             .status()
@@ -406,6 +399,34 @@ impl AppManager {
             .map_err(|error| AppManagerError::CommandIo("systemctl", error))?;
         if !status.success() || unit_is_active(&unit)? {
             return Err(AppManagerError::UnitFailed("stop"));
+        }
+        Ok(())
+    }
+
+    pub fn freeze(&self, app_id: &str) -> Result<(), AppManagerError> {
+        self.set_frozen(app_id, true)
+    }
+
+    pub fn thaw(&self, app_id: &str) -> Result<(), AppManagerError> {
+        self.set_frozen(app_id, false)
+    }
+
+    fn set_frozen(&self, app_id: &str, frozen: bool) -> Result<(), AppManagerError> {
+        let unit = self.unit_for_app(app_id)?;
+        if !unit_is_active(&unit)? {
+            return Err(AppManagerError::NotRunning(app_id.into()));
+        }
+        let action = if frozen { "freeze" } else { "thaw" };
+        let status = Command::new(SYSTEMCTL_PATH)
+            .args([action, &unit])
+            .status()
+            .map_err(|error| AppManagerError::CommandIo("systemctl", error))?;
+        if !status.success() || !unit_is_active(&unit)? {
+            return Err(AppManagerError::UnitFailed(if frozen {
+                "freeze"
+            } else {
+                "thaw"
+            }));
         }
         Ok(())
     }

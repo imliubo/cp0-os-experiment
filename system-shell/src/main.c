@@ -37,6 +37,7 @@
 
 #define BUFFER_COUNT 2
 #define SCREENSHOT_RETRY_MAX 2U
+#define CP0_APP_SURFACE_MAX 32U
 #define CP0_SHELL_SETTINGS_PATH "/var/lib/cardputerzero/shell/settings.conf"
 
 _Static_assert(CP0_STORE_INSTALL_BATCH_MAX == CP0_UI_STORE_UPDATE_BATCH_MAX,
@@ -58,6 +59,12 @@ struct screenshot_buffer {
     struct wl_buffer *wl_buffer;
     uint32_t *pixels;
     size_t size;
+};
+
+struct app_surface_binding {
+    uint32_t token;
+    uint32_t account_uid;
+    char app_id[CP0_APP_ID_BYTES];
 };
 
 struct shell {
@@ -110,9 +117,13 @@ struct shell {
     uint64_t store_catalog_sequence;
     struct cp0_store_install_preflight store_preflight;
     struct cp0_app_list installed_apps;
+    struct cp0_task_list task_list;
     uint32_t store_icon_pixels[CP0_STORE_ICON_MAX_PIXELS];
     uint32_t store_screenshot_pixels[CP0_STORE_SCREENSHOT_PIXELS];
     char pending_activation[CP0_APP_ID_BYTES];
+    uint32_t pending_activation_uid;
+    struct app_surface_binding app_surfaces[CP0_APP_SURFACE_MAX];
+    size_t app_surface_count;
 };
 
 static volatile sig_atomic_t stop_requested;
@@ -122,6 +133,7 @@ static void shell_redraw(struct shell *shell);
 static void begin_screenshot(struct shell *shell);
 static void maybe_create_capture_source(struct shell *shell);
 static void poll_app_catalog(struct shell *shell);
+static void poll_task_catalog(struct shell *shell);
 static void poll_store_catalog(struct shell *shell);
 static void poll_display_state(struct shell *shell);
 static void poll_audio_output_state(struct shell *shell);
@@ -134,6 +146,62 @@ static void apply_provision_network_status(
         &shell->ui, status->network_manager_available,
         status->ethernet_connected, status->ethernet_ipv4,
         status->wifi_available, status->wifi_connected, status->wifi_ipv4);
+}
+
+static struct app_surface_binding *surface_binding(struct shell *shell,
+                                                   uint32_t token)
+{
+    for (size_t index = 0; index < shell->app_surface_count; index++) {
+        if (shell->app_surfaces[index].token == token)
+            return &shell->app_surfaces[index];
+    }
+    return NULL;
+}
+
+static struct app_surface_binding *remember_surface(struct shell *shell,
+                                                    uint32_t token,
+                                                    const char *app_id)
+{
+    struct app_surface_binding *binding = surface_binding(shell, token);
+    if (binding == NULL) {
+        if (shell->app_surface_count == CP0_APP_SURFACE_MAX)
+            return NULL;
+        binding = &shell->app_surfaces[shell->app_surface_count++];
+        memset(binding, 0, sizeof(*binding));
+        binding->token = token;
+    }
+    if (app_id != NULL)
+        snprintf(binding->app_id, sizeof(binding->app_id), "%s", app_id);
+    return binding;
+}
+
+static void forget_surface(struct shell *shell, uint32_t token)
+{
+    for (size_t index = 0; index < shell->app_surface_count; index++) {
+        if (shell->app_surfaces[index].token != token)
+            continue;
+        if (index + 1 < shell->app_surface_count) {
+            memmove(&shell->app_surfaces[index], &shell->app_surfaces[index + 1],
+                    (shell->app_surface_count - index - 1) *
+                        sizeof(shell->app_surfaces[0]));
+        }
+        shell->app_surface_count--;
+        memset(&shell->app_surfaces[shell->app_surface_count], 0,
+               sizeof(shell->app_surfaces[0]));
+        return;
+    }
+}
+
+static uint32_t token_for_account_uid(const struct shell *shell,
+                                      uint32_t account_uid)
+{
+    if (account_uid == 0)
+        return 0;
+    for (size_t index = 0; index < shell->app_surface_count; index++) {
+        if (shell->app_surfaces[index].account_uid == account_uid)
+            return shell->app_surfaces[index].token;
+    }
+    return 0;
 }
 
 static void apply_provision_status(struct shell *shell,
@@ -212,6 +280,7 @@ static void begin_normal_shell(struct shell *shell)
     cp0_system_shell_v1_set_overlay_mode(shell->system_control,
                                           shell->overlay_mode);
     poll_app_catalog(shell);
+    poll_task_catalog(shell);
     poll_store_catalog(shell);
     poll_display_state(shell);
     poll_audio_output_state(shell);
@@ -510,6 +579,58 @@ static void poll_app_catalog(struct shell *shell)
         };
     }
     cp0_ui_sync_app_catalog(&shell->ui, catalog, list.count, list.truncated);
+}
+
+static void poll_task_catalog(struct shell *shell)
+{
+    struct cp0_task_list list;
+    struct cp0_ui_catalog_task catalog[CP0_APPD_MAX_TASKS];
+
+    if (cp0_appd_list_tasks(&list) != 0)
+        return;
+    shell->task_list = list;
+    for (size_t index = 0; index < list.count; index++) {
+        enum cp0_ui_task_state state;
+        switch (shell->task_list.tasks[index].state) {
+        case CP0_TASK_FOREGROUND:
+            state = CP0_UI_TASK_FOREGROUND;
+            break;
+        case CP0_TASK_BACKGROUND:
+            state = CP0_UI_TASK_BACKGROUND;
+            break;
+        case CP0_TASK_FROZEN:
+            state = CP0_UI_TASK_FROZEN;
+            break;
+        case CP0_TASK_CHECKPOINTED:
+            state = CP0_UI_TASK_CHECKPOINTED;
+            break;
+        case CP0_TASK_CRASHED:
+            state = CP0_UI_TASK_CRASHED;
+            break;
+        default:
+            return;
+        }
+        catalog[index] = (struct cp0_ui_catalog_task){
+            .task_id = shell->task_list.tasks[index].task_id,
+            .account_uid = shell->task_list.tasks[index].account_uid,
+            .created_sequence =
+                shell->task_list.tasks[index].created_sequence,
+            .last_activated_sequence =
+                shell->task_list.tasks[index].last_activated_sequence,
+            .runtime_generation =
+                shell->task_list.tasks[index].runtime_generation,
+            .thumbnail_generation =
+                shell->task_list.tasks[index].thumbnail_generation,
+            .state = state,
+            .immersive = shell->task_list.tasks[index].immersive,
+            .checkpoint_available =
+                shell->task_list.tasks[index].checkpoint_available,
+            .app_id = shell->task_list.tasks[index].app_id,
+            .name = shell->task_list.tasks[index].name,
+            .version = shell->task_list.tasks[index].version,
+        };
+    }
+    cp0_ui_sync_task_catalog(&shell->ui, catalog, list.count);
 }
 
 static void apply_device_settings(
@@ -1556,6 +1677,8 @@ static void begin_store_preflight(struct shell *shell,
 static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
 {
     enum cp0_ui_screen previous_screen = shell->ui.screen;
+    if (action == CP0_UI_SHOW_TASKS)
+        poll_task_catalog(shell);
     enum cp0_ui_event event = cp0_ui_handle_action(&shell->ui, action);
     if (event >= CP0_UI_EVENT_SETUP_SET_REGION &&
         event <= CP0_UI_EVENT_SETUP_START) {
@@ -1630,15 +1753,18 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                                      CP0_UI_APP_STARTING);
                 snprintf(shell->pending_activation,
                          sizeof(shell->pending_activation), "%s", app_id);
+                shell->pending_activation_uid = 0;
             } else {
                 cp0_ui_set_app_state(&shell->ui, app_id,
                                      CP0_UI_APP_STARTING);
                 snprintf(shell->pending_activation,
                          sizeof(shell->pending_activation), "%s", app_id);
+                shell->pending_activation_uid = 0;
                 shell_redraw(shell);
                 wl_display_flush(shell->display);
                 if (cp0_appd_start_app(app_id) != 0) {
                     shell->pending_activation[0] = '\0';
+                    shell->pending_activation_uid = 0;
                     cp0_ui_set_app_state(&shell->ui, app_id,
                                          CP0_UI_APP_FAILED);
                     fprintf(stderr,
@@ -1651,14 +1777,69 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                 }
             }
         }
+    } else if (event == CP0_UI_EVENT_ACTIVATE_TASK) {
+        uint64_t task_id = cp0_ui_selected_task_id(&shell->ui);
+        uint32_t account_uid =
+            cp0_ui_selected_task_account_uid(&shell->ui);
+        const char *selected_id = cp0_ui_selected_task_app_id(&shell->ui);
+        char app_id[CP0_APP_ID_BYTES] = {0};
+        bool immersive = cp0_ui_selected_task_is_immersive(&shell->ui);
+        uint64_t runtime_generation = 0;
+        if (task_id != 0 && selected_id != NULL &&
+            snprintf(app_id, sizeof(app_id), "%s", selected_id) > 0 &&
+            cp0_appd_activate_task(task_id, &runtime_generation) == 0) {
+            uint32_t token = token_for_account_uid(shell, account_uid);
+            shell->overlay_mode = immersive
+                                      ? CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN
+                                      : CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS;
+            if (token != 0) {
+                shell->pending_activation[0] = '\0';
+                shell->pending_activation_uid = 0;
+                cp0_system_shell_v1_activate_app(shell->system_control, token);
+            } else {
+                snprintf(shell->pending_activation,
+                         sizeof(shell->pending_activation), "%s", app_id);
+                shell->pending_activation_uid = account_uid;
+            }
+            poll_task_catalog(shell);
+            fprintf(stderr,
+                    "system-shell: task=%llu runtime=%llu activation requested\n",
+                    (unsigned long long)task_id,
+                    (unsigned long long)runtime_generation);
+        } else {
+            fprintf(stderr, "system-shell: task activation failed\n");
+            poll_task_catalog(shell);
+        }
+    } else if (event == CP0_UI_EVENT_CLOSE_TASK) {
+        uint64_t task_id = cp0_ui_selected_task_id(&shell->ui);
+        const char *selected_id = cp0_ui_selected_task_app_id(&shell->ui);
+        char app_id[CP0_APP_ID_BYTES] = {0};
+        if (selected_id != NULL)
+            snprintf(app_id, sizeof(app_id), "%s", selected_id);
+        if (task_id != 0 && cp0_appd_close_task(task_id) == 0) {
+            if (app_id[0] != '\0' &&
+                strcmp(shell->pending_activation, app_id) == 0) {
+                shell->pending_activation[0] = '\0';
+                shell->pending_activation_uid = 0;
+            }
+            poll_task_catalog(shell);
+            poll_app_catalog(shell);
+            fprintf(stderr, "system-shell: task=%llu closed\n",
+                    (unsigned long long)task_id);
+        } else {
+            fprintf(stderr, "system-shell: task close failed\n");
+            poll_task_catalog(shell);
+        }
     } else if (event == CP0_UI_EVENT_STOP_APP) {
         char app_id[CP0_APP_ID_BYTES];
         const char *selected_id = cp0_ui_selected_app_id(&shell->ui);
         if (selected_id != NULL &&
             snprintf(app_id, sizeof(app_id), "%s", selected_id) > 0) {
             if (cp0_appd_stop_app(app_id) == 0) {
-                if (strcmp(shell->pending_activation, app_id) == 0)
+                if (strcmp(shell->pending_activation, app_id) == 0) {
                     shell->pending_activation[0] = '\0';
+                    shell->pending_activation_uid = 0;
+                }
                 cp0_ui_set_app_state(&shell->ui, app_id,
                                      CP0_UI_APP_STOPPED);
                 shell->overlay_mode =
@@ -1956,6 +2137,9 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         poll_app_catalog(shell);
         poll_store_catalog(shell);
     }
+    if (previous_screen != CP0_UI_TASKS &&
+        shell->ui.screen == CP0_UI_TASKS)
+        poll_task_catalog(shell);
     if (previous_screen != CP0_UI_SETTINGS &&
         shell->ui.screen == CP0_UI_SETTINGS) {
         poll_display_state(shell);
@@ -2050,10 +2234,13 @@ static void handle_app_added(void *data,
 {
     struct shell *shell = data;
     (void)system_control;
+    remember_surface(shell, token, app_id);
     cp0_ui_add_app(&shell->ui, token, app_id);
     fprintf(stderr, "system-shell: app token=%u available\n", token);
-    if (strcmp(shell->pending_activation, app_id) == 0) {
+    if (shell->pending_activation_uid == 0 &&
+        strcmp(shell->pending_activation, app_id) == 0) {
         shell->pending_activation[0] = '\0';
+        shell->pending_activation_uid = 0;
         shell->overlay_mode = cp0_ui_app_is_immersive(&shell->ui, token)
                                   ? CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN
                                   : CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS;
@@ -2073,6 +2260,7 @@ static void handle_app_removed(void *data,
         cancel_notification(shell, false);
         shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     }
+    forget_surface(shell, token);
     cp0_ui_remove_app(&shell->ui, token);
     fprintf(stderr, "system-shell: app token=%u removed\n", token);
     shell_redraw(shell);
@@ -2085,6 +2273,7 @@ static void handle_activation_failed(
     (void)system_control;
     cp0_ui_remove_app(&shell->ui, token);
     shell->pending_activation[0] = '\0';
+    shell->pending_activation_uid = 0;
     shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     fprintf(stderr, "system-shell: app token=%u activation failed\n", token);
     shell_redraw(shell);
@@ -2101,12 +2290,35 @@ static void handle_app_display_mode(
         mode == CP0_SYSTEM_SHELL_V1_DISPLAY_MODE_IMMERSIVE);
 }
 
+static void handle_app_identity(
+    void *data, struct cp0_system_shell_v1 *system_control, uint32_t token,
+    uint32_t account_uid)
+{
+    struct shell *shell = data;
+    struct app_surface_binding *binding = surface_binding(shell, token);
+    (void)system_control;
+
+    if (binding == NULL || account_uid == 0)
+        return;
+    binding->account_uid = account_uid;
+    if (shell->pending_activation_uid == account_uid &&
+        strcmp(shell->pending_activation, binding->app_id) == 0) {
+        shell->pending_activation[0] = '\0';
+        shell->pending_activation_uid = 0;
+        cp0_system_shell_v1_activate_app(shell->system_control, token);
+        fprintf(stderr,
+                "system-shell: app token=%u authenticated and activated\n",
+                token);
+    }
+}
+
 static const struct cp0_system_shell_v1_listener system_control_listener = {
     .action = handle_system_action,
     .app_added = handle_app_added,
     .app_removed = handle_app_removed,
     .activation_failed = handle_activation_failed,
     .app_display_mode = handle_app_display_mode,
+    .app_identity = handle_app_identity,
 };
 
 static bool translate_key(struct shell *shell, uint32_t key,
@@ -2413,7 +2625,7 @@ static void handle_registry_global(void *data, struct wl_registry *registry,
         xdg_wm_base_add_listener(shell->wm_base, &wm_base_listener, shell);
     } else if (strcmp(interface, cp0_system_shell_v1_interface.name) == 0 &&
                version >= 4) {
-        uint32_t bind_version = version < 6 ? version : 6;
+        uint32_t bind_version = version < 7 ? version : 7;
         shell->system_control = wl_registry_bind(
             registry, name, &cp0_system_shell_v1_interface, bind_version);
         cp0_system_shell_v1_add_listener(shell->system_control,
@@ -2620,6 +2832,7 @@ static void shell_destroy(struct shell *shell)
         wl_display_flush(shell->display);
         wl_display_disconnect(shell->display);
     }
+    cp0_ui_deinit(&shell->ui);
 }
 
 static int shell_dispatch(struct shell *shell)
@@ -2628,6 +2841,7 @@ static int shell_dispatch(struct shell *shell)
 
     if (!shell->ui.setup_active) {
         poll_app_catalog(shell);
+        poll_task_catalog(shell);
         poll_store_catalog(shell);
         poll_display_state(shell);
         poll_audio_output_state(shell);
@@ -2709,6 +2923,9 @@ static int shell_dispatch(struct shell *shell)
                         poll_store_catalog(shell);
                         show_store_completion_notification(shell);
                     }
+                    shell->catalog_ticks = 0;
+                } else if (shell->ui.screen == CP0_UI_TASKS) {
+                    poll_task_catalog(shell);
                     shell->catalog_ticks = 0;
                 } else if (shell->catalog_ticks >= 5) {
                     poll_app_catalog(shell);

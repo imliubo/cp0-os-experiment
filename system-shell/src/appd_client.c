@@ -19,6 +19,7 @@
 #define CP0_APPD_FRAME_BYTES 8192U
 #define CP0_APPD_JSON_TOKENS 384U
 #define CP0_APPD_PAGE_SIZE 8U
+#define CP0_APPD_TASK_PAGE_SIZE 10U
 
 static uint64_t next_request_id = 1;
 
@@ -116,7 +117,7 @@ static int parse_success(const char *document, size_t length,
     if (version < 0 || response_id < 0 || outcome < 0 ||
         !cp0_json_get_u64(document, &tokens[version], &parsed_version) ||
         !cp0_json_get_u64(document, &tokens[response_id], &parsed_id) ||
-        parsed_version != 1 || parsed_id != request_id ||
+        parsed_version != 2 || parsed_id != request_id ||
         tokens[outcome].type != CP0_JSON_OBJECT)
         return -1;
     int status = cp0_json_object_get(document, tokens, (size_t)count, outcome,
@@ -324,7 +325,7 @@ static int list_page(uint16_t offset, struct cp0_app_summary *apps,
     uint64_t request_id = next_request_id++;
     int request_length = snprintf(
         request, sizeof(request),
-        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
         "\"name\":\"list\",\"offset\":%u,\"limit\":%u}}\n",
         (unsigned long long)request_id, (unsigned int)offset,
         CP0_APPD_PAGE_SIZE);
@@ -364,6 +365,282 @@ int cp0_appd_list_apps(struct cp0_app_list *list)
     decoded.truncated = true;
     *list = decoded;
     return 0;
+}
+
+static bool parse_task_state(const char *document,
+                             const struct cp0_json_token *token,
+                             enum cp0_task_state *state)
+{
+    static const struct {
+        const char *name;
+        enum cp0_task_state state;
+    } states[] = {
+        {"foreground", CP0_TASK_FOREGROUND},
+        {"background", CP0_TASK_BACKGROUND},
+        {"frozen", CP0_TASK_FROZEN},
+        {"checkpointed", CP0_TASK_CHECKPOINTED},
+        {"crashed", CP0_TASK_CRASHED},
+    };
+    for (size_t index = 0; index < sizeof(states) / sizeof(states[0]); index++) {
+        if (cp0_json_string_equals(document, token, states[index].name)) {
+            *state = states[index].state;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool parse_optional_u64(const char *document,
+                               const struct cp0_json_token *token,
+                               uint64_t *value)
+{
+    if (cp0_json_is_null(document, token)) {
+        *value = 0;
+        return true;
+    }
+    return cp0_json_get_u64(document, token, value) && *value != 0;
+}
+
+static int parse_task_page(const char *response, size_t response_length,
+                           uint64_t request_id, uint8_t offset,
+                           struct cp0_task_summary *tasks, size_t capacity,
+                           size_t *task_count, bool *has_next,
+                           uint8_t *next_offset)
+{
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    size_t token_count;
+    int data;
+
+    if (tasks == NULL || task_count == NULL || has_next == NULL ||
+        next_offset == NULL ||
+        parse_success(response, response_length, request_id, tokens,
+                      &token_count, &data) != 0)
+        return -1;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int array = cp0_json_object_get(response, tokens, token_count, data,
+                                    "tasks");
+    int next = cp0_json_object_get(response, tokens, token_count, data,
+                                   "next_offset");
+    if (kind < 0 || array < 0 || next < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind], "tasks") ||
+        tokens[array].type != CP0_JSON_ARRAY ||
+        tokens[array].children > CP0_APPD_TASK_PAGE_SIZE ||
+        tokens[array].children > capacity)
+        return -1;
+
+    for (unsigned int index = 0; index < tokens[array].children; index++) {
+        int item = cp0_json_array_get(tokens, token_count, array, index);
+        struct cp0_task_summary decoded = {0};
+        int task_id;
+        int account_uid;
+        int display;
+        int state;
+        int created;
+        int activated;
+        int checkpoint;
+        int runtime;
+        int thumbnail;
+        if (item < 0 || tokens[item].type != CP0_JSON_OBJECT ||
+            !copy_member(response, tokens, token_count, item, "app_id",
+                         decoded.app_id, sizeof(decoded.app_id)) ||
+            !valid_app_id(decoded.app_id) ||
+            !copy_member(response, tokens, token_count, item, "name",
+                         decoded.name, sizeof(decoded.name)) ||
+            decoded.name[0] == '\0' ||
+            !copy_member(response, tokens, token_count, item, "version",
+                         decoded.version, sizeof(decoded.version)))
+            return -1;
+        task_id = cp0_json_object_get(response, tokens, token_count, item,
+                                      "task_id");
+        account_uid = cp0_json_object_get(response, tokens, token_count, item,
+                                          "account_uid");
+        display = cp0_json_object_get(response, tokens, token_count, item,
+                                      "display");
+        state = cp0_json_object_get(response, tokens, token_count, item,
+                                    "state");
+        created = cp0_json_object_get(response, tokens, token_count, item,
+                                      "created_sequence");
+        activated = cp0_json_object_get(response, tokens, token_count, item,
+                                        "last_activated_sequence");
+        checkpoint = cp0_json_object_get(response, tokens, token_count, item,
+                                         "checkpoint");
+        runtime = cp0_json_object_get(response, tokens, token_count, item,
+                                      "runtime_generation");
+        thumbnail = cp0_json_object_get(response, tokens, token_count, item,
+                                        "thumbnail_generation");
+        uint64_t decoded_uid;
+        if (task_id < 0 || account_uid < 0 || display < 0 || state < 0 ||
+            created < 0 ||
+            activated < 0 || checkpoint < 0 || runtime < 0 || thumbnail < 0 ||
+            !cp0_json_get_u64(response, &tokens[task_id], &decoded.task_id) ||
+            decoded.task_id == 0 ||
+            !cp0_json_get_u64(response, &tokens[account_uid], &decoded_uid) ||
+            decoded_uid == 0 || decoded_uid > UINT32_MAX ||
+            !cp0_json_get_u64(response, &tokens[created],
+                              &decoded.created_sequence) ||
+            decoded.created_sequence == 0 ||
+            !cp0_json_get_u64(response, &tokens[activated],
+                              &decoded.last_activated_sequence) ||
+            decoded.last_activated_sequence == 0 ||
+            !parse_optional_u64(response, &tokens[runtime],
+                                &decoded.runtime_generation) ||
+            !parse_optional_u64(response, &tokens[thumbnail],
+                                &decoded.thumbnail_generation) ||
+            !parse_task_state(response, &tokens[state], &decoded.state) ||
+            tokens[checkpoint].type != CP0_JSON_OBJECT)
+            return -1;
+        decoded.account_uid = (uint32_t)decoded_uid;
+        if (cp0_json_string_equals(response, &tokens[display], "immersive"))
+            decoded.immersive = true;
+        else if (!cp0_json_string_equals(response, &tokens[display], "standard"))
+            return -1;
+        int checkpoint_status = cp0_json_object_get(
+            response, tokens, token_count, checkpoint, "status");
+        if (checkpoint_status < 0)
+            return -1;
+        decoded.checkpoint_available = cp0_json_string_equals(
+            response, &tokens[checkpoint_status], "available");
+        if (!decoded.checkpoint_available &&
+            !cp0_json_string_equals(response, &tokens[checkpoint_status],
+                                    "not-requested") &&
+            !cp0_json_string_equals(response, &tokens[checkpoint_status],
+                                    "unavailable"))
+            return -1;
+        tasks[index] = decoded;
+    }
+    *task_count = tokens[array].children;
+    if (cp0_json_is_null(response, &tokens[next])) {
+        *has_next = false;
+        *next_offset = 0;
+    } else {
+        uint64_t decoded_offset;
+        if (!cp0_json_get_u64(response, &tokens[next], &decoded_offset) ||
+            decoded_offset > UINT8_MAX || decoded_offset <= offset)
+            return -1;
+        *has_next = true;
+        *next_offset = (uint8_t)decoded_offset;
+    }
+    return 0;
+}
+
+#ifdef CP0_APPD_CLIENT_TEST
+int cp0_appd_test_parse_task_page(
+    const char *response, size_t response_length, uint64_t request_id,
+    uint8_t offset, struct cp0_task_summary *tasks, size_t capacity,
+    size_t *task_count, bool *has_next, uint8_t *next_offset)
+{
+    return parse_task_page(response, response_length, request_id, offset, tasks,
+                           capacity, task_count, has_next, next_offset);
+}
+#endif
+
+static int list_task_page(uint8_t offset, struct cp0_task_summary *tasks,
+                          size_t capacity, size_t *task_count, bool *has_next,
+                          uint8_t *next_offset)
+{
+    char request[256];
+    char response[CP0_APPD_FRAME_BYTES];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"list-tasks\",\"offset\":%u,\"limit\":%u}}\n",
+        (unsigned long long)request_id, (unsigned int)offset,
+        CP0_APPD_TASK_PAGE_SIZE);
+
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 500) != 0)
+        return -1;
+    return parse_task_page(response, response_length, request_id, offset, tasks,
+                           capacity, task_count, has_next, next_offset);
+}
+
+int cp0_appd_list_tasks(struct cp0_task_list *list)
+{
+    uint8_t offset = 0;
+    struct cp0_task_list decoded = {0};
+
+    if (list == NULL)
+        return -1;
+    while (decoded.count < CP0_APPD_MAX_TASKS) {
+        size_t count;
+        bool has_next;
+        uint8_t next_offset;
+        if (list_task_page(offset, &decoded.tasks[decoded.count],
+                           CP0_APPD_MAX_TASKS - decoded.count, &count,
+                           &has_next, &next_offset) != 0)
+            return -1;
+        decoded.count += count;
+        if (!has_next) {
+            *list = decoded;
+            return 0;
+        }
+        if (count == 0)
+            return -1;
+        offset = next_offset;
+    }
+    *list = decoded;
+    return 0;
+}
+
+static int task_lifecycle_command(const char *command, const char *kind,
+                                  uint64_t task_id,
+                                  uint64_t *runtime_generation)
+{
+    char request[256];
+    char response[CP0_APPD_FRAME_BYTES];
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    size_t response_length;
+    size_t token_count;
+    uint64_t request_id = next_request_id++;
+    uint64_t response_task_id;
+    int data;
+    if (task_id == 0)
+        return -1;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"%s\",\"task_id\":%llu}}\n",
+        (unsigned long long)request_id, command, (unsigned long long)task_id);
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 3000) != 0 ||
+        parse_success(response, response_length, request_id, tokens,
+                      &token_count, &data) != 0)
+        return -1;
+    int response_kind = cp0_json_object_get(response, tokens, token_count, data,
+                                            "kind");
+    int response_task = cp0_json_object_get(response, tokens, token_count, data,
+                                            "task_id");
+    if (response_kind < 0 || response_task < 0 ||
+        !cp0_json_string_equals(response, &tokens[response_kind], kind) ||
+        !cp0_json_get_u64(response, &tokens[response_task], &response_task_id) ||
+        response_task_id != task_id)
+        return -1;
+    if (runtime_generation != NULL) {
+        int generation = cp0_json_object_get(response, tokens, token_count, data,
+                                             "runtime_generation");
+        if (generation < 0 ||
+            !cp0_json_get_u64(response, &tokens[generation], runtime_generation) ||
+            *runtime_generation == 0)
+            return -1;
+    }
+    return 0;
+}
+
+int cp0_appd_activate_task(uint64_t task_id, uint64_t *runtime_generation)
+{
+    if (runtime_generation == NULL)
+        return -1;
+    return task_lifecycle_command("activate-task", "task-activated", task_id,
+                                  runtime_generation);
+}
+
+int cp0_appd_close_task(uint64_t task_id)
+{
+    return task_lifecycle_command("close-task", "task-closed", task_id, NULL);
 }
 
 static int parse_lifecycle_response(const char *response,
@@ -439,7 +716,7 @@ static int app_lifecycle_command(const char *command, const char *expected_kind,
         return -1;
     int request_length = snprintf(
         request, sizeof(request),
-        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
         "\"name\":\"%s\",\"app_id\":\"%s\"}}\n",
         (unsigned long long)request_id, command, app_id);
     if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
@@ -533,13 +810,13 @@ static int device_settings_command(const char *name, const char *mode,
     if (mode == NULL) {
         request_length = snprintf(
             request, sizeof(request),
-            "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+            "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
             "\"name\":\"%s\"}}\n",
             (unsigned long long)request_id, name);
     } else {
         request_length = snprintf(
             request, sizeof(request),
-            "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+            "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
             "\"name\":\"%s\",\"mode\":\"%s\",\"enabled\":%s}}\n",
             (unsigned long long)request_id, name, mode,
             enabled ? "true" : "false");
@@ -600,7 +877,7 @@ static int parse_media_action_response(const char *response,
     if (version < 0 || response_id < 0 || outcome < 0 ||
         !cp0_json_get_u64(response, &tokens[version], &parsed_version) ||
         !cp0_json_get_u64(response, &tokens[response_id], &parsed_id) ||
-        parsed_version != 1 || parsed_id != request_id ||
+        parsed_version != 2 || parsed_id != request_id ||
         tokens[outcome].type != CP0_JSON_OBJECT)
         return CP0_MEDIA_DISPATCH_FAILED;
     status = cp0_json_object_get(response, tokens, (size_t)count, outcome,
@@ -670,7 +947,7 @@ int cp0_appd_dispatch_media_action(enum cp0_media_action action,
     app_id[0] = '\0';
     request_length = snprintf(
         request, sizeof(request),
-        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
         "\"name\":\"dispatch-media-action\",\"action\":\"%s\"}}\n",
         (unsigned long long)request_id, actions[action]);
     if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
@@ -811,7 +1088,7 @@ int cp0_appd_uninstall_app(const char *app_id)
         return -1;
     int request_length = snprintf(
         request, sizeof(request),
-        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
         "\"name\":\"uninstall\",\"app_id\":\"%s\"}}\n",
         (unsigned long long)request_id, app_id);
     if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
@@ -830,7 +1107,7 @@ int cp0_appd_take_notification(struct cp0_notification *notification)
     uint64_t request_id = next_request_id++;
     int request_length = snprintf(
         request, sizeof(request),
-        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
         "\"name\":\"take-notification\"}}\n",
         (unsigned long long)request_id);
 
@@ -855,7 +1132,7 @@ int cp0_appd_get_permission_prompt(struct cp0_permission_prompt *prompt)
     uint64_t request_id = next_request_id++;
     int request_length = snprintf(
         request, sizeof(request),
-        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
         "\"name\":\"get-permission-prompt\"}}\n",
         (unsigned long long)request_id);
 
@@ -912,7 +1189,7 @@ int cp0_appd_resolve_permission(uint64_t prompt_id,
         return -1;
     int request_length = snprintf(
         request, sizeof(request),
-        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
         "\"name\":\"resolve-permission\",\"prompt_id\":%llu,"
         "\"choice\":\"%s\"}}\n",
         (unsigned long long)request_id, (unsigned long long)prompt_id,
@@ -1013,7 +1290,7 @@ int cp0_appd_get_document_prompt(struct cp0_document_prompt *prompt)
     uint64_t request_id = next_request_id++;
     int request_length = snprintf(
         request, sizeof(request),
-        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
         "\"name\":\"get-document-prompt\"}}\n",
         (unsigned long long)request_id);
 
@@ -1043,14 +1320,14 @@ int cp0_appd_resolve_document(uint64_t prompt_id, const char *document_id)
     if (document_id == NULL) {
         request_length = snprintf(
             request, sizeof(request),
-            "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+            "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
             "\"name\":\"resolve-document\",\"prompt_id\":%llu,"
             "\"document_id\":null}}\n",
             (unsigned long long)request_id, (unsigned long long)prompt_id);
     } else {
         request_length = snprintf(
             request, sizeof(request),
-            "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+            "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
             "\"name\":\"resolve-document\",\"prompt_id\":%llu,"
             "\"document_id\":\"%s\"}}\n",
             (unsigned long long)request_id, (unsigned long long)prompt_id,

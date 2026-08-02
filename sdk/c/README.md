@@ -11,6 +11,12 @@ from `sdk/abi/cardputerzero-hostcalls-v1.json`. Applications include only
 `tests/test-sdk-abi.sh` guarantees that the C declarations, Rust imports and
 Runtime registration table remain byte-for-byte synchronized with the contract.
 
+Apps that want resumable task eviction may export `cp0_app_checkpoint` and
+`cp0_app_restore` with the declarations in `cardputerzero.h`. The Runtime owns
+the temporary linear-memory buffers, copies at most 8 KiB, and rejects schema
+version zero. The callbacks are optional; an App that omits them restarts
+cleanly after capacity eviction.
+
 Strings are UTF-8 byte buffers with explicit lengths. Applications should keep
 notification titles at 32 Unicode characters and bodies at 160; the Runtime and
 broker enforce byte, encoding and character limits again across the trust

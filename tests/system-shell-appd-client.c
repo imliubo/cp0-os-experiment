@@ -9,6 +9,10 @@ int cp0_appd_test_parse_app_page(
     const char *response, size_t response_length, uint64_t request_id,
     uint16_t offset, struct cp0_app_summary *apps, size_t capacity,
     size_t *app_count, bool *has_next, uint16_t *next_offset);
+int cp0_appd_test_parse_task_page(
+    const char *response, size_t response_length, uint64_t request_id,
+    uint8_t offset, struct cp0_task_summary *tasks, size_t capacity,
+    size_t *task_count, bool *has_next, uint8_t *next_offset);
 int cp0_appd_test_parse_lifecycle_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *expected_kind, const char *app_id);
@@ -33,7 +37,7 @@ int cp0_appd_test_parse_media_action_response(
 int main(void)
 {
     static const char page[] =
-        "{\"protocol_version\":1,\"request_id\":7,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":7,\"outcome\":{"
         "\"status\":\"ok\",\"data\":{\"kind\":\"applications\","
         "\"apps\":[{\"app_id\":\"dev.cardputerzero.first\","
         "\"name\":\"First Card\",\"version\":\"1.0.0\","
@@ -73,7 +77,7 @@ int main(void)
                &next_offset) < 0);
 
     static const char bad_display[] =
-        "{\"protocol_version\":1,\"request_id\":9,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":9,\"outcome\":{"
         "\"status\":\"ok\",\"data\":{\"kind\":\"applications\","
         "\"apps\":[{\"app_id\":\"dev.cardputerzero.bad\","
         "\"name\":\"Bad\",\"version\":\"1.0.0\","
@@ -85,8 +89,46 @@ int main(void)
                bad_display, strlen(bad_display), 9, 0, apps, 2, &count,
                &has_next, &next_offset) < 0);
 
+    static const char task_page[] =
+        "{\"protocol_version\":2,\"request_id\":10,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"tasks\","
+        "\"tasks\":[{\"task_id\":4,\"account_uid\":20000,"
+        "\"app_id\":\"dev.cardputerzero.first\","
+        "\"name\":\"First Card\",\"version\":\"1.0.0\","
+        "\"display\":\"standard\",\"state\":\"foreground\","
+        "\"created_sequence\":1,\"last_activated_sequence\":7,"
+        "\"checkpoint\":{\"status\":\"not-requested\"},"
+        "\"runtime_generation\":11,\"thumbnail_generation\":3},{"
+        "\"task_id\":2,\"account_uid\":20001,"
+        "\"app_id\":\"dev.cardputerzero.second\","
+        "\"name\":\"Second Card\",\"version\":\"2.1.0\","
+        "\"display\":\"immersive\",\"state\":\"checkpointed\","
+        "\"created_sequence\":2,\"last_activated_sequence\":6,"
+        "\"checkpoint\":{\"status\":\"available\","
+        "\"schema_version\":1,\"bytes\":128},"
+        "\"runtime_generation\":null,\"thumbnail_generation\":9}],"
+        "\"next_offset\":null}}}";
+    struct cp0_task_summary tasks[2];
+    uint8_t task_next_offset;
+    assert(cp0_appd_test_parse_task_page(
+               task_page, strlen(task_page), 10, 0, tasks, 2, &count,
+               &has_next, &task_next_offset) == 0);
+    assert(count == 2 && !has_next);
+    assert(tasks[0].task_id == 4 && tasks[0].account_uid == 20000 &&
+           tasks[0].state == CP0_TASK_FOREGROUND);
+    assert(tasks[0].runtime_generation == 11 &&
+           tasks[0].thumbnail_generation == 3);
+    assert(!tasks[0].checkpoint_available && !tasks[0].immersive);
+    assert(tasks[1].state == CP0_TASK_CHECKPOINTED &&
+           tasks[1].checkpoint_available && tasks[1].immersive);
+    assert(tasks[1].runtime_generation == 0 &&
+           tasks[1].thumbnail_generation == 9);
+    assert(cp0_appd_test_parse_task_page(
+               task_page, strlen(task_page), 10, 0, tasks, 1, &count,
+               &has_next, &task_next_offset) < 0);
+
     static const char started[] =
-        "{\"protocol_version\":1,\"request_id\":11,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":11,\"outcome\":{"
         "\"status\":\"ok\",\"data\":{\"kind\":\"started\","
         "\"app_id\":\"dev.cardputerzero.first\","
         "\"unit\":\"cardputerzero-app-20000.service\"}}}";
@@ -101,7 +143,7 @@ int main(void)
                "dev.cardputerzero.second") < 0);
 
     static const char uninstalled[] =
-        "{\"protocol_version\":1,\"request_id\":17,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":17,\"outcome\":{"
         "\"status\":\"ok\",\"data\":{\"kind\":\"uninstalled\","
         "\"app_id\":\"dev.cardputerzero.first\","
         "\"private_data_retained\":true,"
@@ -113,7 +155,7 @@ int main(void)
                uninstalled, strlen(uninstalled), 17,
                "dev.cardputerzero.second") < 0);
     static const char destructive_uninstall[] =
-        "{\"protocol_version\":1,\"request_id\":18,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":18,\"outcome\":{"
         "\"status\":\"ok\",\"data\":{\"kind\":\"uninstalled\","
         "\"app_id\":\"dev.cardputerzero.first\","
         "\"private_data_retained\":false,"
@@ -123,7 +165,7 @@ int main(void)
                "dev.cardputerzero.first") < 0);
 
     static const char notification_response[] =
-        "{\"protocol_version\":1,\"request_id\":12,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":12,\"outcome\":{"
         "\"status\":\"ok\",\"data\":{\"kind\":\"next-notification\","
         "\"notification\":{\"notification_id\":4,"
         "\"app_id\":\"dev.cardputerzero.first\","
@@ -139,7 +181,7 @@ int main(void)
     assert(strcmp(notification.body, "The operation completed") == 0);
 
     static const char empty_queue[] =
-        "{\"protocol_version\":1,\"request_id\":13,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":13,\"outcome\":{"
         "\"status\":\"ok\",\"data\":{\"kind\":\"next-notification\","
         "\"notification\":null}}}";
     assert(cp0_appd_test_parse_notification_response(
@@ -154,7 +196,7 @@ int main(void)
     assert(!cp0_appd_test_valid_app_id("dev..first"));
 
     static const char document_response[] =
-        "{\"protocol_version\":1,\"request_id\":14,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":14,\"outcome\":{"
         "\"status\":\"ok\",\"data\":{\"kind\":\"pending-document\","
         "\"prompt\":{\"prompt_id\":5,"
         "\"app_id\":\"dev.cardputerzero.first\","
@@ -174,7 +216,7 @@ int main(void)
     assert(!cp0_appd_test_valid_document_id("../../etc/passwd"));
 
     static const char settings_response[] =
-        "{\"protocol_version\":1,\"request_id\":15,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":15,\"outcome\":{"
         "\"status\":\"ok\",\"data\":{\"kind\":\"device-settings\","
         "\"settings\":{\"authority\":\"organization\","
         "\"developer_mode\":false,\"developer_mode_allowed\":false,"
@@ -196,7 +238,7 @@ int main(void)
                "device-settings", &settings) < 0);
 
     static const char invalid_settings[] =
-        "{\"protocol_version\":1,\"request_id\":16,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":16,\"outcome\":{"
         "\"status\":\"ok\",\"data\":{\"kind\":\"device-settings\","
         "\"settings\":{\"authority\":\"remote\","
         "\"developer_mode\":false,\"developer_mode_allowed\":false,"
@@ -209,21 +251,21 @@ int main(void)
                "device-settings", &settings) < 0);
 
     static const char media_sent[] =
-        "{\"protocol_version\":1,\"request_id\":20,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":20,\"outcome\":{"
         "\"status\":\"ok\",\"data\":{"
         "\"kind\":\"media-action-dispatched\","
         "\"app_id\":\"dev.cardputerzero.player\","
         "\"action\":\"play-pause\"}}}";
     static const char media_unavailable[] =
-        "{\"protocol_version\":1,\"request_id\":20,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":20,\"outcome\":{"
         "\"status\":\"error\",\"code\":\"unavailable\","
         "\"message\":\"inactive\"}}";
     static const char media_busy[] =
-        "{\"protocol_version\":1,\"request_id\":20,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":20,\"outcome\":{"
         "\"status\":\"error\",\"code\":\"resource-exhausted\","
         "\"message\":\"full\"}}";
     static const char media_extra[] =
-        "{\"protocol_version\":1,\"request_id\":20,\"outcome\":{"
+        "{\"protocol_version\":2,\"request_id\":20,\"outcome\":{"
         "\"status\":\"ok\",\"data\":{"
         "\"kind\":\"media-action-dispatched\","
         "\"app_id\":\"dev.cardputerzero.player\","

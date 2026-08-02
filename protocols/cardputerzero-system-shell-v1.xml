@@ -18,7 +18,7 @@
     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
   </copyright>
 
-  <interface name="cp0_system_shell_v1" version="6">
+  <interface name="cp0_system_shell_v1" version="7">
     <description summary="trusted CardputerZero System Shell control">
       This global is restricted by the compositor to the dedicated cp0-shell
       Unix account. It registers the trusted system surface and carries global
@@ -147,5 +147,15 @@
       </description>
       <arg name="seconds" type="uint" summary="0, 30, 60 or 300 seconds"/>
     </request>
+
+    <event name="app_identity" since="7">
+      <description summary="kernel-authenticated Unix identity for an application surface">
+        The compositor reads this UID from the Wayland client credentials. The
+        trusted Shell must match it to appd task metadata before activating a
+        surface from Tasks. The app-id event remains display-only text.
+      </description>
+      <arg name="token" type="uint" summary="opaque compositor app token"/>
+      <arg name="account_uid" type="uint" summary="authenticated application Unix UID"/>
+    </event>
   </interface>
 </protocol>

@@ -162,6 +162,18 @@ interface application {
     run: func() -> s32;
 }
 
+interface lifecycle {
+    use types.{error-code};
+
+    record saved-state {
+        schema-version: u32,
+        payload: list<u8>,
+    }
+
+    checkpoint: func() -> result<saved-state, error-code>;
+    restore: func(saved: saved-state) -> result<_, error-code>;
+}
+
 world cardputer-application {
     import system;
     import display;
@@ -176,4 +188,9 @@ world cardputer-application {
     import intents;
     import media;
     export application;
+}
+
+world cardputer-multitask-application {
+    include cardputer-application;
+    export lifecycle;
 }

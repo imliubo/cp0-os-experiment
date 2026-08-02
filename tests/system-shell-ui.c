@@ -77,6 +77,39 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
          .data_bytes = 2U * 1024U * 1024U,
          .permissions = (1U << 0) | (1U << 6)},
     };
+    static const struct cp0_ui_catalog_task tasks[] = {
+        {.task_id = 2,
+         .account_uid = 20001,
+         .created_sequence = 2,
+         .last_activated_sequence = 9,
+         .runtime_generation = 12,
+         .thumbnail_generation = 4,
+         .state = CP0_UI_TASK_FOREGROUND,
+         .immersive = true,
+         .app_id = "dev.cardputerzero.second",
+         .name = "Second Card",
+         .version = "2.0.0"},
+        {.task_id = 1,
+         .account_uid = 20000,
+         .created_sequence = 1,
+         .last_activated_sequence = 7,
+         .runtime_generation = 11,
+         .thumbnail_generation = 3,
+         .state = CP0_UI_TASK_BACKGROUND,
+         .app_id = "dev.cardputerzero.first",
+         .name = "First Card",
+         .version = "1.2.3"},
+        {.task_id = 3,
+         .account_uid = 20002,
+         .created_sequence = 3,
+         .last_activated_sequence = 5,
+         .thumbnail_generation = 2,
+         .state = CP0_UI_TASK_CHECKPOINTED,
+         .checkpoint_available = true,
+         .app_id = "dev.cardputerzero.notes",
+         .name = "Field Notes",
+         .version = "1.0.0"},
+    };
     cp0_ui_init(ui);
     cp0_ui_set_local_simulation(ui, true);
     cp0_ui_set_status(ui, "12:34", true, 73);
@@ -233,6 +266,16 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     cp0_ui_handle_action(ui, CP0_UI_LEFT);
 
     cp0_ui_sync_app_catalog(ui, apps, 2, false);
+    cp0_ui_sync_task_catalog(ui, tasks, 3);
+    uint16_t task_thumbnail[CP0_UI_TASK_THUMBNAIL_PIXELS];
+    for (unsigned int y = 0; y < CP0_UI_TASK_THUMBNAIL_HEIGHT; y++) {
+        for (unsigned int x = 0; x < CP0_UI_TASK_THUMBNAIL_WIDTH; x++) {
+            task_thumbnail[y * CP0_UI_TASK_THUMBNAIL_WIDTH + x] =
+                (uint16_t)(((x / 8U) << 11) | ((y / 3U) << 5) | 12U);
+        }
+    }
+    cp0_ui_set_task_thumbnail(ui, 2, 4, task_thumbnail,
+                              CP0_UI_TASK_THUMBNAIL_PIXELS);
     cp0_ui_add_app(ui, 42, "dev.cardputerzero.second");
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
     cp0_ui_handle_action(ui, CP0_UI_DOWN);
@@ -494,6 +537,9 @@ int main(int argc, char **argv)
     struct guarded_frame *frame = calloc(1, sizeof(*frame));
     assert(frame != NULL);
     assert(sizeof(struct cp0_ui) <= 64U * 1024U);
+    cp0_ui_init(&ui);
+    assert(ui.tasks != NULL);
+    cp0_ui_deinit(&ui);
 
     static const struct {
         uint32_t key;
@@ -1273,21 +1319,57 @@ int main(int argc, char **argv)
     cp0_ui_remove_app(&ui, 99);
     assert(ui.app_count == 2);
 
-    cp0_ui_set_app_state(&ui, "dev.cardputerzero.second",
-                         CP0_UI_APP_STARTING);
-    assert(cp0_ui_selected_app_state(&ui) == CP0_UI_APP_STARTING);
+    static const struct cp0_ui_catalog_task task_catalog[] = {
+        {.task_id = 8,
+         .account_uid = 20000,
+         .created_sequence = 1,
+         .last_activated_sequence = 5,
+         .runtime_generation = 18,
+         .state = CP0_UI_TASK_BACKGROUND,
+         .app_id = "dev.cardputerzero.first",
+         .name = "First Card",
+         .version = "1.0.0"},
+        {.task_id = 9,
+         .account_uid = 20001,
+         .created_sequence = 2,
+         .last_activated_sequence = 6,
+         .runtime_generation = 19,
+         .state = CP0_UI_TASK_FOREGROUND,
+         .immersive = true,
+         .app_id = "dev.cardputerzero.second",
+         .name = "Second Card",
+         .version = "2.0.0"},
+        {.task_id = 10,
+         .account_uid = 20002,
+         .created_sequence = 3,
+         .last_activated_sequence = 4,
+         .state = CP0_UI_TASK_CHECKPOINTED,
+         .checkpoint_available = true,
+         .app_id = "dev.cardputerzero.notes",
+         .name = "Notes",
+         .version = "1.1.0"},
+    };
+    cp0_ui_sync_task_catalog(&ui, task_catalog, 3);
     cp0_ui_handle_action(&ui, CP0_UI_SHOW_TASKS);
-    assert(strcmp(cp0_ui_selected_app_id(&ui),
-                  "dev.cardputerzero.first") == 0);
+    assert(cp0_ui_selected_task_id(&ui) == 9);
+    assert(strcmp(cp0_ui_selected_task_app_id(&ui),
+                  "dev.cardputerzero.second") == 0);
+    assert(cp0_ui_selected_task_runtime_generation(&ui) == 19);
+    assert(cp0_ui_selected_task_account_uid(&ui) == 20001);
+    assert(cp0_ui_selected_task_is_immersive(&ui));
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
-           CP0_UI_EVENT_OPEN_APP);
+           CP0_UI_EVENT_ACTIVATE_TASK);
+    cp0_ui_handle_action(&ui, CP0_UI_LEFT);
+    assert(cp0_ui_selected_task_id(&ui) == 8);
     cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    assert(cp0_ui_selected_task_id(&ui) == 10);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
-           CP0_UI_EVENT_STOP_APP);
-    cp0_ui_set_app_state(&ui, "dev.cardputerzero.first",
-                         CP0_UI_APP_STOPPED);
-    cp0_ui_set_app_state(&ui, "dev.cardputerzero.second", CP0_UI_APP_FAILED);
-    assert(cp0_ui_selected_app_id(&ui) == NULL);
+           CP0_UI_EVENT_ACTIVATE_TASK);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_UP) ==
+           CP0_UI_EVENT_CLOSE_TASK);
+    cp0_ui_sync_task_catalog(&ui, NULL, 0);
+    assert(cp0_ui_selected_task_id(&ui) == 0);
 
     static const struct cp0_ui_catalog_app many[] = {
         {.app_id = "dev.cardputerzero.a", .name = "A"},

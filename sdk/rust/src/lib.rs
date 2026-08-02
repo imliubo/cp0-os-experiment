@@ -8,6 +8,7 @@ pub mod gpio;
 mod host_imports;
 pub mod input;
 pub mod intents;
+pub mod lifecycle;
 pub mod media;
 pub mod network;
 pub mod radio;
@@ -70,7 +71,12 @@ mod tests {
         assert_eq!(package.name.namespace, "cardputerzero");
         assert_eq!(package.name.name, "sdk");
         assert_eq!((version.major, version.minor, version.patch), (1, 0, 0));
-        assert_eq!(package.interfaces.len(), 14);
+        assert_eq!(package.interfaces.len(), 15);
         assert!(package.worlds.contains_key("cardputer-application"));
+        assert!(
+            package
+                .worlds
+                .contains_key("cardputer-multitask-application")
+        );
     }
 }

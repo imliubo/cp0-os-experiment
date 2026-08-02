@@ -143,7 +143,7 @@ be31b0f7cee2ecde9c9d6b5521af41686019f0873fb7f88398174976db85f434  document.ppm
 d0f6c4fb530e418af657af2cf5297d52cbe42b612eb1005537fc855c63be6dae  network-detail.ppm
 efa8b35b22372eaf879a4e47ad5b5b7c30247ce008738a979fddabb78b389c37  network-offline.ppm
 653692ea351514d9813b17ca261790d546c45404bf95ce5a6056e993acc38f6c  network.ppm
-ac052cab469f3f5fc072f0aa87daf6a5d4512146122926181b82e2e077ef9c45  notification.ppm
+9339f99f3b7134f1df3089248ecfacc60a7f461a01971eda10c780360ac2f1ec  notification.ppm
 5ad4e7360ef38b27d0a416e62840e42b8aa88aaccdfe7aa54da944659b261728  permission.ppm
 8b0cfe3da3a68f5c4ebd8138eb56c024a06c4261581430a1ab3bf5e0a62d082b  power.ppm
 3decae67fc0f937c1c97d6585395a98525233494ae7d888cc50cdea2a6da3cc5  settings-apps-privacy.ppm
@@ -199,7 +199,7 @@ abbfe8dea28bc05258ea8031051e2fad43fab8b99758942f2fe2ea0cf8ee6af0  system-screens
 f580566abdc0d1de33888bab69d77071ac4c767d56dbe4561e91944099e2aeac  system-screenshot-unavailable.ppm
 1a0c201546f675d79e656e99dfe5cb254b251f4f5c92e3abf5036d1863e1e64e  theme-high-contrast.ppm
 79e5c787c9b0cc012213f4ddc9a2e7615f20fd9f36d4698e8d6f2cf07aeb8998  theme-light.ppm
-b382c359864c04060e4676c13c50e9578d241f132009a2840a3a9ed8324cfae2  tasks.ppm'
+879c45ff089f2ef29fbbeb019199dfd4797d06c9bd4e01590b47d1c381f95d80  tasks.ppm'
 
 if [ "$actual" != "$expected" ]; then
     echo "System Shell screenshot regression:" >&2

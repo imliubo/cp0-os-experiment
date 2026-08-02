@@ -4,6 +4,11 @@ This `no_std` crate is the supported Rust API for CardputerZero applications.
 Applications compile for `wasm32-unknown-unknown` and must not declare private
 Runtime imports directly.
 
+The `lifecycle` module defines the optional multitasking checkpoint contract
+and its 8 KiB bound. Apps opt in by exporting `cp0_app_checkpoint` and
+`cp0_app_restore` with the stable core-WASM signatures; Apps without them remain
+valid and restart cleanly after capacity eviction.
+
 The SDK 1.0 API exposes display and focused input, a monotonic clock, bounded
 event waiting, notifications, documents, restricted HTTPS GET, fixed-format
 PCM audio, fixed-frame camera, logical GPIO, LoRa, private storage and intent

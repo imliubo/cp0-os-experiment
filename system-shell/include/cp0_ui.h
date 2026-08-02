@@ -8,6 +8,11 @@
 #define CP0_UI_WIDTH 320
 #define CP0_UI_HEIGHT 170
 #define CP0_UI_MAX_APPS 32
+#define CP0_UI_MAX_TASKS 10
+#define CP0_UI_TASK_THUMBNAIL_WIDTH 160
+#define CP0_UI_TASK_THUMBNAIL_HEIGHT 85
+#define CP0_UI_TASK_THUMBNAIL_PIXELS \
+    (CP0_UI_TASK_THUMBNAIL_WIDTH * CP0_UI_TASK_THUMBNAIL_HEIGHT)
 #define CP0_UI_APP_ID_MAX 128
 #define CP0_UI_APP_NAME_MAX 128
 #define CP0_UI_APP_VERSION_MAX 64
@@ -90,6 +95,8 @@ enum cp0_ui_event {
     CP0_UI_EVENT_POWER_OFF,
     CP0_UI_EVENT_OPEN_APP,
     CP0_UI_EVENT_STOP_APP,
+    CP0_UI_EVENT_ACTIVATE_TASK,
+    CP0_UI_EVENT_CLOSE_TASK,
     CP0_UI_EVENT_PERMISSION_ONCE,
     CP0_UI_EVENT_PERMISSION_ALWAYS,
     CP0_UI_EVENT_PERMISSION_DENY,
@@ -206,6 +213,14 @@ enum cp0_ui_app_state {
     CP0_UI_APP_FAILED,
 };
 
+enum cp0_ui_task_state {
+    CP0_UI_TASK_FOREGROUND,
+    CP0_UI_TASK_BACKGROUND,
+    CP0_UI_TASK_FROZEN,
+    CP0_UI_TASK_CHECKPOINTED,
+    CP0_UI_TASK_CRASHED,
+};
+
 enum cp0_ui_store_state {
     CP0_UI_STORE_AVAILABLE,
     CP0_UI_STORE_UPDATE,
@@ -280,6 +295,38 @@ struct cp0_ui_app {
     char app_id[CP0_UI_APP_ID_MAX + 1];
     char name[CP0_UI_APP_NAME_MAX + 1];
     char version[CP0_UI_APP_VERSION_MAX + 1];
+};
+
+struct cp0_ui_catalog_task {
+    uint64_t task_id;
+    uint32_t account_uid;
+    uint64_t created_sequence;
+    uint64_t last_activated_sequence;
+    uint64_t runtime_generation;
+    uint64_t thumbnail_generation;
+    enum cp0_ui_task_state state;
+    bool immersive;
+    bool checkpoint_available;
+    const char *app_id;
+    const char *name;
+    const char *version;
+};
+
+struct cp0_ui_task {
+    uint64_t task_id;
+    uint32_t account_uid;
+    uint64_t created_sequence;
+    uint64_t last_activated_sequence;
+    uint64_t runtime_generation;
+    uint64_t thumbnail_generation;
+    enum cp0_ui_task_state state;
+    bool immersive;
+    bool checkpoint_available;
+    bool thumbnail_available;
+    const uint16_t *thumbnail_pixels;
+    const char *app_id;
+    const char *name;
+    const char *version;
 };
 
 struct cp0_ui_device_info {
@@ -452,6 +499,8 @@ struct cp0_ui {
     bool store_browse_has_next;
     bool store_search_input;
     unsigned int task_action_selected;
+    unsigned int task_selected;
+    unsigned int task_count;
     unsigned int settings_selected;
     unsigned int settings_item_selected;
     unsigned int app_detail_page;
@@ -611,6 +660,7 @@ struct cp0_ui {
     const uint32_t *store_icon_pixels;
     const uint32_t *store_screenshot_pixels;
     struct cp0_ui_app apps[CP0_UI_MAX_APPS];
+    struct cp0_ui_task *tasks;
     struct cp0_ui_store_app store_apps[CP0_UI_MAX_APPS];
     struct cp0_ui_store_app store_page_apps[CP0_UI_STORE_SEARCH_PAGE_MAX];
     struct cp0_ui_store_app store_today_featured;
@@ -620,6 +670,7 @@ struct cp0_ui {
 };
 
 void cp0_ui_init(struct cp0_ui *ui);
+void cp0_ui_deinit(struct cp0_ui *ui);
 char cp0_ui_key_character(uint32_t key, bool shifted);
 void cp0_ui_setup_begin(struct cp0_ui *ui, enum cp0_ui_setup_page page);
 void cp0_ui_setup_resume(struct cp0_ui *ui, unsigned int phase,
@@ -678,6 +729,12 @@ void cp0_ui_add_app(struct cp0_ui *ui, uint32_t token, const char *app_id);
 void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
                              const struct cp0_ui_catalog_app *apps,
                              size_t app_count, bool truncated);
+void cp0_ui_sync_task_catalog(struct cp0_ui *ui,
+                              const struct cp0_ui_catalog_task *tasks,
+                              size_t task_count);
+void cp0_ui_set_task_thumbnail(struct cp0_ui *ui, uint64_t task_id,
+                               uint64_t generation, const uint16_t *pixels,
+                               size_t pixel_count);
 void cp0_ui_set_app_display_mode(struct cp0_ui *ui, uint32_t token,
                                  bool immersive);
 void cp0_ui_remove_app(struct cp0_ui *ui, uint32_t token);
@@ -750,6 +807,11 @@ const char *cp0_ui_selected_app_id(const struct cp0_ui *ui);
 enum cp0_ui_app_state cp0_ui_selected_app_state(const struct cp0_ui *ui);
 uint32_t cp0_ui_selected_app_token(const struct cp0_ui *ui);
 bool cp0_ui_selected_app_is_immersive(const struct cp0_ui *ui);
+uint64_t cp0_ui_selected_task_id(const struct cp0_ui *ui);
+uint64_t cp0_ui_selected_task_runtime_generation(const struct cp0_ui *ui);
+uint32_t cp0_ui_selected_task_account_uid(const struct cp0_ui *ui);
+const char *cp0_ui_selected_task_app_id(const struct cp0_ui *ui);
+bool cp0_ui_selected_task_is_immersive(const struct cp0_ui *ui);
 bool cp0_ui_app_is_immersive(const struct cp0_ui *ui, uint32_t token);
 bool cp0_ui_show_permission(struct cp0_ui *ui, uint64_t prompt_id,
                             const char *app_name, const char *permission,

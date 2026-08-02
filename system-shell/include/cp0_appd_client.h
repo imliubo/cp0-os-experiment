@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #define CP0_APPD_MAX_APPS 32
+#define CP0_APPD_MAX_TASKS 10
 #define CP0_APP_ID_BYTES 129
 #define CP0_APP_NAME_BYTES 129
 #define CP0_APP_VERSION_BYTES 65
@@ -60,6 +61,14 @@ enum cp0_media_dispatch_result {
     CP0_MEDIA_DISPATCH_BUSY = 2,
 };
 
+enum cp0_task_state {
+    CP0_TASK_FOREGROUND,
+    CP0_TASK_BACKGROUND,
+    CP0_TASK_FROZEN,
+    CP0_TASK_CHECKPOINTED,
+    CP0_TASK_CRASHED,
+};
+
 struct cp0_device_settings {
     enum cp0_management_authority authority;
     bool developer_mode;
@@ -96,6 +105,26 @@ struct cp0_app_list {
     struct cp0_app_summary apps[CP0_APPD_MAX_APPS];
 };
 
+struct cp0_task_summary {
+    uint64_t task_id;
+    uint32_t account_uid;
+    uint64_t created_sequence;
+    uint64_t last_activated_sequence;
+    uint64_t runtime_generation;
+    uint64_t thumbnail_generation;
+    enum cp0_task_state state;
+    bool immersive;
+    bool checkpoint_available;
+    char app_id[CP0_APP_ID_BYTES];
+    char name[CP0_APP_NAME_BYTES];
+    char version[CP0_APP_VERSION_BYTES];
+};
+
+struct cp0_task_list {
+    size_t count;
+    struct cp0_task_summary tasks[CP0_APPD_MAX_TASKS];
+};
+
 struct cp0_notification {
     uint64_t notification_id;
     char app_id[CP0_APP_ID_BYTES];
@@ -118,6 +147,9 @@ struct cp0_document_prompt {
 };
 
 int cp0_appd_list_apps(struct cp0_app_list *list);
+int cp0_appd_list_tasks(struct cp0_task_list *list);
+int cp0_appd_activate_task(uint64_t task_id, uint64_t *runtime_generation);
+int cp0_appd_close_task(uint64_t task_id);
 int cp0_appd_start_app(const char *app_id);
 int cp0_appd_stop_app(const char *app_id);
 int cp0_appd_uninstall_app(const char *app_id);

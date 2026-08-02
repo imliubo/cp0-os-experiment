@@ -7,6 +7,7 @@ use serde::Serialize;
 mod audio_client;
 mod broker;
 mod camera_client;
+mod checkpoint;
 mod document_client;
 mod document_prompt;
 mod gpio_client;
@@ -21,9 +22,13 @@ mod policy;
 mod protocol;
 mod radio_client;
 mod registry;
+mod resource_governor;
 mod server;
 mod storage_client;
 mod store_metrics_client;
+mod task_journal;
+mod tasks;
+mod thumbnail;
 
 pub use audio_client::{AudioClient, AudioClientError, DEFAULT_AUDIO_SOCKET};
 pub use broker::{
@@ -34,6 +39,10 @@ pub use broker::{
 };
 pub use camera_client::{
     CameraClient, CameraClientError, CapturedCameraFrame, DEFAULT_CAMERA_SOCKET,
+};
+pub use checkpoint::{
+    CHECKPOINT_SCHEMA_VERSION, CHECKPOINT_TIMEOUT, CheckpointBlob, CheckpointError,
+    MAX_CHECKPOINT_BYTES, capture_with_timeout,
 };
 pub use document_client::{
     DEFAULT_DOCUMENT_SOCKET, DocumentClient, DocumentClientError, OpenedDocument,
@@ -76,17 +85,35 @@ pub use policy::{
 
 pub use protocol::{
     APPD_PROTOCOL_VERSION, AppSummary, AppdCommand, AppdRequest, AppdResponse, ErrorCode,
-    MAX_APP_LIST_PAGE, MAX_LOG_LINES, PeerCredentials, ProtocolError, ResponseData,
-    ResponseOutcome, StoreInstalledApp, peer_credentials, read_request, read_response,
-    write_request, write_response,
+    MAX_APP_LIST_PAGE, MAX_LOG_LINES, MAX_TASK_LIST_PAGE, PeerCredentials, ProtocolError,
+    ResponseData, ResponseOutcome, StoreInstalledApp, TaskSummary, peer_credentials, read_request,
+    read_response, write_request, write_response,
 };
 pub use radio_client::{DEFAULT_RADIO_SOCKET, RadioClient, RadioClientError, ReceivedRadioPacket};
 pub use registry::{
     AppAccount, AppRegistry, FIRST_APP_ACCOUNT_ID, LAST_APP_ACCOUNT_ID, RegistryError,
 };
+pub use resource_governor::{
+    BACKGROUND_CPU_WEIGHT, BackgroundCapability, FOREGROUND_CPU_WEIGHT, FROZEN_CPU_WEIGHT,
+    MemoryPressure, ResourceAction, plan_foreground_change, plan_resources,
+};
 pub use server::{AppdServer, CapabilityServices, ServerError};
 pub use storage_client::{DEFAULT_STORAGE_SOCKET, StorageClient, StorageClientError};
 pub use store_metrics_client::{DEFAULT_STORE_SOCKET, StoreMetricsClient, StoreMetricsClientError};
+pub use task_journal::{
+    DEFAULT_TASK_JOURNAL_PATH, EvictionReason, EvictionRecord, MAX_EVICTION_HISTORY,
+    RecoveredRuntime, TASK_JOURNAL_SCHEMA_VERSION, TaskJournal, TaskJournalError,
+};
+pub use tasks::{
+    ActivationOutcome, CheckpointFailure, CheckpointStatus, EvictedTask, EvictionCheckpoint,
+    LaunchOutcome, MAX_TASKS, RuntimeBinding, TASK_SNAPSHOT_SCHEMA_VERSION, TaskError, TaskId,
+    TaskRecord, TaskRegistry, TaskRegistrySnapshot, TaskState,
+};
+pub use thumbnail::{
+    MAX_THUMBNAIL_CACHE_BYTES, THUMBNAIL_BYTES, THUMBNAIL_HEIGHT, THUMBNAIL_PIXELS,
+    THUMBNAIL_REFRESH_MILLISECONDS, THUMBNAIL_WIDTH, ThumbnailCache, ThumbnailError,
+    ThumbnailFrame, ThumbnailIdentity,
+};
 
 pub const DEFAULT_APPS_ROOT: &str = "/var/lib/cardputerzero/apps";
 pub const DEFAULT_DATA_ROOT: &str = "/var/lib/cardputerzero/data";

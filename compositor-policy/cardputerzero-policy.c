@@ -236,6 +236,26 @@ sanitize_app_id(const char *source, char output[CP0_APP_ID_MAX + 1])
     output[index] = '\0';
 }
 
+static bool
+surface_client_uid(struct weston_surface *surface, uint32_t *account_uid)
+{
+    struct wl_client *client;
+    pid_t pid;
+    uid_t uid;
+    gid_t gid;
+
+    if (surface == NULL || surface->resource == NULL || account_uid == NULL)
+        return false;
+    client = wl_resource_get_client(surface->resource);
+    if (client == NULL)
+        return false;
+    wl_client_get_credentials(client, &pid, &uid, &gid);
+    (void)pid;
+    (void)gid;
+    *account_uid = (uint32_t)uid;
+    return true;
+}
+
 static void
 announce_app(struct cp0_surface_watch *watch)
 {
@@ -244,6 +264,7 @@ announce_app(struct cp0_surface_watch *watch)
     char safe_app_id[CP0_APP_ID_MAX + 1];
     const char *app_id;
     const char *title;
+    uint32_t account_uid;
 
     if (watch->announced || policy->shell_resource == NULL ||
         wl_resource_get_version(policy->shell_resource) < 2 ||
@@ -262,6 +283,11 @@ announce_app(struct cp0_surface_watch *watch)
         watch->app_token = allocate_app_token(policy);
     cp0_system_shell_v1_send_app_added(policy->shell_resource,
                                        watch->app_token, safe_app_id);
+    if (wl_resource_get_version(policy->shell_resource) >= 7 &&
+        surface_client_uid(watch->surface, &account_uid)) {
+        cp0_system_shell_v1_send_app_identity(
+            policy->shell_resource, watch->app_token, account_uid);
+    }
     if (wl_resource_get_version(policy->shell_resource) >= 3) {
         cp0_system_shell_v1_send_app_display_mode(
             policy->shell_resource, watch->app_token,

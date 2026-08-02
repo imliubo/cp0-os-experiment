@@ -212,7 +212,11 @@ function validateWit() {
   const mapped = new Set(contract.imports.map((entry) => entry.wit));
   for (const name of mapped) if (!actual.has(name)) fail(`WIT function ${name} is missing`);
   for (const name of actual) {
-    if (!name.startsWith("application.") && !mapped.has(name))
+    if (
+      !name.startsWith("application.") &&
+      !name.startsWith("lifecycle.") &&
+      !mapped.has(name)
+    )
       fail(`WIT function ${name} has no flat ABI mapping`);
   }
 }

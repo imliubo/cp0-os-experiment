@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::BufReader;
 use std::os::fd::{AsFd, OwnedFd};
@@ -22,14 +22,15 @@ use crate::protocol::APPD_PROTOCOL_VERSION;
 use crate::{
     AppManager, AppManagerError, AppSummary, AppdCommand, AppdRequest, AppdResponse, AudioClient,
     AudioClientError, BrokerCommand, BrokerErrorCode, BrokerProtocolError, BrokerRequest,
-    BrokerResponse, CameraClient, CameraClientError, DevicePolicyEngine, DocumentClient,
-    DocumentClientError, DocumentCoordinator, DocumentPromptError, DocumentRequestResult,
-    ErrorCode, GpioClient, GpioClientError, InstallError, IntentQueue, MediaAction,
-    MediaSessionBroker, MediaSessionError, NetworkClient, NetworkClientError, NotificationQueue,
-    PackageInstaller, PermissionChoice, PermissionCoordinator, PermissionPromptError,
-    PermissionRequestResult, PolicyError, RadioClient, RadioClientError, ResponseData,
-    StorageClient, StorageClientError, StoreMetricsClient, TrustPaths, TrustPolicy,
-    encode_broker_response, peer_credentials, read_broker_request, read_request,
+    BrokerResponse, CameraClient, CameraClientError, CheckpointFailure, CheckpointStatus,
+    DevicePolicyEngine, DocumentClient, DocumentClientError, DocumentCoordinator,
+    DocumentPromptError, DocumentRequestResult, ErrorCode, EvictionCheckpoint, GpioClient,
+    GpioClientError, InstallError, IntentQueue, MediaAction, MediaSessionBroker, MediaSessionError,
+    NetworkClient, NetworkClientError, NotificationQueue, PackageInstaller, PermissionChoice,
+    PermissionCoordinator, PermissionPromptError, PermissionRequestResult, PolicyError,
+    RadioClient, RadioClientError, ResponseData, RuntimeBinding, StorageClient, StorageClientError,
+    StoreMetricsClient, TaskError, TaskId, TaskRegistry, TaskState, TaskSummary, TrustPaths,
+    TrustPolicy, encode_broker_response, peer_credentials, read_broker_request, read_request,
     write_broker_response, write_response,
 };
 
@@ -70,7 +71,8 @@ pub struct AppdServer {
     capabilities: CapabilityServices,
     installer: PackageInstaller,
     store_metrics: StoreMetricsClient,
-    runtime: Arc<Mutex<Option<RuntimeSession>>>,
+    lifecycle: Arc<Mutex<()>>,
+    runtime: Arc<Mutex<RuntimeState>>,
     runtime_sequence: Arc<AtomicU64>,
 }
 
@@ -88,6 +90,7 @@ pub struct CapabilityServices {
 #[derive(Debug)]
 struct ServerState {
     manager: AppManager,
+    tasks: TaskRegistry,
     permissions: PermissionCoordinator,
     notifications: NotificationQueue,
     document_prompts: DocumentCoordinator,
@@ -99,9 +102,16 @@ struct ServerState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeSession {
     token: u64,
+    task_id: TaskId,
     app_id: String,
     version: String,
     explicit_stop: bool,
+}
+
+#[derive(Debug, Default)]
+struct RuntimeState {
+    sessions: BTreeMap<u64, RuntimeSession>,
+    foreground: Option<u64>,
 }
 
 impl AppdServer {
@@ -162,6 +172,7 @@ impl AppdServer {
         Self {
             state: Arc::new(Mutex::new(ServerState {
                 manager,
+                tasks: TaskRegistry::default(),
                 permissions,
                 notifications: NotificationQueue::default(),
                 document_prompts: DocumentCoordinator::default(),
@@ -173,7 +184,8 @@ impl AppdServer {
             store_installer_uids: BTreeSet::new(),
             capabilities,
             store_metrics: StoreMetricsClient::default(),
-            runtime: Arc::new(Mutex::new(None)),
+            lifecycle: Arc::new(Mutex::new(())),
+            runtime: Arc::new(Mutex::new(RuntimeState::default())),
             runtime_sequence: Arc::new(AtomicU64::new(1)),
             installer: PackageInstaller::new(
                 crate::DEFAULT_APPS_ROOT,
@@ -296,6 +308,15 @@ impl AppdServer {
             AppdCommand::Stop { app_id } => {
                 return self.stop_app_control(request_id, &app_id);
             }
+            AppdCommand::Start { app_id } => {
+                return self.start_app_control(request_id, &app_id);
+            }
+            AppdCommand::ActivateTask { task_id } => {
+                return self.activate_task_control(request_id, TaskId(task_id));
+            }
+            AppdCommand::CloseTask { task_id } => {
+                return self.close_task_control(request_id, TaskId(task_id));
+            }
             command => command,
         };
         let mut state = match self.state.lock() {
@@ -308,7 +329,6 @@ impl AppdServer {
                 );
             }
         };
-        let mut started_runtime = None;
         let result: Result<ResponseData, CommandError> = match command {
             AppdCommand::Install { .. } => unreachable!("install returned before state lock"),
             AppdCommand::StoreInstall { .. } => {
@@ -321,18 +341,18 @@ impl AppdServer {
             AppdCommand::List { offset, limit } => {
                 self.list_apps(&state, request_id, offset, limit)
             }
+            AppdCommand::ListTasks { offset, limit } => Self::list_tasks(&state, offset, limit),
             AppdCommand::StoreListInstalled { offset, limit } => {
                 Self::list_store_apps(&state, offset, limit).map_err(CommandError::Manager)
             }
-            AppdCommand::Start { app_id } => match self.start_app(&state, &app_id) {
-                Ok((unit, version)) => {
-                    state.media_sessions.clear();
-                    started_runtime = Some((app_id.clone(), version, unit.clone()));
-                    Ok(ResponseData::Started { app_id, unit })
-                }
-                Err(error) => Err(error),
-            },
+            AppdCommand::Start { .. } => unreachable!("start returned before state lock"),
             AppdCommand::Stop { .. } => unreachable!("stop returned before state lock"),
+            AppdCommand::ActivateTask { .. } => {
+                unreachable!("task activation returned before state lock")
+            }
+            AppdCommand::CloseTask { .. } => {
+                unreachable!("task close returned before state lock")
+            }
             AppdCommand::Uninstall { app_id } => {
                 let result = state
                     .manager
@@ -432,9 +452,6 @@ impl AppdServer {
                 .map_err(CommandError::Document),
         };
         drop(state);
-        if let Some((app_id, version, unit)) = started_runtime {
-            self.start_runtime_monitor(app_id, version, unit);
-        }
         match result {
             Ok(data) => AppdResponse::success(request_id, data),
             Err(error) => {
@@ -455,7 +472,10 @@ impl AppdServer {
                 );
             }
         };
-        let Some(session) = runtime.as_ref() else {
+        let Some(session) = runtime
+            .foreground
+            .and_then(|token| runtime.sessions.get(&token))
+        else {
             return AppdResponse::error(
                 request_id,
                 ErrorCode::Unavailable,
@@ -505,6 +525,16 @@ impl AppdServer {
     }
 
     fn stop_app_control(&self, request_id: u64, app_id: &str) -> AppdResponse {
+        let _lifecycle = match self.lifecycle.lock() {
+            Ok(lifecycle) => lifecycle,
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application lifecycle coordinator is unavailable",
+                );
+            }
+        };
         let runtime_token = self.mark_explicit_stop(app_id);
         let mut state = match self.state.lock() {
             Ok(state) => state,
@@ -517,13 +547,26 @@ impl AppdServer {
                 );
             }
         };
-        let result = state.manager.stop(app_id).map(|()| {
+        let task_id = state.tasks.task_for_app(app_id).map(|task| task.task_id);
+        let running = state.manager.is_running(app_id);
+        let result = running.and_then(|running| {
+            if running {
+                state.manager.stop(app_id)?;
+            } else if task_id.is_none() {
+                return Err(AppManagerError::NotRunning(app_id.into()));
+            }
+            if let Some(task_id) = task_id {
+                state
+                    .tasks
+                    .close(task_id)
+                    .map_err(|_| AppManagerError::NotRunning(app_id.into()))?;
+            }
             state.permissions.clear_app_session(app_id);
             state.document_prompts.clear_app(app_id);
             state.media_sessions.clear_app(app_id);
-            ResponseData::Stopped {
+            Ok(ResponseData::Stopped {
                 app_id: app_id.into(),
-            }
+            })
         });
         drop(state);
         match result {
@@ -536,6 +579,136 @@ impl AppdServer {
                 command_error_response(request_id, &CommandError::Manager(error))
             }
         }
+    }
+
+    fn activate_task_control(&self, request_id: u64, task_id: TaskId) -> AppdResponse {
+        let _lifecycle = match self.lifecycle.lock() {
+            Ok(lifecycle) => lifecycle,
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application lifecycle coordinator is unavailable",
+                );
+            }
+        };
+        let app_id = match self.state.lock() {
+            Ok(state) => match state.tasks.task(task_id) {
+                Some(task) => task.app_id.clone(),
+                None => {
+                    return AppdResponse::error(
+                        request_id,
+                        ErrorCode::NotFound,
+                        "task was not found",
+                    );
+                }
+            },
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application service state is unavailable",
+                );
+            }
+        };
+        match self.start_or_activate_app(&app_id) {
+            Ok((task_id, token, unit, started)) => {
+                if started {
+                    let version = match self.state.lock() {
+                        Ok(state) => state
+                            .tasks
+                            .task(task_id)
+                            .expect("started task remains registered")
+                            .version
+                            .clone(),
+                        Err(_) => {
+                            return AppdResponse::error(
+                                request_id,
+                                ErrorCode::Internal,
+                                "application service state is unavailable",
+                            );
+                        }
+                    };
+                    self.start_runtime_monitor(task_id, token, app_id.clone(), version, unit);
+                } else {
+                    self.set_foreground_runtime(token);
+                }
+                AppdResponse::success(
+                    request_id,
+                    ResponseData::TaskActivated {
+                        task_id: task_id.0,
+                        app_id,
+                        runtime_generation: token,
+                    },
+                )
+            }
+            Err(error) => command_error_response(request_id, &error),
+        }
+    }
+
+    fn close_task_control(&self, request_id: u64, task_id: TaskId) -> AppdResponse {
+        let _lifecycle = match self.lifecycle.lock() {
+            Ok(lifecycle) => lifecycle,
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application lifecycle coordinator is unavailable",
+                );
+            }
+        };
+        let task = match self.state.lock() {
+            Ok(state) => state.tasks.task(task_id).cloned(),
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application service state is unavailable",
+                );
+            }
+        };
+        let Some(task) = task else {
+            return AppdResponse::error(request_id, ErrorCode::NotFound, "task was not found");
+        };
+        let runtime_token = task.runtime().map(|runtime| runtime.token);
+        if runtime_token.is_some() {
+            self.mark_explicit_stop(&task.app_id);
+        }
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                self.cancel_explicit_stop(runtime_token);
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application service state is unavailable",
+                );
+            }
+        };
+        if task.state.is_resident() {
+            if let Err(error) = state.manager.stop(&task.app_id) {
+                drop(state);
+                self.cancel_explicit_stop(runtime_token);
+                return command_error_response(request_id, &CommandError::Manager(error));
+            }
+        }
+        if let Err(error) = state.tasks.close(task_id) {
+            drop(state);
+            self.cancel_explicit_stop(runtime_token);
+            return command_error_response(request_id, &CommandError::Task(error));
+        }
+        state.permissions.clear_app_session(&task.app_id);
+        state.document_prompts.clear_app(&task.app_id);
+        state.media_sessions.clear_app(&task.app_id);
+        drop(state);
+        self.finish_explicit_stop(runtime_token);
+        AppdResponse::success(
+            request_id,
+            ResponseData::TaskClosed {
+                task_id: task_id.0,
+                app_id: task.app_id,
+            },
+        )
     }
 
     fn install_package(&self, request_id: u64, package_name: &str) -> AppdResponse {
@@ -688,40 +861,172 @@ impl AppdServer {
         self.commit_prepared_install(request_id, prepared, true)
     }
 
-    fn start_app(
-        &self,
-        state: &ServerState,
-        app_id: &str,
-    ) -> Result<(String, String), CommandError> {
-        if !state.policy.allows_app(app_id) {
-            return Err(CommandError::Restricted(
-                "application launch is blocked by device policy",
-            ));
+    fn start_app_control(&self, request_id: u64, app_id: &str) -> AppdResponse {
+        let _lifecycle = match self.lifecycle.lock() {
+            Ok(lifecycle) => lifecycle,
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application lifecycle coordinator is unavailable",
+                );
+            }
+        };
+        match self.start_or_activate_app(app_id) {
+            Ok((task_id, token, unit, started)) => {
+                if started {
+                    let (version, app_id) = match self.state.lock() {
+                        Ok(state) => {
+                            let task = state
+                                .tasks
+                                .task(task_id)
+                                .expect("new runtime has a task record");
+                            (task.version.clone(), task.app_id.clone())
+                        }
+                        Err(_) => {
+                            return AppdResponse::error(
+                                request_id,
+                                ErrorCode::Internal,
+                                "application service state is unavailable",
+                            );
+                        }
+                    };
+                    self.start_runtime_monitor(task_id, token, app_id, version, unit.clone());
+                } else {
+                    self.set_foreground_runtime(token);
+                }
+                AppdResponse::success(
+                    request_id,
+                    ResponseData::Started {
+                        app_id: app_id.into(),
+                        unit,
+                    },
+                )
+            }
+            Err(error) => command_error_response(request_id, &error),
         }
-        let version = state
-            .manager
-            .installed_manifest(app_id)
-            .map_err(CommandError::Manager)?
-            .version;
-        state
-            .manager
-            .start(app_id)
-            .map(|unit| (unit, version))
-            .map_err(CommandError::Manager)
     }
 
-    fn start_runtime_monitor(&self, app_id: String, version: String, unit: String) {
+    fn start_or_activate_app(
+        &self,
+        app_id: &str,
+    ) -> Result<(TaskId, u64, String, bool), CommandError> {
+        let (existing, victim, version) = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| CommandError::Task(TaskError::InvalidCapacity))?;
+            if !state.policy.allows_app(app_id) {
+                return Err(CommandError::Restricted(
+                    "application launch is blocked by device policy",
+                ));
+            }
+            let version = state.manager.installed_manifest(app_id)?.version;
+            let existing = state.tasks.task_for_app(app_id).cloned();
+            let victim =
+                (existing.is_none() && state.tasks.len() == state.tasks.capacity()).then(|| {
+                    state
+                        .tasks
+                        .oldest_task()
+                        .expect("a full task registry has an oldest task")
+                        .clone()
+                });
+            (existing, victim, version)
+        };
+
+        if let Some(task) = existing.as_ref().filter(|task| task.state.is_resident()) {
+            if task.state == TaskState::Frozen {
+                self.state
+                    .lock()
+                    .map_err(|_| CommandError::Task(TaskError::TaskNotFound(task.task_id)))?
+                    .manager
+                    .thaw(app_id)?;
+            }
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| CommandError::Task(TaskError::TaskNotFound(task.task_id)))?;
+            state.tasks.activate(task.task_id)?;
+            let runtime = task.runtime().expect("resident task has a runtime binding");
+            return Ok((task.task_id, runtime.token, runtime.unit.clone(), false));
+        }
+
+        if let Some(victim) = victim {
+            let checkpoint = if victim.checkpoint.is_available() {
+                victim.checkpoint.clone()
+            } else {
+                CheckpointStatus::Unavailable {
+                    reason: CheckpointFailure::Unsupported,
+                }
+            };
+            if victim.state.is_resident() {
+                let stop_token = self.mark_explicit_stop(&victim.app_id);
+                let stop_result = self
+                    .state
+                    .lock()
+                    .map_err(|_| CommandError::Task(TaskError::TaskNotFound(victim.task_id)))?
+                    .manager
+                    .stop(&victim.app_id);
+                if let Err(error) = stop_result {
+                    self.cancel_explicit_stop(stop_token);
+                    return Err(CommandError::Manager(error));
+                }
+                self.finish_explicit_stop(stop_token);
+            }
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| CommandError::Task(TaskError::TaskNotFound(victim.task_id)))?;
+            state.tasks.evict_capacity_victim(EvictionCheckpoint {
+                task_id: victim.task_id,
+                status: checkpoint,
+            })?;
+            state.permissions.clear_app_session(&victim.app_id);
+            state.document_prompts.clear_app(&victim.app_id);
+            state.media_sessions.clear_app(&victim.app_id);
+        }
+
         let token = self.runtime_sequence.fetch_add(1, Ordering::Relaxed);
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| CommandError::Task(TaskError::InvalidCapacity))?;
+        let unit = state.manager.start(app_id)?;
+        let runtime = RuntimeBinding::new(token, unit.clone())?;
+        let outcome = match state.tasks.launch(app_id, version, runtime, None) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let _ = state.manager.stop(app_id);
+                return Err(CommandError::Task(error));
+            }
+        };
+        state.media_sessions.clear();
+        Ok((outcome.task_id, token, unit, true))
+    }
+
+    fn start_runtime_monitor(
+        &self,
+        task_id: TaskId,
+        token: u64,
+        app_id: String,
+        version: String,
+        unit: String,
+    ) {
         let Ok(mut runtime) = self.runtime.lock() else {
             eprintln!("cp0-appd: runtime metrics state is unavailable");
             return;
         };
-        *runtime = Some(RuntimeSession {
+        runtime.sessions.insert(
             token,
-            app_id: app_id.clone(),
-            version: version.clone(),
-            explicit_stop: false,
-        });
+            RuntimeSession {
+                token,
+                task_id,
+                app_id: app_id.clone(),
+                version: version.clone(),
+                explicit_stop: false,
+            },
+        );
+        runtime.foreground = Some(token);
         drop(runtime);
 
         let server = self.clone();
@@ -731,12 +1036,7 @@ impl AppdServer {
         {
             eprintln!("cp0-appd: cannot start runtime monitor: {error}");
             if let Ok(mut runtime) = self.runtime.lock() {
-                if runtime
-                    .as_ref()
-                    .is_some_and(|session| session.token == token)
-                {
-                    *runtime = None;
-                }
+                take_runtime_end(&mut runtime, token);
             }
         }
     }
@@ -764,6 +1064,9 @@ impl AppdServer {
             Err(_) => return,
         };
         if let Ok(mut state) = self.state.lock() {
+            if crashed {
+                state.tasks.runtime_exited(token);
+            }
             state.permissions.clear_app_session(&app_id);
             state.document_prompts.clear_app(&app_id);
             state.media_sessions.clear_app(&app_id);
@@ -786,18 +1089,25 @@ impl AppdServer {
     }
 
     fn runtime_is_current(&self, token: u64) -> bool {
-        self.runtime.lock().is_ok_and(|runtime| {
-            runtime
-                .as_ref()
-                .is_some_and(|session| session.token == token)
-        })
+        self.runtime
+            .lock()
+            .is_ok_and(|runtime| runtime.sessions.contains_key(&token))
+    }
+
+    fn set_foreground_runtime(&self, token: u64) {
+        if let Ok(mut runtime) = self.runtime.lock() {
+            if runtime.sessions.contains_key(&token) {
+                runtime.foreground = Some(token);
+            }
+        }
     }
 
     fn mark_explicit_stop(&self, app_id: &str) -> Option<u64> {
         let mut runtime = self.runtime.lock().ok()?;
         let session = runtime
-            .as_mut()
-            .filter(|session| session.app_id == app_id)?;
+            .sessions
+            .values_mut()
+            .find(|session| session.app_id == app_id)?;
         session.explicit_stop = true;
         Some(session.token)
     }
@@ -807,7 +1117,7 @@ impl AppdServer {
             return;
         };
         if let Ok(mut runtime) = self.runtime.lock() {
-            if let Some(session) = runtime.as_mut().filter(|session| session.token == token) {
+            if let Some(session) = runtime.sessions.get_mut(&token) {
                 session.explicit_stop = false;
             }
         }
@@ -818,12 +1128,7 @@ impl AppdServer {
             return;
         };
         if let Ok(mut runtime) = self.runtime.lock() {
-            if runtime
-                .as_ref()
-                .is_some_and(|session| session.token == token)
-            {
-                *runtime = None;
-            }
+            take_runtime_end(&mut runtime, token);
         }
     }
 
@@ -879,6 +1184,46 @@ impl AppdServer {
             u16::try_from(consumed).expect("application registry is bounded below u16::MAX")
         });
         Ok(ResponseData::Applications { apps, next_offset })
+    }
+
+    fn list_tasks(
+        state: &ServerState,
+        offset: u8,
+        limit: u8,
+    ) -> Result<ResponseData, CommandError> {
+        let ordered: Vec<_> = state.tasks.switcher_order().into_iter().cloned().collect();
+        let mut tasks = Vec::new();
+        for task in ordered
+            .iter()
+            .skip(usize::from(offset))
+            .take(usize::from(limit))
+        {
+            let manifest = state.manager.installed_manifest(&task.app_id)?;
+            let account_uid = state
+                .manager
+                .installed_apps()
+                .into_iter()
+                .find(|installed| installed.app_id == task.app_id)
+                .ok_or_else(|| AppManagerError::NotInstalled(task.app_id.clone()))?
+                .account_uid;
+            tasks.push(TaskSummary {
+                task_id: task.task_id.0,
+                account_uid,
+                app_id: task.app_id.clone(),
+                name: manifest.name,
+                version: task.version.clone(),
+                display: manifest.display,
+                state: task.state,
+                created_sequence: task.created_sequence,
+                last_activated_sequence: task.last_activated_sequence,
+                checkpoint: task.checkpoint.clone(),
+                runtime_generation: task.runtime().map(|runtime| runtime.token),
+                thumbnail_generation: task.thumbnail_generation,
+            });
+        }
+        let consumed = usize::from(offset).saturating_add(tasks.len());
+        let next_offset = (consumed < ordered.len()).then_some(consumed as u8);
+        Ok(ResponseData::Tasks { tasks, next_offset })
     }
 
     fn list_store_apps(
@@ -1370,56 +1715,12 @@ impl AppdServer {
     }
 
     fn complete_intent_transition(&self, transition: IntentTransition) {
-        let stop_token = self.mark_explicit_stop(&transition.sender_app_id);
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(_) => {
-                self.cancel_explicit_stop(stop_token);
-                eprintln!("cp0-appd: cannot switch applications after accepted intent");
-                return;
-            }
-        };
-        match state.manager.is_running(&transition.sender_app_id) {
-            Ok(true) => {
-                if let Err(error) = state.manager.stop(&transition.sender_app_id) {
-                    drop(state);
-                    self.cancel_explicit_stop(stop_token);
-                    eprintln!("cp0-appd: cannot stop intent sender: {error}");
-                    return;
-                }
-            }
-            Ok(false) => {}
-            Err(error) => {
-                drop(state);
-                self.cancel_explicit_stop(stop_token);
-                eprintln!("cp0-appd: cannot verify intent sender state: {error}");
-                return;
-            }
-        }
-        state
-            .permissions
-            .clear_app_session(&transition.sender_app_id);
-        state.document_prompts.clear_app(&transition.sender_app_id);
-        state.media_sessions.clear();
-        let version = match state.manager.installed_manifest(&transition.target_app_id) {
-            Ok(manifest) => manifest.version,
-            Err(error) => {
-                drop(state);
-                self.finish_explicit_stop(stop_token);
-                eprintln!("cp0-appd: cannot inspect accepted intent receiver: {error}");
-                return;
-            }
-        };
-        let start_result = state.manager.start(&transition.target_app_id);
-        drop(state);
-        self.finish_explicit_stop(stop_token);
-        match start_result {
-            Ok(unit) => {
-                self.start_runtime_monitor(transition.target_app_id, version, unit);
-            }
-            Err(error) => {
-                eprintln!("cp0-appd: cannot start accepted intent receiver: {error}");
-            }
+        let response = self.start_app_control(transition.intent_id, &transition.target_app_id);
+        if matches!(response.outcome, crate::ResponseOutcome::Error { .. }) {
+            eprintln!(
+                "cp0-appd: cannot activate intent receiver {} for sender {}",
+                transition.target_app_id, transition.sender_app_id
+            );
         }
     }
 
@@ -1758,7 +2059,8 @@ impl AppdServer {
             }
         };
         let Some(session) = runtime
-            .as_ref()
+            .foreground
+            .and_then(|token| runtime.sessions.get(&token))
             .filter(|session| session.app_id == app.app_id)
         else {
             return Err(BrokerResponse::error(
@@ -1872,6 +2174,7 @@ fn select_intent_target(
 #[derive(Debug)]
 enum CommandError {
     Manager(AppManagerError),
+    Task(TaskError),
     Storage(StorageClientError),
     Permission(PermissionPromptError),
     Document(DocumentPromptError),
@@ -1883,6 +2186,7 @@ impl fmt::Display for CommandError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Manager(error) => write!(formatter, "{error}"),
+            Self::Task(error) => write!(formatter, "{error}"),
             Self::Storage(error) => write!(formatter, "{error}"),
             Self::Permission(error) => write!(formatter, "{error}"),
             Self::Document(error) => write!(formatter, "{error}"),
@@ -1898,6 +2202,12 @@ impl From<AppManagerError> for CommandError {
     }
 }
 
+impl From<TaskError> for CommandError {
+    fn from(error: TaskError) -> Self {
+        Self::Task(error)
+    }
+}
+
 impl From<PermissionPromptError> for CommandError {
     fn from(error: PermissionPromptError) -> Self {
         Self::Permission(error)
@@ -1907,6 +2217,24 @@ impl From<PermissionPromptError> for CommandError {
 fn command_error_response(request_id: u64, error: &CommandError) -> AppdResponse {
     match error {
         CommandError::Manager(error) => manager_error_response(request_id, error),
+        CommandError::Task(TaskError::TaskNotFound(_)) => {
+            AppdResponse::error(request_id, ErrorCode::NotFound, "task was not found")
+        }
+        CommandError::Task(TaskError::TaskNotResident(_)) => AppdResponse::error(
+            request_id,
+            ErrorCode::Unavailable,
+            "task runtime must be restored before activation",
+        ),
+        CommandError::Task(TaskError::AppAlreadyResident(_)) => AppdResponse::error(
+            request_id,
+            ErrorCode::AlreadyRunning,
+            "application already has a resident task",
+        ),
+        CommandError::Task(_) => AppdResponse::error(
+            request_id,
+            ErrorCode::Conflict,
+            "task lifecycle transition could not be committed",
+        ),
         CommandError::Storage(_) => AppdResponse::error(
             request_id,
             ErrorCode::Unavailable,
@@ -2285,10 +2613,12 @@ fn cgroup_contains_unit(cgroup: &str, unit: &str) -> bool {
     })
 }
 
-fn take_runtime_end(runtime: &mut Option<RuntimeSession>, token: u64) -> Option<bool> {
-    let session = runtime.as_ref().filter(|session| session.token == token)?;
+fn take_runtime_end(runtime: &mut RuntimeState, token: u64) -> Option<bool> {
+    let session = runtime.sessions.remove(&token)?;
     let crashed = !session.explicit_stop;
-    *runtime = None;
+    if runtime.foreground == Some(token) {
+        runtime.foreground = None;
+    }
     Some(crashed)
 }
 
@@ -2348,21 +2678,27 @@ mod tests {
     fn counts_only_unexpected_runtime_disappearance_as_a_crash() {
         let session = |explicit_stop| RuntimeSession {
             token: 7,
+            task_id: TaskId(3),
             app_id: "dev.cardputerzero.test".into(),
             version: "1.2.3".into(),
             explicit_stop,
         };
-        let mut unexpected = Some(session(false));
+        let mut unexpected = RuntimeState::default();
+        unexpected.sessions.insert(7, session(false));
+        unexpected.foreground = Some(7);
         assert_eq!(take_runtime_end(&mut unexpected, 7), Some(true));
-        assert!(unexpected.is_none());
+        assert!(unexpected.sessions.is_empty());
+        assert_eq!(unexpected.foreground, None);
 
-        let mut explicit = Some(session(true));
+        let mut explicit = RuntimeState::default();
+        explicit.sessions.insert(7, session(true));
         assert_eq!(take_runtime_end(&mut explicit, 7), Some(false));
-        assert!(explicit.is_none());
+        assert!(explicit.sessions.is_empty());
 
-        let mut newer = Some(session(false));
+        let mut newer = RuntimeState::default();
+        newer.sessions.insert(7, session(false));
         assert_eq!(take_runtime_end(&mut newer, 6), None);
-        assert!(newer.is_some());
+        assert!(newer.sessions.contains_key(&7));
     }
 
     #[test]
