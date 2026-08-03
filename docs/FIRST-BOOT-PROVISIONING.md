@@ -275,14 +275,16 @@ Missing identity prerequisites or contradictory completion records enter
 `REPAIR_REQUIRED`; they must not bypass Setup, create a second owner or erase
 data automatically.
 
-Final commit applies and verifies regional settings, the SSH consent marker,
-owner group membership and the live SSH service before persisting `COMMITTING`.
-It then atomically writes the completion marker and finally persists
-`COMPLETE`. Restart with `COMMITTING` but no completion marker returns safely to
-`REVIEW`; restart with both final side effects and the marker completes the
-transaction automatically. `REVIEW` accepts either pre-commit or idempotently
-applied SSH membership so an SSH start failure remains retryable instead of
-being misclassified as identity corruption.
+Final commit applies and verifies regional settings, the SSH consent marker and
+owner group membership before persisting `COMMITTING`. It then atomically writes
+the completion marker, activates the live SSH choice through its marker-gated
+systemd unit, and finally persists `COMPLETE`. The marker must exist before live
+activation because the production sshd gate refuses pre-provisioning starts.
+Restart with `COMMITTING` but no completion marker returns safely to `REVIEW`;
+restart with both final side effects and the marker completes the transaction
+automatically and applies the SSH choice at boot. `REVIEW` accepts either
+pre-commit or idempotently applied SSH membership so an earlier commit failure
+remains retryable instead of being misclassified as identity corruption.
 
 If `cp0-data` cannot be mounted safely, the Shell displays a persistent-storage
 error with shutdown/retry guidance. It must not create credentials in the

@@ -702,7 +702,7 @@ impl PlatformBackend for LinuxPlatformBackend {
             &[OsStr::new("set-hostname"), OsStr::new(hostname)],
             "device name could not be configured",
         )?;
-        atomic_write(
+        atomic_replace(
             &self.paths.locale_file,
             format!("LANG={locale}\n").as_bytes(),
             0o644,
@@ -1113,14 +1113,13 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                 self.backend.configure_ssh(state.ssh_enabled)?;
                 self.identity_store
                     .set_ssh_membership(username, state.ssh_enabled)?;
-                self.backend.activate_ssh(state.ssh_enabled)?;
-                // Backend work is idempotent. Keep the durable state at Review
-                // until it succeeds so a failed commit remains retryable.
                 state.phase = ProvisioningPhase::Committing;
                 self.state_store.save(&state)?;
                 self.state_store.mark_complete()?;
+                let activation = self.backend.activate_ssh(state.ssh_enabled);
                 state.phase = ProvisioningPhase::Complete;
                 self.state_store.save(&state)?;
+                activation?;
                 Ok(ProvisioningOutcome::State { state })
             }
         }
@@ -1518,6 +1517,11 @@ mod tests {
         let zone = paths.zoneinfo_root.join("Asia/Shanghai");
         fs::create_dir_all(zone.parent().unwrap()).unwrap();
         fs::write(&zone, b"test zone").unwrap();
+        let original_locale = root.join("etc/locale.conf");
+        fs::create_dir_all(original_locale.parent().unwrap()).unwrap();
+        fs::write(&original_locale, b"LANG=C.UTF-8\n").unwrap();
+        fs::create_dir_all(paths.locale_file.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink("../locale.conf", &paths.locale_file).unwrap();
         let original_zone = root.join("original-zone");
         fs::write(&original_zone, b"original zone").unwrap();
         fs::create_dir_all(paths.localtime_file.parent().unwrap()).unwrap();
@@ -1531,6 +1535,16 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&paths.locale_file).unwrap(),
             "LANG=en_US.UTF-8\n"
+        );
+        assert!(
+            !fs::symlink_metadata(&paths.locale_file)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_to_string(&original_locale).unwrap(),
+            "LANG=C.UTF-8\n"
         );
         assert_eq!(
             fs::read_to_string(&paths.timezone_file).unwrap(),
@@ -2007,7 +2021,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_ssh_activation_remains_reviewable_and_can_be_retried() {
+    fn failed_live_ssh_activation_keeps_durable_setup_complete() {
         let (root, paths) = fixture();
         let backend = MockBackend {
             fail_activate_once: true,
@@ -2015,6 +2029,9 @@ mod tests {
         };
         let mut service = ProvisioningService::new(&paths, backend);
         advance_to_review(&mut service, true);
+        // MockBackend tracks consent in memory; emulate the Linux backend's
+        // durable marker so post-error reconciliation checks the real layout.
+        atomic_write(&paths.ssh_marker, b"password\n", 0o600).unwrap();
         assert!(matches!(
             service
                 .dispatch(request(6, ProvisioningCommand::Commit {}))
@@ -2024,11 +2041,8 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(service.status().unwrap().phase, ProvisioningPhase::Review);
-        assert_eq!(
-            state(service.dispatch(request(7, ProvisioningCommand::Commit {}))).phase,
-            ProvisioningPhase::Complete
-        );
+        assert_eq!(service.status().unwrap().phase, ProvisioningPhase::Complete);
+        assert!(paths.complete_marker.is_file());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2044,7 +2058,6 @@ mod tests {
             .identity_store
             .set_ssh_membership("owner", true)
             .unwrap();
-        service.backend.activate_ssh(true).unwrap();
         interrupted.phase = ProvisioningPhase::Committing;
         service.state_store.save(&interrupted).unwrap();
         assert_eq!(service.status().unwrap().phase, ProvisioningPhase::Review);
