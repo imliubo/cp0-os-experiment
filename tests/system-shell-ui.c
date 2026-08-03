@@ -1394,6 +1394,29 @@ int main(int argc, char **argv)
     assert(ui.system_action_overlay && ui.system_action_ticks == 2);
     assert(!cp0_ui_tick(&ui));
     assert(cp0_ui_tick(&ui) && !ui.system_action_overlay);
+
+    ui.screen = CP0_UI_NETWORK;
+    ui.network_page = 1;
+    unsigned int network_page = ui.network_page;
+    cp0_ui_handle_action(&ui, CP0_UI_VOLUME_UP);
+    assert(ui.screen == CP0_UI_NETWORK && ui.network_page == network_page &&
+           ui.system_action_overlay);
+    cp0_ui_handle_action(&ui, CP0_UI_VOLUME_UP);
+    assert(ui.screen == CP0_UI_NETWORK && ui.system_action_ticks == 2);
+
+    cp0_ui_handle_action(&ui, CP0_UI_GO_HOME);
+    ui.screen = CP0_UI_SETTINGS;
+    ui.settings_selected = 3;
+    ui.settings_item_selected = 2;
+    ui.settings_detail = true;
+    cp0_ui_handle_action(&ui, CP0_UI_BRIGHTNESS_DOWN);
+    assert(ui.screen == CP0_UI_SETTINGS && ui.settings_detail &&
+           ui.settings_selected == 3 && ui.settings_item_selected == 2 &&
+           ui.system_action_overlay);
+    assert(!cp0_ui_tick(&ui));
+    assert(cp0_ui_tick(&ui) && !ui.system_action_overlay &&
+           ui.screen == CP0_UI_SETTINGS && ui.settings_detail);
+
     assert(cp0_ui_handle_action(&ui, CP0_UI_MEDIA_NEXT) ==
            CP0_UI_EVENT_MEDIA_NEXT);
     assert(ui.media_status == CP0_UI_MEDIA_REQUESTED);

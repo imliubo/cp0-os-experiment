@@ -92,6 +92,10 @@ install -D -m 0644 "${STAGE_DIR}/01-compositor/policy/esc-gesture.c" \
     "${policy_source}/esc-gesture.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/policy/esc-gesture.h" \
     "${policy_source}/esc-gesture.h"
+install -D -m 0644 "${STAGE_DIR}/01-compositor/policy/overlay-state.c" \
+    "${policy_source}/overlay-state.c"
+install -D -m 0644 "${STAGE_DIR}/01-compositor/policy/overlay-state.h" \
+    "${policy_source}/overlay-state.h"
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/policy/cardputerzero-system-shell-v1.xml" \
     "${policy_source}/cardputerzero-system-shell-v1.xml"
@@ -219,6 +223,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     /tmp/cardputerzero-system-shell/power_client.c \
     /tmp/cardputerzero-system-shell/store_client.c \
     /tmp/cardputerzero-system-shell/system_info.c \
+    /tmp/cardputerzero-policy/overlay-state.c \
     /tmp/cardputerzero-policy/cardputerzero-system-shell-protocol.c \
     /tmp/cardputerzero-weston-build/protocol/xdg-shell-protocol.c \
     /tmp/cardputerzero-weston-build/protocol/weston-output-capture-protocol.c \
@@ -232,6 +237,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \
     -I/tmp/cardputerzero-weston-build \
     /tmp/cardputerzero-policy/cardputerzero-policy.c \
     /tmp/cardputerzero-policy/esc-gesture.c \
+    /tmp/cardputerzero-policy/overlay-state.c \
     /tmp/cardputerzero-policy/cardputerzero-system-shell-protocol.c \
     -L/tmp/cardputerzero-weston-build/libweston -lweston-14 \
     \$(pkg-config --cflags --libs pixman-1 wayland-server) \

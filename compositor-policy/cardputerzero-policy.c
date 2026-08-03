@@ -2,6 +2,7 @@
 
 #include "cardputerzero-system-shell-server-protocol.h"
 #include "esc-gesture.h"
+#include "overlay-state.h"
 
 #include <libweston/desktop.h>
 #include <libweston/libweston.h>
@@ -20,6 +21,16 @@
 #define CP0_SHELL_USER "cp0-shell"
 #define CP0_APP_ID_MAX 128
 #define CP0_ESC_POLL_MSEC 20
+
+_Static_assert((uint32_t)CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL ==
+                       (uint32_t)CP0_OVERLAY_STATE_FULL &&
+                   (uint32_t)CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS ==
+                       (uint32_t)CP0_OVERLAY_STATE_STATUS &&
+                   (uint32_t)CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN ==
+                       (uint32_t)CP0_OVERLAY_STATE_HIDDEN &&
+                   (uint32_t)CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION ==
+                       (uint32_t)CP0_OVERLAY_STATE_NOTIFICATION,
+               "overlay protocol values must match the shared state model");
 
 struct cp0_policy;
 
@@ -696,7 +707,7 @@ dispatch_system_action(struct cp0_policy *policy,
                          keyboard);
     else
         set_overlay_mode(policy,
-                         CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION,
+                         cp0_overlay_transient_target(policy->overlay_mode),
                          keyboard);
     cp0_system_shell_v1_send_action(policy->shell_resource, action);
 }

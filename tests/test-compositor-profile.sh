@@ -20,6 +20,8 @@ policy="$repo_root/compositor-policy/cardputerzero-policy.c"
 esc_gesture="$repo_root/compositor-policy/esc-gesture.c"
 esc_gesture_header="$repo_root/compositor-policy/esc-gesture.h"
 esc_gesture_test="$repo_root/tests/compositor-esc-gesture.c"
+overlay_state="$repo_root/compositor-policy/overlay-state.c"
+overlay_state_test="$repo_root/tests/compositor-overlay-state.c"
 protocol="$repo_root/protocols/cardputerzero-system-shell-v1.xml"
 shell_client="$repo_root/system-shell/src/main.c"
 provision_client="$repo_root/system-shell/src/provision_client.c"
@@ -160,6 +162,11 @@ trap 'rm -rf -- "$generator_tmp"' EXIT
     "$esc_gesture" "$esc_gesture_test" \
     -o "$generator_tmp/compositor-esc-gesture-test"
 "$generator_tmp/compositor-esc-gesture-test"
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -I"$repo_root/compositor-policy" \
+    "$overlay_state" "$overlay_state_test" \
+    -o "$generator_tmp/compositor-overlay-state-test"
+"$generator_tmp/compositor-overlay-state-test"
 marker="$generator_tmp/recovery-mode"
 test "$("$display_generator" --select product "$marker")" = \
     cardputerzero-compositor.service
@@ -184,6 +191,8 @@ grep -q 'WESTON_LAYER_POSITION_NORMAL' "$policy"
 grep -q 'WESTON_LAYER_POSITION_HIDDEN' "$policy"
 grep -q 'weston_compositor_add_key_binding' "$policy"
 grep -q 'cp0_system_shell_v1_send_action' "$policy"
+grep -q 'cp0_overlay_transient_target(policy->overlay_mode)' "$policy"
+grep -q 'cp0_overlay_transient_base(' "$shell_client"
 grep -q 'wl_event_loop_add_timer' "$policy"
 grep -q 'keyboard_has_key(keyboard, KEY_ESC)' "$policy"
 grep -q '^#define CP0_ESC_LONG_PRESS_MSEC 800U$' "$esc_gesture_header"

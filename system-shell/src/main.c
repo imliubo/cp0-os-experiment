@@ -13,6 +13,7 @@
 #include "cp0_store_client.h"
 #include "cp0_system_info.h"
 #include "cp0_ui.h"
+#include "overlay-state.h"
 #include "weston-output-capture-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 
@@ -42,6 +43,15 @@
 
 _Static_assert(CP0_STORE_INSTALL_BATCH_MAX == CP0_UI_STORE_UPDATE_BATCH_MAX,
                "Store batch limits must match");
+_Static_assert((uint32_t)CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL ==
+                       (uint32_t)CP0_OVERLAY_STATE_FULL &&
+                   (uint32_t)CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS ==
+                       (uint32_t)CP0_OVERLAY_STATE_STATUS &&
+                   (uint32_t)CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN ==
+                       (uint32_t)CP0_OVERLAY_STATE_HIDDEN &&
+                   (uint32_t)CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION ==
+                       (uint32_t)CP0_OVERLAY_STATE_NOTIFICATION,
+               "overlay protocol values must match the shared state model");
 
 struct shell;
 
@@ -2217,14 +2227,20 @@ static void handle_system_action(void *data,
         return;
     }
     cancel_notification(shell, true);
-    cancel_system_action(shell, true);
     if (action > CP0_SYSTEM_SHELL_V1_ACTION_POWER &&
         action != CP0_SYSTEM_SHELL_V1_ACTION_HELP) {
-        shell->system_action_restore_mode = shell->overlay_mode;
-        shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION;
+        enum cp0_overlay_state base = cp0_overlay_transient_base(
+            shell->ui.system_action_overlay, shell->overlay_mode,
+            shell->system_action_restore_mode);
+        cancel_system_action(shell, false);
+        shell->system_action_restore_mode = base;
+        shell->overlay_mode = cp0_overlay_transient_target(base);
     } else {
+        cancel_system_action(shell, false);
         shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     }
+    cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                          shell->overlay_mode);
     handle_ui_action(shell, ui_action);
 }
 

@@ -35,6 +35,7 @@ wayland-scanner private-code "$protocol" \
 
 cc -std=c11 -Os -Wall -Wextra -Werror \
     -I"$repo_root/system-shell/include" \
+    -I"$repo_root/compositor-policy" \
     -I"$output" \
     -I"$weston_build/protocol" \
     "$repo_root/system-shell/src/main.c" \
@@ -51,6 +52,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     "$repo_root/system-shell/src/power_client.c" \
     "$repo_root/system-shell/src/store_client.c" \
     "$repo_root/system-shell/src/system_info.c" \
+    "$repo_root/compositor-policy/overlay-state.c" \
     "$output/cardputerzero-system-shell-protocol.c" \
     "$weston_build/protocol/xdg-shell-protocol.c" \
     "$weston_build/protocol/weston-output-capture-protocol.c" \
@@ -64,6 +66,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \
     -I"$weston_build" \
     "$repo_root/compositor-policy/cardputerzero-policy.c" \
     "$repo_root/compositor-policy/esc-gesture.c" \
+    "$repo_root/compositor-policy/overlay-state.c" \
     "$output/cardputerzero-system-shell-protocol.c" \
     -L"$weston_build/libweston" -lweston-14 \
     $(pkg-config --cflags --libs pixman-1 wayland-server) \
