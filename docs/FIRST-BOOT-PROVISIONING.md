@@ -326,18 +326,21 @@ determine whether a usable RTC exists and document the cold-power behavior.
 
 ### Remote access
 
-Remote access is visibly Off by default. The first release should offer:
+Remote access is visibly Off by default. The product separates two controls:
 
 - **Off**: no SSH listener and no generated host keys;
-- **SSH with owner password**: owner only, root login disabled;
-- **SSH with public key**: proposed follow-up once a safe on-device import and
-  fingerprint-confirmation UI is complete.
+- **Developer Mode**: constrained `cp0-dev` deployment only, with a separate
+  ten-minute on-device pairing window and root-managed Ed25519 keys;
+- **Owner SSH Shell**: full Bash as the owner only, root login and sudo still
+  disabled.
 
-An owner selected for SSH is added to a dedicated dynamic `cp0-ssh` group and
-sshd uses `AllowGroups cp0-ssh`, `PermitRootLogin no` and mode-specific
-authentication. Host keys are generated only after SSH is enabled and are
-written to the already persistent `/etc/ssh` bind. Setup completion never opens
-a port unless the owner selected it.
+The owner always receives the constrained `cp0-developer-access` identity;
+`cp0-ssh` membership is added only when the independent Owner SSH Shell option
+is selected. sshd uses both groups in `AllowGroups`, `PermitRootLogin no` and a
+root-controlled authorized-key path. Host keys are generated only when one of
+the two access modes starts SSH and are written to the persistent `/etc/ssh`
+bind. Setup completion never opens a port unless the owner selected the shell;
+Developer Mode remains Off until physically enabled later in Settings.
 
 The production profile disables SSH initially without permanently masking it.
 The implemented owner choice uses this root-only marker:
@@ -346,9 +349,20 @@ The implemented owner choice uses this root-only marker:
 /var/lib/cardputerzero/provisioning/ssh-enabled
 ```
 
-sshd and host-key preparation use a systemd condition or generator tied to the
-marker. The Shell cannot create it directly. The Complete page shows hostname,
-IP and SSH status without displaying a password.
+The Developer Mode marker is independent:
+
+```text
+/var/lib/cardputerzero/registry/developer-mode
+```
+
+sshd and host-key preparation use a systemd condition or generator that accepts
+either marker after provisioning is complete. `/usr/libexec/cardputerzero/owner-shell`
+routes `cp0-dev` into the constrained daemon and reaches Bash only when the
+login process has the `cp0-ssh` group granted by the Owner SSH Shell setting.
+The daemon checks the root-only Developer Mode marker on every request. Paired
+public keys always carry a forced `cp0ctl dev-session` command, and sshd disables
+all forwarding. The Complete page shows hostname, IP and Owner SSH Shell status
+without displaying a password.
 
 ## Security and privacy requirements
 
@@ -367,11 +381,10 @@ IP and SSH status without displaying a password.
 - Recovery and OS rollback must understand the provisioning schema and must not
   restore a `COMPLETE` marker without its referenced identity/configuration.
 
-The owner is **not** granted sudo by default. The recommended product model is
-that Developer Mode separately and visibly grants a constrained `cp0-admin`
-role when it is implemented. Making every owner an unrestricted Linux
-administrator would weaken the Android-like application and broker boundary.
-This product decision requires explicit approval.
+The owner is **not** granted sudo. Developer Mode now separately and visibly
+grants only the constrained `cp0-devd` operations documented in
+`DEVELOPER-ACCESS.md`. Making every owner an unrestricted Linux administrator
+would weaken the Android-like application and broker boundary.
 
 ## Verification plan and release gates
 

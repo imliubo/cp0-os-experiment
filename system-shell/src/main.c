@@ -5,6 +5,7 @@
 #include "cp0_audio_settings_client.h"
 #include "cp0_connectivity_client.h"
 #include "cp0_display_client.h"
+#include "cp0_developer_client.h"
 #include "cp0_provision_client.h"
 #include "cp0_screenshot_store.h"
 #include "cp0_shell_settings.h"
@@ -539,6 +540,23 @@ static void poll_device_settings(struct shell *shell)
     struct cp0_device_settings settings;
     if (cp0_appd_get_device_settings(&settings) == 0)
         apply_device_settings(shell, &settings);
+}
+
+static void poll_developer_access(struct shell *shell)
+{
+    struct cp0_developer_access access;
+    struct cp0_ui_developer_host hosts[CP0_DEVELOPER_MAX_HOSTS];
+    if (cp0_developer_list(&access) != 0) {
+        shell->ui.developer_access_available = false;
+        shell->ui.developer_pairing_open = false;
+        return;
+    }
+    for (size_t index = 0; index < access.host_count; index++) {
+        hosts[index].label = access.hosts[index].label;
+        hosts[index].ssh_fingerprint = access.hosts[index].ssh_fingerprint;
+    }
+    cp0_ui_set_developer_access(&shell->ui, access.pairing_open, hosts,
+                                access.host_count);
 }
 
 static void apply_display_state(struct shell *shell,
@@ -1849,6 +1867,36 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         poll_store_search(shell);
     } else if (event == CP0_UI_EVENT_STORE_BROWSE) {
         poll_store_browse(shell);
+    } else if (event == CP0_UI_EVENT_DEVELOPER_OPEN_PAIRING) {
+        uint16_t remaining_seconds;
+        if (cp0_developer_open_pairing(600, &remaining_seconds) == 0) {
+            (void)remaining_seconds;
+            poll_developer_access(shell);
+            fprintf(stderr,
+                    "system-shell: developer pairing window opened for 10 minutes\n");
+        } else {
+            fprintf(stderr,
+                    "system-shell: developer pairing window could not be opened\n");
+            poll_developer_access(shell);
+        }
+    } else if (event == CP0_UI_EVENT_DEVELOPER_UNPAIR ||
+               event == CP0_UI_EVENT_DEVELOPER_UNPAIR_ALL) {
+        uint8_t remaining;
+        const char *fingerprint =
+            cp0_ui_selected_developer_fingerprint(&shell->ui);
+        int result = event == CP0_UI_EVENT_DEVELOPER_UNPAIR_ALL
+                         ? cp0_developer_unpair_all(&remaining)
+                         : cp0_developer_unpair(fingerprint, &remaining);
+        if (result == 0) {
+            fprintf(stderr,
+                    "system-shell: developer authorization revoked; %u remain\n",
+                    (unsigned int)remaining);
+            poll_developer_access(shell);
+        } else {
+            fprintf(stderr,
+                    "system-shell: developer authorization revocation failed\n");
+            poll_developer_access(shell);
+        }
     } else if (event == CP0_UI_EVENT_DEVELOPER_ENABLE ||
                event == CP0_UI_EVENT_DEVELOPER_DISABLE ||
                event == CP0_UI_EVENT_RECOVERY_ENABLE ||
@@ -1862,6 +1910,8 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                                              : CP0_DEVICE_MODE_DEVELOPER;
         if (cp0_appd_set_device_mode(mode, enabled, &settings) == 0) {
             apply_device_settings(shell, &settings);
+            if (!recovery)
+                poll_developer_access(shell);
             fprintf(stderr, "system-shell: %s mode %s\n",
                     recovery ? "recovery" : "developer",
                     enabled ? "enabled" : "disabled");
@@ -1909,6 +1959,7 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         poll_audio_output_state(shell);
         poll_connectivity_state(shell);
         poll_device_settings(shell);
+        poll_developer_access(shell);
         poll_auto_update_status(shell);
         poll_metrics_status(shell);
     }

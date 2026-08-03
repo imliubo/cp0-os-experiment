@@ -1,20 +1,17 @@
 [package]
-name = "cp0ctl"
+name = "cp0-devd"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
 
 [dependencies]
+base64.workspace = true
 cp0-appd = { path = "../cp0-appd" }
-cp0-devd = { path = "../cp0-devd" }
 cp0-manifest = { path = "../cp0-manifest" }
 cp0-package = { path = "../cp0-package" }
-cp0-store-metadata = { path = "../cp0-store-metadata" }
-cp0-store-protocol = { path = "../cp0-store-protocol" }
+cp0-provision-protocol = { path = "../cp0-provision-protocol" }
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-ureq = { version = "=3.3.0", default-features = false, features = ["json", "rustls"] }
-wasmparser = "=0.245.1"

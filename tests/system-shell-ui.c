@@ -372,6 +372,30 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
         ui->settings_detail = true;
         write_snapshot(directory, setting_names[category], ui, frame);
     }
+    static const struct cp0_ui_developer_host snapshot_hosts[] = {
+        {.label = "workstation",
+         .ssh_fingerprint =
+             "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+        {.label = "laptop",
+         .ssh_fingerprint =
+             "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"},
+    };
+    cp0_ui_set_device_settings(
+        ui, CP0_UI_AUTHORITY_PERSONAL, true, true, false, true, true, false, 0);
+    cp0_ui_set_developer_access(ui, true, snapshot_hosts, 2);
+    ui->settings_selected = 7;
+    ui->settings_detail = true;
+    ui->developer_hosts_view = true;
+    ui->developer_host_selected = 0;
+    write_snapshot(directory, "settings-developer-hosts", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    write_snapshot(directory, "settings-developer-revoke", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_BACK);
+    ui->developer_hosts_view = false;
+    cp0_ui_set_device_settings(
+        ui, CP0_UI_AUTHORITY_ORGANIZATION, false, true, false, true, false,
+        true, 3);
+    cp0_ui_set_developer_access(ui, false, NULL, 0);
     ui->settings_selected = 5;
     ui->settings_item_selected = 4;
     ui->settings_detail = true;
@@ -562,12 +586,45 @@ int main(int argc, char **argv)
         false, 0);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_DEVELOPER_DISABLE);
+    cp0_ui_set_device_settings(
+        &ui, CP0_UI_AUTHORITY_PERSONAL, true, true, false, true, true,
+        false, 0);
+    static const struct cp0_ui_developer_host developer_hosts[] = {
+        {.label = "workstation",
+         .ssh_fingerprint =
+             "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+        {.label = "laptop",
+         .ssh_fingerprint =
+             "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"},
+    };
+    cp0_ui_set_developer_access(&ui, false, developer_hosts, 2);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_DEVELOPER_OPEN_PAIRING);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+    assert(ui.developer_hosts_view && ui.developer_host_selected == 0);
+    cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
+    assert(ui.developer_revoke_confirm && ui.dialog_selected == 1);
+    cp0_ui_handle_action(&ui, CP0_UI_LEFT);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_DEVELOPER_UNPAIR);
+    assert(strcmp(cp0_ui_selected_developer_fingerprint(&ui),
+                  developer_hosts[0].ssh_fingerprint) == 0);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
     cp0_ui_handle_action(&ui, CP0_UI_DOWN);
     cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
     cp0_ui_handle_action(&ui, CP0_UI_LEFT);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_DEVELOPER_UNPAIR_ALL);
+    cp0_ui_handle_action(&ui, CP0_UI_BACK);
+    assert(!ui.developer_hosts_view && ui.settings_detail);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
+    cp0_ui_handle_action(&ui, CP0_UI_LEFT);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_RECOVERY_ENABLE);
-    assert(ui.settings_item_selected == 2);
+    assert(ui.settings_item_selected == 4);
     cp0_ui_handle_action(&ui, CP0_UI_BACK);
     assert(!ui.settings_detail && ui.screen == CP0_UI_SETTINGS);
 

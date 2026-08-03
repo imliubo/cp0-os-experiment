@@ -27,9 +27,11 @@ use uuid::Uuid;
 use zeroize::Zeroize;
 
 pub const OWNER_UID: u32 = 1000;
+pub const DEVELOPER_ACCESS_GROUP_GID: u32 = 1998;
 pub const SSH_GROUP_GID: u32 = 1999;
 pub const STATE_SCHEMA_VERSION: u32 = 1;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+const OWNER_SHELL: &str = "/usr/libexec/cardputerzero/owner-shell";
 
 #[derive(Debug)]
 pub enum ProvisioningError {
@@ -224,7 +226,7 @@ impl ExtrausersIdentityStore {
         atomic_write(
             &self.path("passwd"),
             format!(
-                "{username}:x:{OWNER_UID}:{OWNER_UID}:{display_name}:/home/{username}:/bin/bash\n"
+                "{username}:x:{OWNER_UID}:{OWNER_UID}:{display_name}:/home/{username}:{OWNER_SHELL}\n"
             )
             .as_bytes(),
             0o644,
@@ -236,12 +238,15 @@ impl ExtrausersIdentityStore {
         )?;
         atomic_write(
             &self.path("group"),
-            format!("{username}:x:{OWNER_UID}:\ncp0-ssh:x:{SSH_GROUP_GID}:\n").as_bytes(),
+            format!(
+                "{username}:x:{OWNER_UID}:\ncp0-developer-access:x:{DEVELOPER_ACCESS_GROUP_GID}:{username}\ncp0-ssh:x:{SSH_GROUP_GID}:\n"
+            )
+            .as_bytes(),
             0o644,
         )?;
         atomic_write(
             &self.path("gshadow"),
-            format!("{username}:!::\ncp0-ssh:!::\n").as_bytes(),
+            format!("{username}:!::\ncp0-developer-access:!::{username}\ncp0-ssh:!::\n").as_bytes(),
             0o640,
         )
     }
@@ -276,12 +281,16 @@ impl ExtrausersIdentityStore {
         let members = if enabled { username } else { "" };
         atomic_write(
             &self.path("group"),
-            format!("{username}:x:{OWNER_UID}:\ncp0-ssh:x:{SSH_GROUP_GID}:{members}\n").as_bytes(),
+            format!(
+                "{username}:x:{OWNER_UID}:\ncp0-developer-access:x:{DEVELOPER_ACCESS_GROUP_GID}:{username}\ncp0-ssh:x:{SSH_GROUP_GID}:{members}\n"
+            )
+            .as_bytes(),
             0o644,
         )?;
         atomic_write(
             &self.path("gshadow"),
-            format!("{username}:!::\ncp0-ssh:!::{members}\n").as_bytes(),
+            format!("{username}:!::\ncp0-developer-access:!::{username}\ncp0-ssh:!::{members}\n")
+                .as_bytes(),
             0o640,
         )
     }
@@ -294,11 +303,16 @@ impl ExtrausersIdentityStore {
         let shadow = fs::read_to_string(self.path("shadow")).unwrap_or_default();
         let group = fs::read_to_string(self.path("group")).unwrap_or_default();
         let gshadow = fs::read_to_string(self.path("gshadow")).unwrap_or_default();
-        let empty_group = format!("{username}:x:{OWNER_UID}:\ncp0-ssh:x:{SSH_GROUP_GID}:\n");
-        let member_group =
-            format!("{username}:x:{OWNER_UID}:\ncp0-ssh:x:{SSH_GROUP_GID}:{username}\n");
-        let empty_gshadow = format!("{username}:!::\ncp0-ssh:!::\n");
-        let member_gshadow = format!("{username}:!::\ncp0-ssh:!::{username}\n");
+        let empty_group = format!(
+            "{username}:x:{OWNER_UID}:\ncp0-developer-access:x:{DEVELOPER_ACCESS_GROUP_GID}:{username}\ncp0-ssh:x:{SSH_GROUP_GID}:\n"
+        );
+        let member_group = format!(
+            "{username}:x:{OWNER_UID}:\ncp0-developer-access:x:{DEVELOPER_ACCESS_GROUP_GID}:{username}\ncp0-ssh:x:{SSH_GROUP_GID}:{username}\n"
+        );
+        let empty_gshadow =
+            format!("{username}:!::\ncp0-developer-access:!::{username}\ncp0-ssh:!::\n");
+        let member_gshadow =
+            format!("{username}:!::\ncp0-developer-access:!::{username}\ncp0-ssh:!::{username}\n");
         let membership_valid = if !state.ssh_enabled {
             group == empty_group && gshadow == empty_gshadow
         } else if state.phase == ProvisioningPhase::Review {
@@ -319,6 +333,7 @@ impl ExtrausersIdentityStore {
         let home_valid =
             home_valid && home_metadata.uid() == OWNER_UID && home_metadata.gid() == OWNER_UID;
         passwd.starts_with(&format!("{username}:x:{OWNER_UID}:{OWNER_UID}:"))
+            && passwd.ends_with(&format!(":{OWNER_SHELL}\n"))
             && (!state.password_configured || shadow.starts_with(&format!("{username}:$y$")))
             && membership_valid
             && home_valid

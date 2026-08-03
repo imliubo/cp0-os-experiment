@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch CardputerZero owner and developer SSH authorization
+After=local-fs.target
+
+[Path]
+PathChanged=/var/lib/cardputerzero/provisioning
+PathChanged=/var/lib/cardputerzero/registry
+Unit=cardputerzero-ssh-access-refresh.service
+
+[Install]
+WantedBy=multi-user.target

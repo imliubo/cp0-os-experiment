@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+
+owner_shell_group=1999
+invoked=${2:-}
+original=${SSH_ORIGINAL_COMMAND:-}
+
+if [ "$invoked" = "/usr/bin/cp0ctl dev-session" ]; then
+    exec /usr/bin/cp0ctl dev-session
+fi
+if [ "$invoked" = cp0-dev ] || [ "$original" = cp0-dev ]; then
+    exec /usr/bin/cp0ctl dev-session
+fi
+
+case " $(/usr/bin/id -G) " in
+*" $owner_shell_group "*)
+    [ -z "$original" ] || exit 126
+    if [ -z "$invoked" ]; then
+        exec /bin/bash -l
+    fi
+    exec /bin/bash -c "$invoked"
+    ;;
+esac
+
+echo "CardputerZero owner SSH shell is disabled" >&2
+exit 126

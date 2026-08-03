@@ -1,0 +1,17 @@
+[Unit]
+Description=CardputerZero constrained developer access socket
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/cardputerzero-devd/control.sock
+FileDescriptorName=control
+Service=cardputerzero-devd.service
+SocketUser=root
+SocketGroup=root
+SocketMode=0666
+DirectoryMode=0755
+RemoveOnStop=yes
+Accept=no
+
+[Install]
+WantedBy=sockets.target

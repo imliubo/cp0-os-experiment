@@ -4,10 +4,10 @@ After=local-fs.target
 Before=ssh.service
 RequiresMountsFor=/etc/ssh
 ConditionPathExists=/var/lib/cardputerzero/provisioning/complete
-ConditionPathExists=/var/lib/cardputerzero/provisioning/ssh-enabled
 
 [Service]
 Type=oneshot
+ExecCondition=/usr/libexec/cardputerzero/ssh-access-allowed
 ExecStart=/usr/libexec/cardputerzero/prepare-ssh.sh
 RemainAfterExit=yes
 NoNewPrivileges=yes

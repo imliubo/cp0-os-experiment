@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+complete=/var/lib/cardputerzero/provisioning/complete
+owner_shell=/var/lib/cardputerzero/provisioning/ssh-enabled
+developer=/var/lib/cardputerzero/registry/developer-mode
+
+[ -f "$complete" ] && [ ! -L "$complete" ] || exit 1
+if [ -f "$owner_shell" ] && [ ! -L "$owner_shell" ]; then
+    exit 0
+fi
+if [ -f "$developer" ] && [ ! -L "$developer" ]; then
+    exit 0
+fi
+exit 1

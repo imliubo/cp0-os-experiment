@@ -117,7 +117,8 @@ Shell 和其他应用数据。
 - [x] 发布完整 Rust 和 C/C++ SDK，从统一 ABI 契约生成 WAMR/C/Rust bindings，
   并提供 LVGL 9 320x170 适配层。
 - [x] 实现 `cp0ctl new/build` 的 SDK-only 项目生成、Cargo metadata 解析和规范产物树。
-- [x] 实现 `cp0ctl run/package/sign/install/logs`，包含 PC 到真机的 SSH 安装/日志路径。
+- [x] 实现 `cp0ctl run/package/sign/install/logs`，包含 PC 到真机的受限 SSH
+  forced-command 安装/日志路径，不依赖 scp、sudo 或完整 Shell。
 - [x] 建立 PC WASM 模拟器、权限模拟、evdev 输入映射和 JSON 性能分析工具。
 - [x] 迁移 Calculator、Camera 示例，不提供传统 Linux 应用兼容层。
 - [x] 冻结 SDK 1.0 ABI、精确 legacy 0.1 兼容策略、权限词表和开发者文档。
@@ -173,10 +174,11 @@ Shell 和其他应用数据。
   的条件式架构评估；当前开发镜像不宣称 verified boot。
 - [x] 为 manifest、`.capp`、Store、appd 控制帧和恢复备份建立 libFuzzer/ASan 入口、
   有界本地 smoke 和定期 CI。
-- [x] 增加独立 production access profile：拒绝共享密码和 SSH key，锁定维护账户、
-  SSH/getty 与产品内开发/恢复模式，并以独立 recovery SD 作为物理维护入口。
-- [ ] 在可擦写介质上启动 production access 候选，确认 System Shell 正常且 SSH、
-  tty 登录、sudo 与产品内恢复入口全部不可用。
+- [x] 增加独立 production access profile：拒绝构建时共享密码和 SSH key，锁定
+  getty/恢复模式；个人 Owner 可物理开启受限 Developer Mode，完整 Owner SSH Shell
+  继续独立且默认关闭，root 维护仍以 recovery SD 为物理入口。
+- [ ] 在可擦写介质上启动 production access 候选，确认默认无监听、Developer Mode
+  forced-command、Owner SSH Shell 独立开关、tty/root/sudo 拒绝和恢复入口锁定。
 - [x] Phase 6I-A：冻结首次开机状态机、`cp0-provisiond` 有界协议、320x170 Setup
   页面及像素测试；详细方案见 `FIRST-BOOT-PROVISIONING.md` 和 ADR 0007。
 - [x] Phase 6I-B：从最终 product rootfs 清除 pi-gen 临时人类账户，引入位于
@@ -194,6 +196,18 @@ Shell 和其他应用数据。
   rootfs 挂载检查和全部页面/长文本像素仍待候选镜像阶段关闭。
 - [ ] Phase 6I-G：在全新 SD 卡完成无 HDMI/SSH 的 V0.6 首次启动、全部键盘路径、
   三类网络、SSH 拒绝/允许、逐阶段断电、十次冷启动和出厂重置验收报告。
+- [x] Phase 6J-A：实现 root `cp0-devd` 有界协议、Owner UID 与 trusted Shell UID
+  分权、逐请求 Developer Mode/policy 检查、配对签名 key 和 forced-command SSH key。
+- [x] Phase 6J-B：将 PC 端 `cp0ctl pair/install/logs/app` 改为 `ssh -T cp0-dev`
+  流式协议，移除 scp、sudo、通用上传和远程 Shell 依赖。
+- [x] Phase 6J-C：在 320x170 Security UI 实现 Developer Mode、10 分钟
+  `PAIR NEW COMPUTER`、最多 8 台配对电脑列表以及单个/全部撤销；Owner SSH Shell
+  保持独立且默认关闭。
+- [x] Phase 6J-D：将 devd、SSH gate/dispatcher/path unit、持久配对状态和信任目录
+  纳入 product 镜像，同时在 recovery profile 显式 mask；增加 Rust/C、像素和镜像门禁。
+- [ ] Phase 6J-E：在 V0.6 production 候选完成密码首次配对、key 复用、窗口超时、
+  单个/全部撤销、Developer Mode Off、Owner Shell 独立开关、正常重启持久性和真实
+  OpenSSH `SSH_ORIGINAL_COMMAND` 行为验收。
 - [x] 实现不接入当前启动链的 OS 发布元数据策略、rootfs/hash tree/FIT 摘要门禁、
   dm-verity 离线验证、三次启动回滚状态机、双副本撕裂写检测和 100 轮断电模型；
   RAUC CMS、签名 FIT 与硬件信任根仍是独立启用门禁。

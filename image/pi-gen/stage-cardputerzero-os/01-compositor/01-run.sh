@@ -36,6 +36,9 @@ install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/cp0_display_client.h" \
     "${shell_source}/cp0_display_client.h"
 install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/cp0_developer_client.h" \
+    "${shell_source}/cp0_developer_client.h"
+install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/cp0_screenshot_store.h" \
     "${shell_source}/cp0_screenshot_store.h"
 install -D -m 0644 \
@@ -64,6 +67,9 @@ install -D -m 0644 \
     "${shell_source}/shell_settings.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/display_client.c" \
     "${shell_source}/display_client.c"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/developer_client.c" \
+    "${shell_source}/developer_client.c"
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/screenshot_store.c" \
     "${shell_source}/screenshot_store.c"
@@ -203,6 +209,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     /tmp/cardputerzero-system-shell/provision_client.c \
     /tmp/cardputerzero-system-shell/shell_settings.c \
     /tmp/cardputerzero-system-shell/display_client.c \
+    /tmp/cardputerzero-system-shell/developer_client.c \
     /tmp/cardputerzero-system-shell/store_client.c \
     /tmp/cardputerzero-system-shell/system_info.c \
     /tmp/cardputerzero-policy/cardputerzero-system-shell-protocol.c \

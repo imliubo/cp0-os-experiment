@@ -1,0 +1,7 @@
+[Unit]
+Description=Refresh CardputerZero owner and developer SSH access
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/cardputerzero/ssh-access-refresh

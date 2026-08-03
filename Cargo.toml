@@ -11,6 +11,7 @@ members = [
     "crates/cp0-documentd",
     "crates/cp0-display-protocol",
     "crates/cp0-displayd",
+    "crates/cp0-devd",
     "crates/cp0-gpio-protocol",
     "crates/cp0-gpiod",
     "crates/cp0-manifest",

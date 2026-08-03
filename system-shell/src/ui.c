@@ -327,6 +327,8 @@ static const char *screen_title(const struct cp0_ui *ui)
     case CP0_UI_NETWORK:
         return "NETWORK";
     case CP0_UI_SETTINGS:
+        if (ui->developer_hosts_view)
+            return "PAIRED COMPUTERS";
         if (ui->settings_detail) {
             static const char *categories[] = {
                 "CONNECTIVITY", "DISPLAY", "SOUND",  "CAMERA",
@@ -585,11 +587,11 @@ static void draw_setup(struct canvas *canvas, const struct cp0_ui *ui)
         draw_setup_footer(canvas, "RIGHT SHOW/HIDE", "ENTER CONNECT");
         break;
     case CP0_UI_SETUP_SSH:
-        draw_text(canvas, 12, 58, "REMOTE ACCESS (SSH)", 1, COLOR_MUTED);
+        draw_text(canvas, 12, 58, "OWNER SSH SHELL", 1, COLOR_MUTED);
         draw_setup_choice(canvas, 82,
                           ui->setup_ssh_enabled ? "ON" : "OFF (RECOMMENDED)",
                           true);
-        draw_text(canvas, 12, 121, "PASSWORD LOGIN ON YOUR LOCAL NETWORK", 1,
+        draw_text(canvas, 12, 121, "FULL SHELL; DEVELOPER ACCESS IS SEPARATE", 1,
                   COLOR_YELLOW);
         draw_setup_footer(canvas, "LEFT/RIGHT CHANGE", "ENTER NEXT");
         break;
@@ -1771,7 +1773,7 @@ static void draw_settings_page(struct canvas *canvas, const struct cp0_ui *ui)
 
 static unsigned int settings_item_count(unsigned int category)
 {
-    static const unsigned int counts[] = {6, 3, 4, 4, 5, 6, 6, 5};
+    static const unsigned int counts[] = {6, 3, 4, 4, 5, 6, 6, 7};
     return category < 8 ? counts[category] : 0;
 }
 
@@ -1958,8 +1960,10 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
         break;
     }
     default: {
-        static const char *labels[] = {"AUTHORITY", "DEVELOPER MODE", "RECOVERY BOOT",
-                                       "SCREEN LOCK", "ENCRYPTION"};
+        static const char *labels[] = {
+            "AUTHORITY", "DEVELOPER MODE", "PAIR NEW COMPUTER",
+            "PAIRED COMPUTERS", "RECOVERY BOOT", "SCREEN LOCK", "ENCRYPTION",
+        };
         *label = labels[item];
         if (item == 0)
             snprintf(value, 24, "%s",
@@ -1970,13 +1974,80 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
                      settings_state(ui->developer_mode, ui->developer_mode_allowed));
         else if (item == 2)
             snprintf(value, 24, "%s",
+                     ui->developer_pairing_open ? "OPEN - 10 MIN" : "ACTION");
+        else if (item == 3)
+            snprintf(value, 24, "%u PAIRED", ui->developer_host_count);
+        else if (item == 4)
+            snprintf(value, 24, "%s",
                      settings_state(ui->recovery_mode, ui->recovery_mode_allowed));
         else {
             snprintf(value, 24, "NOT SUPPORTED");
             *available = false;
         }
+        if ((item == 2 || item == 3) &&
+            (!ui->developer_mode || !ui->developer_access_available)) {
+            snprintf(value, 24, "%s",
+                     ui->developer_mode ? "UNAVAILABLE" : "ENABLE DEV MODE");
+            *available = false;
+        }
         break;
     }
+    }
+}
+
+static void draw_developer_hosts(struct canvas *canvas,
+                                 const struct cp0_ui *ui)
+{
+    unsigned int count = ui->developer_host_count + 1U;
+    unsigned int first = ui->developer_host_selected > 3
+                             ? ui->developer_host_selected - 3
+                             : 0;
+    for (unsigned int row = 0; row < 4 && first + row < count; row++) {
+        unsigned int item = first + row;
+        bool selected = item == ui->developer_host_selected;
+        bool revoke_all = item == ui->developer_host_count;
+        int y = 27 + (int)row * 32;
+        fill_rect(canvas, 8, y, 304, 28,
+                  selected ? COLOR_SELECTED : COLOR_SURFACE);
+        stroke_rect(canvas, 8, y, 304, 28, selected ? 2 : 1,
+                    selected ? (revoke_all ? COLOR_RED : COLOR_GREEN)
+                             : COLOR_BAR);
+        draw_text_slice(canvas, 20, y + 6,
+                        revoke_all ? "REVOKE ALL" : ui->developer_host_labels[item],
+                        0, 26, selected ? COLOR_TEXT : COLOR_MUTED);
+        draw_text(canvas, 20, y + 17,
+                  revoke_all ? "REMOVE EVERY DEBUG AUTHORIZATION"
+                             : "PRESS ENTER TO REVOKE",
+                  1, revoke_all ? COLOR_RED : COLOR_MUTED);
+    }
+    char page[16];
+    snprintf(page, sizeof(page), "%u/%u", ui->developer_host_selected + 1U,
+             count);
+    draw_text(canvas, 278, 158, page, 1, COLOR_MUTED);
+}
+
+static void draw_developer_revoke_confirm(struct canvas *canvas,
+                                          const struct cp0_ui *ui)
+{
+    static const char *labels[] = {"REVOKE", "CANCEL"};
+    fill_rect(canvas, 0, 21, CP0_UI_WIDTH, CP0_UI_HEIGHT - 21, 0x00090b0cu);
+    fill_rect(canvas, 24, 35, 272, 108, COLOR_SURFACE);
+    stroke_rect(canvas, 24, 35, 272, 108, 2, COLOR_RED);
+    draw_text(canvas, 42, 50,
+              ui->developer_revoke_all ? "REVOKE ALL COMPUTERS"
+                                       : "REVOKE COMPUTER",
+              1, COLOR_TEXT);
+    draw_text(canvas, 42, 72, "DEPLOYMENT ACCESS ENDS IMMEDIATELY", 1,
+              COLOR_MUTED);
+    for (unsigned int index = 0; index < 2; index++) {
+        int x = 48 + (int)index * 116;
+        bool selected = ui->dialog_selected == index;
+        fill_rect(canvas, x, 105, 104, 24,
+                  selected ? COLOR_SELECTED : COLOR_BAR);
+        stroke_rect(canvas, x, 105, 104, 24, selected ? 2 : 1,
+                    selected ? COLOR_RED : COLOR_MUTED);
+        draw_text(canvas, x + 24, 114, labels[index], 1,
+                  selected ? COLOR_TEXT : COLOR_MUTED);
     }
 }
 
@@ -2120,7 +2191,9 @@ static void draw_page(struct canvas *canvas, const struct cp0_ui *ui)
         draw_network_page(canvas, ui);
         break;
     case CP0_UI_SETTINGS:
-        if (ui->settings_detail)
+        if (ui->developer_hosts_view)
+            draw_developer_hosts(canvas, ui);
+        else if (ui->settings_detail)
             draw_settings_detail(canvas, ui);
         else
             draw_settings_page(canvas, ui);
@@ -3001,6 +3074,56 @@ void cp0_ui_set_device_settings(
     ui->app_launch_restricted = app_launch_restricted;
     ui->denied_permission_count = denied_permission_count;
     ui->settings_available = true;
+}
+
+void cp0_ui_set_developer_access(
+    struct cp0_ui *ui, bool pairing_open,
+    const struct cp0_ui_developer_host *hosts, size_t host_count)
+{
+    if (ui == NULL || host_count > CP0_UI_MAX_DEVELOPER_HOSTS ||
+        (host_count > 0 && hosts == NULL))
+        return;
+    ui->developer_access_available = true;
+    ui->developer_pairing_open = pairing_open;
+    ui->developer_host_count = (unsigned int)host_count;
+    for (size_t index = 0; index < host_count; index++) {
+        if (hosts[index].label == NULL || hosts[index].ssh_fingerprint == NULL) {
+            ui->developer_access_available = false;
+            ui->developer_host_count = 0;
+            return;
+        }
+        int label_length = snprintf(ui->developer_host_labels[index],
+                                    sizeof(ui->developer_host_labels[index]),
+                                    "%s", hosts[index].label);
+        int fingerprint_length = snprintf(
+            ui->developer_host_fingerprints[index],
+            sizeof(ui->developer_host_fingerprints[index]), "%s",
+            hosts[index].ssh_fingerprint);
+        if (label_length <= 0 ||
+            (size_t)label_length >= sizeof(ui->developer_host_labels[index]) ||
+            fingerprint_length <= 0 ||
+            (size_t)fingerprint_length >=
+                sizeof(ui->developer_host_fingerprints[index])) {
+            ui->developer_access_available = false;
+            ui->developer_host_count = 0;
+            return;
+        }
+    }
+    for (size_t index = host_count; index < CP0_UI_MAX_DEVELOPER_HOSTS;
+         index++) {
+        ui->developer_host_labels[index][0] = '\0';
+        ui->developer_host_fingerprints[index][0] = '\0';
+    }
+    if (ui->developer_host_selected > ui->developer_host_count)
+        ui->developer_host_selected = ui->developer_host_count;
+}
+
+const char *cp0_ui_selected_developer_fingerprint(const struct cp0_ui *ui)
+{
+    if (ui == NULL || ui->developer_revoke_all ||
+        ui->developer_host_selected >= ui->developer_host_count)
+        return NULL;
+    return ui->developer_host_fingerprints[ui->developer_host_selected];
 }
 
 void cp0_ui_set_auto_update(
@@ -4493,6 +4616,8 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     if (action == CP0_UI_GO_HOME) {
         ui->power_dialog = false;
         ui->settings_confirm = false;
+        ui->developer_hosts_view = false;
+        ui->developer_revoke_confirm = false;
         ui->store_detail = false;
         ui->app_detail = false;
         ui->settings_detail = false;
@@ -4502,12 +4627,15 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     if (action == CP0_UI_SHOW_TASKS) {
         ui->power_dialog = false;
         ui->settings_confirm = false;
+        ui->developer_hosts_view = false;
+        ui->developer_revoke_confirm = false;
         ui->screen = CP0_UI_TASKS;
         ui->task_action_selected = 0;
         return CP0_UI_EVENT_NONE;
     }
     if (action == CP0_UI_SHOW_POWER) {
         ui->settings_confirm = false;
+        ui->developer_revoke_confirm = false;
         ui->power_dialog = true;
         ui->dialog_selected = 0;
         return CP0_UI_EVENT_NONE;
@@ -4569,6 +4697,24 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         return CP0_UI_EVENT_NONE;
     }
 
+    if (ui->developer_revoke_confirm) {
+        if (action == CP0_UI_LEFT)
+            ui->dialog_selected = 0;
+        else if (action == CP0_UI_RIGHT)
+            ui->dialog_selected = 1;
+        else if (action == CP0_UI_BACK)
+            ui->developer_revoke_confirm = false;
+        else if (action == CP0_UI_ACCEPT) {
+            unsigned int selected = ui->dialog_selected;
+            bool revoke_all = ui->developer_revoke_all;
+            ui->developer_revoke_confirm = false;
+            if (selected == 0)
+                return revoke_all ? CP0_UI_EVENT_DEVELOPER_UNPAIR_ALL
+                                  : CP0_UI_EVENT_DEVELOPER_UNPAIR;
+        }
+        return CP0_UI_EVENT_NONE;
+    }
+
     if (action == CP0_UI_BACK) {
         if (ui->screen == CP0_UI_APPS && ui->app_detail) {
             ui->app_detail = false;
@@ -4602,6 +4748,10 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             return CP0_UI_EVENT_NONE;
         }
         if (ui->screen == CP0_UI_SETTINGS && ui->settings_detail) {
+            if (ui->developer_hosts_view) {
+                ui->developer_hosts_view = false;
+                return CP0_UI_EVENT_NONE;
+            }
             ui->settings_detail = false;
             return CP0_UI_EVENT_NONE;
         }
@@ -4963,6 +5113,21 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     }
 
     if (ui->screen == CP0_UI_SETTINGS) {
+        if (ui->developer_hosts_view) {
+            unsigned int count = ui->developer_host_count + 1U;
+            if (action == CP0_UI_UP && ui->developer_host_selected > 0)
+                ui->developer_host_selected--;
+            else if (action == CP0_UI_DOWN &&
+                     ui->developer_host_selected + 1U < count)
+                ui->developer_host_selected++;
+            else if (action == CP0_UI_ACCEPT) {
+                ui->developer_revoke_all =
+                    ui->developer_host_selected == ui->developer_host_count;
+                ui->developer_revoke_confirm = true;
+                ui->dialog_selected = 1;
+            }
+            return CP0_UI_EVENT_NONE;
+        }
         if (ui->settings_detail) {
             unsigned int count = settings_item_count(ui->settings_selected);
             unsigned int item = ui->settings_item_selected;
@@ -5109,9 +5274,18 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 ui->screen = CP0_UI_DEVICE;
                 ui->device_page = item == 0 ? 0 : 3;
                 ui->settings_detail = false;
-            } else if (ui->settings_selected == 7 && (item == 1 || item == 2) &&
+            } else if (ui->settings_selected == 7 && item == 2 &&
+                       action == CP0_UI_ACCEPT && ui->developer_mode &&
+                       ui->developer_access_available) {
+                return CP0_UI_EVENT_DEVELOPER_OPEN_PAIRING;
+            } else if (ui->settings_selected == 7 && item == 3 &&
+                       action == CP0_UI_ACCEPT && ui->developer_mode &&
+                       ui->developer_access_available) {
+                ui->developer_hosts_view = true;
+                ui->developer_host_selected = 0;
+            } else if (ui->settings_selected == 7 && (item == 1 || item == 4) &&
                        action == CP0_UI_ACCEPT) {
-                bool recovery = item == 2;
+                bool recovery = item == 4;
                 bool allowed = recovery ? ui->recovery_mode_allowed
                                         : ui->developer_mode_allowed;
                 bool enabled = recovery ? ui->recovery_mode : ui->developer_mode;
@@ -5201,7 +5375,8 @@ void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
     if (ui->setup_active)
         goto apply_theme;
     if (ui->notification_banner && !ui->power_dialog &&
-        !ui->settings_confirm && !ui->permission_prompt &&
+        !ui->settings_confirm && !ui->developer_revoke_confirm &&
+        !ui->permission_prompt &&
         !ui->document_prompt && !ui->store_install_prompt)
         draw_notification_banner(&canvas, ui);
     if (ui->power_dialog)
@@ -5210,6 +5385,8 @@ void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
         draw_uninstall_confirm(&canvas, ui);
     else if (ui->settings_confirm)
         draw_settings_confirm(&canvas, ui);
+    else if (ui->developer_revoke_confirm)
+        draw_developer_revoke_confirm(&canvas, ui);
     if (ui->permission_prompt)
         draw_permission_dialog(&canvas, ui);
     else if (ui->document_prompt)

@@ -36,6 +36,8 @@ install -D -m 0755 "${payload}/cp0-connectivityd" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-connectivityd"
 install -D -m 0755 "${payload}/cp0-displayd" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-displayd"
+install -D -m 0755 "${payload}/cp0-devd" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-devd"
 install -D -m 0755 "${payload}/cp0-gpiod" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-gpiod"
 install -D -m 0755 "${payload}/cp0-radiod" \
@@ -54,6 +56,10 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-appd.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-appd.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-appd.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-appd.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-devd.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-devd.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-devd.socket" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-devd.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-broker.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-broker.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-networkd.service" \
@@ -88,6 +94,19 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-ssh-gate.conf" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/ssh.service.d/cardputerzero-gate.conf"
 install -D -m 0600 "${payload}/systemd/cardputerzero-sshd.conf" \
     "${ROOTFS_DIR}/etc/ssh/sshd_config.d/40-cardputerzero-owner.conf"
+install -D -m 0755 "${payload}/systemd/cardputerzero-owner-shell" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/owner-shell"
+install -D -m 0755 "${payload}/systemd/cardputerzero-ssh-access-allowed" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/ssh-access-allowed"
+install -D -m 0755 "${payload}/systemd/cardputerzero-ssh-access-refresh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/ssh-access-refresh"
+install -D -m 0644 "${payload}/systemd/cardputerzero-ssh-access-refresh.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-ssh-access-refresh.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-ssh-access.path" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-ssh-access.path"
+if ! grep -qx '/usr/libexec/cardputerzero/owner-shell' "${ROOTFS_DIR}/etc/shells"; then
+    printf '%s\n' '/usr/libexec/cardputerzero/owner-shell' >>"${ROOTFS_DIR}/etc/shells"
+fi
 install -D -m 0644 "${payload}/systemd/cardputerzero-displayd.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-displayd.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-displayd.socket" \
@@ -127,7 +146,9 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-store.conf" \
 install -d -o root -g root -m 0755 \
     "${ROOTFS_DIR}/etc/cardputerzero/trust/store" \
     "${ROOTFS_DIR}/etc/cardputerzero/trust/developers" \
-    "${ROOTFS_DIR}/etc/cardputerzero/trust/revoked"
+    "${ROOTFS_DIR}/etc/cardputerzero/trust/revoked" \
+    "${ROOTFS_DIR}/etc/cardputerzero/authorized_keys" \
+    "${ROOTFS_DIR}/var/lib/cardputerzero/developer"
 for store_key in "${payload}"/trust/store/*.pub; do
     if [ -f "$store_key" ] && [ ! -L "$store_key" ]; then
         install -o root -g root -m 0644 "$store_key" \
@@ -355,6 +376,7 @@ CHROOT
     on_chroot <<'CHROOT'
 set -e
 systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
+    cardputerzero-devd.socket cardputerzero-ssh-access.path \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
     cardputerzero-audiod.socket cardputerzero-camerad.socket \
     cardputerzero-connectivityd.socket cardputerzero-displayd.socket \
@@ -367,6 +389,8 @@ else
 set -e
 systemctl mask cardputerzero-appd.service \
     cardputerzero-appd.socket cardputerzero-broker.socket \
+    cardputerzero-devd.service cardputerzero-devd.socket \
+    cardputerzero-ssh-access.path cardputerzero-ssh-access-refresh.service \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
     cardputerzero-audiod.socket cardputerzero-camerad.socket \
     cardputerzero-connectivityd.service cardputerzero-connectivityd.socket \

@@ -40,7 +40,7 @@ expect_rejected \
 jq -e \
     '.schema_version == 1 and
      .authority == "personal" and
-     .developer_mode_allowed == false and
+     .developer_mode_allowed == true and
      .recovery_mode_allowed == false and
      .store_install_allowed == true' \
     "$policy" >/dev/null
@@ -134,6 +134,9 @@ grep -Fq 'production image enables SSH before owner consent' "$verifier"
 grep -Fq 'production image preauthorizes maintenance access' "$verifier"
 grep -Fq 'production image contains pre-Setup remote access' "$verifier"
 grep -Fq 'production access unit is not masked' "$verifier"
-grep -Fq '.developer_mode_allowed == false' "$verifier"
+grep -Fq '.developer_mode_allowed == true' "$verifier"
+grep -Fq 'cardputerzero-devd.socket cardputerzero-ssh-access.path' "$platform"
+grep -Fq '/usr/libexec/cardputerzero/owner-shell' "$platform"
+grep -Fq 'cp0-developer-access' "$repo_root/crates/cp0-provisiond/src/lib.rs"
 
 bash -n "$build" "$bsp" "$platform" "$verifier"

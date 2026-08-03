@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+if /usr/libexec/cardputerzero/ssh-access-allowed; then
+    exec /usr/bin/systemctl start ssh.service
+fi
+exec /usr/bin/systemctl stop ssh.service

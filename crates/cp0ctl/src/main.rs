@@ -40,6 +40,12 @@ fn main() -> ExitCode {
         [key, command, secret, public] if key == "key" && command == "generate" => {
             package::generate_key(secret, public)
         }
+        [command, developer_public, ssh_public, host_label, flag, device]
+            if command == "pair" && flag == "--device" =>
+        {
+            remote::pair(developer_public, ssh_public, host_label, device)
+        }
+        [command] if command == "dev-session" => remote::session(),
         [command, project] if command == "package" => {
             package::default_package_path(project).and_then(|output| {
                 package::package_project(project, &output.to_string_lossy())
@@ -194,10 +200,25 @@ fn main() -> ExitCode {
                 app_id: app_id.clone(),
             })
         }
+        [app, command, app_id, flag, device]
+            if app == "app" && command == "start" && flag == "--device" =>
+        {
+            remote::start(device, app_id)
+        }
         [app, command, app_id] if app == "app" && command == "stop" => {
             send_app_command(AppdCommand::Stop {
                 app_id: app_id.clone(),
             })
+        }
+        [app, command, app_id, flag, device]
+            if app == "app" && command == "stop" && flag == "--device" =>
+        {
+            remote::stop(device, app_id)
+        }
+        [app, command, app_id, flag, device]
+            if app == "app" && command == "uninstall" && flag == "--device" =>
+        {
+            remote::uninstall(device, app_id)
         }
         [app, command, app_id] if app == "app" && command == "rollback" => {
             send_app_command(AppdCommand::Rollback {
@@ -206,6 +227,11 @@ fn main() -> ExitCode {
         }
         [device, command] if device == "device" && command == "status" => {
             send_app_command(AppdCommand::GetDeviceSettings)
+        }
+        [device, command, flag, target]
+            if device == "device" && command == "remote-status" && flag == "--device" =>
+        {
+            remote::status(target)
         }
         [device, mode, enabled] if device == "device" => parse_device_mode(mode).and_then(|mode| {
             parse_enabled(enabled).and_then(|enabled| {
@@ -244,7 +270,7 @@ fn main() -> ExitCode {
             })
         }
         _ => Err(
-            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--media-actions comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | store validate <developer-signed.capp> <store/listing.json> | store submit <developer-signed.capp> <store/listing.json> | store publish <submissions-dir> <reviews-dir> <output-dir> <base-url> <sequence> <published-unix> <expires-unix> <store-secret-key> | store list | store browse <all|category> [offset limit] | store search <query> [offset limit] | store refresh | store metrics | store install <app-id> --approve-permissions | store install-batch --approve-permissions <app-id>... | store pause|resume|cancel <app-id> | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> | app stop <app-id> | app rollback <app-id> | device status | device <developer|recovery> <on|off> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
+            "usage: cp0ctl new <directory> <app-id> <display-name> | build <directory> | run <directory> [--duration ms] [--permissions allow|deny] [--keys comma-list] [--media-actions comma-list] [--output frame.ppm] [--profile profile.json] | package <directory> [output.capp] | key generate <secret-key> <public-key> | sign <developer|store> <input.capp> <output.capp> <secret-key> | verify <package.capp> [store-public-key] | pair <developer-public-key> <ssh-public-key> <host-label> --device owner@host | store validate <developer-signed.capp> <store/listing.json> | store submit <developer-signed.capp> <store/listing.json> | store publish <submissions-dir> <reviews-dir> <output-dir> <base-url> <sequence> <published-unix> <expires-unix> <store-secret-key> | store list | store browse <all|category> [offset limit] | store search <query> [offset limit] | store refresh | store metrics | store install <app-id> --approve-permissions | store install-batch --approve-permissions <app-id>... | store pause|resume|cancel <app-id> | install <package.capp> [--device user@host] | logs <app-id> [lines] [--device user@host] | manifest validate <app.json> | app ping | app list [offset limit] | app start <app-id> [--device user@host] | app stop <app-id> [--device user@host] | app uninstall <app-id> --device user@host | app rollback <app-id> | device status | device remote-status --device user@host | device <developer|recovery> <on|off> | permission pending | permission resolve <prompt-id> <once|always|deny> | permission reset <app-id> <capability> | notification take | broker notify <title> <body>"
                 .into(),
         ),
     };

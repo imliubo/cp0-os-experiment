@@ -40,6 +40,7 @@ check: fmt
 	./tests/test-recovery-image-profile.sh
 	./tests/test-production-access-profile.sh
 	./tests/test-setup-ssh-boundary.sh
+	./tests/test-developer-access.sh
 	./tests/test-os-update-profile.sh
 	./tests/test-recovery-data.sh
 	./tests/test-compositor-profile.sh

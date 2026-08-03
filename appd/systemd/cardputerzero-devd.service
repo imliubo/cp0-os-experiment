@@ -1,0 +1,40 @@
+[Unit]
+Description=CardputerZero constrained developer access service
+Requires=cardputerzero-devd.socket cardputerzero-appd.socket
+After=cardputerzero-devd.socket cardputerzero-appd.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/cardputerzero/cp0-devd serve
+User=root
+Group=root
+UMask=0077
+Restart=on-failure
+RestartSec=500ms
+TimeoutStopSec=5
+MemoryMax=12M
+MemorySwapMax=0
+TasksMax=8
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/cardputerzero/trust/developers /etc/cardputerzero/authorized_keys /var/lib/cardputerzero/developer /run/cardputerzero-appd /run/cardputerzero-devd
+ProtectHome=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

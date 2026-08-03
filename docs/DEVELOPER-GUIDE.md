@@ -123,18 +123,28 @@ cargo run -p cp0ctl -- install /tmp/my-clock.developer.capp \
   --device OWNER@DEVICE_IP
 ```
 
-Device installation succeeds only when the developer key is trusted and the
-device has explicitly enabled developer mode. The mode can be inspected with
-`sudo cp0ctl device status` and changed locally with `sudo cp0ctl device developer
-on|off`, unless parent or organization policy locks it. Store distribution adds
-an independent store review signature. Trust and device policy configuration
-is root-owned and is never writable by an application.
+Device installation succeeds only when the developer key is paired and the
+device has explicitly enabled Developer Mode. On a personal production device,
+open **Settings > Security > Developer Mode**, select **Pair New Computer**,
+then register the workstation's developer and SSH public keys during the
+ten-minute window:
+
+```sh
+cp0ctl pair developer.pub ~/.ssh/cardputerzero_ed25519.pub workstation \
+  --device OWNER@DEVICE_IP
+```
+
+Developer Mode exposes only the bounded `cp0ctl` deployment channel. It does
+not enable an interactive SSH shell, root, sudo, native packages or unsigned
+Apps. Parent or organization policy may lock the setting. Store distribution
+adds an independent store review signature. See `DEVELOPER-ACCESS.md` for the
+complete trust and revocation boundary.
 
 Product images contain no fixed `pi` account, password or address. First-boot
-Setup must be complete, and the owner must explicitly enable SSH before remote
-installation or logs can work. Use the owner-selected username and the IP shown
-by trusted Setup/Network UI; never embed test-device credentials in an App or
-distribution script.
+Setup must be complete. Developer Mode starts the constrained SSH transport;
+the independent **Owner SSH Shell** setting may remain Off. Use the
+owner-selected username and the IP shown by trusted Setup/Network UI; never
+embed test-device credentials in an App or distribution script.
 
 Store submission uses the developer-signed package, not an unsigned build and
 not a package that already has a store signature. Review metadata must bind the

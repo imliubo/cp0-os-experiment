@@ -198,6 +198,15 @@ root-owned `device-policy.json` 为家长/组织管理提供本地策略上限�
 `sudo cp0ctl device recovery off` 关闭。详细配置和恢复步骤见
 `docs/PHASE5C-DEVICE-POLICY.md`。
 
+个人 production 设备允许 Owner 在 trusted System Shell 物理开启 Developer Mode，
+但该模式只启动受限部署通道，不提供 Linux 管理权限。新电脑必须在单独的 10 分钟
+`PAIR NEW COMPUTER` 窗口中登记 Ed25519 SSH 公钥和 32 字节开发者签名公钥；最多保留
+8 台。后续 SSH key 固定带 `restrict` 与 `cp0ctl dev-session` forced command，安装、
+日志和生命周期请求由 root `cp0-devd` 重新检查 policy、Developer Mode、签名与配对
+关系后代理到 appd。System Shell 可单个或全部撤销，最后一个引用移除时同步删除开发者
+信任 key。完整 Owner SSH Shell 是独立 marker、默认关闭，开启后仍无 sudo/root；
+Developer Mode 不会隐式开启它。详见 `docs/DEVELOPER-ACCESS.md`。
+
 ## 8. 512 MB 内存预算
 
 | 模块 | 目标上限 |
@@ -258,15 +267,18 @@ LCD 启动摘要、网络和 SSH。恢复启动不会自动扩容、挂载或绑
 group 和 UID residue 一起删除；首次开机由 trusted System Shell 独占 320x170 Setup，
 通过精确 `SO_PEERCRED` Shell UID 认证的 `SOCK_SEQPACKET` 协议调用 root
 `cp0-provisiond`。Owner 固定 UID 1000、默认无 sudo，身份数据库和 home 位于
-`cp0-data-layout-v2`，SSH 只有 complete 与 owner 明示 marker 同时存在才启动。
+`cp0-data-layout-v2`。SSH 只有 Setup complete 且 Owner SSH Shell 或 Developer Mode
+任一 root marker 存在时才启动，登录 dispatcher 再按 `cp0-ssh` 登录组将会话限制为 Bash 或
+`cp0-dev`。
 Setup 未完成时 Home、Tasks、普通 App、截图和按键音均不可用；离线选择是有效的持久
 网络决策。详见 `docs/FIRST-BOOT-PROVISIONING.md` 和 ADR 0007。
 
 系统级安全声明由 `docs/THREAT-MODEL.md` 约束：应用隔离不等于抵抗内核、可信原生
 服务或物理 SD 攻击。当前 OverlayFS 是运行期写保护，不是启动完整性机制；开发镜像
-的 SSH/显式密码也不是量产身份方案。`production` access profile 因而拒绝外部密码
-和 SSH key，锁定产品内账户、SSH/getty、Developer Mode 与 Recovery Boot；管理员只
-能通过独立、显式插入的 recovery SD 维护，移除介质即撤销访问。未来 OS 更新采用独立
+的共享 SSH/显式密码也不是量产身份方案。`production` access profile 因而拒绝构建时
+外部密码和 SSH key，锁定 getty 与 Recovery Boot；个人 Owner 可在设备端开启受限
+Developer Mode，并可独立选择默认关闭的无 sudo Owner SSH Shell。root 维护仍只能通过
+独立、显式插入的 recovery SD 完成，移除介质即撤销访问。未来 OS 更新采用独立
 签名根、A/B boot/root、dm-verity 和健康确认后提交。Phase 6H 已实现不接入启动链的
 发布策略、verity 产物校验和三次失败回滚状态机；启动前必须先把递减后的双副本状态
 持久化，启动后只有 compositor、appd 和 `cp0-data` 都健康才能确认新槽。校验和只能

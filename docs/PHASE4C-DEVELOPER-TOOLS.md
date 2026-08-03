@@ -33,29 +33,35 @@ still depends on `.capp` signatures and appd sandbox enforcement.
 
 ## Device install and logs
 
-A local device install is run as root:
+A local maintenance install is still available to root:
 
 ```sh
 sudo cp0ctl install my-app-store.capp
 sudo cp0ctl logs dev.example.my-app 50
 ```
 
-From a PC, `cp0ctl` reuses the system SSH configuration and agent:
+For the normal SDK workflow, enable Developer Mode on the device, open the
+ten-minute **Pair New Computer** window and register a developer signing key
+with an Ed25519 SSH key:
 
 ```sh
-cp0ctl install my-app-store.capp --device pi@cardputerzero.local
-cp0ctl logs dev.example.my-app 50 --device pi@cardputerzero.local
+cp0ctl pair developer.pub ~/.ssh/cardputerzero_ed25519.pub workstation \
+  --device OWNER@DEVICE_IP
+cp0ctl install my-app.developer.capp --device OWNER@DEVICE_IP
+cp0ctl logs dev.example.my-app 50 --device OWNER@DEVICE_IP
 ```
 
-Remote install verifies the developer signature before upload, uses a generated
-constant-format `/tmp` name, invokes the same root device admission path, then
-cleans up the upload. It stores no password and does not add an SSH protocol or
-credential store to the OS SDK.
+Remote install verifies the developer signature before transmission and streams
+the bounded package body through `ssh -T` and `cp0-dev`. The forced-command key
+cannot run a shell, and the transport contains no `scp`, sudo or generic upload
+fallback. `cp0-devd` checks Developer Mode and policy on every request, verifies
+that the package signing key remains paired, stages it in a root-only runtime
+directory and invokes the same appd admission path.
 
 Logs are resolved by appd from the root-owned registry to the stable systemd
-unit. The caller cannot supply an arbitrary unit. Only root can request them;
-the result is limited to 100 lines, 256 characters per line and a bounded JSON
-frame, with control characters removed.
+unit. The caller cannot supply an arbitrary unit. The result is limited to 100
+lines, 256 characters per line and a bounded JSON frame, with control characters
+removed. Pairing and revocation are described in `DEVELOPER-ACCESS.md`.
 
 `tests/test-simulator.sh` builds and runs Hello Card with allowed camera, GPIO
 and storage input, then checks the PPM header and profile counters. CLI tests

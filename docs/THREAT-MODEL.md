@@ -66,6 +66,8 @@ applications and application-owned data are untrusted.
 | BOOT-01 | SD attacker replaces kernel/initramfs/root | OverlayFS limits runtime writes only | OverlayFS is not an integrity control; verified boot and dm-verity remain release blockers |
 | UPDATE-01 | Interrupted or malicious OS update bricks device | no remote OS updater is enabled | Adopt the signed A/B design in ADR 0006 only after boot-chain hardware validation |
 | MGMT-01 | Shared development credential or fixed human identity exposes SSH/sudo | product rootfs removes the pi-gen account, trusted Setup creates one owner in persistent extrausers, sudo stays absent and SSH is explicit marker-controlled opt-in | Fresh-media image inspection and V0.6 SSH deny/allow testing remain release gates; physical SD access can still rewrite unencrypted owner data |
+| DEV-01 | Developer Mode becomes an unrestricted remote shell | sshd owner dispatcher, forced-command paired keys, forwarding disabled, per-request mode/policy checks, no sudo/root and independent `cp0-ssh` Owner Shell group | Real OpenSSH argv/environment behavior and disconnect-on-mode-off require V0.6 acceptance |
+| DEV-02 | Unauthorized computer or signing key installs an App | physical ten-minute pairing window, owner password, Ed25519 SSH key, paired developer key, signed `.capp`, root registry and appd revalidation | A compromised owner password or trusted native service can authorize a host; physical SD access can rewrite unencrypted pairing state |
 | SUPPLY-01 | Dependency/build compromise | pinned BSP/pi-gen revisions, locked Rust dependencies and image gates | Reproducible build comparison, SBOM signing and independent review remain open |
 
 ## Release gates
@@ -94,7 +96,8 @@ development image passes functional tests:
 ## Verification mapping
 
 - `make check` covers schema, protocol, package, sandbox, permission, malicious
-  application, recovery and static image-policy tests.
+  application, recovery, Developer Mode pairing/revocation and static
+  image-policy tests.
 - `make fuzz-check` compiles all libFuzzer targets with nightly Rust.
 - `make fuzz-smoke` runs bounded AddressSanitizer campaigns for manifest,
   package, Store, appd control and recovery inputs.

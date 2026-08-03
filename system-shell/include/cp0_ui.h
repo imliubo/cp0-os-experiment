@@ -47,6 +47,9 @@
 #define CP0_UI_SETUP_WIFI_MAX 24
 #define CP0_UI_SETUP_ERROR_MAX 160
 #define CP0_UI_SETUP_IPV4_MAX 15
+#define CP0_UI_MAX_DEVELOPER_HOSTS 8
+#define CP0_UI_DEVELOPER_LABEL_MAX 32
+#define CP0_UI_DEVELOPER_FINGERPRINT_MAX 50
 
 enum cp0_ui_screen {
     CP0_UI_HOME,
@@ -105,6 +108,9 @@ enum cp0_ui_event {
     CP0_UI_EVENT_STORE_INSTALL_CONFIRM,
     CP0_UI_EVENT_DEVELOPER_ENABLE,
     CP0_UI_EVENT_DEVELOPER_DISABLE,
+    CP0_UI_EVENT_DEVELOPER_OPEN_PAIRING,
+    CP0_UI_EVENT_DEVELOPER_UNPAIR,
+    CP0_UI_EVENT_DEVELOPER_UNPAIR_ALL,
     CP0_UI_EVENT_RECOVERY_ENABLE,
     CP0_UI_EVENT_RECOVERY_DISABLE,
     CP0_UI_EVENT_AUTO_UPDATE_ENABLE,
@@ -375,6 +381,11 @@ struct cp0_ui_document {
     char name[CP0_UI_DOCUMENT_NAME_MAX + 1];
 };
 
+struct cp0_ui_developer_host {
+    const char *label;
+    const char *ssh_fingerprint;
+};
+
 struct cp0_ui {
     bool setup_active;
     bool setup_show_password;
@@ -472,6 +483,17 @@ struct cp0_ui {
     bool settings_confirm;
     bool settings_confirm_recovery;
     bool settings_confirm_metrics;
+    bool developer_hosts_view;
+    bool developer_revoke_confirm;
+    bool developer_revoke_all;
+    bool developer_access_available;
+    bool developer_pairing_open;
+    unsigned int developer_host_selected;
+    unsigned int developer_host_count;
+    char developer_host_labels[CP0_UI_MAX_DEVELOPER_HOSTS]
+                              [CP0_UI_DEVELOPER_LABEL_MAX + 1];
+    char developer_host_fingerprints[CP0_UI_MAX_DEVELOPER_HOSTS]
+                                    [CP0_UI_DEVELOPER_FINGERPRINT_MAX + 1];
     bool store_install_prompt;
     enum cp0_ui_store_preflight_error store_preflight_error;
     uint8_t store_preflight_app_count;
@@ -643,6 +665,10 @@ void cp0_ui_set_device_settings(
     bool developer_mode, bool developer_mode_allowed, bool recovery_mode,
     bool recovery_mode_allowed, bool store_install_allowed,
     bool app_launch_restricted, uint8_t denied_permission_count);
+void cp0_ui_set_developer_access(
+    struct cp0_ui *ui, bool pairing_open,
+    const struct cp0_ui_developer_host *hosts, size_t host_count);
+const char *cp0_ui_selected_developer_fingerprint(const struct cp0_ui *ui);
 void cp0_ui_set_auto_update(
     struct cp0_ui *ui, bool available, bool enabled, bool policy_allowed,
     bool charging, bool unmetered_network, bool due, bool checking);

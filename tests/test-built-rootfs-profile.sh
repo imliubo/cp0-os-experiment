@@ -38,6 +38,7 @@ required_executables=(
     usr/libexec/cardputerzero/cp0-audiod
     usr/libexec/cardputerzero/cp0-camerad
     usr/libexec/cardputerzero/cp0-documentd
+    usr/libexec/cardputerzero/cp0-devd
     usr/libexec/cardputerzero/cp0-gpiod
     usr/libexec/cardputerzero/cp0-networkd
     usr/libexec/cardputerzero/cp0-provisiond
@@ -133,6 +134,7 @@ if [[ $image_profile == product ]]; then
         sockets.target.wants/cardputerzero-broker.socket
         sockets.target.wants/cardputerzero-camerad.socket
         sockets.target.wants/cardputerzero-documentd.socket
+        sockets.target.wants/cardputerzero-devd.socket
         sockets.target.wants/cardputerzero-gpiod.socket
         sockets.target.wants/cardputerzero-networkd.socket
         sockets.target.wants/cardputerzero-provisiond.socket
@@ -140,6 +142,7 @@ if [[ $image_profile == product ]]; then
         sockets.target.wants/cardputerzero-radiod.socket
         sockets.target.wants/cardputerzero-storaged.socket
         sockets.target.wants/cardputerzero-stored.socket
+        multi-user.target.wants/cardputerzero-ssh-access.path
     )
 fi
 for path in "${enabled_units[@]}"; do
@@ -198,9 +201,13 @@ if [[ $access_profile == production ]]; then
     test -x "$rootfs/usr/lib/systemd/system-generators/cardputerzero-ssh-generator"
     grep -qx 'ConditionPathExists=/var/lib/cardputerzero/provisioning/complete' \
         "$rootfs/usr/lib/systemd/system/ssh.service.d/cardputerzero-gate.conf"
-    grep -qx 'ConditionPathExists=/var/lib/cardputerzero/provisioning/ssh-enabled' \
+    grep -qx 'ExecCondition=/usr/libexec/cardputerzero/ssh-access-allowed' \
         "$rootfs/usr/lib/systemd/system/ssh.service.d/cardputerzero-gate.conf"
-    grep -qx 'AllowGroups cp0-ssh' \
+    grep -qx 'AllowGroups cp0-ssh cp0-developer-access' \
+        "$rootfs/etc/ssh/sshd_config.d/40-cardputerzero-owner.conf"
+    grep -qx 'AuthorizedKeysFile /etc/cardputerzero/authorized_keys/%u' \
+        "$rootfs/etc/ssh/sshd_config.d/40-cardputerzero-owner.conf"
+    grep -qx 'DisableForwarding yes' \
         "$rootfs/etc/ssh/sshd_config.d/40-cardputerzero-owner.conf"
     grep -qx 'ProtectHome=no' \
         "$rootfs/usr/lib/systemd/system/cardputerzero-provisiond.service"
@@ -233,7 +240,7 @@ if [[ $access_profile == production ]]; then
         exit 1
     fi
     chroot "$rootfs" /usr/bin/jq -e \
-        '.developer_mode_allowed == false and .recovery_mode_allowed == false' \
+        '.developer_mode_allowed == true and .recovery_mode_allowed == false' \
         /etc/cardputerzero/device-policy.json >/dev/null
 elif [[ ! -L $rootfs/etc/systemd/system/multi-user.target.wants/ssh.service ]]; then
     echo "error: development access does not enable SSH" >&2
@@ -270,6 +277,10 @@ if [[ $image_profile == recovery ]]; then
         cardputerzero-broker.socket
         cardputerzero-camerad.socket
         cardputerzero-documentd.socket
+        cardputerzero-devd.service
+        cardputerzero-devd.socket
+        cardputerzero-ssh-access.path
+        cardputerzero-ssh-access-refresh.service
         cardputerzero-gpiod.socket
         cardputerzero-networkd.socket
         cardputerzero-radiod.socket

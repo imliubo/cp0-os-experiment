@@ -391,6 +391,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp0-devd"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "cp0-appd",
+ "cp0-manifest",
+ "cp0-package",
+ "cp0-provision-protocol",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "cp0-display-protocol"
 version = "0.1.0"
 dependencies = [
@@ -755,6 +770,7 @@ name = "cp0ctl"
 version = "0.1.0"
 dependencies = [
  "cp0-appd",
+ "cp0-devd",
  "cp0-manifest",
  "cp0-package",
  "cp0-store-metadata",
