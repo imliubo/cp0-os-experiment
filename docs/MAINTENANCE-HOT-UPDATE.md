@@ -75,6 +75,10 @@ daemon, replaces both files in the volatile root overlay, restarts the daemon
 socket and Shell, and checks that both units remain active. A failed activation
 restores both binaries and restarts the previous version.
 
+The `/run` filesystem remains mounted `noexec`. Staged artifacts are validated
+as non-empty, root-owned regular files with mode `0700`, then copied into the
+executable volatile overlay; the update path does not weaken the runtime mount.
+
 The update lasts only for the current boot because the production root overlay
 is RAM-backed. This is deliberate: a tested fix must still enter source
 control, pass the full host and mounted-image gates, and be delivered in a new

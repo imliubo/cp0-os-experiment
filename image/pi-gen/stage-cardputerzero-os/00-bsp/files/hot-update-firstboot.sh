@@ -9,7 +9,9 @@ installed_provisiond=/usr/libexec/cardputerzero/cp0-provisiond
 installed_shell=/usr/bin/cardputerzero-system-shell
 
 for artifact in "$provisiond" "$system_shell"; do
-    [ -f "$artifact" ] && [ ! -L "$artifact" ] && [ -x "$artifact" ] || {
+    metadata=$(stat -c '%u:%g:%a' "$artifact" 2>/dev/null || true)
+    [ -f "$artifact" ] && [ ! -L "$artifact" ] && [ -s "$artifact" ] &&
+        [ "$metadata" = 0:0:700 ] || {
         echo "cardputerzero-hot-update: invalid artifact: $artifact" >&2
         exit 1
     }

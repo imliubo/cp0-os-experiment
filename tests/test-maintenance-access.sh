@@ -88,6 +88,11 @@ grep -q '^avahi-daemon$' \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/00-packages-nr"
 grep -q 'hot-update-firstboot.sh' "$repo_root/scripts/device-hot-update-firstboot.sh"
 grep -q 'activation failed; restoring previous binaries' "$hot_update"
+grep -q "stat -c '%u:%g:%a'" "$hot_update"
+if grep -q '\[ -x "\$artifact" \]' "$hot_update"; then
+    echo "error: noexec runtime artifacts are still checked with test -x" >&2
+    exit 1
+fi
 
 for script in "$prepare" "$hot_update" \
     "$repo_root/scripts/enable-maintenance-ssh.sh" \
