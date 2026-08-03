@@ -213,6 +213,24 @@ Shell 和其他应用数据。
   镜像门禁，不向 Shell 或应用授予通用 systemd 权限。
 - [ ] Phase 6K-B：在 V0.6 新 product 镜像从确认 UI 分别验证正常重启、新 boot ID、
   返回 Home，以及完整关机后只能通过物理上电恢复。
+- [x] Phase 6L-A：冻结单前台/十 task、FIFO 容量淘汰、MRU 切换、五态生命周期和
+  checkpoint/resource 安全边界；实现 appd protocol v2、多 session 状态机、F3 卡片
+  模拟 UI、SDK lifecycle ABI 及随机模型测试。
+- [x] Phase 6L-B：把多任务候选整合到最新 main，保留首次开机、Developer Access、
+  Store 和 cp0-powerd 行为；关闭 UI 64 KiB 超限、非驻留 task 包变更及旧 surface
+  token 三项合入回归，并形成 `MULTITASKING-MERGE-REPORT.md`。
+- [ ] Phase 6L-C：接线原子 TaskJournal、appd 重启 reconciliation、Runtime 认证控制
+  socket 与 compositor `(task_id, runtime_generation)` surface 绑定；故障时保持可信
+  Shell，不得按 app-id 或 UID 猜测代际。
+- [ ] Phase 6L-D：实现 compositor 密封 RGB565 缩略图、2 Hz 限频和 Shell 只读接收，
+  完成 0/1/3/10 task 像素、旧代际、伪造身份和内存上限测试。
+- [ ] Phase 6L-E：接入 WAMR 8 KiB/250 ms/fuel-bounded checkpoint/restore、私有 broker
+  namespace、第 11 App FIFO 淘汰及升级版本兼容策略；无回调 App 必须 clean restart。
+- [ ] Phase 6L-F：在 CM0 测量 1/3/10 App 的 RSS、CPU、SPI、SD 写入和切换延迟，确定
+  background/freeze/checkpoint 阈值并验证前台能力租约撤销。
+- [ ] Phase 6L-G：经授权部署同版本 appd/Shell/compositor/Runtime bundle，正常重启后
+  验证 F3、Intent、开发者安装/停止/卸载、11th-App、appd 重启和断电恢复；通过后才
+  进入新镜像发布验收。
 - [x] 实现不接入当前启动链的 OS 发布元数据策略、rootfs/hash tree/FIT 摘要门禁、
   dm-verity 离线验证、三次启动回滚状态机、双副本撕裂写检测和 100 轮断电模型；
   RAUC CMS、签名 FIT 与硬件信任根仍是独立启用门禁。

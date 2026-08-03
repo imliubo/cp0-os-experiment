@@ -63,6 +63,12 @@ Left/Right changes bounded values only when a row is editable.
 
 - Per-app version, install time, package bytes, private-data bytes, display
   mode, lifecycle state and declared permissions.
+- F3 Tasks keeps one foreground view while presenting at most ten horizontally
+  stacked 160x85 cards. Left/Right selects, Enter activates, Up closes and
+  Esc/Home returns to the trusted Home surface.
+- Task cards are ordered by most recent activation, while capacity eviction is
+  strict creation-order FIFO. A checkpointed or crashed task remains an active
+  logical task and blocks package replacement until explicitly closed.
 - Launch/resume, stop, permission reset and uninstall with confirmation.
   Uninstall removes executable package versions and permission decisions while
   retaining private data for a later explicit `Clear data` operation.
@@ -71,6 +77,9 @@ Left/Right changes bounded values only when a row is editable.
 - Notification policy, default intent handlers and camera/microphone/network
   access history need appd-owned audit APIs. The Shell must never inspect
   application-private data to construct these views.
+- Live trusted thumbnails, restore-before-first-frame and background resource
+  pressure behavior stay visibly gated until compositor, Runtime and measured
+  CM0 integration are complete; local placeholder cards are not device proof.
 
 ### System
 

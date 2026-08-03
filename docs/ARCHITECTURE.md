@@ -46,13 +46,14 @@ UID、保留可信系统层并持有全局快捷键。只有在这个受限模�
 
 窗口策略固定如下：
 
-- 同一时间只有一个前台应用 surface；后台应用不渲染；
+- 同一时间只有一个前台应用 surface 和一份键盘焦点；最多保留十个逻辑 task，后台
+  surface 隐藏且不得覆盖可信系统层；
 - 普通模式为 320x150，上方约 20 px 系统状态栏；
 - 沉浸模式使用完整 320x170；
 - 权限、音量、通知和任务切换器由受信任的 System Shell 覆盖显示；
 - 渲染目标为 RGB565、最多 30 FPS，并使用 damage region 降低 SPI 刷屏量。
 
-私有 Shell 协议 v4 将覆盖策略固定为 `full`、`status`、`hidden` 和
+私有 Shell 协议 v7 将覆盖策略固定为 `full`、`status`、`hidden` 和
 `notification`。标准应用在可信 21 px ARGB 状态栏下保持焦点；通知模式显示顶部
 88 px 可信横幅但不转移应用键盘焦点；权限提示会强制切回不透明 `full` 模式。
 沉浸应用只在没有系统覆盖层时使用完整屏幕。全局系统键和显示休眠/唤醒始终由
@@ -60,7 +61,9 @@ compositor 掌握，应用无法拦截或伪造这些状态转换。
 
 Weston 与 System Shell 使用不同 UID。两者仅通过 `cp0-wayland` 组共享 Wayland
 socket；第三方应用不加入该组。可信 Shell 协议以 Wayland peer UID 认证，不能用
-客户端可伪造的 app-id 或 RPC 字符串代替。
+客户端可伪造的 app-id 或 RPC 字符串代替。v7 将 compositor 读取的应用 UID 发送给
+Shell；当前一 App 一 task 的约束使 UID 可以阻止跨应用 surface 替换，但生产版 task
+恢复仍须加入 `(task_id, runtime_generation)` 绑定，不能仅凭 UID 激活旧代际 surface。
 
 ## 5. 应用运行时
 
@@ -69,7 +72,7 @@ socket；第三方应用不加入该组。可信 Shell 协议以 Wayland peer UI
 注册表与 C/Rust 私有导入，并逐项映射回 WIT 公共操作；
 首版不要求设备运行时原生实现 WASM Component Model。
 
-每个运行中的应用由 `appd` 启动到独立沙箱：
+每个驻留 task 由 `appd` 启动到独立沙箱：
 
 - 独立 UID、PID/mount/network namespace 和 cgroup；固定 60% CPU quota 和较低
   CPU weight 防止单核 CM0 被恶意应用完全占用；
@@ -82,8 +85,21 @@ socket；第三方应用不加入该组。可信 Shell 协议以 Wayland peer UI
 System Shell 通过认证后的 appd 控制 socket 获取已安装 manifest 摘要，不从 Wayland
 surface 推断安装状态。Launcher 的 app ID、显示名称和标准/沉浸策略来自 root 控制
 的 manifest；compositor token 只表示一个临时映射 surface。启动由 appd 完成，Shell
-等待两种身份在可信事件中匹配后才激活 token。Home 只隐藏单运行槽，Tasks 可恢复
-或通过 appd 停止它。
+等待两种身份在可信事件中匹配后才激活 token。appd protocol v2 维护最多十个 task、
+一个前台 task、按创建序列执行的 FIFO 容量淘汰和独立的 MRU 切换顺序。F3 Tasks 以
+160x85 卡片选择 task，Enter 激活、Up 关闭；Home 只显示可信 Shell，不销毁前台 task。
+
+每个 App 最多一个 task。存在 task 时，开发者安装、Store 升级、回滚和卸载等非幂等
+包变更必须先显式关闭 task；`is_running()` 为 false 的 checkpointed/crashed task 也
+不能绕过这个门禁。同版本 Store 请求仍可安全重放。Intent 成功写回发送方后激活接收
+方，发送方转入后台而不是被销毁。
+
+当前合入的是 MT0-MT2 模拟与协议基础：多 Runtime session、任务状态机、F3 卡片、
+checkpoint/journal/thumbnail/resource-governor 模型和 SDK lifecycle ABI 已有自动化测试。
+真实 compositor 密封缩略图、Runtime 认证控制通道、WAMR checkpoint/restore 回调、
+appd 启动恢复以及测量后的 CM0 内存压力策略尚未接入启动链。在这些门槛完成前，不得
+把占位缩略图或模型 checkpoint 描述为真机实时恢复能力。详见
+`docs/MULTITASKING-ARCHITECTURE.md`。
 
 App Runtime 在应用线性内存与 Wayland surface 之间传递 RGB565 帧，并转换到
 Weston 的 XRGB8888 SHM buffer。标准应用只能提交 320x150，沉浸应用可提交
@@ -213,6 +229,11 @@ root-owned `device-policy.json` 为家长/组织管理提供本地策略上限�
 信任 key。完整 Owner SSH Shell 是独立 marker、默认关闭，开启后仍无 sudo/root；
 Developer Mode 不会隐式开启它。详见 `docs/DEVELOPER-ACCESS.md`。
 
+该 Developer Mode 通道只安装签名 `.capp` 并代理有界 App 生命周期命令，不允许替换
+appd、System Shell、compositor policy、systemd unit 或系统镜像。因此多任务系统组件
+不能通过开发者通道热更新；真机集成需要一次受控系统 bundle/重启或新镜像，并把三个
+协议端点作为同一版本部署。
+
 ## 8. 512 MB 内存预算
 
 | 模块 | 目标上限 |
@@ -220,11 +241,13 @@ Developer Mode 不会隐式开启它。详见 `docs/DEVELOPER-ACCESS.md`。
 | 内核、systemd 和基础服务 | 100 MB |
 | compositor、Shell、字体和图形缓冲 | 55 MB |
 | appd、权限及硬件代理 | 30 MB |
-| 单个 App Runtime 与应用 | 96 MB |
+| 前台 App Runtime 与应用 | 96 MB |
 | 文件缓存、zram 和突发余量 | 231 MB |
 
-首页空闲常驻内存目标低于 220 MB，应用运行时总使用目标低于 360 MB。超出 manifest
-资源上限的应用由 cgroup 限制并由系统 Shell 报告终止原因。
+首页空闲常驻内存目标低于 220 MB，全部驻留应用运行时总使用目标低于 360 MB。十个
+task 是逻辑上限，不代表允许十份 96 MB Runtime 同时驻留；后台 task 必须按测量后的
+策略降低 CPU 权重、冻结或 checkpoint 后释放进程。超出 manifest 资源上限的应用由
+cgroup 限制并由系统 Shell 报告终止原因。
 
 CM0 固件内存划分固定为 64 MB VideoCore、448 MB ARM，VC4 CMA 固定为 64 MB。
 memory cgroup 必须启用，否则 `appd` 无法执行 manifest 内存上限。

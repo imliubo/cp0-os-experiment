@@ -197,9 +197,9 @@ static uint32_t token_for_account_uid(const struct shell *shell,
 {
     if (account_uid == 0)
         return 0;
-    for (size_t index = 0; index < shell->app_surface_count; index++) {
-        if (shell->app_surfaces[index].account_uid == account_uid)
-            return shell->app_surfaces[index].token;
+    for (size_t index = shell->app_surface_count; index > 0; index--) {
+        if (shell->app_surfaces[index - 1].account_uid == account_uid)
+            return shell->app_surfaces[index - 1].token;
     }
     return 0;
 }

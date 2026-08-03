@@ -188,14 +188,16 @@ checkpoint availability, runtime generation and thumbnail generation. Existing
 `start` remains a Launcher operation: it activates an existing task or creates
 one. Existing `stop` closes the task for compatibility.
 
-The private System Shell Wayland protocol adds trusted task binding and
-thumbnail events. Protocol version negotiation remains strict; image and
-device releases must update appd, Shell and compositor as one bundle.
+Private System Shell Wayland protocol v7 adds the compositor-authenticated App
+UID event used by the simulation slice. Runtime-authenticated task/generation
+binding and sealed thumbnail events remain MT3/MT4 work. Protocol version
+negotiation remains strict; image and device releases must update appd, Shell
+and compositor as one bundle.
 
 ## Simulation implementation status
 
-The `codex/multitasking` branch implements the simulation-first slice without
-deploying it to a device:
+The `codex/multitasking-main-integration` branch integrates the simulation-first
+slice on main without deploying it to a device:
 
 - appd protocol v2 and its C client expose task listing, activation and close;
 - `TaskRegistry` enforces one foreground task, a ten-task bound, independent
@@ -219,6 +221,15 @@ deploying it to a device:
 - the resource governor produces deterministic CPU, freeze, checkpoint/stop and
   lease-revocation plans from an abstract pressure level. No CM0 threshold is
   guessed before measurement.
+- integration with the latest Setup, Developer Access, Store and power UI keeps
+  `struct cp0_ui` below its 64 KiB bound by allocating one fixed 880-byte task
+  table; teardown explicitly releases it;
+- non-idempotent package install, upgrade, rollback and uninstall reject every
+  active logical task, including checkpointed/crashed tasks with no resident
+  process; an exact-version Store replay remains idempotent;
+- when more than one transient surface exists for the same App UID, Shell
+  prefers the most recently announced token. Runtime generation binding is
+  still required before production release.
 
 The task journal, checkpoint envelope, thumbnail cache and governor are model
 components in this phase. Production wiring still needs the authenticated
@@ -265,3 +276,9 @@ No hardware operation is required for this phase. Local acceptance must cover:
 
 Device deployment, service restart and image generation remain out of scope
 until explicitly authorized.
+
+Developer Mode is not a system-component hot-update channel. It can install and
+exercise signed SDK Apps after a compatible multitasking system bundle exists,
+but it cannot replace appd, System Shell, compositor policy or Runtime. Current
+hardware work therefore remains gated on a coordinated bundle/reboot or a new
+image assisted by the device owner.

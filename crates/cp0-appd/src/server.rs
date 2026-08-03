@@ -354,12 +354,13 @@ impl AppdServer {
                 unreachable!("task close returned before state lock")
             }
             AppdCommand::Uninstall { app_id } => {
+                let has_task = task_blocks_package_change(&state.tasks, &app_id);
                 let result = state
                     .manager
                     .is_running(&app_id)
                     .map_err(CommandError::Manager)
                     .and_then(|running| {
-                        if running {
+                        if running || has_task {
                             Err(CommandError::Manager(AppManagerError::AlreadyRunning(
                                 app_id.clone(),
                             )))
@@ -389,14 +390,22 @@ impl AppdServer {
                     }
                 })
             }
-            AppdCommand::Rollback { app_id } => state
-                .manager
-                .rollback(&app_id)
-                .map(|installed| ResponseData::RolledBack {
-                    app_id: installed.app_id,
-                    version: installed.version,
-                })
-                .map_err(CommandError::Manager),
+            AppdCommand::Rollback { app_id } => {
+                if task_blocks_package_change(&state.tasks, &app_id) {
+                    Err(CommandError::Manager(AppManagerError::AlreadyRunning(
+                        app_id,
+                    )))
+                } else {
+                    state
+                        .manager
+                        .rollback(&app_id)
+                        .map(|installed| ResponseData::RolledBack {
+                            app_id: installed.app_id,
+                            version: installed.version,
+                        })
+                        .map_err(CommandError::Manager)
+                }
+            }
             AppdCommand::Logs { app_id, limit } => state
                 .manager
                 .logs(&app_id, limit)
@@ -751,7 +760,8 @@ impl AppdServer {
                 && previous_version.as_deref() == Some(prepared.manifest.version.as_str());
             if already_registered
                 && !idempotent_replay
-                && state.manager.is_running(&prepared.manifest.id)?
+                && (task_blocks_package_change(&state.tasks, &prepared.manifest.id)
+                    || state.manager.is_running(&prepared.manifest.id)?)
             {
                 return Err(AppManagerError::AlreadyRunning(prepared.manifest.id.clone()).into());
             }
@@ -2151,6 +2161,10 @@ fn canonical_store_permissions(
     permissions
 }
 
+fn task_blocks_package_change(tasks: &TaskRegistry, app_id: &str) -> bool {
+    tasks.task_for_app(app_id).is_some()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IntentTargetError {
     NotFound,
@@ -2699,6 +2713,46 @@ mod tests {
         newer.sessions.insert(7, session(false));
         assert_eq!(take_runtime_end(&mut newer, 6), None);
         assert!(newer.sessions.contains_key(&7));
+    }
+
+    #[test]
+    fn checkpointed_task_still_blocks_package_changes() {
+        let mut tasks = TaskRegistry::new(2).unwrap();
+        let first = tasks
+            .launch(
+                "dev.cardputerzero.first",
+                "1.0.0",
+                RuntimeBinding::new(1, "cardputerzero-app-20000.service").unwrap(),
+                None,
+            )
+            .unwrap();
+        tasks
+            .launch(
+                "dev.cardputerzero.second",
+                "1.0.0",
+                RuntimeBinding::new(2, "cardputerzero-app-20001.service").unwrap(),
+                None,
+            )
+            .unwrap();
+        tasks
+            .checkpoint(
+                first.task_id,
+                CheckpointStatus::Available {
+                    schema_version: 1,
+                    bytes: 32,
+                },
+            )
+            .unwrap();
+
+        assert!(task_blocks_package_change(
+            &tasks,
+            "dev.cardputerzero.first"
+        ));
+        tasks.close(first.task_id).unwrap();
+        assert!(!task_blocks_package_change(
+            &tasks,
+            "dev.cardputerzero.first"
+        ));
     }
 
     #[test]
