@@ -2486,6 +2486,14 @@ void cp0_ui_setup_resume(struct cp0_ui *ui, unsigned int phase,
     copy_optional_text(ui->setup_username, sizeof(ui->setup_username),
                        username);
     ui->setup_ssh_enabled = ssh_enabled;
+    if (phase >= 4U) {
+        memset(ui->setup_password, 0, sizeof(ui->setup_password));
+        memset(ui->setup_password_confirm, 0,
+               sizeof(ui->setup_password_confirm));
+    }
+    if (phase >= 5U)
+        memset(ui->setup_wifi_password, 0,
+               sizeof(ui->setup_wifi_password));
 }
 
 void cp0_ui_setup_set_wifi(struct cp0_ui *ui,
@@ -2834,8 +2842,6 @@ static enum cp0_ui_event handle_setup_action(struct cp0_ui *ui,
             return CP0_UI_EVENT_SETUP_LIST_WIFI;
         else if (action == CP0_UI_ACCEPT)
             return CP0_UI_EVENT_SETUP_USE_OFFLINE;
-        else if (action == CP0_UI_BACK)
-            ui->setup_page = CP0_UI_SETUP_PASSWORD;
         break;
     case CP0_UI_SETUP_WIFI_LIST:
         if (action == CP0_UI_UP && ui->setup_wifi_selected > 0)

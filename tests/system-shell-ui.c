@@ -1463,6 +1463,23 @@ int main(int argc, char **argv)
            ui.setup_password_confirm[0] == '\0');
     assert(cp0_ui_handle_action(&ui, CP0_UI_GO_HOME) == CP0_UI_EVENT_NONE);
     assert(ui.setup_page == CP0_UI_SETUP_NETWORK);
+    snprintf(ui.setup_password, sizeof(ui.setup_password), "left-in-memory");
+    snprintf(ui.setup_password_confirm, sizeof(ui.setup_password_confirm),
+             "left-in-memory");
+    cp0_ui_setup_resume(&ui, 4, "cp0-test", "Owner", "owner", false);
+    assert(ui.setup_page == CP0_UI_SETUP_NETWORK);
+    assert(ui.setup_password[0] == '\0' &&
+           ui.setup_password_confirm[0] == '\0');
+    snprintf(ui.setup_wifi_password, sizeof(ui.setup_wifi_password),
+             "wifi-secret");
+    cp0_ui_setup_resume(&ui, 5, "cp0-test", "Owner", "owner", false);
+    assert(ui.setup_page == CP0_UI_SETUP_SSH);
+    assert(ui.setup_wifi_password[0] == '\0');
+    cp0_ui_setup_resume(&ui, 2, "cp0-test", "Owner", "owner", false);
+    assert(ui.setup_page == CP0_UI_SETUP_DISPLAY_NAME);
+    cp0_ui_setup_resume(&ui, 3, "cp0-test", "Owner", "owner", false);
+    assert(ui.setup_page == CP0_UI_SETUP_PASSWORD);
+    cp0_ui_setup_resume(&ui, 4, "cp0-test", "Owner", "owner", false);
     cp0_ui_setup_set_network_status(&ui, true, true, "192.168.20.146", true,
                                     false, NULL);
     assert(ui.setup_network_manager_available && ui.setup_ethernet_connected);

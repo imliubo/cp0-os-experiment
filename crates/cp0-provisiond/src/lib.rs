@@ -899,6 +899,7 @@ impl<B: PlatformBackend> ProvisioningService<B> {
 
     pub fn dispatch(&mut self, request: ProvisioningRequest) -> ProvisioningResponse {
         let request_id = request.request_id;
+        let command_name = command_name(&request.command);
         match self.dispatch_command(request.command) {
             Ok(ProvisioningOutcome::State { mut state }) => {
                 if state.phase >= ProvisioningPhase::Network
@@ -912,7 +913,13 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                 ProvisioningResponse::wifi_list(request_id, networks)
             }
             Ok(ProvisioningOutcome::Error { .. }) => unreachable!(),
-            Err(error) => error_response(request_id, error),
+            Err(error) => {
+                let phase = self.status().ok().map(|state| state.phase);
+                eprintln!(
+                    "cp0-provisiond: command failed: request_id={request_id} command={command_name} phase={phase:?} error={error}"
+                );
+                error_response(request_id, error)
+            }
         }
     }
 
@@ -940,6 +947,21 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                 timezone,
                 hostname,
             } => {
+                let unchanged = state.locale.as_deref() == Some(locale.as_str())
+                    && state.country.as_deref() == Some(country.as_str())
+                    && state.timezone.as_deref() == Some(timezone.as_str())
+                    && state.hostname.as_deref() == Some(hostname.as_str());
+                if state.phase > ProvisioningPhase::Owner {
+                    if unchanged {
+                        return Ok(ProvisioningOutcome::State { state });
+                    }
+                    return Err(ProvisioningError::InvalidState(
+                        "regional setup cannot change after owner creation",
+                    ));
+                }
+                if state.phase == ProvisioningPhase::Owner && unchanged {
+                    return Ok(ProvisioningOutcome::State { state });
+                }
                 state.locale = Some(locale);
                 state.country = Some(country);
                 state.timezone = Some(timezone);
@@ -965,6 +987,16 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                         "owner username cannot change after creation",
                     ));
                 }
+                if state.phase >= ProvisioningPhase::PasswordReady {
+                    if state.username.as_deref() == Some(username.as_str())
+                        && state.display_name.as_deref() == Some(display_name.as_str())
+                    {
+                        return Ok(ProvisioningOutcome::State { state });
+                    }
+                    return Err(ProvisioningError::InvalidState(
+                        "owner setup cannot change after creation",
+                    ));
+                }
                 if let Some(uid) = system_identity_uid(&username)?
                     && uid != OWNER_UID
                 {
@@ -984,6 +1016,10 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                 if state.phase < ProvisioningPhase::PasswordReady {
                     password.zeroize();
                     return Err(ProvisioningError::InvalidState("owner setup is incomplete"));
+                }
+                if state.phase > ProvisioningPhase::PasswordReady {
+                    password.zeroize();
+                    return Ok(ProvisioningOutcome::State { state });
                 }
                 let username = state
                     .username
@@ -1097,6 +1133,21 @@ impl<B: PlatformBackend> ProvisioningService<B> {
         }
         self.backend.apply_region(&state)?;
         self.backend.configure_ssh(state.ssh_enabled)
+    }
+}
+
+fn command_name(command: &ProvisioningCommand) -> &'static str {
+    match command {
+        ProvisioningCommand::GetStatus {} => "get-status",
+        ProvisioningCommand::SetRegion { .. } => "set-region",
+        ProvisioningCommand::SetOwner { .. } => "set-owner",
+        ProvisioningCommand::SetPassword { .. } => "set-password",
+        ProvisioningCommand::ListWifi {} => "list-wifi",
+        ProvisioningCommand::ConnectWifi { .. } => "connect-wifi",
+        ProvisioningCommand::UseEthernet {} => "use-ethernet",
+        ProvisioningCommand::UseOffline {} => "use-offline",
+        ProvisioningCommand::SetSshEnabled { .. } => "set-ssh-enabled",
+        ProvisioningCommand::Commit {} => "commit",
     }
 }
 
@@ -1299,6 +1350,7 @@ mod tests {
     #[derive(Default)]
     struct MockBackend {
         ssh: bool,
+        hash_calls: usize,
         fail_hash_once: bool,
         fail_configure_once: bool,
         fail_activate_once: bool,
@@ -1306,6 +1358,7 @@ mod tests {
 
     impl PlatformBackend for MockBackend {
         fn hash_password(&mut self, _password: &str) -> Result<String, ProvisioningError> {
+            self.hash_calls += 1;
             if self.fail_hash_once {
                 self.fail_hash_once = false;
                 return Err(ProvisioningError::Operation(
@@ -1619,6 +1672,190 @@ mod tests {
             service.status().unwrap().phase,
             ProvisioningPhase::RepairRequired
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replays_completed_steps_without_rewinding_or_reapplying_secrets() {
+        let (root, paths) = fixture();
+        let mut service = ProvisioningService::new(&paths, MockBackend::default());
+        let region = ProvisioningCommand::SetRegion {
+            locale: "en_US.UTF-8".into(),
+            country: "CN".into(),
+            timezone: "Asia/Shanghai".into(),
+            hostname: "cp0-replay".into(),
+        };
+        let owner = ProvisioningCommand::SetOwner {
+            display_name: "Owner".into(),
+            username: "owner".into(),
+        };
+
+        assert_eq!(
+            state(service.dispatch(request(1, region.clone()))).phase,
+            ProvisioningPhase::Owner
+        );
+        assert_eq!(
+            state(service.dispatch(request(2, owner.clone()))).phase,
+            ProvisioningPhase::PasswordReady
+        );
+        assert_eq!(
+            state(service.dispatch(request(
+                3,
+                ProvisioningCommand::SetPassword {
+                    password: "original password".into(),
+                },
+            )))
+            .phase,
+            ProvisioningPhase::Network
+        );
+        assert_eq!(service.backend.hash_calls, 1);
+
+        assert_eq!(
+            state(service.dispatch(request(4, region))).phase,
+            ProvisioningPhase::Network
+        );
+        assert_eq!(
+            state(service.dispatch(request(5, owner))).phase,
+            ProvisioningPhase::Network
+        );
+        assert_eq!(
+            state(service.dispatch(request(
+                6,
+                ProvisioningCommand::SetPassword {
+                    password: "must not replace original".into(),
+                },
+            )))
+            .phase,
+            ProvisioningPhase::Network
+        );
+        assert_eq!(service.backend.hash_calls, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resumes_and_completes_every_network_and_ssh_choice() {
+        for network in 0..3 {
+            for ssh_enabled in [false, true] {
+                let (root, paths) = fixture();
+                let mut service = ProvisioningService::new(&paths, MockBackend::default());
+                assert_eq!(
+                    state(service.dispatch(request(
+                        1,
+                        ProvisioningCommand::SetRegion {
+                            locale: "en_US.UTF-8".into(),
+                            country: "CN".into(),
+                            timezone: "Asia/Shanghai".into(),
+                            hostname: format!("cp0-{network}-{}", u8::from(ssh_enabled)),
+                        },
+                    )))
+                    .phase,
+                    ProvisioningPhase::Owner
+                );
+                service = ProvisioningService::new(&paths, MockBackend::default());
+                assert_eq!(service.status().unwrap().phase, ProvisioningPhase::Owner);
+                assert_eq!(
+                    state(service.dispatch(request(
+                        2,
+                        ProvisioningCommand::SetOwner {
+                            display_name: "Owner".into(),
+                            username: "owner".into(),
+                        },
+                    )))
+                    .phase,
+                    ProvisioningPhase::PasswordReady
+                );
+                service = ProvisioningService::new(&paths, MockBackend::default());
+                assert_eq!(
+                    state(service.dispatch(request(
+                        3,
+                        ProvisioningCommand::SetPassword {
+                            password: "matrix password".into(),
+                        },
+                    )))
+                    .phase,
+                    ProvisioningPhase::Network
+                );
+                service = ProvisioningService::new(&paths, MockBackend::default());
+                let response = match network {
+                    0 => service.dispatch(request(4, ProvisioningCommand::UseEthernet {})),
+                    1 => service.dispatch(request(
+                        4,
+                        ProvisioningCommand::ConnectWifi {
+                            ssid: "CP0-NET".into(),
+                            security: WifiSecurity::Wpa2,
+                            password: "wifi password".into(),
+                            hidden: false,
+                        },
+                    )),
+                    _ => service.dispatch(request(4, ProvisioningCommand::UseOffline {})),
+                };
+                assert_eq!(state(response).phase, ProvisioningPhase::RemoteAccess);
+                service = ProvisioningService::new(&paths, MockBackend::default());
+                assert_eq!(
+                    state(service.dispatch(request(
+                        5,
+                        ProvisioningCommand::SetSshEnabled {
+                            enabled: ssh_enabled,
+                        },
+                    )))
+                    .phase,
+                    ProvisioningPhase::Review
+                );
+                service = ProvisioningService::new(&paths, MockBackend::default());
+                assert_eq!(
+                    state(service.dispatch(request(6, ProvisioningCommand::Commit {}))).phase,
+                    ProvisioningPhase::Complete
+                );
+                if ssh_enabled {
+                    // MockBackend records SSH only in memory; emulate the Linux
+                    // backend's durable consent marker before process restart.
+                    atomic_write(&paths.ssh_marker, b"password\n", 0o600).unwrap();
+                }
+                service = ProvisioningService::new(&paths, MockBackend::default());
+                assert_eq!(service.status().unwrap().phase, ProvisioningPhase::Complete);
+                let persisted = fs::read_to_string(&paths.state_file).unwrap();
+                assert!(!persisted.contains("matrix password"));
+                assert!(!persisted.contains("wifi password"));
+                fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_commands_before_their_prerequisites() {
+        let (root, paths) = fixture();
+        let mut service = ProvisioningService::new(&paths, MockBackend::default());
+        for (id, command) in [
+            (
+                1,
+                ProvisioningCommand::SetOwner {
+                    display_name: "Owner".into(),
+                    username: "owner".into(),
+                },
+            ),
+            (
+                2,
+                ProvisioningCommand::SetPassword {
+                    password: "early password".into(),
+                },
+            ),
+            (3, ProvisioningCommand::UseEthernet {}),
+            (4, ProvisioningCommand::UseOffline {}),
+            (5, ProvisioningCommand::SetSshEnabled { enabled: true }),
+            (6, ProvisioningCommand::Commit {}),
+        ] {
+            assert!(matches!(
+                service.dispatch(request(id, command)).outcome,
+                ProvisioningOutcome::Error {
+                    code: ProvisioningErrorCode::InvalidState,
+                    ..
+                }
+            ));
+            assert_eq!(
+                service.status().unwrap().phase,
+                ProvisioningPhase::Unprovisioned
+            );
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

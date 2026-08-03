@@ -165,6 +165,24 @@ static void apply_provision_status(struct shell *shell,
         shell->ui.setup_active = false;
 }
 
+static bool reconcile_provisioning(struct shell *shell, bool show_complete)
+{
+    struct cp0_provision_status status = {0};
+    char error[CP0_PROVISION_ERROR_MAX + 1] = {0};
+    int result = cp0_provision_get_status(&status, error);
+
+    shell->provision_retry_pending = result == CP0_PROVISION_UNAVAILABLE;
+    if (result == CP0_PROVISION_OK) {
+        apply_provision_status(shell, &status, show_complete);
+        return true;
+    }
+    if (result == CP0_PROVISION_REPAIR_REQUIRED) {
+        cp0_ui_setup_begin(&shell->ui, CP0_UI_SETUP_REPAIR);
+        return true;
+    }
+    return false;
+}
+
 static void initialize_provisioning(struct shell *shell)
 {
     struct cp0_provision_status status = {0};
@@ -326,9 +344,16 @@ static void handle_setup_event(struct shell *shell, enum cp0_ui_event event)
         return;
     }
     shell->provision_retry_pending = result == CP0_PROVISION_UNAVAILABLE;
-    if (result == CP0_PROVISION_OK)
-        apply_provision_network_status(shell, &status);
-    cp0_ui_setup_result(&shell->ui, event, result == CP0_PROVISION_OK, error);
+    if (result == CP0_PROVISION_OK) {
+        /* The daemon's durable phase is authoritative after every mutation. */
+        apply_provision_status(shell, &status, true);
+        return;
+    }
+    if ((result == CP0_PROVISION_INVALID_STATE ||
+         result == CP0_PROVISION_REPAIR_REQUIRED) &&
+        reconcile_provisioning(shell, true))
+        return;
+    cp0_ui_setup_result(&shell->ui, event, false, error);
 }
 
 static void retry_unavailable_provisioning(struct shell *shell)
