@@ -464,6 +464,33 @@ includes the physically armed, one-boot ED25519 maintenance path documented in
 with automatic rollback, but never persists a key, password or update and
 cannot update BSP or boot components.
 
+The V0.6 hot-update run at `192.168.20.66` then reproduced the Device Name
+failure as `invalid provisioning state: symbolic link is not allowed`. Raspberry
+Pi OS conventionally installs `/etc/default/locale` as a link to
+`../locale.conf`; the daemon's safe-write policy rejected that valid destination
+before applying region settings. Locale persistence now uses the same atomic
+replacement primitive as `/etc/localtime`: it replaces the link itself without
+following it, and a regression test proves that the former target is unchanged.
+The corrected AArch64 daemon completed region, owner, yescrypt password, real
+Wi-Fi scan, Ethernet selection and SSH consent on the device and reached Review.
+
+That run exposed a final transaction-order issue. `ssh.service` requires both
+the completion and SSH-enabled markers, while the old commit implementation
+started it before publishing completion. systemd correctly skipped the start,
+then maintenance SSH stopped, leaving port 22 closed even though both markers
+were ultimately durable. Commit now persists `COMMITTING`, publishes completion,
+activates gated SSH, and finally persists `COMPLETE`. Recovery tests cover
+crashes before and after marker publication. The one-boot updater was also
+corrected for the production `/run` `noexec` mount: it validates a staged file
+as regular, non-symlink, non-empty, root-owned and mode `0700`, then copies it to
+the executable volatile overlay instead of requiring `[ -x ]` on `/run`.
+
+The corresponding production candidate is
+`image_2026-08-03-firstboot-stable-d12383c-cp0-os-production.img.xz`; its mounted
+rootfs/initramfs gates and checksum verification pass. The device run and exact
+remaining fresh-media checks are recorded in
+`docs/FIRST-BOOT-DEVICE-TEST-REPORT-20260803.md`.
+
 ### Host and image tests
 
 - mounted product root contains no human UID, fixed username, password hash,
