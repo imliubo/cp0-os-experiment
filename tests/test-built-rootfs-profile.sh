@@ -80,6 +80,22 @@ for path in "${required_files[@]}"; do
         exit 1
     fi
 done
+
+keyboard_manifest="$rootfs/var/lib/cardputerzero/apps/dev.cardputerzero.keyboard-diagnostics/0.1.0/app.json"
+keyboard_wasm="$rootfs/var/lib/cardputerzero/apps/dev.cardputerzero.keyboard-diagnostics/0.1.0/bin/keyboard_diagnostics.wasm"
+if [[ -e $keyboard_manifest || -e $keyboard_wasm ]]; then
+    for diagnostic_file in "$keyboard_manifest" "$keyboard_wasm"; do
+        if [[ ! -f $diagnostic_file || -L $diagnostic_file ]]; then
+            echo "error: optional keyboard diagnostics payload is incomplete" >&2
+            exit 1
+        fi
+    done
+    jq -e '
+        .id == "dev.cardputerzero.keyboard-diagnostics" and
+        .version == "0.1.0" and
+        .permissions == []
+    ' "$keyboard_manifest" >/dev/null
+fi
 for marker in developer-mode recovery-mode; do
     if [[ -e $rootfs/var/lib/cardputerzero/registry/$marker ]]; then
         echo "error: image enables $marker by default" >&2

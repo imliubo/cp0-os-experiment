@@ -9,6 +9,8 @@ cargo fmt --manifest-path "$repo_root/examples/neon-snake/Cargo.toml" -- --check
 cargo test --quiet --manifest-path "$repo_root/examples/neon-snake/Cargo.toml"
 cargo fmt --manifest-path "$repo_root/examples/media-controls/Cargo.toml" -- --check
 cargo test --quiet --manifest-path "$repo_root/examples/media-controls/Cargo.toml"
+cargo fmt --manifest-path "$repo_root/examples/keyboard-diagnostics/Cargo.toml" -- --check
+cargo test --quiet --manifest-path "$repo_root/examples/keyboard-diagnostics/Cargo.toml"
 cargo run --quiet --manifest-path "$repo_root/Cargo.toml" -p cp0ctl -- \
     run "$repo_root/examples/calculator" \
     --duration 250 --permissions deny --keys 1,2,plus,3,equal \
@@ -56,3 +58,14 @@ jq -e '
     .storage_keys == 1 and
     .capability_calls == {}
 ' "$output/neon-snake.json" >/dev/null
+
+printf '%s\n' \
+    'CP0K,1,1' \
+    'S,1,HOLD SHIFT + A,30,1,65' \
+    'C,1,30,0,97,0' \
+    'K,1,0' \
+    'D,1,0,1,0' >"$output/keyboard-diagnostics.log"
+"$repo_root/scripts/analyze-keyboard-diagnostics.sh" \
+    "$output/keyboard-diagnostics.log" >"$output/keyboard-diagnostics-analysis.txt"
+grep -q '1 modifier-state mismatch' \
+    "$output/keyboard-diagnostics-analysis.txt"

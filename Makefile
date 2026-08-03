@@ -16,6 +16,7 @@ check: fmt
 		examples/hello-card/app.json \
 		examples/media-controls/app.json \
 		examples/neon-snake/app.json \
+		examples/keyboard-diagnostics/app.json \
 		examples/device-capability-probe/app.json \
 		examples/storage-isolation-probe/app.json \
 		examples/store-acceptance-v1/app.json \

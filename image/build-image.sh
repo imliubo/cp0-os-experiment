@@ -14,6 +14,7 @@ resume_build=${CP0_RESUME_BUILD:-0}
 image_name=${CP0_IMAGE_NAME:-}
 image_profile=${CP0_IMAGE_PROFILE:-product}
 access_profile=${CP0_ACCESS_PROFILE:-development}
+keyboard_diagnostics=${CP0_KEYBOARD_DIAGNOSTICS:-0}
 
 case "$image_profile" in
     product | recovery) ;;
@@ -27,6 +28,13 @@ case "$access_profile" in
     development | production) ;;
     *)
         echo "error: CP0_ACCESS_PROFILE must be development or production" >&2
+        exit 2
+        ;;
+esac
+case "$keyboard_diagnostics" in
+    0 | 1) ;;
+    *)
+        echo "error: CP0_KEYBOARD_DIAGNOSTICS must be 0 or 1" >&2
         exit 2
         ;;
 esac
@@ -138,6 +146,10 @@ cp "$repo_root/compositor-policy/cardputerzero-policy.c" \
 "$repo_root/scripts/build-appd.sh"
 "$repo_root/scripts/build-app-runtime.sh"
 "$repo_root/scripts/build-example-app.sh"
+if [[ $keyboard_diagnostics == 1 ]]; then
+    cargo run --quiet --manifest-path "$repo_root/Cargo.toml" -p cp0ctl -- \
+        build "$repo_root/examples/keyboard-diagnostics"
+fi
 platform_payload="$pi_gen_dir/stage-cardputerzero-os/02-app-platform/payload"
 mkdir -p "$platform_payload/systemd" "$platform_payload/hello/bin" \
     "$platform_payload/trust/store" \
@@ -188,6 +200,13 @@ cp "$repo_root/target/apps/dev.cardputerzero.hello/0.1.0/app.json" \
     "$platform_payload/hello/"
 cp "$repo_root/target/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm" \
     "$platform_payload/hello/bin/"
+if [[ $keyboard_diagnostics == 1 ]]; then
+    keyboard_root="$repo_root/examples/keyboard-diagnostics/target/cardputerzero/dev.cardputerzero.keyboard-diagnostics/0.1.0"
+    mkdir -p "$platform_payload/keyboard-diagnostics/bin"
+    cp "$keyboard_root/app.json" "$platform_payload/keyboard-diagnostics/"
+    cp "$keyboard_root/bin/keyboard_diagnostics.wasm" \
+        "$platform_payload/keyboard-diagnostics/bin/"
+fi
 # The stage1 user already exists. Installing userconf-pi after sizing the
 # image adds a large Raspberry Pi utility dependency set and can fill rootfs.
 touch "$pi_gen_dir/export-image/01-user-rename/SKIP"

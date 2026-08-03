@@ -2,6 +2,7 @@
 
 payload="${STAGE_DIR}/02-app-platform/payload"
 hello_root="${ROOTFS_DIR}/var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0"
+keyboard_root="${ROOTFS_DIR}/var/lib/cardputerzero/apps/dev.cardputerzero.keyboard-diagnostics/0.1.0"
 image_profile=$(cat "${STAGE_DIR}/image-profile")
 access_profile=$(cat "${STAGE_DIR}/access-profile")
 case "$image_profile" in
@@ -163,6 +164,14 @@ install -D -m 0755 "${payload}/diagnostics/device-support-bundle.sh" \
 install -D -m 0644 "${payload}/hello/app.json" "${hello_root}/app.json"
 install -D -m 0644 "${payload}/hello/bin/hello-card.wasm" \
     "${hello_root}/bin/hello-card.wasm"
+if [[ -f ${payload}/keyboard-diagnostics/app.json && \
+      -f ${payload}/keyboard-diagnostics/bin/keyboard_diagnostics.wasm ]]; then
+    install -D -m 0644 "${payload}/keyboard-diagnostics/app.json" \
+        "${keyboard_root}/app.json"
+    install -D -m 0644 \
+        "${payload}/keyboard-diagnostics/bin/keyboard_diagnostics.wasm" \
+        "${keyboard_root}/bin/keyboard_diagnostics.wasm"
+fi
 
 on_chroot <<'CHROOT'
 set -e
@@ -285,6 +294,14 @@ chown -R root:root /var/lib/cardputerzero/apps/dev.cardputerzero.hello
 chmod -R go-w /var/lib/cardputerzero/apps/dev.cardputerzero.hello
 /usr/libexec/cardputerzero/cp0-appd register-installed \
     dev.cardputerzero.hello 0.1.0
+if [ -f /var/lib/cardputerzero/apps/dev.cardputerzero.keyboard-diagnostics/0.1.0/app.json ]; then
+    chown -R root:root \
+        /var/lib/cardputerzero/apps/dev.cardputerzero.keyboard-diagnostics
+    chmod -R go-w \
+        /var/lib/cardputerzero/apps/dev.cardputerzero.keyboard-diagnostics
+    /usr/libexec/cardputerzero/cp0-appd register-installed \
+        dev.cardputerzero.keyboard-diagnostics 0.1.0
+fi
 
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-appd.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-display.conf
