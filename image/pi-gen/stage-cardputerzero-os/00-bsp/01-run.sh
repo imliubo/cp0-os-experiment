@@ -24,7 +24,7 @@ fi
 BSP_REPOSITORY="https://github.com/m5stack/m5stack-linux-dtoverlays.git"
 BSP_COMMIT="c3b254819307c177a34100b66fe19e52059ce8c4"
 
-install -m 0644 "${STAGE_DIR}/files/0001-tca8418-flush-synthetic-shift.patch" \
+install -m 0644 "${STAGE_DIR}/00-bsp/files/0001-tca8418-flush-synthetic-shift.patch" \
     "${ROOTFS_DIR}/tmp/0001-tca8418-flush-synthetic-shift.patch"
 
 on_chroot <<CHROOT

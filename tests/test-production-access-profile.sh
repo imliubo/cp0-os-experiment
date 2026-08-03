@@ -58,7 +58,7 @@ grep -Fq 'if getent passwd "$FIRST_USER_NAME" >/dev/null 2>&1; then' "$bsp"
 grep -Fq 'temporary product build identity remains' "$bsp"
 grep -Fq 'test -e /usr/lib/libnss_extrausers.so.2' "$bsp"
 grep -Fq 'locale-gen en_US.UTF-8 zh_CN.UTF-8' "$bsp"
-grep -Fq '0001-tca8418-flush-synthetic-shift.patch' "$bsp"
+grep -Fq '${STAGE_DIR}/00-bsp/files/0001-tca8418-flush-synthetic-shift.patch' "$bsp"
 test "$(grep -c '^+.*input_sync(keypad_data->input);' "$keyboard_patch")" -eq 4
 if grep -Fq 'libpam-extrausers' \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/00-packages-nr"; then
