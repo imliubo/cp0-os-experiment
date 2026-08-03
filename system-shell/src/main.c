@@ -6,6 +6,7 @@
 #include "cp0_connectivity_client.h"
 #include "cp0_display_client.h"
 #include "cp0_developer_client.h"
+#include "cp0_power_client.h"
 #include "cp0_provision_client.h"
 #include "cp0_screenshot_store.h"
 #include "cp0_shell_settings.h"
@@ -1607,9 +1608,11 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
         cp0_system_shell_v1_sleep_display(shell->system_control);
     } else if (event == CP0_UI_EVENT_RESTART) {
-        fprintf(stderr, "system-shell: restart requested; broker unavailable\n");
+        if (cp0_power_request(CP0_POWER_RESTART) != 0)
+            fprintf(stderr, "system-shell: restart request failed\n");
     } else if (event == CP0_UI_EVENT_POWER_OFF) {
-        fprintf(stderr, "system-shell: power off requested; broker unavailable\n");
+        if (cp0_power_request(CP0_POWER_OFF) != 0)
+            fprintf(stderr, "system-shell: power off request failed\n");
     } else if (event == CP0_UI_EVENT_OPEN_APP) {
         char app_id[CP0_APP_ID_BYTES];
         const char *selected_id = cp0_ui_selected_app_id(&shell->ui);

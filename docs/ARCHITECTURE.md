@@ -107,6 +107,12 @@ Weston 的 XRGB8888 SHM buffer。标准应用只能提交 320x150，沉浸应用
 `/sys/class/backlight/backlight` 的亮度属性。请求范围为 5% 到 100%，全局快捷键只
 执行固定 10% 步进并回读实际值；应用、Runtime 和 Store 均没有对应 SDK 或控制路径。
 
+电源操作由独立 root cp0-powerd 承担。socket DAC 只允许 cp0-power-control 组，
+daemon 再以 SO_PEERCRED 精确接受 cp0-shell UID。协议只有 restart 和 power-off，
+后端固定映射到 /usr/bin/systemctl --no-block reboot|poweroff；请求不能携带 unit、
+参数或路径，Shell 不获得 sudo、通用 systemd 或 D-Bus 权限。recovery 镜像显式
+mask 此入口。详见 docs/POWER-CONTROL.md。
+
 通知 broker 同样从 `SO_PEERCRED` 和当前 systemd cgroup 绑定应用身份。`appd` 只
 向可信 Shell 返回规范应用名称和有界内容；Shell 决定横幅布局与四秒显示周期。
 权限提示优先于通知，Home、Tasks、Power 和应用退出会撤销当前横幅。

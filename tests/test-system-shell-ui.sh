@@ -49,6 +49,15 @@ mkdir -p "$snapshot_dir"
 "$work_dir/system-shell-developer-client-test"
 
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -DCP0_POWER_CLIENT_TEST \
+    -I"$repo_root/system-shell/include" \
+    "$repo_root/system-shell/src/json.c" \
+    "$repo_root/system-shell/src/power_client.c" \
+    "$repo_root/tests/system-shell-power-client.c" \
+    -o "$work_dir/system-shell-power-client-test"
+"$work_dir/system-shell-power-client-test"
+
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -DCP0_DISPLAY_CLIENT_TEST \
     -I"$repo_root/system-shell/include" \
     "$repo_root/system-shell/src/json.c" \

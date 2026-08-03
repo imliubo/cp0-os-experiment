@@ -48,6 +48,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     "$repo_root/system-shell/src/provision_client.c" \
     "$repo_root/system-shell/src/display_client.c" \
     "$repo_root/system-shell/src/developer_client.c" \
+    "$repo_root/system-shell/src/power_client.c" \
     "$repo_root/system-shell/src/store_client.c" \
     "$repo_root/system-shell/src/system_info.c" \
     "$output/cardputerzero-system-shell-protocol.c" \

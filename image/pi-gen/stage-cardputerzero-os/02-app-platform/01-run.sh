@@ -24,6 +24,8 @@ install -D -m 0755 "${payload}/cp0-appd" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-appd"
 install -D -m 0755 "${payload}/cp0-networkd" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-networkd"
+install -D -m 0755 "${payload}/cp0-powerd" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-powerd"
 install -D -m 0755 "${payload}/cp0-provisiond" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-provisiond"
 install -D -m 0755 "${payload}/cp0-documentd" \
@@ -60,6 +62,10 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-devd.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-devd.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-devd.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-devd.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-powerd.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-powerd.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-powerd.socket" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-powerd.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-broker.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-broker.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-networkd.service" \
@@ -135,6 +141,8 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-connectivity.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-connectivity.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-provision.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-provision.conf"
+install -D -m 0644 "${payload}/systemd/cardputerzero-power.conf" \
+    "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-power.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-appd.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-appd.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-storage.conf" \
@@ -217,6 +225,10 @@ if ! getent group cp0-provision-control >/dev/null 2>&1; then
     groupadd --system cp0-provision-control
 fi
 usermod -a -G cp0-provision-control cp0-shell
+if ! getent group cp0-power-control >/dev/null 2>&1; then
+    groupadd --system cp0-power-control
+fi
+usermod -a -G cp0-power-control cp0-shell
 if ! getent group cp0-display >/dev/null 2>&1; then
     groupadd --system cp0-display
 fi
@@ -377,6 +389,7 @@ CHROOT
 set -e
 systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-devd.socket cardputerzero-ssh-access.path \
+    cardputerzero-powerd.socket \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
     cardputerzero-audiod.socket cardputerzero-camerad.socket \
     cardputerzero-connectivityd.socket cardputerzero-displayd.socket \
@@ -390,6 +403,7 @@ set -e
 systemctl mask cardputerzero-appd.service \
     cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-devd.service cardputerzero-devd.socket \
+    cardputerzero-powerd.service cardputerzero-powerd.socket \
     cardputerzero-ssh-access.path cardputerzero-ssh-access-refresh.service \
     cardputerzero-networkd.socket cardputerzero-documentd.socket \
     cardputerzero-audiod.socket cardputerzero-camerad.socket \

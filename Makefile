@@ -41,6 +41,7 @@ check: fmt
 	./tests/test-production-access-profile.sh
 	./tests/test-setup-ssh-boundary.sh
 	./tests/test-developer-access.sh
+	./tests/test-power-control.sh
 	./tests/test-os-update-profile.sh
 	./tests/test-recovery-data.sh
 	./tests/test-compositor-profile.sh

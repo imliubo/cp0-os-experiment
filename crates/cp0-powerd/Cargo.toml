@@ -1,0 +1,10 @@
+[package]
+name = "cp0-powerd"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+cp0-power-protocol = { path = "../cp0-power-protocol" }
+libc.workspace = true

@@ -56,7 +56,8 @@ Left/Right changes bounded values only when a row is editable.
 
 - Charge state, capacity, voltage, signed current and estimated battery power.
 - Battery saver and charge limit are capability-gated future controls.
-- Power-off and restart remain trusted global actions with confirmation.
+- Power-off and restart use the trusted confirmation UI and the implemented
+  Shell-only cp0-powerd fixed-action broker.
 
 ### Apps, storage and privacy
 
@@ -103,7 +104,7 @@ write a bounded audit record. The planned providers are:
 | display broker | backlight level, timeout and compositor appearance state | raw sysfs/DRM handles |
 | audio broker | output volume, mute, route and focus policy | unrestricted ALSA devices |
 | camera broker | capture profile and orientation policy | raw V4L2 devices |
-| power broker | sleep, restart, shutdown and supported charge policy | arbitrary systemd or sysfs operations |
+| power broker | implemented restart/shutdown; future supported charge policy | arbitrary systemd or sysfs operations |
 | system broker | time, update, backup/reset and support bundle jobs | shell commands or filesystem paths |
 
 Every mutating request is capability queried first. Unsupported controls remain

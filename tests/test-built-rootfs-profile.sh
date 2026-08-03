@@ -41,6 +41,7 @@ required_executables=(
     usr/libexec/cardputerzero/cp0-devd
     usr/libexec/cardputerzero/cp0-gpiod
     usr/libexec/cardputerzero/cp0-networkd
+    usr/libexec/cardputerzero/cp0-powerd
     usr/libexec/cardputerzero/cp0-provisiond
     usr/libexec/cardputerzero/cp0-radiod
     usr/libexec/cardputerzero/cp0-storaged
@@ -137,6 +138,7 @@ if [[ $image_profile == product ]]; then
         sockets.target.wants/cardputerzero-devd.socket
         sockets.target.wants/cardputerzero-gpiod.socket
         sockets.target.wants/cardputerzero-networkd.socket
+        sockets.target.wants/cardputerzero-powerd.socket
         sockets.target.wants/cardputerzero-provisiond.socket
         multi-user.target.wants/cardputerzero-provision-apply.service
         sockets.target.wants/cardputerzero-radiod.socket
@@ -283,6 +285,8 @@ if [[ $image_profile == recovery ]]; then
         cardputerzero-ssh-access-refresh.service
         cardputerzero-gpiod.socket
         cardputerzero-networkd.socket
+        cardputerzero-powerd.service
+        cardputerzero-powerd.socket
         cardputerzero-radiod.socket
         cardputerzero-storaged.socket
         cardputerzero-stored.socket

@@ -121,6 +121,7 @@ cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$repo_root/system-shell/include/cp0_shell_settings.h" \
     "$repo_root/system-shell/include/cp0_display_client.h" \
     "$repo_root/system-shell/include/cp0_developer_client.h" \
+    "$repo_root/system-shell/include/cp0_power_client.h" \
     "$repo_root/system-shell/include/cp0_screenshot_store.h" \
     "$repo_root/system-shell/include/cp0_store_client.h" \
     "$repo_root/system-shell/include/cp0_system_info.h" \
@@ -133,6 +134,7 @@ cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$repo_root/system-shell/src/shell_settings.c" \
     "$repo_root/system-shell/src/display_client.c" \
     "$repo_root/system-shell/src/developer_client.c" \
+    "$repo_root/system-shell/src/power_client.c" \
     "$repo_root/system-shell/src/screenshot_store.c" \
     "$repo_root/system-shell/src/store_client.c" \
     "$repo_root/system-shell/src/system_info.c" \
@@ -165,6 +167,7 @@ cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-documentd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-gpiod" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-networkd" \
+    "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-powerd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-provisiond" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-radiod" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-recovery" \

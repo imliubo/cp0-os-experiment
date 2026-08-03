@@ -1,0 +1,17 @@
+[Unit]
+Description=CardputerZero constrained system power socket
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/cardputerzero-powerd/power.sock
+FileDescriptorName=power
+Service=cardputerzero-powerd.service
+SocketUser=root
+SocketGroup=cp0-power-control
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=yes
+Accept=no
+
+[Install]
+WantedBy=sockets.target

@@ -498,6 +498,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp0-power-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cp0-powerd"
+version = "0.1.0"
+dependencies = [
+ "cp0-power-protocol",
+ "libc",
+]
+
+[[package]]
 name = "cp0-provision-protocol"
 version = "0.1.0"
 dependencies = [

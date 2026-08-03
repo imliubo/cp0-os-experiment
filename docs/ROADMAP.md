@@ -208,6 +208,11 @@ Shell 和其他应用数据。
 - [ ] Phase 6J-E：在 V0.6 production 候选完成密码首次配对、key 复用、窗口超时、
   单个/全部撤销、Developer Mode Off、Owner Shell 独立开关、正常重启持久性和真实
   OpenSSH `SSH_ORIGINAL_COMMAND` 行为验收。
+- [x] Phase 6K-A：实现 root cp0-powerd、严格有界的 restart/power-off 协议、
+  Shell UID 双重认证、固定 systemctl 参数、System Shell 客户端及 product/recovery
+  镜像门禁，不向 Shell 或应用授予通用 systemd 权限。
+- [ ] Phase 6K-B：在 V0.6 新 product 镜像从确认 UI 分别验证正常重启、新 boot ID、
+  返回 Home，以及完整关机后只能通过物理上电恢复。
 - [x] 实现不接入当前启动链的 OS 发布元数据策略、rootfs/hash tree/FIT 摘要门禁、
   dm-verity 离线验证、三次启动回滚状态机、双副本撕裂写检测和 100 轮断电模型；
   RAUC CMS、签名 FIT 与硬件信任根仍是独立启用门禁。
