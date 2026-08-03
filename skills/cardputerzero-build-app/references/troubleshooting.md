@@ -31,6 +31,11 @@
   not agree.
 - App returns nonzero: preserve the first SDK error and test that branch rather
   than converting every error to success.
+- Unknown `cp0_media_*` import: the SDK and simulator came from different
+  DevKit versions. Do not remove the media call; restore a matched DevKit.
+- Media action is not consumed: register a non-inactive session with the exact
+  supported mask, use `--media-actions` rather than raw `--keys`, and inspect
+  `media_session_updates` plus `media_actions_taken` in the profile.
 
 ## Package or install fails
 
@@ -43,3 +48,16 @@
   active. Retrieve its evidence first.
 - Use `cp0ctl logs APP_ID` for bounded service-mediated logs; do not grant the
   app shell or SSH access.
+- SSH unavailable: confirm first-boot Setup completed and the owner explicitly
+  enabled remote access. Do not try fixed usernames, passwords or maintenance
+  backdoors.
+
+## Store submission fails
+
+- Run `cp0ctl store validate` again after every package, Listing or PNG change.
+- Identity mismatch: `app_id` and `version` must exactly match the signed
+  package; do not edit a signed `.capp`.
+- OAuth pending or expired: follow the displayed verification URI, use the
+  registered App owner's eligible account with 2FA, and restart only after the
+  stable error is reported.
+- Never place a private key, OAuth token or Store signature in `store/`.

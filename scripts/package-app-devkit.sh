@@ -45,7 +45,7 @@ case "$bundle" in
         ;;
 esac
 rm -rf -- "$bundle"
-mkdir -p "$bundle/bin" "$bundle/docs" "$bundle/examples" "$bundle/skills"
+mkdir -p "$bundle/bin" "$bundle/docs" "$bundle/examples" "$bundle/schemas" "$bundle/skills"
 
 "${cargo[@]}" build --manifest-path "$repo_root/Cargo.toml" --locked --release -p cp0ctl
 install -m 0755 "$repo_root/target/release/cp0ctl" "$bundle/bin/cp0ctl"
@@ -64,8 +64,16 @@ install -m 0644 "$repo_root/examples/neon-snake/README.md" \
     "$bundle/examples/neon-snake/"
 install -m 0644 "$repo_root/examples/neon-snake/src/lib.rs" \
     "$bundle/examples/neon-snake/src/"
+mkdir -p "$bundle/examples/media-controls/src"
+for file in Cargo.toml Cargo.lock app.json README.md; do
+    install -m 0644 "$repo_root/examples/media-controls/$file" \
+        "$bundle/examples/media-controls/"
+done
+install -m 0644 "$repo_root/examples/media-controls/src/lib.rs" \
+    "$bundle/examples/media-controls/src/"
 install -m 0644 "$repo_root/docs/DEVELOPER-GUIDE.md" "$bundle/docs/"
 install -m 0644 "$repo_root/docs/APP-DEVKIT-DISTRIBUTION.md" "$bundle/docs/"
+install -m 0644 "$repo_root/schemas/store-listing-v1.schema.json" "$bundle/schemas/"
 printf '%s\n' "$version" >"$bundle/VERSION"
 
 emcc_version=unavailable
@@ -84,7 +92,7 @@ jq -n \
         version: $version,
         host: $host,
         built_with: { rust: $rust, node: $node, emscripten: $emcc },
-        bundled: ["cp0ctl", "sdk", "simulator", "skill", "neon-snake"]
+        bundled: ["cp0ctl", "sdk", "simulator", "skill", "neon-snake", "media-controls", "store-listing-schema"]
     }' >"$bundle/devkit.json"
 
 (

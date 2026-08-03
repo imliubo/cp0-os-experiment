@@ -980,12 +980,12 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                         "regional setup is incomplete",
                     ));
                 }
-                if let Some(existing) = &state.username
-                    && existing != &username
-                {
-                    return Err(ProvisioningError::InvalidState(
-                        "owner username cannot change after creation",
-                    ));
+                if let Some(existing) = &state.username {
+                    if existing != &username {
+                        return Err(ProvisioningError::InvalidState(
+                            "owner username cannot change after creation",
+                        ));
+                    }
                 }
                 if state.phase >= ProvisioningPhase::PasswordReady {
                     if state.username.as_deref() == Some(username.as_str())
@@ -997,12 +997,12 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                         "owner setup cannot change after creation",
                     ));
                 }
-                if let Some(uid) = system_identity_uid(&username)?
-                    && uid != OWNER_UID
-                {
-                    return Err(ProvisioningError::InvalidValue(
-                        "username is already in use",
-                    ));
+                if let Some(uid) = system_identity_uid(&username)? {
+                    if uid != OWNER_UID {
+                        return Err(ProvisioningError::InvalidValue(
+                            "username is already in use",
+                        ));
+                    }
                 }
                 self.identity_store
                     .create_locked_owner(&display_name, &username)?;

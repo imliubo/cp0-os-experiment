@@ -1462,10 +1462,10 @@ fn require_empty_body(headers: &HeaderMap, body: &[u8]) -> Result<(), WorkforceE
     if !body.is_empty() || headers.contains_key("transfer-encoding") {
         return Err(WorkforceError::InvalidRequest);
     }
-    if let Some(length) = headers.get(CONTENT_LENGTH)
-        && length.to_str().ok() != Some("0")
-    {
-        return Err(WorkforceError::InvalidRequest);
+    if let Some(length) = headers.get(CONTENT_LENGTH) {
+        if length.to_str().ok() != Some("0") {
+            return Err(WorkforceError::InvalidRequest);
+        }
     }
     Ok(())
 }
@@ -1593,10 +1593,10 @@ fn json_response<T: Serialize>(
             "application/problem+json"
         }),
     );
-    if let Some(version) = version
-        && let Ok(value) = HeaderValue::from_str(&format!("\"{version}\""))
-    {
-        response.headers_mut().insert("etag", value);
+    if let Some(version) = version {
+        if let Ok(value) = HeaderValue::from_str(&format!("\"{version}\"")) {
+            response.headers_mut().insert("etag", value);
+        }
     }
     secure_headers(&mut response, &request_id);
     response
@@ -1613,10 +1613,10 @@ fn redirect_response(
         return WorkforceError::Internal.response(request_id);
     };
     response.headers_mut().insert(LOCATION, location);
-    if let Some(cookie) = cookie
-        && let Ok(cookie) = HeaderValue::from_str(&cookie)
-    {
-        response.headers_mut().insert(SET_COOKIE, cookie);
+    if let Some(cookie) = cookie {
+        if let Ok(cookie) = HeaderValue::from_str(&cookie) {
+            response.headers_mut().insert(SET_COOKIE, cookie);
+        }
     }
     secure_headers(&mut response, &request_id);
     response
@@ -1624,10 +1624,10 @@ fn redirect_response(
 
 fn empty_response(status: StatusCode, cookie: Option<String>, request_id: String) -> Response {
     let mut response = status.into_response();
-    if let Some(cookie) = cookie
-        && let Ok(cookie) = HeaderValue::from_str(&cookie)
-    {
-        response.headers_mut().insert(SET_COOKIE, cookie);
+    if let Some(cookie) = cookie {
+        if let Ok(cookie) = HeaderValue::from_str(&cookie) {
+            response.headers_mut().insert(SET_COOKIE, cookie);
+        }
     }
     secure_headers(&mut response, &request_id);
     response

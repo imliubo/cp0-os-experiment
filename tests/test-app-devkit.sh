@@ -36,6 +36,7 @@ devkit=${roots[0]}
 )
 jq -e '.version == "1.0.0" and (.built_with.rust | startswith("rustc 1.85.1 "))' \
     "$devkit/devkit.json" >/dev/null
+test -s "$devkit/schemas/store-listing-v1.schema.json"
 
 "$devkit/skills/cardputerzero-build-app/scripts/doctor.sh" "$devkit" rust >/dev/null
 env RUSTUP_TOOLCHAIN=1.85.1 "$devkit/bin/cp0ctl" new \
@@ -47,7 +48,17 @@ env RUSTUP_TOOLCHAIN=1.85.1 "$devkit/bin/cp0ctl" \
 env RUSTUP_TOOLCHAIN=1.85.1 \
     "$devkit/skills/cardputerzero-build-app/scripts/verify-app.sh" \
     "$devkit/examples/neon-snake" up,left,down,right,space,space deny 2400 >/dev/null
+env RUSTUP_TOOLCHAIN=1.85.1 \
+    "$devkit/skills/cardputerzero-build-app/scripts/verify-app.sh" \
+    "$devkit/examples/media-controls" "" deny 600 \
+    play-pause,previous,next >/dev/null
 
 test -s "$devkit/examples/neon-snake/target/cardputerzero/skill-verification/frame.ppm"
 test -s "$devkit/examples/neon-snake/target/cardputerzero/skill-verification/profile.json"
+jq -e '
+    .scripted_media_actions == ["play-pause", "previous", "next"] and
+    .media_actions_taken == 3 and
+    .media_session_updates == 4
+' "$devkit/examples/media-controls/target/cardputerzero/skill-verification/profile.json" \
+    >/dev/null
 echo "PASS relocatable CardputerZero App DevKit"

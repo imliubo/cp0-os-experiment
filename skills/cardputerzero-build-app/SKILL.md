@@ -1,6 +1,6 @@
 ---
 name: cardputerzero-build-app
-description: Build, modify, debug, simulate, package, sign, and install applications for CardputerZero OS with its isolated WebAssembly SDK. Use for CardputerZero app ideas, app.json manifests, 320x170 or 320x150 UI, keyboard input, Rust/C/C++ SDK code, cp0ctl workflows, permissions, DevKit setup, simulator failures, .capp packaging, developer signing, or device installation.
+description: Build, modify, debug, simulate, package, sign, submit, and install applications for CardputerZero OS with its isolated WebAssembly SDK. Use for CardputerZero app ideas, app.json manifests, 320x170 or 320x150 UI, keyboard and global media input, Rust/C/C++ SDK code, cp0ctl workflows, permissions, DevKit setup, simulator failures, .capp packaging, developer signing, Store listings or OAuth submission, and provisioned-device installation.
 ---
 
 # Build CardputerZero Apps
@@ -40,6 +40,9 @@ example, or substitute a compiler/toolchain version without reporting it.
   than 30 FPS. Poll input with a bounded timeout.
 - Design for keyboard-only operation, high contrast, stable geometry and the
   physical 320-pixel screen. Never rely on hover, touch or tiny text.
+- For media applications, use the targetless `media` SDK and read the media
+  section of [references/platform-contract.md](references/platform-contract.md).
+  Never treat global media actions as raw focused key events.
 
 ## Create Or Modify
 
@@ -54,8 +57,10 @@ generated files: `app.json`, `Cargo.toml`, and `src/lib.rs`. Preserve the
 generated `cdylib`, release profile, SDK path and exported `main` contract.
 
 For an existing app, inspect those files plus the exact SDK modules it imports.
-Follow local patterns from a nearby current example. Do not add an abstraction
-unless it removes real application complexity.
+Follow local patterns from a nearby current example. Use `examples/neon-snake`
+for stateful UI and storage, and `examples/media-controls` for global media
+actions. Do not add an abstraction unless it removes real application
+complexity.
 
 Implement the smallest complete interaction loop:
 
@@ -73,6 +78,9 @@ matching public SDK module. Give a short user-facing reason. Private storage is
 quota-controlled and needs no permission. Never request a broader permission
 to work around an implementation failure.
 
+Media-session registration needs no permission and grants no audio access.
+Declare `audio.playback` separately when the app actually submits PCM audio.
+
 Read [references/platform-contract.md](references/platform-contract.md) for the
 closed permission vocabulary, limits and input codes. Confirm imports and
 manifest declarations agree before packaging.
@@ -82,7 +90,14 @@ manifest declarations agree before packaging.
 Run the bundled verifier with a representative comma-separated key sequence:
 
 ```sh
-"$SKILL_DIR/scripts/verify-app.sh" APP_DIR left,right,enter deny
+"$SKILL_DIR/scripts/verify-app.sh" APP_DIR left,right,enter deny 1000
+```
+
+For a media app, pass global actions as the fifth optional argument:
+
+```sh
+"$SKILL_DIR/scripts/verify-app.sh" APP_DIR "" deny 1000 \
+  play-pause,previous,next
 ```
 
 Then inspect both the rendered PPM and JSON profile. Exercise at least the
@@ -100,11 +115,18 @@ Read [references/workflows.md](references/workflows.md) before signing or device
 installation. Package reproducibly with `cp0ctl package`, sign with a developer
 key kept outside the project, and verify the signed `.capp` before install.
 
+When Store distribution is requested, read
+[references/store-submission.md](references/store-submission.md). Prepare and
+locally validate the Listing before starting OAuth Device Flow. Do not run the
+internal `store publish` operator workflow or add a Store signature yourself.
+
 Installing changes a real device. Confirm the requested device and that no
 stability, recovery or factory acceptance run is active. Developer mode and a
 trusted developer public key must already be configured by the device owner.
-Never weaken device policy, copy a private key to the device, or bypass
-signature verification.
+Product devices must also have completed first-boot provisioning and explicitly
+enabled SSH. Use the owner-selected SSH account; never assume `pi`, a fixed
+password or a stable IP address. Never weaken device policy, copy a private key
+to the device, or bypass signature verification.
 
 ## Diagnose Failures
 
@@ -122,6 +144,8 @@ narrowest layer before continuing.
 - Logic tests and `verify-app.sh` pass with representative input.
 - The final frame is visually inspected at its real 320-pixel dimensions.
 - Package signature verification passes when distribution is requested.
+- Store Listing validation passes before submission when Store distribution is
+  requested.
 - Device install and physical keys are tested only when authorized and safe.
 - Source, commands, artifact paths and any remaining hardware checks are
   reported to the user.

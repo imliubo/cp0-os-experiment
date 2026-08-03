@@ -219,11 +219,13 @@ impl<B: ConnectivityBackend> ConnectivityServer<B> {
         }
         let mutating = !matches!(request.command, ConnectivityCommand::GetState {});
         let response = self.dispatch(request);
-        if mutating && let ConnectivityOutcome::State { state } = response.outcome {
-            eprintln!(
-                "cp0-connectivityd: audit uid={uid} wifi_enabled={} airplane_mode={}",
-                state.wifi_enabled, state.airplane_mode
-            );
+        if mutating {
+            if let ConnectivityOutcome::State { state } = &response.outcome {
+                eprintln!(
+                    "cp0-connectivityd: audit uid={uid} wifi_enabled={} airplane_mode={}",
+                    state.wifi_enabled, state.airplane_mode
+                );
+            }
         }
         write_response(&mut stream, &response).map_err(protocol_io)
     }

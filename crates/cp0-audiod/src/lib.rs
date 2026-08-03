@@ -615,14 +615,14 @@ impl<D: AudioDevice + AudioOutputDevice> AudioServer<D> {
                 | AudioCommand::SetOutputMuted { .. }
         );
         let response = self.dispatch(request);
-        if mutating
-            && let cp0_audio_protocol::AudioOutcome::OutputState { state } = &response.outcome
-        {
-            eprintln!(
-                "cp0-audiod: audit uid={uid} volume_percent={} muted={}",
-                state.volume_percent.unwrap_or(0),
-                state.muted.unwrap_or(false)
-            );
+        if mutating {
+            if let cp0_audio_protocol::AudioOutcome::OutputState { state } = &response.outcome {
+                eprintln!(
+                    "cp0-audiod: audit uid={uid} volume_percent={} muted={}",
+                    state.volume_percent.unwrap_or(0),
+                    state.muted.unwrap_or(false)
+                );
+            }
         }
         write_response(&mut stream, &response).map_err(protocol_io)
     }

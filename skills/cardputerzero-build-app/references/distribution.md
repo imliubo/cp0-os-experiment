@@ -25,7 +25,8 @@ The native archive is named
 - `sdk/{rust,c,lvgl,wit,abi}`;
 - `simulator/cp0-simulator.mjs`;
 - this Skill under `skills/`;
-- verified examples, version metadata and checksums.
+- verified Neon Snake and Media Controls examples, version metadata and
+  checksums.
 
 Set `CP0_DEVKIT_ROOT` to the extracted root and add its `bin` directory to
 `PATH`. Run this Skill's `scripts/doctor.sh` before creating a project.

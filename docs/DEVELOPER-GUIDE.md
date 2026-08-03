@@ -105,6 +105,9 @@ for the device namespace, seccomp and cgroup tests.
 `examples/neon-snake` is a complete allocation-free game example using the
 display, focused keyboard input, monotonic clock and isolated private storage.
 It includes simulator commands and physical-key controls in its README.
+`examples/media-controls` demonstrates targetless media-session registration
+and deterministic Play/Pause, Previous and Next simulator actions without
+claiming the separate audio permission.
 
 ## Package, sign and install
 
@@ -117,7 +120,7 @@ cargo run -p cp0ctl -- sign developer /tmp/my-clock.capp \
   /tmp/my-clock.developer.capp developer.key
 cargo run -p cp0ctl -- verify /tmp/my-clock.developer.capp
 cargo run -p cp0ctl -- install /tmp/my-clock.developer.capp \
-  --device pi@192.168.20.146
+  --device OWNER@DEVICE_IP
 ```
 
 Device installation succeeds only when the developer key is trusted and the
@@ -126,6 +129,12 @@ device has explicitly enabled developer mode. The mode can be inspected with
 on|off`, unless parent or organization policy locks it. Store distribution adds
 an independent store review signature. Trust and device policy configuration
 is root-owned and is never writable by an application.
+
+Product images contain no fixed `pi` account, password or address. First-boot
+Setup must be complete, and the owner must explicitly enable SSH before remote
+installation or logs can work. Use the owner-selected username and the IP shown
+by trusted Setup/Network UI; never embed test-device credentials in an App or
+distribution script.
 
 Store submission uses the developer-signed package, not an unsigned build and
 not a package that already has a store signature. Review metadata must bind the
@@ -149,7 +158,8 @@ cargo run -p cp0ctl -- store submit \
 
 The CLI uses OAuth Device Flow, bounded resumable chunks and in-memory tokens.
 Its final stdout value is machine-readable JSON with the Submission ID and
-Portal URL. The current manual review/publishing operator then runs:
+Portal URL. Developers stop here. An independent manual review/publishing
+operator may run:
 
 ```sh
 cargo run -p cp0ctl -- store publish \
@@ -176,7 +186,7 @@ catalog; none can be supplied through these commands.
 Application logs are bounded and root-mediated:
 
 ```sh
-cargo run -p cp0ctl -- logs dev.example.clock --device pi@192.168.20.146
+cargo run -p cp0ctl -- logs dev.example.clock --device OWNER@DEVICE_IP
 ```
 
 Media applications register only playback state and supported global actions

@@ -29,6 +29,7 @@ function runController() {
       height,
       permissionMode: options.permissions,
       keys: parseKeys(options.keys),
+      mediaActions: parseMediaActions(options.mediaActions),
     },
   });
 
@@ -76,6 +77,9 @@ function runController() {
       configured_duration_ms: options.duration,
       permission_mode: options.permissions,
       scripted_keys: options.keys ? options.keys.split(",").filter(Boolean) : [],
+      scripted_media_actions: options.mediaActions
+        ? options.mediaActions.split(",").filter(Boolean)
+        : [],
       wasm_bytes: wasm.length,
       frame_bytes: lastFrame.length,
       notifications,
@@ -89,10 +93,13 @@ function runController() {
 }
 
 async function runApplication() {
-  const { wasm, manifest, height, permissionMode, keys } = workerData;
+  const { wasm, manifest, height, permissionMode, keys, mediaActions } = workerData;
   const metrics = emptyMetrics();
   const permissions = new Set((manifest.permissions || []).map((request) => request.name));
   const keyQueue = [...keys];
+  const mediaActionQueue = [...mediaActions];
+  let mediaState = 0;
+  let mediaSupportedActions = 0;
   const storage = new Map();
   const storageQuota = Number(manifest.resources.storage_mb) * 1024 * 1024;
   let storageBytes = 0;
@@ -309,6 +316,35 @@ async function runApplication() {
       range(payloadPointer, payloadCapacity);
       return 0n;
     },
+    cp0_media_session_update(state, supportedActions) {
+      metrics.host_calls += 1;
+      const normalizedState = state >>> 0;
+      const normalizedActions = supportedActions >>> 0;
+      if (
+        normalizedState > 2 ||
+        (normalizedActions & ~0x07) !== 0 ||
+        ((normalizedState === 0) !== (normalizedActions === 0))
+      ) {
+        return ERROR_INVALID;
+      }
+      mediaState = normalizedState;
+      mediaSupportedActions = normalizedActions;
+      metrics.media_session_updates += 1;
+      return 0;
+    },
+    cp0_media_take_action() {
+      metrics.host_calls += 1;
+      if (mediaState === 0) return 0;
+      while (mediaActionQueue.length > 0) {
+        const action = mediaActionQueue.shift();
+        const bit = 1 << (action - 1);
+        if ((mediaSupportedActions & bit) !== 0) {
+          metrics.media_actions_taken += 1;
+          return action;
+        }
+      }
+      return 0;
+    },
   };
 
   const result = await WebAssembly.instantiate(wasm, { cardputerzero: host });
@@ -328,12 +364,14 @@ function emptyMetrics() {
     memory_pages: 0,
     storage_bytes: 0,
     storage_keys: 0,
+    media_session_updates: 0,
+    media_actions_taken: 0,
     capability_calls: {},
   };
 }
 
 function parseArguments(arguments_) {
-  const options = { duration: 1000, permissions: "deny", keys: "" };
+  const options = { duration: 1000, permissions: "deny", keys: "", mediaActions: "" };
   for (let index = 0; index < arguments_.length; index += 1) {
     const name = arguments_[index];
     const value = arguments_[++index];
@@ -343,6 +381,7 @@ function parseArguments(arguments_) {
     else if (name === "--duration") options.duration = Number(value);
     else if (name === "--permissions") options.permissions = value;
     else if (name === "--keys") options.keys = value;
+    else if (name === "--media-actions") options.mediaActions = value;
     else if (name === "--output") options.output = value;
     else if (name === "--profile") options.profile = value;
     else throw new Error(`unknown option ${name}`);
@@ -357,6 +396,16 @@ function parseArguments(arguments_) {
     throw new Error("permissions must be allow or deny");
   }
   return options;
+}
+
+function parseMediaActions(value) {
+  if (!value) return [];
+  const actions = { "play-pause": 1, previous: 2, next: 3 };
+  return value.split(",").map((name) => {
+    const action = actions[name];
+    if (!action) throw new Error(`unknown media action ${name}`);
+    return action;
+  });
 }
 
 function parseKeys(value) {

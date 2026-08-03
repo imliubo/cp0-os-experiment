@@ -21,6 +21,14 @@ cp0ctl run ./my-app --duration 1000 --permissions deny \
   --profile ./my-app/profile.json
 ```
 
+For a media App, use the separate trusted-action fixture:
+
+```sh
+cp0ctl run ./my-app --duration 1000 --permissions deny \
+  --media-actions play-pause,previous,next \
+  --output ./my-app/frame.ppm --profile ./my-app/profile.json
+```
+
 Rust apps are `#![no_std]` `cdylib` crates for `wasm32-unknown-unknown`. Keep the
 generated panic handler and exported `main`. Use only public modules from
 `cp0-sdk`; never declare private imports.
@@ -67,11 +75,13 @@ approval.
 ## Device install and logs
 
 ```sh
-cp0ctl install ./my-app.capp --device pi@DEVICE_IP
-cp0ctl logs dev.example.my-app 100 --device pi@DEVICE_IP
+cp0ctl install ./my-app.capp --device OWNER@DEVICE_IP
+cp0ctl logs dev.example.my-app 100 --device OWNER@DEVICE_IP
 ```
 
-Before install, confirm the device is not running a soak, recovery, update or
-factory acceptance test. The device owner must configure the public trust key
-and developer mode locally. Installation must fail closed when trust or policy
-is missing.
+Before install, confirm first-boot Setup is complete and the device is not
+running a soak, recovery, update or factory acceptance test. Launching an App
+invalidates an active stability run. Product SSH is off by default; the owner
+must enable it and supply the current username/address. The owner must also
+configure the public trust key and developer mode locally. Installation must
+fail closed when provisioning, trust, SSH or policy is missing.

@@ -14,7 +14,9 @@ fi
 grep -Fq '$cardputerzero-build-app' "$skill/agents/openai.yaml"
 grep -Fq 'release-ready project workflow is Rust' "$skill/SKILL.md"
 grep -Fq 'advanced SDK integration preview' "$skill/references/workflows.md"
-for reference in platform-contract workflows distribution troubleshooting; do
+grep -Fq -- '--media-actions' "$skill/references/workflows.md"
+grep -Fq 'cp0ctl store submit' "$skill/references/store-submission.md"
+for reference in platform-contract workflows distribution troubleshooting store-submission; do
     test -s "$skill/references/$reference.md"
     grep -Fq "references/$reference.md" "$skill/SKILL.md"
 done

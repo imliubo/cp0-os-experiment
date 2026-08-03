@@ -25,8 +25,9 @@ The archive contains:
 
 - a relocatable `bin/cp0ctl` for its named host target;
 - Rust, C/C++, WIT, ABI and LVGL SDK sources;
-- the deterministic PC simulator;
-- the `cardputerzero-build-app` Skill and a verified game example;
+- the deterministic PC simulator with focused-key and global-media fixtures;
+- the `cardputerzero-build-app` Skill, Store Listing schema, Neon Snake and
+  Media Controls examples;
 - a machine-readable `devkit.json`, per-file `SHA256SUMS` and archive checksum.
 
 Publish a separate native archive for each supported host. Native archives do
@@ -58,7 +59,8 @@ Before publishing, verify all of the following on every host artifact:
 2. `bin/cp0ctl new` creates a project whose SDK path resolves inside the
    extracted DevKit.
 3. The generated project builds without the source repository.
-4. Neon Snake builds and the simulator produces a 320x150 frame and profile.
+4. Neon Snake and Media Controls build; the simulator produces 320x150 frames,
+   profiles and consumes all scripted global media actions.
 5. The Skill passes its structural validator and its `doctor.sh` reports the
    expected toolchain.
 6. `make check` passes at the release commit.

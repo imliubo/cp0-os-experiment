@@ -74,8 +74,8 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
 - `cp0ctl new/build` SDK-only 项目脚手架、结构化 Cargo metadata 构建和规范应用
   产物目录。
 - 可重定位 App DevKit：固定 Rust/Emscripten 工具链、原生 `cp0ctl`、完整 SDK、
-  模拟器、Neon Snake 示例和 `cardputerzero-build-app` AI Skill，发布归档带逐文件及
-  整包 SHA-256 校验。
+  键盘/媒体动作模拟器、Neon Snake 与 Media Controls 示例、Store Listing schema 和
+  `cardputerzero-build-app` AI Skill，发布归档带逐文件及整包 SHA-256 校验。
 - `pi-gen` app platform stage：构建并安装 appd、broker sockets、静态 Runtime、
   稳定测试身份与 SDK 版 Hello，开发镜像默认进入 System Shell。
 - Freestanding C11/C++17 SDK 1.0 头文件与 wasm32 编译检查，不暴露 WASI/Linux ABI。

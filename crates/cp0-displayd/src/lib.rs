@@ -200,11 +200,12 @@ impl<B: DisplayBackend> DisplayServer<B> {
         }
         let mutating = !matches!(request.command, DisplayCommand::GetState {});
         let response = self.dispatch(request);
-        if mutating
-            && let DisplayOutcome::State { state } = &response.outcome
-            && let Some(percent) = state.brightness_percent
-        {
-            eprintln!("cp0-displayd: audit uid={uid} brightness_percent={percent}");
+        if mutating {
+            if let DisplayOutcome::State { state } = &response.outcome {
+                if let Some(percent) = state.brightness_percent {
+                    eprintln!("cp0-displayd: audit uid={uid} brightness_percent={percent}");
+                }
+            }
         }
         write_response(&mut stream, &response).map_err(protocol_io)
     }

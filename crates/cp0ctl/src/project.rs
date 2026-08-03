@@ -6,6 +6,7 @@ use std::process::Command;
 use cp0_manifest::{AppManifest, DisplayMode, ResourceLimits, Runtime, SCHEMA_VERSION, validate};
 
 const DEVKIT_ROOT_ENV: &str = "CP0_DEVKIT_ROOT";
+const MEDIA_ACTION_NAMES: &str = "play-pause, previous or next";
 
 fn validate_devkit_root(path: PathBuf) -> Result<PathBuf, String> {
     let root = fs::canonicalize(&path).map_err(|error| {
@@ -205,6 +206,7 @@ pub fn run_project(arguments: &[String]) -> Result<(), String> {
     let mut duration = "1000".to_owned();
     let mut permissions = "deny".to_owned();
     let mut keys = String::new();
+    let mut media_actions = String::new();
     let mut output = simulator_output.join("frame.ppm");
     let mut profile = simulator_output.join("profile.json");
 
@@ -228,6 +230,12 @@ pub fn run_project(arguments: &[String]) -> Result<(), String> {
             }
             "--permissions" => return Err("run permissions must be allow or deny".into()),
             "--keys" => keys.clone_from(value),
+            "--media-actions" if valid_media_actions(value) => media_actions.clone_from(value),
+            "--media-actions" => {
+                return Err(format!(
+                    "run media actions must be a comma-separated list of {MEDIA_ACTION_NAMES}"
+                ));
+            }
             "--output" => output = PathBuf::from(value),
             "--profile" => profile = PathBuf::from(value),
             _ => return Err(format!("unknown run option {option}")),
@@ -253,6 +261,7 @@ pub fn run_project(arguments: &[String]) -> Result<(), String> {
         .args(["--duration", &duration])
         .args(["--permissions", &permissions])
         .args(["--keys", &keys])
+        .args(["--media-actions", &media_actions])
         .args(["--output", &output.to_string_lossy()])
         .args(["--profile", &profile.to_string_lossy()])
         .status()
@@ -261,6 +270,13 @@ pub fn run_project(arguments: &[String]) -> Result<(), String> {
         return Err("CardputerZero simulator failed".into());
     }
     Ok(())
+}
+
+fn valid_media_actions(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .split(',')
+            .all(|action| matches!(action, "play-pause" | "previous" | "next"))
 }
 
 fn toml_string(value: &str) -> String {
@@ -321,5 +337,14 @@ mod tests {
         let output = build_project(&path).unwrap();
         assert!(output.join("app.json").is_file());
         assert!(output.join("bin/generated.wasm").is_file());
+    }
+
+    #[test]
+    fn accepts_only_closed_media_action_names() {
+        assert!(valid_media_actions("play-pause"));
+        assert!(valid_media_actions("previous,next,play-pause"));
+        for value in ["", "play", "Play-Pause", "next,", "previous,,next"] {
+            assert!(!valid_media_actions(value));
+        }
     }
 }

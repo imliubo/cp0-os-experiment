@@ -36,6 +36,19 @@ F1-F4 may be intercepted as global System Shell actions on the device. Do not
 make them the only route to an app feature. Letter and number codes follow the
 closed simulator map in `simulator/cp0-simulator.mjs`.
 
+## Global media actions
+
+Media Play/Pause, Previous and Next are trusted System Shell actions (`Fn+Q`,
+`Fn+W` and `Fn+E` on V0.6), not focused key events. Register only playback
+state and a supported-action mask with `media::update_session`, then consume
+each routed action once with `media::take_action`. The call contains no App ID,
+title, artwork, path or target; appd binds it to the authenticated foreground
+Runtime. Registering an inactive session requires an empty mask; paused or
+playing requires at least one supported action.
+
+The simulator accepts `--media-actions play-pause,previous,next`. This fixture
+tests registration and action handling without granting `audio.playback`.
+
 ## Manifest
 
 `app.json` schema version 1 requires a stable reverse-domain ID, display name,
@@ -60,9 +73,20 @@ Private `storage` is always identity-bound and limited by
 `resources.storage_mb`; it has no permission name. Intents must be explicitly
 declared and use reverse-domain actions. Apps cannot select another app by ID.
 
+The `media` module is targetless coordination state and has no permission name.
+It never substitutes for `audio.playback`.
+
 ## Isolation rules
 
 Never add host paths, network addresses, device nodes, shell text, UIDs, socket
 paths or secrets to application code as an escape hatch. Capability brokers
 bind requests to the calling app identity and permission decision. A denial is
 part of the product behavior and must have a usable UI state.
+
+## Device readiness
+
+A product device exposes no fixed human account or password. First-boot Setup
+creates the owner, chooses networking and keeps SSH off unless the owner opts
+in. Setup blocks third-party App activation until its durable commit completes.
+Treat the visible IP and owner-selected username as device state, not constants
+to embed in source, scripts or Skill output.
