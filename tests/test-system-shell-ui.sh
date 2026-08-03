@@ -101,7 +101,7 @@ mkdir -p "$snapshot_dir"
     -o "$work_dir/system-shell-screenshot-store-test"
 "$work_dir/system-shell-screenshot-store-test" "$work_dir/screenshot-store"
 
-snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-auto-update.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-metrics-confirm.ppm settings-metrics.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm setup-busy.ppm setup-complete.ppm setup-hostname.ppm setup-network.ppm setup-password.ppm setup-repair.ppm setup-review.ppm setup-welcome.ppm setup-wifi.ppm store-background-progress.ppm store-description.ppm store-detail.ppm store-failed.ppm store-install-confirm.ppm store-install-storage.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-today-collection.ppm store-today.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm system-media-busy.ppm system-media-failed.ppm system-media-sent.ppm system-media-unavailable.ppm system-screenshot-saved.ppm system-screenshot-unavailable.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
+snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-auto-update.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-display.ppm settings-metrics-confirm.ppm settings-metrics.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings.ppm setup-busy.ppm setup-complete.ppm setup-hostname.ppm setup-network.ppm setup-password.ppm setup-repair.ppm setup-review.ppm setup-welcome-waiting.ppm setup-welcome.ppm setup-wifi.ppm store-background-progress.ppm store-description.ppm store-detail.ppm store-failed.ppm store-install-confirm.ppm store-install-storage.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-today-collection.ppm store-today.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm system-media-busy.ppm system-media-failed.ppm system-media-sent.ppm system-media-unavailable.ppm system-screenshot-saved.ppm system-screenshot-unavailable.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
 if command -v sha256sum >/dev/null 2>&1; then
     actual=$(cd "$snapshot_dir" && sha256sum $snapshot_files)
 else
@@ -141,15 +141,16 @@ a6a85b75eb936c509e68d1a1058035d1f4314cbe280aaff25bad014af3ba3840  settings-metri
 f10e4e270371f6eaab38e4125f37e40f1fb9a17c3b5ef5473425e7b057fd3be4  settings-sound.ppm
 fb1ac2961e301b90c29719745d313c17910f4c938a7a03992abb4fc1e225e3ef  settings-system.ppm
 cc4e5bbf3f6dee26b0b6514661481c9217abe354a1dfa3459eac8cc7c7b27340  settings.ppm
-5416460c4513701b43f51ada8dd0b2d3175ac6d0f8765191bce53703b30d78be  setup-busy.ppm
-20f3f3d47a167b725215e9233feea6e0db1a544e26d2807cc17f4457ae42c5f9  setup-complete.ppm
-09f26dfd916a8d1e4914f3747482d69f8ba8423dcdcbc2c284538f26f646335d  setup-hostname.ppm
-f3f9fc46741bedad1cb45a7c6de6866246ae34bac58b28888d671d5aeb6a9d8b  setup-network.ppm
-f56d677aef06afd31fb9fdcd0f6a44b78372506d13f0ddd037848cdbb284adfe  setup-password.ppm
-d1b0935698d54b9a322fb46c854e0a0aa1500cb762cd5639c15b2321a810007c  setup-repair.ppm
-7bc8d15bc327646fe6e2b3151d365193403473227a1fccb8a118f22ead606ec1  setup-review.ppm
-5757144fe57fe9d4578659e533720f9a2f49d69321e9ff07964b7e9c59201a5b  setup-welcome.ppm
-9f82e5d0ff17f7e4f1884971dab1f52f4c8297988cbb1994a65d962ddfba5ef4  setup-wifi.ppm
+91495731785b1c8135353c6e5280a50ea698f325cc8faca7ed0b5b026c5024e4  setup-busy.ppm
+196103d7d6b019e86f52f8befdc7bef84db1b511555b84c58aa7b2df458517ba  setup-complete.ppm
+a1d26aa490162a052e5934d66dbbf30e4131d2753345c3eedd7104fb042a54da  setup-hostname.ppm
+5c6e06d4992152f217c7b112619599f8159da11eb56f6c35d5a0f274e657b5b2  setup-network.ppm
+43161b7d5de7ed145f036e7e6aae5ca51896680afa3c9e555d884050cb11c050  setup-password.ppm
+0aae1c5153276fa6bfc87eee1842dadcc508778ef295e75e67b27ced95232cdb  setup-repair.ppm
+40806269623d6d19bd1e2c7eec4da348a23f933492f96bbecbb3865d2bf20f0d  setup-review.ppm
+f6999fa406cdef009784c92973bd86bc7e33548a4b684c16764ca6fbb47dd0e9  setup-welcome-waiting.ppm
+fc8dc1e0f4e5374ed0c1ca4587738617bfb7dedf897191e5f9a06f5f1cd19879  setup-welcome.ppm
+4a8644d2400560f32a875418a3b27455b08421ce15e6c599a0f6f8f85fb78e79  setup-wifi.ppm
 22ab6d4b687a348cd5fc6f045aa71f7638258a530ed0673be62661364cbcd0c3  store-background-progress.ppm
 4c6117c8ed1a6ceb6555f2e058d7a42892f03f5fc5dc3c29d59890e803a13fab  store-description.ppm
 714a26b2be741003e0699b8b20e718c454168655db52a7ba5c36e7656c711d94  store-detail.ppm

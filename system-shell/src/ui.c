@@ -393,6 +393,7 @@ static void draw_battery(struct canvas *canvas, int percent)
 static void draw_status_bar(struct canvas *canvas, const struct cp0_ui *ui)
 {
     char store_status[12];
+    char setup_address[CP0_UI_SETUP_IPV4_MAX + 4];
 
     fill_rect(canvas, 0, 0, CP0_UI_WIDTH, 21, COLOR_BAR);
     fill_rect(canvas, 0, 20, CP0_UI_WIDTH, 1, COLOR_GREEN);
@@ -411,8 +412,18 @@ static void draw_status_bar(struct canvas *canvas, const struct cp0_ui *ui)
                       ? COLOR_GREEN
                       : COLOR_YELLOW);
     }
-    draw_text(canvas, 145, 7, ui->clock_text, 1, COLOR_MUTED);
-    draw_network_icon(canvas, ui->network_online);
+    if (ui->setup_active) {
+        snprintf(setup_address, sizeof(setup_address), "IP %s",
+                 ui->network_ipv4[0] != '\0' ? ui->network_ipv4 : "WAITING");
+        int address_x = 282 - (int)strlen(setup_address) * 6;
+        if (address_x < 110)
+            address_x = 110;
+        draw_text(canvas, address_x, 7, setup_address, 1,
+                  ui->network_ipv4[0] != '\0' ? COLOR_GREEN : COLOR_YELLOW);
+    } else {
+        draw_text(canvas, 145, 7, ui->clock_text, 1, COLOR_MUTED);
+        draw_network_icon(canvas, ui->network_online);
+    }
     draw_battery(canvas, ui->battery_percent);
 }
 

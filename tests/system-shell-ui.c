@@ -417,6 +417,15 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
 
     cp0_ui_init(ui);
     cp0_ui_setup_begin(ui, CP0_UI_SETUP_WELCOME);
+    write_snapshot(directory, "setup-welcome-waiting", ui, frame);
+    const struct cp0_ui_network_info setup_network_info = {
+        .available = true,
+        .online = true,
+        .link_up = true,
+        .interface_name = "eth0",
+        .ipv4_address = "192.168.51.121",
+    };
+    cp0_ui_set_network_info(ui, &setup_network_info);
     write_snapshot(directory, "setup-welcome", ui, frame);
     ui->setup_page = CP0_UI_SETUP_HOSTNAME;
     snprintf(ui->setup_hostname, sizeof(ui->setup_hostname), "cp0-bedroom");

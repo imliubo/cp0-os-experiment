@@ -72,6 +72,11 @@ recoverable page.
 
 Each page uses a fixed header, at most four visible rows, one primary action and
 one concise help/error area. Long lists scroll without resizing the surface.
+The header continuously shows the selected non-loopback IPv4 address and
+refreshes it once per second. Before DHCP completes it shows `IP WAITING`.
+This address comes directly from kernel interfaces, so it remains visible on
+Welcome and error pages even when the provisioning daemon is unavailable, and
+can be used for one-boot maintenance SSH without mDNS discovery.
 
 1. **Welcome and regional locale**: the first release renders Setup in English
    and selects either the generated `en_US` or `zh_CN` system locale. Full Shell
