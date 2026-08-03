@@ -1,9 +1,7 @@
 # Phase 6G: production access profile
 
-> This is the currently implemented interim profile. The proposed first-boot
-> owner model in `FIRST-BOOT-PROVISIONING.md` and ADR 0007 will replace its
-> fixed, locked pi-gen identity after product approval and implementation. No
-> first-boot behavior has changed yet.
+> The first-boot owner model in `FIRST-BOOT-PROVISIONING.md` and ADR 0007 is the
+> current production access contract.
 
 ## Boundary
 
@@ -18,19 +16,17 @@ network maintenance boundary is closed by default:
 - pi-gen receives a generated 256-bit temporary password only because its stage
   contract requires one; the exported account is locked and uses `nologin`;
 - the first user retains no sudo, device, network or diagnostic group;
-- SSH, SSH key preparation, host-key generation and local/serial getty units
-  are disabled and masked;
+- SSH and local/serial getty units are unavailable during Setup;
 - the home directory contains no SSH authorization directory;
 - root remains locked;
 - Developer Mode and Recovery Boot are locked off by the root-owned production
   device policy.
 
-The image also carries a conditional, one-boot maintenance sshd. It has no
-embedded key and no password path, and does not start unless a physically
-present operator writes a versioned marker plus one ED25519 public key to the
-FAT boot partition. The inputs are consumed before listening and access ends
-on reboot. This narrow first-boot hot-update path is specified in
-`MAINTENANCE-HOT-UPDATE.md`.
+The product image contains no conditional maintenance sshd, boot-partition
+enable marker, pre-Setup authorized-key path or first-boot hot updater. Writing
+files to the FAT boot partition cannot open a network login path. Ordinary SSH
+is generated and gated only after provisioning is complete and the owner has
+explicitly selected SSH On; root login remains prohibited.
 
 NetworkManager, the compositor, System Shell, appd and the capability brokers
 remain available. This access profile changes maintenance authority, not the
@@ -62,8 +58,8 @@ Persistent and unrestricted maintenance uses a separately built recovery SD
 with an operator-selected one-time password or key. Booting that removable
 image is the physical authorization ceremony; removing it revokes access. The
 recovery image does not automatically mount `cp0-data`, and all product
-application entry points remain masked there. The boot-marker maintenance mode
-is deliberately narrower and changes only the current RAM-backed root overlay.
+application entry points remain masked there. There is no boot-marker
+maintenance mode in a product image.
 
 This design avoids placing a fleet-wide or per-release login secret in the
 product image. It does not protect an SD card from offline replacement and does

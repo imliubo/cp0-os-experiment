@@ -473,20 +473,24 @@ int main(int argc, char **argv)
 
     static const struct {
         uint32_t key;
-        char character;
+        char plain;
+        char shifted;
     } symbol_keys[] = {
-        {26, '!'}, {27, '@'}, {39, '#'}, {40, '$'}, {41, '%'},
-        {43, '^'}, {51, '&'}, {52, '*'}, {53, '('}, {94, ')'},
-        {55, '~'}, {69, '`'}, {70, '_'}, {71, '-'}, {72, '+'},
-        {73, '='}, {74, '['}, {75, ']'}, {76, '{'}, {77, '}'},
-        {79, ';'}, {80, ':'}, {81, '\''}, {82, '"'}, {83, '<'},
-        {85, '>'}, {86, '\\'}, {89, '|'}, {90, ','}, {91, '.'},
-        {92, '/'}, {93, '?'},
+        {2, '1', '!'},  {3, '2', '@'},  {4, '3', '#'},
+        {5, '4', '$'},  {6, '5', '%'},  {7, '6', '^'},
+        {8, '7', '&'},  {9, '8', '*'},  {10, '9', '('},
+        {11, '0', ')'}, {12, '-', '_'}, {13, '=', '+'},
+        {26, '[', '{'}, {27, ']', '}'}, {39, ';', ':'},
+        {40, '\'', '"'}, {41, '`', '~'}, {43, '\\', '|'},
+        {51, ',', '<'}, {52, '.', '>'}, {53, '/', '?'},
     };
     for (size_t index = 0;
-         index < sizeof(symbol_keys) / sizeof(symbol_keys[0]); index++)
+         index < sizeof(symbol_keys) / sizeof(symbol_keys[0]); index++) {
         assert(cp0_ui_key_character(symbol_keys[index].key, false) ==
-               symbol_keys[index].character);
+               symbol_keys[index].plain);
+        assert(cp0_ui_key_character(symbol_keys[index].key, true) ==
+               symbol_keys[index].shifted);
+    }
     assert(cp0_ui_key_character(30, false) == 'a');
     assert(cp0_ui_key_character(30, true) == 'A');
     static const uint32_t letter_keys[] = {
@@ -501,7 +505,9 @@ int main(int argc, char **argv)
                (char)(lowercase - 'a' + 'A'));
     }
     assert(cp0_ui_key_character(2, false) == '1');
+    assert(cp0_ui_key_character(2, true) == '!');
     assert(cp0_ui_key_character(11, false) == '0');
+    assert(cp0_ui_key_character(11, true) == ')');
     assert(cp0_ui_key_character(12, false) == '-');
     assert(cp0_ui_key_character(12, true) == '_');
     assert(cp0_ui_key_character(57, false) == ' ');
@@ -1455,16 +1461,24 @@ int main(int argc, char **argv)
            CP0_UI_EVENT_SETUP_SET_REGION);
     cp0_ui_setup_result(&ui, CP0_UI_EVENT_SETUP_SET_REGION, true, NULL);
     assert(ui.setup_page == CP0_UI_SETUP_DISPLAY_NAME);
+    assert(cp0_ui_setup_input_ascii(&ui, 'O'));
+    assert(cp0_ui_setup_input_ascii(&ui, 'w'));
+    assert(cp0_ui_setup_backspace(&ui));
     snprintf(ui.setup_display_name, sizeof(ui.setup_display_name), "Owner");
     cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
     snprintf(ui.setup_username, sizeof(ui.setup_username), "owner");
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_SETUP_SET_OWNER);
     cp0_ui_setup_result(&ui, CP0_UI_EVENT_SETUP_SET_OWNER, true, NULL);
-    snprintf(ui.setup_password, sizeof(ui.setup_password), "long-password");
+    static const char printable_password[] =
+        "Aa1!@#$%^&*()_+-=[]{};:'\"~`\\|,.<>/?";
+    for (size_t index = 0; index < strlen(printable_password); index++)
+        assert(cp0_ui_setup_input_ascii(&ui, printable_password[index]));
+    assert(strcmp(ui.setup_password, printable_password) == 0);
     cp0_ui_handle_action(&ui, CP0_UI_ACCEPT);
-    snprintf(ui.setup_password_confirm, sizeof(ui.setup_password_confirm),
-             "long-password");
+    for (size_t index = 0; index < strlen(printable_password); index++)
+        assert(cp0_ui_setup_input_ascii(&ui, printable_password[index]));
+    assert(strcmp(ui.setup_password_confirm, printable_password) == 0);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_SETUP_SET_PASSWORD);
     cp0_ui_setup_result(&ui, CP0_UI_EVENT_SETUP_SET_PASSWORD, true, NULL);

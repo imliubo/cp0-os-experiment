@@ -48,7 +48,7 @@ http_proxy="$APT_PROXY" https_proxy="$APT_PROXY" \
     git clone --no-checkout "${BSP_REPOSITORY}" /tmp/cardputerzero-bsp
 git -C /tmp/cardputerzero-bsp checkout "${BSP_COMMIT}"
 test "\$(git -C /tmp/cardputerzero-bsp rev-parse HEAD)" = "${BSP_COMMIT}"
-git -C /tmp/cardputerzero-bsp apply \
+git -C /tmp/cardputerzero-bsp apply --unidiff-zero \
     /tmp/0001-tca8418-flush-synthetic-shift.patch
 rm -f /tmp/0001-tca8418-flush-synthetic-shift.patch
 
@@ -173,15 +173,6 @@ install -D -m 0755 "${STAGE_DIR}/00-bsp/files/prepare-ssh.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/prepare-ssh.sh"
 install -D -m 0644 "${STAGE_DIR}/00-bsp/files/cardputerzero-ssh-prepare.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-ssh-prepare.service"
-install -D -m 0755 "${STAGE_DIR}/00-bsp/files/prepare-maintenance-ssh.sh" \
-    "${ROOTFS_DIR}/usr/libexec/cardputerzero/prepare-maintenance-ssh.sh"
-install -D -m 0755 "${STAGE_DIR}/00-bsp/files/hot-update-firstboot.sh" \
-    "${ROOTFS_DIR}/usr/libexec/cardputerzero/hot-update-firstboot.sh"
-install -D -m 0644 \
-    "${STAGE_DIR}/00-bsp/files/cardputerzero-maintenance-ssh.service" \
-    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-maintenance-ssh.service"
-install -D -m 0600 "${STAGE_DIR}/00-bsp/files/maintenance-sshd_config" \
-    "${ROOTFS_DIR}/usr/lib/cardputerzero/maintenance-sshd_config"
 install -D -m 0644 "${STAGE_DIR}/00-bsp/files/avahi-daemon.conf" \
     "${ROOTFS_DIR}/etc/avahi/avahi-daemon.conf"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/cardputerzero-firmware.initramfs-hook" \
@@ -373,7 +364,6 @@ systemctl mask --force \
     regenerate_ssh_host_keys.service getty@.service getty@tty1.service \
     serial-getty@.service serial-getty@serial0.service \
     cardputerzero-recovery-console.service
-systemctl enable cardputerzero-maintenance-ssh.service
 CHROOT
 fi
 

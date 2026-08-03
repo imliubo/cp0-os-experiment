@@ -76,7 +76,8 @@ The header continuously shows the selected non-loopback IPv4 address and
 refreshes it once per second. Before DHCP completes it shows `IP WAITING`.
 This address comes directly from kernel interfaces, so it remains visible on
 Welcome and error pages even when the provisioning daemon is unavailable, and
-can be used for one-boot maintenance SSH without mDNS discovery.
+can be used for local network diagnosis without implying that a listener is
+available before Setup completes.
 
 1. **Welcome and regional locale**: the first release renders Setup in English
    and selects either the generated `en_US` or `zh_CN` system locale. Full Shell
@@ -112,10 +113,13 @@ can be used for one-boot maintenance SSH without mDNS discovery.
 Keyboard behavior is consistent on every page: Up/Down moves focus, Left/Right
 changes a value, Enter activates, Backspace edits, and ESC goes back when safe.
 The V0.6 BSP commits an ASMUX-generated Shift press in its own input frame
-before the selected character. The Shell then derives held Shift from the
-compositor-provided XKB keymap and depressed/latched/locked modifier masks,
-with the raw key event retained as a fallback. This keeps unshifted letters
-lower-case, held-Shift letters upper-case and the BSP's Sym layer independent.
+before the selected character. The Sym layer translates every printed ASCII
+symbol to its standard US Linux evdev base key and synthesizes Shift for
+`!@#$%^&*()~_+{}:"<>|?`. Unshifted symbols use the same standard keys for
+`` `-=[];'\\,./ ``. The Shell derives held Shift from the compositor-provided
+XKB keymap and depressed/latched/locked modifier masks, with the raw key event
+retained as a fallback. Setup, system text fields and SDK applications therefore
+receive the same lower-case, upper-case and symbol semantics.
 Password pages disable key-click sound, mask text by default and must never
 appear with cleartext in screenshots, crash reports or support bundles.
 
@@ -458,11 +462,14 @@ phase; plaintext buffers are cleared when the returned phase crosses their
 durable boundary. Host tests now restart the daemon at every step across all
 six Ethernet/Wi-Fi/offline and SSH On/Off combinations.
 
-To stop using full-media burns as the diagnostic loop, the next image also
-includes the physically armed, one-boot ED25519 maintenance path documented in
-`MAINTENANCE-HOT-UPDATE.md`. It permits volatile user-space binary replacement
-with automatic rollback, but never persists a key, password or update and
-cannot update BSP or boot components.
+An earlier diagnostic candidate temporarily carried a physically armed,
+one-boot ED25519 maintenance path so provisioning defects could be isolated
+without repeated full-media burns. It was never an owner feature. After the
+complete Setup flow passed on V0.6, the path, boot markers, root sshd, volatile
+updater and fixed maintenance mDNS identity were removed from production.
+Mounted-image gates now reject any of those files or units. Before completion,
+port 22 stays closed regardless of boot-partition contents; afterward ordinary
+sshd requires both the durable completion marker and explicit SSH consent.
 
 The V0.6 hot-update run at `192.168.20.66` then reproduced the Device Name
 failure as `invalid provisioning state: symbolic link is not allowed`. Raspberry
@@ -477,13 +484,12 @@ Wi-Fi scan, Ethernet selection and SSH consent on the device and reached Review.
 That run exposed a final transaction-order issue. `ssh.service` requires both
 the completion and SSH-enabled markers, while the old commit implementation
 started it before publishing completion. systemd correctly skipped the start,
-then maintenance SSH stopped, leaving port 22 closed even though both markers
-were ultimately durable. Commit now persists `COMMITTING`, publishes completion,
-activates gated SSH, and finally persists `COMPLETE`. Recovery tests cover
-crashes before and after marker publication. The one-boot updater was also
-corrected for the production `/run` `noexec` mount: it validates a staged file
-as regular, non-symlink, non-empty, root-owned and mode `0700`, then copies it to
-the executable volatile overlay instead of requiring `[ -x ]` on `/run`.
+then the temporary diagnostic SSH stopped, leaving port 22 closed even though
+both markers were ultimately durable. Commit now persists `COMMITTING`,
+publishes completion, activates gated SSH, and finally persists `COMPLETE`.
+Recovery tests cover
+crashes before and after marker publication. That diagnostic route is retained
+only as historical test evidence and is absent from subsequent product images.
 
 The corresponding production candidate is
 `image_2026-08-03-firstboot-stable-d12383c-cp0-os-production.img.xz`; its mounted

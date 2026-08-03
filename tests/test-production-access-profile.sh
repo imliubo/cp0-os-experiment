@@ -59,7 +59,11 @@ grep -Fq 'temporary product build identity remains' "$bsp"
 grep -Fq 'test -e /usr/lib/libnss_extrausers.so.2' "$bsp"
 grep -Fq 'locale-gen en_US.UTF-8 zh_CN.UTF-8' "$bsp"
 grep -Fq '${STAGE_DIR}/00-bsp/files/0001-tca8418-flush-synthetic-shift.patch' "$bsp"
-test "$(grep -c '^+.*input_sync(keypad_data->input);' "$keyboard_patch")" -eq 4
+test "$(grep -c '^+.*input_sync(keypad_data->input);' "$keyboard_patch")" -eq 6
+test "$(grep -c '^+.*{ KEY_.*KEY_.*\(true\|false\) },$' "$keyboard_patch")" -eq 32
+grep -Fq 'tca8418_translate_symbol_key' "$keyboard_patch"
+grep -Fq 'input_set_capability(input, EV_KEY, KEY_SLASH)' "$keyboard_patch"
+grep -Fq 'git -C /tmp/cardputerzero-bsp apply --unidiff-zero' "$bsp"
 if grep -Fq 'libpam-extrausers' \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/00-packages-nr"; then
     echo "error: unavailable Debian package libpam-extrausers is requested" >&2
@@ -71,7 +75,10 @@ if grep -Fq 'systemctl mask --force ssh.service ssh.socket' "$bsp"; then
 fi
 grep -Fq 'serial-getty@.service' "$bsp"
 grep -Fq 'cardputerzero-recovery-console.service' "$bsp"
-grep -Fq 'systemctl enable cardputerzero-maintenance-ssh.service' "$bsp"
+if grep -Eq 'maintenance-ssh|cp0-maintenance|hot-update-firstboot' "$bsp"; then
+    echo "error: production BSP contains pre-Setup remote access" >&2
+    exit 1
+fi
 grep -Fq 'device-policy-production.json' "$platform"
 grep -Fq 'product:production) IMG_SUFFIX="-cp0-os-production"' \
     "$export_profile"
@@ -79,6 +86,7 @@ grep -Fq 'production image contains a human account' "$verifier"
 grep -Fq 'production build identity residue remains' "$verifier"
 grep -Fq 'production image enables SSH before owner consent' "$verifier"
 grep -Fq 'production image preauthorizes maintenance access' "$verifier"
+grep -Fq 'production image contains pre-Setup remote access' "$verifier"
 grep -Fq 'production access unit is not masked' "$verifier"
 grep -Fq '.developer_mode_allowed == false' "$verifier"
 

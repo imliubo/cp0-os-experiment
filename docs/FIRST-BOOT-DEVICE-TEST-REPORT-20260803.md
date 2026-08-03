@@ -1,5 +1,9 @@
 # CardputerZero V0.6 first-boot device test report
 
+> Historical diagnostic report. The one-boot maintenance SSH and hot-update
+> mechanism used for this run was removed after Setup completed successfully.
+> Current product images expose SSH only after completion and explicit consent.
+
 ## Test identity
 
 - Date: 2026-08-03, Asia/Shanghai
@@ -100,4 +104,3 @@ sha256: 40aae6933d22bc64a3697a568d11e0c6edbe65b6ee792f74851064140934733d
    then confirm deterministic resume without a second owner.
 7. Confirm completion transitions to Home and ten subsequent cold boots do not
    reopen Setup.
-

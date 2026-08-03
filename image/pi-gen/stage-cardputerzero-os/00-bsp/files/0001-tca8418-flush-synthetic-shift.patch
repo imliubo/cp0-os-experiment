@@ -1,47 +1,127 @@
 From: CardputerZero OS <os@cardputerzero.local>
-Subject: [PATCH] Input: tca8418: flush synthetic Shift presses
+Subject: [PATCH] Input: tca8418: emit standard shifted symbols
 
 The V0.6 ASMUX state machine can synthesize KEY_LEFTSHIFT immediately before
 the selected character in the same hardware event. Commit the modifier first
 so libinput and Wayland update keyboard state before delivering the character.
 
+The Sym layer currently exposes printable characters as unrelated keypad and
+international keycodes. Translate those encoded values to standard US evdev
+keys and synthesize Shift where needed. Setup, the System Shell, and SDK apps
+then receive the same portable keycode and modifier semantics.
+
 ---
- modules/tca8418-1.0/tca8418_keypad_m5stack.c | 4 ++++
- 1 file changed, 4 insertions(+)
+ modules/tca8418-1.0/tca8418_keypad_m5stack.c | 92 ++++++++++++++++++++
+ 1 file changed, 92 insertions(+)
 
 diff --git a/modules/tca8418-1.0/tca8418_keypad_m5stack.c b/modules/tca8418-1.0/tca8418_keypad_m5stack.c
-index fd452bf..5f763ec 100644
+index fd452bf..382f28c 100644
 --- a/modules/tca8418-1.0/tca8418_keypad_m5stack.c
 +++ b/modules/tca8418-1.0/tca8418_keypad_m5stack.c
-@@ -538,6 +538,7 @@ static void tca8418_asmux_longpress_work(struct work_struct *work)
- 	keypad_data->asmux_longpress = true;
- 	tca8418_report_key(keypad_data, keypad_data->asmux_button_code,
- 			    KEY_LEFTSHIFT, true);
+@@ -211,0 +212 @@ struct tca8418_keypad {
++	bool *symbol_shifted;
+@@ -368,0 +370,55 @@ static void tca8418_report_key(struct tca8418_keypad *keypad_data,
++struct tca8418_symbol_translation {
++	unsigned int encoded;
++	unsigned int keycode;
++	bool shifted;
++};
++
++static const struct tca8418_symbol_translation tca8418_symbols[] = {
++	{ KEY_LEFTBRACE, KEY_1, true },
++	{ KEY_RIGHTBRACE, KEY_2, true },
++	{ KEY_SEMICOLON, KEY_3, true },
++	{ KEY_APOSTROPHE, KEY_4, true },
++	{ KEY_GRAVE, KEY_5, true },
++	{ KEY_BACKSLASH, KEY_6, true },
++	{ KEY_COMMA, KEY_7, true },
++	{ KEY_DOT, KEY_8, true },
++	{ KEY_SLASH, KEY_9, true },
++	{ KEY_MUHENKAN, KEY_0, true },
++	{ KEY_KPASTERISK, KEY_GRAVE, true },
++	{ KEY_NUMLOCK, KEY_GRAVE, false },
++	{ KEY_SCROLLLOCK, KEY_MINUS, true },
++	{ KEY_KP7, KEY_MINUS, false },
++	{ KEY_KP8, KEY_EQUAL, true },
++	{ KEY_KP9, KEY_EQUAL, false },
++	{ KEY_KPMINUS, KEY_LEFTBRACE, false },
++	{ KEY_KP4, KEY_RIGHTBRACE, false },
++	{ KEY_KP5, KEY_LEFTBRACE, true },
++	{ KEY_KP6, KEY_RIGHTBRACE, true },
++	{ KEY_KP1, KEY_SEMICOLON, false },
++	{ KEY_KP2, KEY_SEMICOLON, true },
++	{ KEY_KP3, KEY_APOSTROPHE, false },
++	{ KEY_KP0, KEY_APOSTROPHE, true },
++	{ KEY_KPDOT, KEY_COMMA, true },
++	{ KEY_ZENKAKUHANKAKU, KEY_DOT, true },
++	{ KEY_102ND, KEY_BACKSLASH, false },
++	{ KEY_RO, KEY_BACKSLASH, true },
++	{ KEY_KATAKANA, KEY_COMMA, false },
++	{ KEY_HIRAGANA, KEY_DOT, false },
++	{ KEY_HENKAN, KEY_SLASH, false },
++	{ KEY_KATAKANAHIRAGANA, KEY_SLASH, true },
++};
++
++static bool tca8418_translate_symbol_key(unsigned int *keycode)
++{
++	size_t i;
++
++	for (i = 0; i < ARRAY_SIZE(tca8418_symbols); i++) {
++		if (tca8418_symbols[i].encoded != *keycode)
++			continue;
++		*keycode = tca8418_symbols[i].keycode;
++		return tca8418_symbols[i].shifted;
++	}
++
++	return false;
++}
++
+@@ -546,0 +603 @@ static void tca8418_asmux_longpress_work(struct work_struct *work)
 +	input_sync(keypad_data->input);
- 	tca8418_asmux_update_led(keypad_data);
- }
- 
-@@ -563,6 +564,7 @@ static void tca8418_handle_asmux_key(struct tca8418_keypad *keypad_data,
- 				keypad_data->asmux_locked = true;
- 				tca8418_report_key(keypad_data, scan_code,
- 						    KEY_LEFTSHIFT, true);
+@@ -572,0 +630 @@ static void tca8418_handle_asmux_key(struct tca8418_keypad *keypad_data,
 +				input_sync(keypad_data->input);
- 			} else {
- 				keypad_data->asmux_second_click = true;
- 			}
-@@ -630,5 +632,6 @@ static void tca8418_consume_asmux_oneshot(struct tca8418_keypad *keypad_data,
- 	cancel_delayed_work_sync(&keypad_data->asmux_blink_off_work);
- 	tca8418_report_key(keypad_data, scan_code, KEY_LEFTSHIFT, true);
+@@ -631,0 +690 @@ static void tca8418_consume_asmux_oneshot(struct tca8418_keypad *keypad_data,
 +	input_sync(keypad_data->input);
- 	tca8418_asmux_update_led(keypad_data);
- }
- 
-@@ -645,5 +648,6 @@ static void tca8418_activate_asmux_hold(struct tca8418_keypad *keypad_data)
- 	keypad_data->asmux_longpress = true;
- 	tca8418_report_key(keypad_data, keypad_data->asmux_button_code,
- 			    KEY_LEFTSHIFT, true);
+@@ -647,0 +707 @@ static void tca8418_activate_asmux_hold(struct tca8418_keypad *keypad_data)
 +	input_sync(keypad_data->input);
- 	tca8418_asmux_update_led(keypad_data);
- }
+@@ -687,0 +748 @@ static void tca8418_handle_key_new(struct tca8418_keypad *keypad_data,
++		bool symbol_shifted = false;
+@@ -695,0 +757,3 @@ static void tca8418_handle_key_new(struct tca8418_keypad *keypad_data,
++			if (report_code != KEY_RESERVED)
++				symbol_shifted =
++					tca8418_translate_symbol_key(&report_code);
+@@ -707,0 +772,5 @@ static void tca8418_handle_key_new(struct tca8418_keypad *keypad_data,
++		keypad_data->symbol_shifted[code] = symbol_shifted;
++		if (symbol_shifted) {
++			tca8418_report_key(keypad_data, code, KEY_LEFTSHIFT, true);
++			input_sync(keypad_data->input);
++		}
+@@ -714,0 +784 @@ static void tca8418_handle_key_new(struct tca8418_keypad *keypad_data,
++			keypad_data->symbol_shifted[code] = false;
+@@ -723,0 +794,5 @@ static void tca8418_handle_key_new(struct tca8418_keypad *keypad_data,
++		if (keypad_data->symbol_shifted[code]) {
++			input_sync(keypad_data->input);
++			tca8418_report_key(keypad_data, code, KEY_LEFTSHIFT, false);
++			keypad_data->symbol_shifted[code] = false;
++		}
+@@ -1081,0 +1157,5 @@ static int tca8418_keypad_probe(struct i2c_client *client)
++	keypad_data->symbol_shifted = devm_kcalloc(dev, keymap_size,
++						   sizeof(*keypad_data->symbol_shifted),
++						   GFP_KERNEL);
++	if (!keypad_data->symbol_shifted)
++		return -ENOMEM;
+@@ -1211,0 +1292,12 @@ static int tca8418_keypad_probe(struct i2c_client *client)
++	input_set_capability(input, EV_KEY, KEY_GRAVE);
++	input_set_capability(input, EV_KEY, KEY_MINUS);
++	input_set_capability(input, EV_KEY, KEY_EQUAL);
++	input_set_capability(input, EV_KEY, KEY_LEFTBRACE);
++	input_set_capability(input, EV_KEY, KEY_RIGHTBRACE);
++	input_set_capability(input, EV_KEY, KEY_SEMICOLON);
++	input_set_capability(input, EV_KEY, KEY_APOSTROPHE);
++	input_set_capability(input, EV_KEY, KEY_BACKSLASH);
++	input_set_capability(input, EV_KEY, KEY_COMMA);
++	input_set_capability(input, EV_KEY, KEY_DOT);
++	input_set_capability(input, EV_KEY, KEY_SLASH);
++
 -- 
 2.50.1
