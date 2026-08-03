@@ -182,6 +182,8 @@ install -D -m 0644 \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-maintenance-ssh.service"
 install -D -m 0600 "${STAGE_DIR}/00-bsp/files/maintenance-sshd_config" \
     "${ROOTFS_DIR}/usr/lib/cardputerzero/maintenance-sshd_config"
+install -D -m 0644 "${STAGE_DIR}/00-bsp/files/avahi-daemon.conf" \
+    "${ROOTFS_DIR}/etc/avahi/avahi-daemon.conf"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/cardputerzero-firmware.initramfs-hook" \
     "${ROOTFS_DIR}/etc/initramfs-tools/hooks/cardputerzero-firmware"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/overlay-root-initramfs" \
@@ -227,7 +229,7 @@ for package in \
     dpkg-dev libdpkg-perl libc-dev-bin libc6-dev linux-libc-dev make \
     lightdm wayfire wf-panel-pi pcmanfm pcmanfm-qt \
     packagekit pipewire pipewire-pulse wireplumber libinput-tools \
-    avahi-daemon bluez bluez-firmware modemmanager udisks2 \
+    bluez bluez-firmware modemmanager udisks2 \
     rpi-connect rpi-connect-lite rpi-connect-wayvnc \
     rpicam-apps-lite mkvtoolnix cifs-utils ntfs-3g libmtp-runtime \
     wolfram-engine gdb htop man-db manpages-dev ncdu strace; do
@@ -280,7 +282,6 @@ fi
 systemctl disable \
     apt-daily.timer \
     apt-daily-upgrade.timer \
-    avahi-daemon.service \
     bluetooth.service \
     ModemManager.service \
     nfs-blkmap.service \
@@ -297,6 +298,7 @@ systemctl mask apt-daily.service apt-daily.timer \
     apt-daily-upgrade.service apt-daily-upgrade.timer \
     fb_load.service 2>/dev/null || true
 systemctl enable NetworkManager.service apparmor.service \
+    avahi-daemon.service \
     cardputerzero-console-banner.service \
     cardputerzero-overlay-root-status.service
 systemctl set-default multi-user.target

@@ -28,6 +28,7 @@ CP0_MAINTENANCE_BOOT_DIR=$boot \
 CP0_MAINTENANCE_RUNTIME_DIR=$runtime \
 CP0_MAINTENANCE_SSHD=/usr/bin/true \
 CP0_MAINTENANCE_HOSTNAME=/usr/bin/false \
+CP0_MAINTENANCE_NETWORK_WAIT_SECONDS=0 \
 CP0_MAINTENANCE_SSHD_CONFIG=/dev/null \
 CP0_MAINTENANCE_RUNTIME_OWNER=$(id -un) \
 CP0_MAINTENANCE_RUNTIME_GROUP=$(id -gn) \
@@ -45,6 +46,7 @@ if CP0_MAINTENANCE_BOOT_DIR=$boot \
    CP0_MAINTENANCE_RUNTIME_DIR=$runtime \
    CP0_MAINTENANCE_SSHD=/usr/bin/true \
    CP0_MAINTENANCE_HOSTNAME=/usr/bin/false \
+   CP0_MAINTENANCE_NETWORK_WAIT_SECONDS=0 \
    CP0_MAINTENANCE_SSHD_CONFIG=/dev/null \
    CP0_MAINTENANCE_RUNTIME_OWNER=$(id -un) \
    CP0_MAINTENANCE_RUNTIME_GROUP=$(id -gn) \
@@ -80,6 +82,10 @@ grep -q '^PermitRootLogin prohibit-password$' "$config"
 grep -q '^AllowUsers root$' "$config"
 grep -q '^ConditionPathExists=/boot/firmware/cp0-maintenance.enable$' "$unit"
 grep -q '^Conflicts=ssh.service$' "$unit"
+grep -q '^host-name=cardputerzero-maintenance$' \
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/avahi-daemon.conf"
+grep -q '^avahi-daemon$' \
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/00-packages-nr"
 grep -q 'hot-update-firstboot.sh' "$repo_root/scripts/device-hot-update-firstboot.sh"
 grep -q 'activation failed; restoring previous binaries' "$hot_update"
 

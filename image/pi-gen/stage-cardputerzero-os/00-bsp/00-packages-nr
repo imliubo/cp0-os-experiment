@@ -1,5 +1,6 @@
 alsa-utils
 apparmor
+avahi-daemon
 bubblewrap
 ca-certificates
 firmware-brcm80211

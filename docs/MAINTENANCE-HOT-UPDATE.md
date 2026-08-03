@@ -41,11 +41,17 @@ cp0-maintenance.authorized_key
 Boot the device. Both input files disappear after successful validation. The
 remaining `cp0-maintenance.status` records the ephemeral host-key fingerprint,
 the IP addresses visible at service start (or `pending`) and the login name
-`root`. Verify that fingerprint on the first SSH connection:
+`root`. The image publishes the fixed local discovery name
+`cardputerzero-maintenance.local`, independently of the owner-selected device
+name. Verify the recorded fingerprint on the first SSH connection:
 
 ```sh
-ssh -i ~/.ssh/cp0-maintenance root@DEVICE_IP
+ssh -i ~/.ssh/cp0-maintenance root@cardputerzero-maintenance.local
 ```
+
+The name requires the computer and device to be on the same multicast-capable
+LAN. If a router isolates wired and wireless clients, use the IP recorded in
+`cp0-maintenance.status` or the router's DHCP lease list instead.
 
 If preparation fails, port 22 remains closed and the input files are retained
 for inspection. The service journal uses the unit name

@@ -12,6 +12,7 @@ config=${CP0_MAINTENANCE_SSHD_CONFIG:-/usr/lib/cardputerzero/maintenance-sshd_co
 ssh_keygen=${CP0_MAINTENANCE_SSH_KEYGEN:-/usr/bin/ssh-keygen}
 sshd=${CP0_MAINTENANCE_SSHD:-/usr/sbin/sshd}
 hostname_command=${CP0_MAINTENANCE_HOSTNAME:-/usr/bin/hostname}
+network_wait_seconds=${CP0_MAINTENANCE_NETWORK_WAIT_SECONDS:-15}
 runtime_owner=${CP0_MAINTENANCE_RUNTIME_OWNER:-root}
 runtime_group=${CP0_MAINTENANCE_RUNTIME_GROUP:-root}
 
@@ -54,6 +55,11 @@ chmod 0644 "$host_key.pub"
 fingerprint=$("$ssh_keygen" -l -E sha256 -f "$host_key.pub" |
     awk '{ print $2 }')
 addresses=$("$hostname_command" -I 2>/dev/null | awk '{$1=$1; print}' || true)
+while [ -z "$addresses" ] && [ "$network_wait_seconds" -gt 0 ]; do
+    sleep 1
+    network_wait_seconds=$((network_wait_seconds - 1))
+    addresses=$("$hostname_command" -I 2>/dev/null | awk '{$1=$1; print}' || true)
+done
 status_new=$status_file.new
 [ ! -L "$status_file" ] && [ ! -L "$status_new" ] ||
     reject "status path must not be symbolic"

@@ -74,6 +74,7 @@ required_files=(
     etc/cardputerzero/device-policy.json
     usr/lib/cardputerzero/maintenance-sshd_config
     usr/lib/systemd/system/cardputerzero-maintenance-ssh.service
+    etc/avahi/avahi-daemon.conf
     var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/app.json
     var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm
 )
@@ -103,6 +104,7 @@ fi
 if [[ $image_profile == product ]]; then
     enabled_units+=(
         multi-user.target.wants/cardputerzero-overlay-root-status.service
+        multi-user.target.wants/avahi-daemon.service
         multi-user.target.wants/seatd.service
         sockets.target.wants/cardputerzero-appd.socket
         sockets.target.wants/cardputerzero-audiod.socket
@@ -167,6 +169,8 @@ if [[ $access_profile == production ]]; then
         "$rootfs/usr/lib/cardputerzero/maintenance-sshd_config"
     grep -qx 'ConditionPathExists=/boot/firmware/cp0-maintenance.enable' \
         "$rootfs/usr/lib/systemd/system/cardputerzero-maintenance-ssh.service"
+    grep -qx 'host-name=cardputerzero-maintenance' \
+        "$rootfs/etc/avahi/avahi-daemon.conf"
     test -x "$rootfs/usr/lib/systemd/system-generators/cardputerzero-ssh-generator"
     grep -qx 'AllowGroups cp0-ssh' \
         "$rootfs/etc/ssh/sshd_config.d/40-cardputerzero-owner.conf"
