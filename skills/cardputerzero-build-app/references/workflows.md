@@ -7,6 +7,7 @@ Select `cp0ctl` from an extracted DevKit:
 ```sh
 export CP0_DEVKIT_ROOT=/path/to/cardputerzero-app-devkit
 export PATH="$CP0_DEVKIT_ROOT/bin:$PATH"
+export RUSTUP_TOOLCHAIN=1.85.1
 ```
 
 In a source checkout, replace `cp0ctl` below with
@@ -36,6 +37,11 @@ generated panic handler and exported `main`. Use only public modules from
 Keep runtime-only imports, the exported `main`, frame storage and panic handler
 behind `#[cfg(not(test))]`. Put deterministic state transitions in ordinary
 functions so `cargo test` can exercise them with the host test harness.
+
+Optional lifecycle checkpoint exports are an advanced, simulation-first API.
+Read `platform-contract.md` before adding them, keep payloads versioned and at
+most 8 KiB, and retain a clean-start path. The bundled simulator does not yet
+exercise checkpoint/restore.
 
 ## C and C++
 
@@ -75,13 +81,20 @@ approval.
 ## Device install and logs
 
 ```sh
+cp0ctl pair ./developer.pub ~/.ssh/cardputerzero_ed25519.pub workstation \
+  --device OWNER@DEVICE_IP
 cp0ctl install ./my-app.capp --device OWNER@DEVICE_IP
 cp0ctl logs dev.example.my-app 100 --device OWNER@DEVICE_IP
+cp0ctl app start dev.example.my-app --device OWNER@DEVICE_IP
+cp0ctl app stop dev.example.my-app --device OWNER@DEVICE_IP
+cp0ctl app uninstall dev.example.my-app --device OWNER@DEVICE_IP
 ```
 
 Before install, confirm first-boot Setup is complete and the device is not
 running a soak, recovery, update or factory acceptance test. Launching an App
-invalidates an active stability run. Product SSH is off by default; the owner
-must enable it and supply the current username/address. The owner must also
-configure the public trust key and developer mode locally. Installation must
-fail closed when provisioning, trust, SSH or policy is missing.
+invalidates an active stability run. The owner must physically enable Developer
+Mode and open **Pair New Computer** before the first `pair` command. Developer
+Mode starts the constrained transport, so Owner SSH Shell can remain Off. Read
+`developer-mode.md` for key generation, pairing, revocation and failure
+behavior. Installation must fail closed when provisioning, pairing, mode or
+policy is missing.

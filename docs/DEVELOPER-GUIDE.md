@@ -22,6 +22,7 @@ release checksum before extraction, then set the root and run its doctor:
 ```sh
 export CP0_DEVKIT_ROOT=/path/to/cardputerzero-app-devkit-1.0.0-HOST
 export PATH="$CP0_DEVKIT_ROOT/bin:$PATH"
+export RUSTUP_TOOLCHAIN=1.85.1
 "$CP0_DEVKIT_ROOT/skills/cardputerzero-build-app/scripts/doctor.sh" \
   "$CP0_DEVKIT_ROOT" rust
 ```
@@ -30,6 +31,32 @@ The bundled `$cardputerzero-build-app` Skill gives an AI agent the platform
 contract, project workflow, permission boundaries, deterministic verifier and
 failure routing needed to complete an application without private Runtime or
 Linux APIs. Keep the Skill, SDK, simulator and `cp0ctl` from the same DevKit.
+
+On another computer, use the native archive matching that computer's OS and
+CPU, or use the released OCI toolchain image. Verify the adjacent archive
+checksum and the extracted `SHA256SUMS` before use. Native `cp0ctl` binaries are
+not portable between macOS/Linux or CPU architectures. Windows development
+uses the OCI image or a supported Linux environment rather than the native
+Unix DevKit.
+
+Public macOS native releases also require Developer ID signing and
+notarization. Do not disable Gatekeeper or strip quarantine to run an
+unverified internal archive; use the verified OCI image or matching source
+checkout instead.
+
+For native Rust development, install Node 20 or newer and the pinned toolchain:
+
+```sh
+rustup toolchain install 1.85.1 --profile minimal
+rustup target add --toolchain 1.85.1 wasm32-unknown-unknown
+```
+
+Generated Rust projects currently record the creating DevKit's canonical
+`sdk/rust` path in `Cargo.toml`. After cloning an App onto another computer,
+replace only `[dependencies].cp0-sdk.path` with that computer's canonical
+`$CP0_DEVKIT_ROOT/sdk/rust`, then repeat manifest validation, build and
+simulation. Do not commit another developer's absolute SDK path as a portable
+dependency. See `APP-DEVKIT-DISTRIBUTION.md` for the complete transfer contract.
 
 ## Create and build
 
@@ -145,6 +172,12 @@ Setup must be complete. Developer Mode starts the constrained SSH transport;
 the independent **Owner SSH Shell** setting may remain Off. Use the
 owner-selected username and the IP shown by trusted Setup/Network UI; never
 embed test-device credentials in an App or distribution script.
+
+Turning Developer Mode Off blocks new pairing and every remote App mutation.
+Each additional workstation needs its own Ed25519 SSH key and on-device pairing
+entry; it may reuse the securely transferred developer signing key when the
+developer identity must stay the same. The device stores at most eight paired
+computers, and the owner can revoke one or all from **Paired Computers**.
 
 Store submission uses the developer-signed package, not an unsigned build and
 not a package that already has a store signature. Review metadata must bind the

@@ -1,6 +1,6 @@
 ---
 name: cardputerzero-build-app
-description: Build, modify, debug, simulate, package, sign, submit, and install applications for CardputerZero OS with its isolated WebAssembly SDK. Use for CardputerZero app ideas, app.json manifests, 320x170 or 320x150 UI, keyboard and global media input, Rust/C/C++ SDK code, cp0ctl workflows, permissions, DevKit setup, simulator failures, .capp packaging, developer signing, Store listings or OAuth submission, and provisioned-device installation.
+description: Build, modify, debug, simulate, package, sign, pair, deploy, and submit applications for CardputerZero OS with its isolated WebAssembly SDK. Use for CardputerZero app ideas, app.json manifests, 320x170 or 320x150 UI, keyboard and global media input, Rust/C/C++ SDK code, lifecycle checkpoints, cp0ctl workflows, permissions, cross-computer DevKit setup, Developer Mode pairing and deployment, simulator failures, .capp signing, Store listings, OAuth submission, and provisioned-device installation.
 ---
 
 # Build CardputerZero Apps
@@ -25,6 +25,9 @@ capabilities.
 
 Do not download unversioned SDK files, copy private host imports from an
 example, or substitute a compiler/toolchain version without reporting it.
+When moving an App to another computer, read the migration section of
+[references/distribution.md](references/distribution.md); generated Rust
+projects currently bind `cp0-sdk` to the creating DevKit's absolute path.
 
 ## Choose The Implementation
 
@@ -43,6 +46,9 @@ example, or substitute a compiler/toolchain version without reporting it.
 - For media applications, use the targetless `media` SDK and read the media
   section of [references/platform-contract.md](references/platform-contract.md).
   Never treat global media actions as raw focused key events.
+- Treat lifecycle checkpoint exports as a forward-compatible simulation
+  preview until the target image confirms Runtime support. Do not claim that
+  current hardware will invoke them merely because the SDK declarations exist.
 
 ## Create Or Modify
 
@@ -115,18 +121,25 @@ Read [references/workflows.md](references/workflows.md) before signing or device
 installation. Package reproducibly with `cp0ctl package`, sign with a developer
 key kept outside the project, and verify the signed `.capp` before install.
 
+For a product device, read
+[references/developer-mode.md](references/developer-mode.md) before pairing or
+remote deployment. The owner must physically enable Developer Mode and open the
+ten-minute pairing window. Pair the workstation's developer-signing public key
+and Ed25519 SSH public key with `cp0ctl pair`; do not edit trust files or use
+`scp`, sudo, a remote shell or an unsigned package.
+
 When Store distribution is requested, read
 [references/store-submission.md](references/store-submission.md). Prepare and
 locally validate the Listing before starting OAuth Device Flow. Do not run the
 internal `store publish` operator workflow or add a Store signature yourself.
 
 Installing changes a real device. Confirm the requested device and that no
-stability, recovery or factory acceptance run is active. Developer mode and a
-trusted developer public key must already be configured by the device owner.
-Product devices must also have completed first-boot provisioning and explicitly
-enabled SSH. Use the owner-selected SSH account; never assume `pi`, a fixed
-password or a stable IP address. Never weaken device policy, copy a private key
-to the device, or bypass signature verification.
+stability, recovery or factory acceptance run is active. Product devices must
+have completed first-boot provisioning. Developer Mode itself starts the
+constrained SSH transport; the independent Owner SSH Shell may remain Off. Use
+the owner-selected account and current device IP; never assume `pi`, a fixed
+password or a stable address. Never weaken device policy, copy a private key to
+the device, or bypass signature verification.
 
 ## Diagnose Failures
 
@@ -144,6 +157,8 @@ narrowest layer before continuing.
 - Logic tests and `verify-app.sh` pass with representative input.
 - The final frame is visually inspected at its real 320-pixel dimensions.
 - Package signature verification passes when distribution is requested.
+- Developer Mode pairing uses the exact package-signing public key and a
+  separate Ed25519 SSH public key when device deployment is requested.
 - Store Listing validation passes before submission when Store distribution is
   requested.
 - Device install and physical keys are tested only when authorized and safe.

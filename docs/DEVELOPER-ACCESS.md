@@ -56,6 +56,11 @@ The first pairing uses the owner's password through standard SSH
 authentication. Add the paired SSH key to the workstation's SSH agent or host
 configuration, then use the constrained commands:
 
+Before entering that password, verify the device SSH host-key fingerprint
+through a trusted device/operator channel. The current trusted product UI does
+not yet display it, so pairing on an untrusted network remains blocked by this
+release gap. Do not accept an unknown key by disabling host-key checking.
+
 ```sh
 cp0ctl install app.developer.capp --device OWNER@DEVICE_IP
 cp0ctl logs dev.example.app 100 --device OWNER@DEVICE_IP

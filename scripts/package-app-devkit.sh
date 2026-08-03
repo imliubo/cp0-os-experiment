@@ -73,8 +73,12 @@ install -m 0644 "$repo_root/examples/media-controls/src/lib.rs" \
     "$bundle/examples/media-controls/src/"
 install -m 0644 "$repo_root/docs/DEVELOPER-GUIDE.md" "$bundle/docs/"
 install -m 0644 "$repo_root/docs/APP-DEVKIT-DISTRIBUTION.md" "$bundle/docs/"
+install -m 0644 "$repo_root/docs/DEVELOPER-ACCESS.md" "$bundle/docs/"
 install -m 0644 "$repo_root/schemas/store-listing-v1.schema.json" "$bundle/schemas/"
 printf '%s\n' "$version" >"$bundle/VERSION"
+
+# Finder metadata is host state, not part of the versioned SDK payload.
+find "$bundle" -type f -name .DS_Store -delete
 
 emcc_version=unavailable
 if command -v emcc >/dev/null 2>&1; then
@@ -92,7 +96,7 @@ jq -n \
         version: $version,
         host: $host,
         built_with: { rust: $rust, node: $node, emscripten: $emcc },
-        bundled: ["cp0ctl", "sdk", "simulator", "skill", "neon-snake", "media-controls", "store-listing-schema"]
+        bundled: ["cp0ctl", "sdk", "simulator", "skill", "neon-snake", "media-controls", "store-listing-schema", "developer-access-doc"]
     }' >"$bundle/devkit.json"
 
 (
@@ -103,6 +107,9 @@ jq -n \
 )
 
 archive="$output/$bundle_name.tar.xz"
-tar -C "$staging_parent" -cJf "$archive" "$bundle_name"
-shasum -a 256 "$archive" >"$archive.sha256"
+COPYFILE_DISABLE=1 tar -C "$staging_parent" -cJf "$archive" "$bundle_name"
+(
+    cd "$output"
+    shasum -a 256 "$bundle_name.tar.xz" >"$bundle_name.tar.xz.sha256"
+)
 printf 'DevKit: %s\nChecksum: %s.sha256\n' "$archive" "$archive"

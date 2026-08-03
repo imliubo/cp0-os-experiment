@@ -16,7 +16,10 @@ grep -Fq 'release-ready project workflow is Rust' "$skill/SKILL.md"
 grep -Fq 'advanced SDK integration preview' "$skill/references/workflows.md"
 grep -Fq -- '--media-actions' "$skill/references/workflows.md"
 grep -Fq 'cp0ctl store submit' "$skill/references/store-submission.md"
-for reference in platform-contract workflows distribution troubleshooting store-submission; do
+grep -Fq 'Pair New Computer' "$skill/references/developer-mode.md"
+grep -Fq 'Owner SSH Shell may remain Off' "$skill/SKILL.md"
+grep -Fq 'simulation-first' "$skill/references/platform-contract.md"
+for reference in platform-contract workflows distribution troubleshooting store-submission developer-mode; do
     test -s "$skill/references/$reference.md"
     grep -Fq "references/$reference.md" "$skill/SKILL.md"
 done

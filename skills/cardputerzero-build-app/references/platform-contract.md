@@ -14,6 +14,23 @@ The Rust SDK renderer is `cp0_sdk::ui::Canvas`. Direct framebuffer, DRM,
 Wayland and evdev access are forbidden even when a native API appears present
 on a development machine.
 
+## Tasks and lifecycle preview
+
+The product remains single-foreground even as the task model evolves: only one
+App is visible and focused. F3 belongs to the trusted System Shell. Background
+tasks never receive focused keys and may be frozen or destroyed under CM0
+memory pressure; exclusive camera, microphone and GPIO output leases are not a
+background entitlement.
+
+SDK 1.0 declares optional `cp0_app_checkpoint` and `cp0_app_restore` exports.
+Checkpoint schema versions are App-owned nonzero `u32` values and payloads are
+limited to 8 KiB. Apps without the exports remain valid and restart cleanly.
+The current multitasking implementation is simulation-first: the PC App
+simulator does not drive checkpoint/restore and production Runtime/compositor
+integration is still gated on device work. Keep state recovery independently
+correct and do not promise checkpoint persistence on a target image unless its
+release notes explicitly enable it.
+
 ## Focused input
 
 `input::poll_key_event` returns Linux evdev-compatible numeric codes through a
@@ -86,7 +103,9 @@ part of the product behavior and must have a usable UI state.
 ## Device readiness
 
 A product device exposes no fixed human account or password. First-boot Setup
-creates the owner, chooses networking and keeps SSH off unless the owner opts
-in. Setup blocks third-party App activation until its durable commit completes.
-Treat the visible IP and owner-selected username as device state, not constants
-to embed in source, scripts or Skill output.
+creates the owner and chooses networking. Setup blocks third-party App
+activation until its durable commit completes. Developer Mode and Owner SSH
+Shell are independent settings: Developer Mode starts only the constrained
+signed-App transport, while Owner SSH Shell grants an owner Bash session with
+no sudo. Treat the visible IP and owner-selected username as device state, not
+constants to embed in source, scripts or Skill output.

@@ -35,6 +35,7 @@ require_command() {
 
 require_file "$root/sdk/rust/Cargo.toml"
 require_file "$root/sdk/rust/src/media.rs"
+require_file "$root/sdk/rust/src/lifecycle.rs"
 require_file "$root/sdk/c/include/cardputerzero.h"
 require_file "$root/sdk/wit/cardputerzero-sdk.wit"
 require_file "$root/simulator/cp0-simulator.mjs"
@@ -64,17 +65,17 @@ if [[ ! $node_major =~ ^[0-9]+$ ]] || ((node_major < 20)); then
 fi
 
 if [[ $language == rust || $language == all ]]; then
-    rust_version=$(rustc --version | awk '{ print $2 }')
-    rust_major=${rust_version%%.*}
-    rust_tail=${rust_version#*.}
-    rust_minor=${rust_tail%%.*}
-    if [[ ! $rust_major =~ ^[0-9]+$ || ! $rust_minor =~ ^[0-9]+$ ]] ||
-        ((rust_major < 1 || (rust_major == 1 && rust_minor < 85))); then
-        echo "error: Rust 1.85 or newer is required; found $rust_version" >&2
+    pinned_rust=$(awk -F '"' '$1 ~ /^rust_version = / { print $2 }' \
+        "$root/devkit/toolchain.toml")
+    if [[ -z $pinned_rust ]] ||
+        ! rustup run "$pinned_rust" rustc --version >/dev/null 2>&1; then
+        echo "error: pinned Rust $pinned_rust is not installed" >&2
         exit 1
     fi
-    if ! rustup target list --installed | grep -qx wasm32-unknown-unknown; then
-        echo "error: Rust target wasm32-unknown-unknown is not installed" >&2
+    rust_version=$(rustup run "$pinned_rust" rustc --version | awk '{ print $2 }')
+    if ! rustup target list --toolchain "$pinned_rust" --installed \
+        | grep -qx wasm32-unknown-unknown; then
+        echo "error: Rust target wasm32-unknown-unknown is not installed for $pinned_rust" >&2
         exit 1
     fi
 fi

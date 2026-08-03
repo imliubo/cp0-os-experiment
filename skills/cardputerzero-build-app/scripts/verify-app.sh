@@ -32,6 +32,9 @@ fi
 app=$(cd "$app" && pwd -P)
 
 "$script_dir/doctor.sh" "$root" rust >/dev/null
+pinned_rust=$(awk -F '"' '$1 ~ /^rust_version = / { print $2 }' \
+    "$root/devkit/toolchain.toml")
+export RUSTUP_TOOLCHAIN=$pinned_rust
 if [[ -x $root/bin/cp0ctl ]]; then
     cp0ctl=("$root/bin/cp0ctl")
 elif [[ -f $root/Cargo.toml ]]; then

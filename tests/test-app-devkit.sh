@@ -21,7 +21,16 @@ if ((${#archives[@]} != 1)) || [[ ! -f ${archives[0]} ]]; then
     exit 1
 fi
 archive=${archives[0]}
-shasum -a 256 -c "$archive.sha256" >/dev/null
+archive_name=$(basename "$archive")
+test "$(awk '{ print $2 }' "$archive.sha256")" = "$archive_name"
+(
+    cd "$(dirname "$archive")"
+    shasum -a 256 -c "$archive_name.sha256" >/dev/null
+)
+if tar -tJf "$archive" | grep -Eq '(^|/)(\.DS_Store|\._[^/]+)$'; then
+    echo "error: App DevKit archive contains host metadata" >&2
+    exit 1
+fi
 mkdir -p "$test_root/unpacked"
 tar -C "$test_root/unpacked" -xJf "$archive"
 roots=("$test_root"/unpacked/cardputerzero-app-devkit-*)
@@ -37,6 +46,9 @@ devkit=${roots[0]}
 jq -e '.version == "1.0.0" and (.built_with.rust | startswith("rustc 1.85.1 "))' \
     "$devkit/devkit.json" >/dev/null
 test -s "$devkit/schemas/store-listing-v1.schema.json"
+test -s "$devkit/docs/DEVELOPER-ACCESS.md"
+jq -e '.bundled | index("developer-access-doc") != null' \
+    "$devkit/devkit.json" >/dev/null
 
 "$devkit/skills/cardputerzero-build-app/scripts/doctor.sh" "$devkit" rust >/dev/null
 env RUSTUP_TOOLCHAIN=1.85.1 "$devkit/bin/cp0ctl" new \
