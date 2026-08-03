@@ -41,7 +41,11 @@ grep -q -- '-Wl,-z,defs' "$stage"
 grep -q 'pkg-config --cflags --libs pixman-1 wayland-server' "$stage"
 grep -q 'pkg-config --cflags --libs wayland-client libpng libdrm xkbcommon' "$stage"
 grep -q 'xkb_keymap_mod_get_index(keymap, XKB_MOD_NAME_SHIFT)' "$shell_client"
-grep -q 'mods_depressed | mods_latched | mods_locked' "$shell_client"
+grep -q 'mods_depressed & shell->shift_modifier_mask' "$shell_client"
+if grep -q 'mods_depressed | mods_latched | mods_locked' "$shell_client"; then
+    echo "error: text input treats latched or locked Shift as physically held" >&2
+    exit 1
+fi
 grep -q '^#define CP0_PROVISION_TIMEOUT_PASSWORD 75$' "$provision_client"
 grep -q '^#define CP0_PROVISION_TIMEOUT_SYSTEM 20$' "$provision_client"
 grep -q '^#define CP0_PROVISION_TIMEOUT_WIFI_SCAN 45$' "$provision_client"

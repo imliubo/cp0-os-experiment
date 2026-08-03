@@ -72,12 +72,9 @@ recoverable page.
 
 Each page uses a fixed header, at most four visible rows, one primary action and
 one concise help/error area. Long lists scroll without resizing the surface.
-The header continuously shows the selected non-loopback IPv4 address and
-refreshes it once per second. Before DHCP completes it shows `IP WAITING`.
-This address comes directly from kernel interfaces, so it remains visible on
-Welcome and error pages even when the provisioning daemon is unavailable, and
-can be used for local network diagnosis without implying that a listener is
-available before Setup completes.
+The header shows only the Setup identity and battery state. Network addresses
+are deliberately kept out of the title bar; they appear on the Network,
+Review, and Complete pages where their context is clear.
 
 1. **Welcome and regional locale**: the first release renders Setup in English
    and selects either the generated `en_US` or `zh_CN` system locale. Full Shell
@@ -112,14 +109,15 @@ available before Setup completes.
 
 Keyboard behavior is consistent on every page: Up/Down moves focus, Left/Right
 changes a value, Enter activates, Backspace edits, and ESC goes back when safe.
-The V0.6 BSP commits an ASMUX-generated Shift press in its own input frame
-before the selected character. The Sym layer translates every printed ASCII
-symbol to its standard US Linux evdev base key and synthesizes Shift for
-`!@#$%^&*()~_+{}:"<>|?`. Unshifted symbols use the same standard keys for
-`` `-=[];'\\,./ ``. The Shell derives held Shift from the compositor-provided
-XKB keymap and depressed/latched/locked modifier masks, with the raw key event
-retained as a fallback. Setup, system text fields and SDK applications therefore
-receive the same lower-case, upper-case and symbol semantics.
+The V0.6 BSP reports physical Shift immediately on press and release. A letter
+without Shift is lower-case; a letter is upper-case only while Shift is
+physically held. The Shell uses only the depressed XKB Shift modifier, with the
+raw key event retained as a fallback; latched and locked Shift states do not
+change text case. The Sym layer maps the 32 physical combinations from the V0.6
+keyboard legend and `按键sym.csv` to standard US Linux evdev keys. It synthesizes
+Shift only for `!@#$%^&*()~_+{}:"<>|?`; unshifted symbols use the same standard
+keys for `` `-=[];'\\,./ ``. Setup, system text fields and SDK applications
+therefore receive the same lower-case, upper-case and symbol semantics.
 Password pages disable key-click sound, mask text by default and must never
 appear with cleartext in screenshots, crash reports or support bundles.
 
@@ -417,9 +415,10 @@ the Setup UI receives only the fixed operation label.
 
 The next candidate accepted lower-case and Sym input but held Shift did not
 produce upper-case letters, and password confirmation returned
-`Provisioning service is unavailable`. The fixed V0.6 BSP implements Shift in
-its ASMUX state machine and the Shell previously discarded the compositor's XKB
-modifier masks. The Shell now consumes the XKB Shift modifier explicitly.
+`Provisioning service is unavailable`. The fixed V0.6 BSP reports ordinary
+held Shift directly and the Shell previously discarded the compositor's XKB
+modifier masks. The Shell now consumes the depressed XKB Shift modifier
+explicitly.
 Password hashing and later network operations also shared a three-second Shell
 socket deadline, while yescrypt ran inside an undersized 16 MiB cgroup. The
 candidate now uses the bounded operation-specific deadlines and 64 MiB
@@ -433,9 +432,11 @@ Name failed with `system locale could not be configured`. The pinned V0.6
 keyboard driver emitted its synthetic `KEY_LEFTSHIFT` press and the following
 letter in one input synchronization frame; the compositor could therefore
 deliver the letter before the client-visible modifier state changed. The image
-now carries a narrow patch on top of the pinned BSP that flushes every synthetic
-Shift press before a character can follow. Shell-side XKB and raw-event tracking
-remain as independent safeguards.
+now carries a patch on top of the pinned BSP that replaces the ASMUX
+single/double-click and long-press state machine with ordinary held Shift. Sym
+characters that require Shift commit their synthetic modifier in a separate
+input frame before the character. Shell-side XKB and raw-event tracking remain
+as independent safeguards.
 
 The locale files were present and both supported locales had been generated;
 the failing boundary was the restricted broker's `localectl` D-Bus mutation.

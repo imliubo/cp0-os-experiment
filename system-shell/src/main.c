@@ -2281,11 +2281,12 @@ static void handle_keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
     struct shell *shell = data;
     (void)keyboard;
     (void)serial;
+    (void)mods_latched;
+    (void)mods_locked;
     (void)group;
     shell->shift_modifier_active =
         shell->shift_modifier_mask != 0 &&
-        ((mods_depressed | mods_latched | mods_locked) &
-         shell->shift_modifier_mask) != 0;
+        (mods_depressed & shell->shift_modifier_mask) != 0;
 }
 
 static const struct wl_keyboard_listener keyboard_listener = {

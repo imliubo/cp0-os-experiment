@@ -1419,6 +1419,29 @@ int main(int argc, char **argv)
     cp0_ui_clear_notification(&ui);
     assert(!cp0_ui_show_notification(&ui, 0, "Hello", "Title", "Body"));
 
+    assert(cp0_ui_show_notification(&ui, 94, "a", "Case", "lower"));
+    render(&ui, frame);
+    uint32_t lowercase_glyph[5U * 7U];
+    for (size_t row = 0; row < 7; row++) {
+        for (size_t column = 0; column < 5; column++) {
+            lowercase_glyph[row * 5U + column] =
+                pixel(frame, 20 + (int)column, 32 + (int)row);
+        }
+    }
+    cp0_ui_clear_notification(&ui);
+    assert(cp0_ui_show_notification(&ui, 95, "A", "Case", "upper"));
+    render(&ui, frame);
+    bool glyph_case_differs = false;
+    for (size_t row = 0; row < 7; row++) {
+        for (size_t column = 0; column < 5; column++) {
+            if (lowercase_glyph[row * 5U + column] !=
+                pixel(frame, 20 + (int)column, 32 + (int)row))
+                glyph_case_differs = true;
+        }
+    }
+    assert(glyph_case_differs);
+    cp0_ui_clear_notification(&ui);
+
     static const struct cp0_ui_document_option documents[] = {
         {.size_bytes = 5,
          .document_id = "00000000000000010000000000000002",
@@ -1441,6 +1464,17 @@ int main(int argc, char **argv)
     cp0_ui_clear_documents(&ui);
     assert(!ui.document_prompt && ui.document_prompt_id == 0);
     assert(cp0_ui_selected_document_id(&ui) == NULL);
+
+    cp0_ui_init(&ui);
+    cp0_ui_setup_begin(&ui, CP0_UI_SETUP_HOSTNAME);
+    render(&ui, frame);
+    uint32_t setup_title_bar[CP0_UI_WIDTH * 21U];
+    memcpy(setup_title_bar, frame->pixels, sizeof(setup_title_bar));
+    cp0_ui_setup_set_network_status(&ui, true, true, "192.168.20.146", true,
+                                    false, NULL);
+    render(&ui, frame);
+    assert(memcmp(setup_title_bar, frame->pixels,
+                  sizeof(setup_title_bar)) == 0);
 
     cp0_ui_init(&ui);
     cp0_ui_setup_begin(&ui, CP0_UI_SETUP_WELCOME);
