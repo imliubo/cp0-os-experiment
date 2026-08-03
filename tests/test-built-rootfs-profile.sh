@@ -90,11 +90,21 @@ if [[ -e $keyboard_manifest || -e $keyboard_wasm ]]; then
             exit 1
         fi
     done
-    jq -e '
+    jq_filter='
         .id == "dev.cardputerzero.keyboard-diagnostics" and
         .version == "0.1.0" and
         .permissions == []
-    ' "$keyboard_manifest" >/dev/null
+    '
+    if command -v jq >/dev/null 2>&1; then
+        jq -e "$jq_filter" "$keyboard_manifest" >/dev/null
+    elif [[ $EUID -eq 0 && -x $rootfs/usr/bin/jq ]]; then
+        chroot "$rootfs" /usr/bin/jq -e "$jq_filter" \
+            /var/lib/cardputerzero/apps/dev.cardputerzero.keyboard-diagnostics/0.1.0/app.json \
+            >/dev/null
+    else
+        echo "error: jq is required to validate keyboard diagnostics" >&2
+        exit 1
+    fi
 fi
 for marker in developer-mode recovery-mode; do
     if [[ -e $rootfs/var/lib/cardputerzero/registry/$marker ]]; then
