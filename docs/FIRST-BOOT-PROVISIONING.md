@@ -106,9 +106,10 @@ one concise help/error area. Long lists scroll without resizing the surface.
 
 Keyboard behavior is consistent on every page: Up/Down moves focus, Left/Right
 changes a value, Enter activates, Backspace edits, and ESC goes back when safe.
-The Shell derives held Shift from the compositor-provided XKB keymap and
-depressed/latched/locked modifier masks, with the raw key event retained as a
-fallback for the V0.6 ASMUX keyboard state machine. This keeps unshifted letters
+The V0.6 BSP commits an ASMUX-generated Shift press in its own input frame
+before the selected character. The Shell then derives held Shift from the
+compositor-provided XKB keymap and depressed/latched/locked modifier masks,
+with the raw key event retained as a fallback. This keeps unshifted letters
 lower-case, held-Shift letters upper-case and the BSP's Sym layer independent.
 Password pages disable key-click sound, mask text by default and must never
 appear with cleartext in screenshots, crash reports or support bundles.
@@ -414,6 +415,28 @@ candidate now uses the bounded operation-specific deadlines and 64 MiB
 setup-only daemon ceiling described above. The same audit added live Ethernet
 IPv4 reporting, bounded NetworkManager waits, unsupported Wi-Fi security
 classification, system-identity collision rejection and SSH-On commit recovery.
+
+The next fresh-media run reached Welcome and accepted lower-case input plus the
+Sym `-` character, but held Shift was still lower-case and submitting Device
+Name failed with `system locale could not be configured`. The pinned V0.6
+keyboard driver emitted its synthetic `KEY_LEFTSHIFT` press and the following
+letter in one input synchronization frame; the compositor could therefore
+deliver the letter before the client-visible modifier state changed. The image
+now carries a narrow patch on top of the pinned BSP that flushes every synthetic
+Shift press before a character can follow. Shell-side XKB and raw-event tracking
+remain as independent safeguards.
+
+The locale files were present and both supported locales had been generated;
+the failing boundary was the restricted broker's `localectl` D-Bus mutation.
+The same dependency existed for the later time-zone step. The broker now writes
+the validated `/etc/default/locale`, `/etc/timezone`, and `/etc/localtime`
+content itself using durable temporary-file, `fsync`, and rename semantics.
+Replacing the conventional `/etc/localtime` symlink changes the link itself and
+never writes through it into `/usr/share/zoneinfo`. Both the interactive broker
+and the completed-state boot applicator receive the matching `/etc` writable
+allowlist inside their otherwise read-only system view. Host tests assert the
+exact locale/time-zone content, replacement behavior, and preservation of the
+former symlink target.
 
 ### Host and image tests
 

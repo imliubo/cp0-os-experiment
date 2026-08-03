@@ -384,8 +384,6 @@ pub struct LinuxPlatformBackend {
     mkpasswd: PathBuf,
     systemctl: PathBuf,
     hostnamectl: PathBuf,
-    localectl: PathBuf,
-    timedatectl: PathBuf,
     iw: PathBuf,
 }
 
@@ -397,8 +395,6 @@ impl LinuxPlatformBackend {
             mkpasswd: "/usr/bin/mkpasswd".into(),
             systemctl: "/usr/bin/systemctl".into(),
             hostnamectl: "/usr/bin/hostnamectl".into(),
-            localectl: "/usr/bin/localectl".into(),
-            timedatectl: "/usr/bin/timedatectl".into(),
             iw: "/usr/sbin/iw".into(),
         }
     }
@@ -706,17 +702,17 @@ impl PlatformBackend for LinuxPlatformBackend {
             &[OsStr::new("set-hostname"), OsStr::new(hostname)],
             "device name could not be configured",
         )?;
-        let locale_argument = format!("LANG={locale}");
-        self.command_ok(
-            &self.localectl,
-            &[OsStr::new("set-locale"), OsStr::new(&locale_argument)],
-            "system locale could not be configured",
+        atomic_write(
+            &self.paths.locale_file,
+            format!("LANG={locale}\n").as_bytes(),
+            0o644,
         )?;
-        self.command_ok(
-            &self.timedatectl,
-            &[OsStr::new("set-timezone"), OsStr::new(timezone)],
-            "time zone could not be configured",
+        atomic_write(
+            &self.paths.timezone_file,
+            format!("{timezone}\n").as_bytes(),
+            0o644,
         )?;
+        atomic_replace(&self.paths.localtime_file, &fs::read(&zone)?, 0o644)?;
         let has_wireless_phy = match fs::read_dir(&self.paths.wireless_phy_dir) {
             Ok(mut entries) => entries.next().transpose()?.is_some(),
             Err(error) if error.kind() == io::ErrorKind::NotFound => false,
@@ -1185,6 +1181,19 @@ fn error_response(request_id: u64, error: ProvisioningError) -> ProvisioningResp
 }
 
 fn atomic_write(path: &Path, contents: &[u8], mode: u32) -> Result<(), ProvisioningError> {
+    atomic_write_impl(path, contents, mode, true)
+}
+
+fn atomic_replace(path: &Path, contents: &[u8], mode: u32) -> Result<(), ProvisioningError> {
+    atomic_write_impl(path, contents, mode, false)
+}
+
+fn atomic_write_impl(
+    path: &Path,
+    contents: &[u8],
+    mode: u32,
+    reject_destination_symlink: bool,
+) -> Result<(), ProvisioningError> {
     let parent = path
         .parent()
         .ok_or(ProvisioningError::InvalidValue("path has no parent"))?;
@@ -1194,7 +1203,7 @@ fn atomic_write(path: &Path, contents: &[u8], mode: u32) -> Result<(), Provision
             "persistent parent is a symlink",
         ));
     }
-    if path.exists() {
+    if reject_destination_symlink && path.exists() {
         reject_symlink(path)?;
     }
     let temporary = parent.join(format!(
@@ -1414,8 +1423,6 @@ mod tests {
     fn region_backend(paths: ProvisioningPaths, tool: &Path) -> LinuxPlatformBackend {
         let mut backend = LinuxPlatformBackend::new(paths);
         backend.hostnamectl = tool.into();
-        backend.localectl = tool.into();
-        backend.timedatectl = tool.into();
         backend.iw = tool.into();
         backend
     }
@@ -1458,12 +1465,32 @@ mod tests {
         let zone = paths.zoneinfo_root.join("Asia/Shanghai");
         fs::create_dir_all(zone.parent().unwrap()).unwrap();
         fs::write(&zone, b"test zone").unwrap();
+        let original_zone = root.join("original-zone");
+        fs::write(&original_zone, b"original zone").unwrap();
+        fs::create_dir_all(paths.localtime_file.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&original_zone, &paths.localtime_file).unwrap();
         let success = root.join("bin/success");
         make_tool(&success, b"#!/bin/sh\nexit 0\n");
         let mut backend = region_backend(paths.clone(), &success);
         backend.iw = root.join("bin/iw-must-not-run");
 
         backend.apply_region(&region_state()).unwrap();
+        assert_eq!(
+            fs::read_to_string(&paths.locale_file).unwrap(),
+            "LANG=en_US.UTF-8\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&paths.timezone_file).unwrap(),
+            "Asia/Shanghai\n"
+        );
+        assert_eq!(fs::read(&paths.localtime_file).unwrap(), b"test zone");
+        assert!(
+            !fs::symlink_metadata(&paths.localtime_file)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(&original_zone).unwrap(), b"original zone");
         fs::remove_dir_all(root).unwrap();
     }
 

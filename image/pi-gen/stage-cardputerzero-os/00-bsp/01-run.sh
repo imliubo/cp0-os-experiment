@@ -24,6 +24,9 @@ fi
 BSP_REPOSITORY="https://github.com/m5stack/m5stack-linux-dtoverlays.git"
 BSP_COMMIT="c3b254819307c177a34100b66fe19e52059ce8c4"
 
+install -m 0644 "${STAGE_DIR}/files/0001-tca8418-flush-synthetic-shift.patch" \
+    "${ROOTFS_DIR}/tmp/0001-tca8418-flush-synthetic-shift.patch"
+
 on_chroot <<CHROOT
 set -e
 for source in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
@@ -45,6 +48,9 @@ http_proxy="$APT_PROXY" https_proxy="$APT_PROXY" \
     git clone --no-checkout "${BSP_REPOSITORY}" /tmp/cardputerzero-bsp
 git -C /tmp/cardputerzero-bsp checkout "${BSP_COMMIT}"
 test "\$(git -C /tmp/cardputerzero-bsp rev-parse HEAD)" = "${BSP_COMMIT}"
+git -C /tmp/cardputerzero-bsp apply \
+    /tmp/0001-tca8418-flush-synthetic-shift.patch
+rm -f /tmp/0001-tca8418-flush-synthetic-shift.patch
 
 # M5Stack validated 20 MHz on its display-stability branch. Keep the newer
 # keyboard fixes from the pinned mainline BSP while applying that narrow LCD

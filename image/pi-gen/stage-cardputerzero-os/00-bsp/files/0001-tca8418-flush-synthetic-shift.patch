@@ -1,0 +1,47 @@
+From: CardputerZero OS <os@cardputerzero.local>
+Subject: [PATCH] Input: tca8418: flush synthetic Shift presses
+
+The V0.6 ASMUX state machine can synthesize KEY_LEFTSHIFT immediately before
+the selected character in the same hardware event. Commit the modifier first
+so libinput and Wayland update keyboard state before delivering the character.
+
+---
+ modules/tca8418-1.0/tca8418_keypad_m5stack.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/modules/tca8418-1.0/tca8418_keypad_m5stack.c b/modules/tca8418-1.0/tca8418_keypad_m5stack.c
+index fd452bf..5f763ec 100644
+--- a/modules/tca8418-1.0/tca8418_keypad_m5stack.c
++++ b/modules/tca8418-1.0/tca8418_keypad_m5stack.c
+@@ -538,6 +538,7 @@ static void tca8418_asmux_longpress_work(struct work_struct *work)
+ 	keypad_data->asmux_longpress = true;
+ 	tca8418_report_key(keypad_data, keypad_data->asmux_button_code,
+ 			    KEY_LEFTSHIFT, true);
++	input_sync(keypad_data->input);
+ 	tca8418_asmux_update_led(keypad_data);
+ }
+ 
+@@ -563,6 +564,7 @@ static void tca8418_handle_asmux_key(struct tca8418_keypad *keypad_data,
+ 				keypad_data->asmux_locked = true;
+ 				tca8418_report_key(keypad_data, scan_code,
+ 						    KEY_LEFTSHIFT, true);
++				input_sync(keypad_data->input);
+ 			} else {
+ 				keypad_data->asmux_second_click = true;
+ 			}
+@@ -630,5 +632,6 @@ static void tca8418_consume_asmux_oneshot(struct tca8418_keypad *keypad_data,
+ 	cancel_delayed_work_sync(&keypad_data->asmux_blink_off_work);
+ 	tca8418_report_key(keypad_data, scan_code, KEY_LEFTSHIFT, true);
++	input_sync(keypad_data->input);
+ 	tca8418_asmux_update_led(keypad_data);
+ }
+ 
+@@ -645,5 +648,6 @@ static void tca8418_activate_asmux_hold(struct tca8418_keypad *keypad_data)
+ 	keypad_data->asmux_longpress = true;
+ 	tca8418_report_key(keypad_data, keypad_data->asmux_button_code,
+ 			    KEY_LEFTSHIFT, true);
++	input_sync(keypad_data->input);
+ 	tca8418_asmux_update_led(keypad_data);
+ }
+-- 
+2.50.1
