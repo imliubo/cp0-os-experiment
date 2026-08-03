@@ -71,12 +71,14 @@ if grep -Fq 'systemctl mask --force ssh.service ssh.socket' "$bsp"; then
 fi
 grep -Fq 'serial-getty@.service' "$bsp"
 grep -Fq 'cardputerzero-recovery-console.service' "$bsp"
+grep -Fq 'systemctl enable cardputerzero-maintenance-ssh.service' "$bsp"
 grep -Fq 'device-policy-production.json' "$platform"
 grep -Fq 'product:production) IMG_SUFFIX="-cp0-os-production"' \
     "$export_profile"
 grep -Fq 'production image contains a human account' "$verifier"
 grep -Fq 'production build identity residue remains' "$verifier"
 grep -Fq 'production image enables SSH before owner consent' "$verifier"
+grep -Fq 'production image preauthorizes maintenance access' "$verifier"
 grep -Fq 'production access unit is not masked' "$verifier"
 grep -Fq '.developer_mode_allowed == false' "$verifier"
 

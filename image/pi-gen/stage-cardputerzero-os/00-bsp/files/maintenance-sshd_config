@@ -1,0 +1,26 @@
+Port 22
+AddressFamily any
+ListenAddress 0.0.0.0
+ListenAddress ::
+HostKey /run/cardputerzero-maintenance/ssh_host_ed25519_key
+PidFile /run/cardputerzero-maintenance/sshd.pid
+AuthorizedKeysFile /run/cardputerzero-maintenance/authorized_keys
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin prohibit-password
+AllowUsers root
+UsePAM yes
+StrictModes yes
+PermitUserEnvironment no
+AllowAgentForwarding no
+AllowTcpForwarding no
+GatewayPorts no
+X11Forwarding no
+PermitTTY yes
+PrintMotd no
+ClientAliveInterval 60
+ClientAliveCountMax 3
+Subsystem sftp internal-sftp

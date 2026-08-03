@@ -55,6 +55,8 @@ required_executables=(
     usr/libexec/cardputerzero/device-support-bundle
     usr/libexec/cardputerzero/data-grow-initramfs
     usr/libexec/cardputerzero/overlay-root-initramfs
+    usr/libexec/cardputerzero/hot-update-firstboot.sh
+    usr/libexec/cardputerzero/prepare-maintenance-ssh.sh
     usr/libexec/cardputerzero/prepare-ssh.sh
     usr/lib/systemd/system-generators/cardputerzero-display-generator
     etc/initramfs-tools/scripts/init-bottom/cardputerzero-overlay-root
@@ -70,6 +72,8 @@ done
 required_files=(
     usr/lib/aarch64-linux-gnu/weston/cardputerzero-policy.so
     etc/cardputerzero/device-policy.json
+    usr/lib/cardputerzero/maintenance-sshd_config
+    usr/lib/systemd/system/cardputerzero-maintenance-ssh.service
     var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/app.json
     var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm
 )
@@ -114,6 +118,11 @@ if [[ $image_profile == product ]]; then
         sockets.target.wants/cardputerzero-stored.socket
     )
 fi
+if [[ $access_profile == production ]]; then
+    enabled_units+=(
+        multi-user.target.wants/cardputerzero-maintenance-ssh.service
+    )
+fi
 for path in "${enabled_units[@]}"; do
     if [[ ! -L $rootfs/etc/systemd/system/$path ]]; then
         echo "error: required unit is not enabled: $path" >&2
@@ -144,6 +153,20 @@ if [[ $access_profile == production ]]; then
         echo "error: production image enables SSH before owner consent" >&2
         exit 1
     fi
+    for path in cp0-maintenance.enable cp0-maintenance.authorized_key; do
+        if [[ -e $bootfs/$path || -L $bootfs/$path ]]; then
+            echo "error: production image preauthorizes maintenance access: $path" >&2
+            exit 1
+        fi
+    done
+    grep -qx 'AuthenticationMethods publickey' \
+        "$rootfs/usr/lib/cardputerzero/maintenance-sshd_config"
+    grep -qx 'PasswordAuthentication no' \
+        "$rootfs/usr/lib/cardputerzero/maintenance-sshd_config"
+    grep -qx 'PermitRootLogin prohibit-password' \
+        "$rootfs/usr/lib/cardputerzero/maintenance-sshd_config"
+    grep -qx 'ConditionPathExists=/boot/firmware/cp0-maintenance.enable' \
+        "$rootfs/usr/lib/systemd/system/cardputerzero-maintenance-ssh.service"
     test -x "$rootfs/usr/lib/systemd/system-generators/cardputerzero-ssh-generator"
     grep -qx 'AllowGroups cp0-ssh' \
         "$rootfs/etc/ssh/sshd_config.d/40-cardputerzero-owner.conf"

@@ -438,6 +438,25 @@ allowlist inside their otherwise read-only system view. Host tests assert the
 exact locale/time-zone content, replacement behavior, and preservation of the
 former symlink target.
 
+The following candidate reported `provisioning command is not valid in the
+current state` after a Device/Owner field was submitted. The Shell advanced
+pages from the event it had just sent instead of from the daemon's returned
+durable phase. A completed request followed by a lost/late response, service
+restart, repeated Enter or prior persisted step could therefore leave the two
+state machines on different pages. The Shell now applies the authoritative
+status after every successful mutation and performs an immediate `GetStatus`
+reconciliation after `InvalidState` or `RepairRequired`. Region, owner and
+password transitions are idempotent after completion and cannot rewind a later
+phase; plaintext buffers are cleared when the returned phase crosses their
+durable boundary. Host tests now restart the daemon at every step across all
+six Ethernet/Wi-Fi/offline and SSH On/Off combinations.
+
+To stop using full-media burns as the diagnostic loop, the next image also
+includes the physically armed, one-boot ED25519 maintenance path documented in
+`MAINTENANCE-HOT-UPDATE.md`. It permits volatile user-space binary replacement
+with automatic rollback, but never persists a key, password or update and
+cannot update BSP or boot components.
+
 ### Host and image tests
 
 - mounted product root contains no human UID, fixed username, password hash,

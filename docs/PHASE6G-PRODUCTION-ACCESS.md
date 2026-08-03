@@ -12,7 +12,7 @@ operator-selected password so the only V0.6 board remains debuggable. That is a
 development artifact and must never be redistributed as a production image.
 
 `CP0_ACCESS_PROFILE=production` creates a distinct product artifact whose
-maintenance boundary is closed by default:
+network maintenance boundary is closed by default:
 
 - the build rejects `CP0_FIRST_USER_PASSWORD` and `CP0_SSH_PUBLIC_KEY`;
 - pi-gen receives a generated 256-bit temporary password only because its stage
@@ -24,6 +24,13 @@ maintenance boundary is closed by default:
 - root remains locked;
 - Developer Mode and Recovery Boot are locked off by the root-owned production
   device policy.
+
+The image also carries a conditional, one-boot maintenance sshd. It has no
+embedded key and no password path, and does not start unless a physically
+present operator writes a versioned marker plus one ED25519 public key to the
+FAT boot partition. The inputs are consumed before listening and access ends
+on reboot. This narrow first-boot hot-update path is specified in
+`MAINTENANCE-HOT-UPDATE.md`.
 
 NetworkManager, the compositor, System Shell, appd and the capability brokers
 remain available. This access profile changes maintenance authority, not the
@@ -51,11 +58,12 @@ combination fails before repository access, Docker or image mutation begins.
 
 ## Maintenance ceremony
 
-The production image has no in-place administrative login. Maintenance uses a
-separately built recovery SD with an operator-selected one-time password or
-key. Booting that removable image is the physical authorization ceremony;
-removing it revokes access. The recovery image does not automatically mount
-`cp0-data`, and all product application entry points remain masked there.
+Persistent and unrestricted maintenance uses a separately built recovery SD
+with an operator-selected one-time password or key. Booting that removable
+image is the physical authorization ceremony; removing it revokes access. The
+recovery image does not automatically mount `cp0-data`, and all product
+application entry points remain masked there. The boot-marker maintenance mode
+is deliberately narrower and changes only the current RAM-backed root overlay.
 
 This design avoids placing a fleet-wide or per-release login secret in the
 product image. It does not protect an SD card from offline replacement and does
