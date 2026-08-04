@@ -4,6 +4,8 @@ This focused SDK application records the keyboard events delivered through the
 trusted Runtime input boundary. It does not open evdev and does not modify the
 keyboard configuration.
 
+![Keyboard Diagnostics review step](assets/screenshot.png)
+
 The guided sequence covers:
 
 - lowercase without Shift;
@@ -15,6 +17,17 @@ For each step, press the requested key or chord. The review screen shows the
 received Linux key code, modifier mask, decoded US ASCII name/code and whether
 it matches the expected event. Press Enter to confirm and continue, or
 Backspace to discard the capture and retry the same step.
+
+## Run in the simulator
+
+```sh
+cargo run -p cp0ctl -- run examples/keyboard-diagnostics \
+  --duration 600 --permissions deny --keys a \
+  --output target/keyboard-diagnostics.ppm
+```
+
+Keyboard Diagnostics is an engineering image option, not one of the eight
+built-in product applications.
 
 The application atomically updates `keyboard-test.log` in its private storage
 after every capture, confirmation and retry. On a development device, a root

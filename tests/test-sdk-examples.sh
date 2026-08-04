@@ -5,6 +5,13 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 output="$repo_root/target/example-simulator"
 mkdir -p "$output"
 
+for manifest in "$repo_root"/examples/*/app.json; do
+    example_dir=$(dirname "$manifest")
+    test -s "$example_dir/README.md"
+    grep -Fq 'assets/screenshot.png' "$example_dir/README.md"
+    test -s "$example_dir/assets/screenshot.png"
+done
+
 cargo fmt --manifest-path "$repo_root/examples/neon-snake/Cargo.toml" -- --check
 cargo test --quiet --manifest-path "$repo_root/examples/neon-snake/Cargo.toml"
 cargo fmt --manifest-path "$repo_root/examples/calculator/Cargo.toml" -- --check

@@ -5,6 +5,8 @@ Neon Snake is a complete CardputerZero SDK 1.0 application. It renders a
 keyboard events and stores the best score in the application's isolated
 private storage.
 
+![Neon Snake game board](assets/screenshot.png)
+
 Controls:
 
 - arrow keys: steer;
@@ -35,3 +37,5 @@ mode and trusts the developer public key.
 The game requests no capabilities. Its frame buffer, fixed snake array and
 game state are caller-owned static memory; there is no allocator and no Linux
 compatibility API.
+
+Neon Snake is one of the eight applications included in the product image.
