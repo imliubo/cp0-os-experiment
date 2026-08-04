@@ -21,6 +21,7 @@
 #define CP0_SHELL_USER "cp0-shell"
 #define CP0_APP_ID_MAX 128
 #define CP0_ESC_POLL_MSEC 20
+#define CP0_SYSTEM_SHELL_PROTOCOL_VERSION 7U
 
 _Static_assert((uint32_t)CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL ==
                        (uint32_t)CP0_OVERLAY_STATE_FULL &&
@@ -639,8 +640,12 @@ bind_system_shell(struct wl_client *client, void *data, uint32_t version,
         return;
     }
 
-    resource = wl_resource_create(client, &cp0_system_shell_v1_interface,
-                                  version < 6 ? version : 6, id);
+    resource = wl_resource_create(
+        client, &cp0_system_shell_v1_interface,
+        version < CP0_SYSTEM_SHELL_PROTOCOL_VERSION
+            ? version
+            : CP0_SYSTEM_SHELL_PROTOCOL_VERSION,
+        id);
     if (resource == NULL) {
         wl_client_post_no_memory(client);
         return;
@@ -933,8 +938,8 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
                   &policy->compositor_idle_listener);
 
     policy->global = wl_global_create(
-        compositor->wl_display, &cp0_system_shell_v1_interface, 6, policy,
-        bind_system_shell);
+        compositor->wl_display, &cp0_system_shell_v1_interface,
+        CP0_SYSTEM_SHELL_PROTOCOL_VERSION, policy, bind_system_shell);
     if (policy->global == NULL) {
         wl_event_source_remove(policy->esc_timer);
         wl_list_remove(&policy->create_surface_listener.link);
