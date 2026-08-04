@@ -16,6 +16,15 @@
 #define COLOR_YELLOW 0x00f2c14eu
 #define COLOR_RED 0x00ef5b5bu
 
+#define SYSTEM_ACTION_X 62
+#define SYSTEM_ACTION_Y 25
+#define SYSTEM_ACTION_WIDTH 196
+#define SYSTEM_ACTION_HEIGHT 60
+#define NOTIFICATION_X 5
+#define NOTIFICATION_Y 24
+#define NOTIFICATION_WIDTH 310
+#define NOTIFICATION_HEIGHT 64
+
 struct canvas {
     uint32_t *pixels;
     int width;
@@ -397,7 +406,7 @@ static void draw_status_bar(struct canvas *canvas, const struct cp0_ui *ui)
 {
     char store_status[12];
 
-    fill_rect(canvas, 0, 0, CP0_UI_WIDTH, 21, COLOR_BAR);
+    fill_rect(canvas, 0, 0, CP0_UI_WIDTH, CP0_UI_STATUS_BAR_HEIGHT, COLOR_BAR);
     fill_rect(canvas, 0, 20, CP0_UI_WIDTH, 1, COLOR_GREEN);
     draw_text(canvas, 8, 7, screen_title(ui), 1, COLOR_TEXT);
     if (ui->store_activity) {
@@ -2515,8 +2524,10 @@ static void draw_system_action_overlay(struct canvas *canvas,
                                    "PREVIOUS", "NEXT", "SCREENSHOT"};
     char value[24];
     unsigned int kind = ui->system_action_kind < 7 ? ui->system_action_kind : 0;
-    fill_rect(canvas, 62, 25, 196, 60, 0x00090b0cu);
-    stroke_rect(canvas, 62, 25, 196, 60, 2, COLOR_GREEN);
+    fill_rect(canvas, SYSTEM_ACTION_X, SYSTEM_ACTION_Y, SYSTEM_ACTION_WIDTH,
+              SYSTEM_ACTION_HEIGHT, 0x00090b0cu);
+    stroke_rect(canvas, SYSTEM_ACTION_X, SYSTEM_ACTION_Y, SYSTEM_ACTION_WIDTH,
+                SYSTEM_ACTION_HEIGHT, 2, COLOR_GREEN);
     draw_text(canvas, 82, 38, labels[kind], 1, COLOR_TEXT);
     if (kind == 0 && !ui->local_simulation && !ui->brightness_available)
         snprintf(value, sizeof(value), "UNAVAILABLE");
@@ -2685,9 +2696,12 @@ static void draw_prompt_line(struct canvas *canvas, int y, const char *text,
 static void draw_notification_banner(struct canvas *canvas,
                                      const struct cp0_ui *ui)
 {
-    fill_rect(canvas, 5, 24, 310, 64, COLOR_SURFACE);
-    fill_rect(canvas, 5, 24, 4, 64, COLOR_GREEN);
-    stroke_rect(canvas, 5, 24, 310, 64, 1, COLOR_GREEN);
+    fill_rect(canvas, NOTIFICATION_X, NOTIFICATION_Y, NOTIFICATION_WIDTH,
+              NOTIFICATION_HEIGHT, COLOR_SURFACE);
+    fill_rect(canvas, NOTIFICATION_X, NOTIFICATION_Y, 4,
+              NOTIFICATION_HEIGHT, COLOR_GREEN);
+    stroke_rect(canvas, NOTIFICATION_X, NOTIFICATION_Y, NOTIFICATION_WIDTH,
+                NOTIFICATION_HEIGHT, 1, COLOR_GREEN);
     draw_prompt_line(canvas, 32, ui->notification_app_name, 0, 46);
     draw_prompt_line(canvas, 46, ui->notification_title, 0, 46);
     draw_prompt_line(canvas, 62, ui->notification_body, 0, 46);
@@ -6101,6 +6115,37 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     }
 
     return CP0_UI_EVENT_NONE;
+}
+
+static bool point_in_rect(int x, int y, int rect_x, int rect_y, int width,
+                          int height)
+{
+    return x >= rect_x && x < rect_x + width && y >= rect_y &&
+           y < rect_y + height;
+}
+
+bool cp0_ui_notification_mode_pixel_opaque(const struct cp0_ui *ui, int x,
+                                           int y)
+{
+    if (ui == NULL || x < 0 || x >= CP0_UI_WIDTH || y < 0 ||
+        y >= CP0_UI_HEIGHT)
+        return false;
+
+    if (ui->setup_active || ui->password_change_active || ui->power_dialog ||
+        ui->app_uninstall_confirm || ui->settings_confirm ||
+        ui->developer_revoke_confirm || ui->permission_prompt ||
+        ui->document_prompt || ui->store_install_prompt || ui->help_overlay)
+        return true;
+
+    if (y < CP0_UI_STATUS_BAR_HEIGHT)
+        return true;
+    if (ui->notification_banner)
+        return point_in_rect(x, y, NOTIFICATION_X, NOTIFICATION_Y,
+                             NOTIFICATION_WIDTH, NOTIFICATION_HEIGHT);
+    if (ui->system_action_overlay)
+        return point_in_rect(x, y, SYSTEM_ACTION_X, SYSTEM_ACTION_Y,
+                             SYSTEM_ACTION_WIDTH, SYSTEM_ACTION_HEIGHT);
+    return false;
 }
 
 void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,

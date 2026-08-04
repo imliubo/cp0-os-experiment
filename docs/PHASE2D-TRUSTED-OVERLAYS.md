@@ -27,8 +27,11 @@ cannot paint over a permission decision or retain focus beneath one.
 
 The Shell uses double-buffered ARGB8888 SHM buffers. In status mode pixels
 below row 20 are transparent and the Wayland input region is limited to the
-status strip. In hidden mode the input region is empty. Full mode covers the
-display and receives keyboard focus.
+status strip. In notification mode only the status strip and the exact trusted
+banner or system-action rectangle are opaque; the rest of the App remains
+visible and retained Shell pages cannot become the overlay backdrop. In hidden
+mode the input region is empty. Full mode covers the display and receives
+keyboard focus.
 
 Permission prompts are read from appd over the authenticated control socket.
 The Shell uses a bounded 8 KiB frame, a 128-token JSON parser and 250 ms socket

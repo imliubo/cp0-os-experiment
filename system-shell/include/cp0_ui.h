@@ -25,7 +25,7 @@
 #define CP0_UI_NOTIFICATION_APP_NAME_MAX 128
 #define CP0_UI_NOTIFICATION_TITLE_MAX 128
 #define CP0_UI_NOTIFICATION_BODY_MAX 640
-#define CP0_UI_NOTIFICATION_BOTTOM 88
+#define CP0_UI_STATUS_BAR_HEIGHT 21
 #define CP0_UI_MAX_DOCUMENTS 16
 #define CP0_UI_DOCUMENT_ID_MAX 32
 #define CP0_UI_DOCUMENT_NAME_MAX 128
@@ -909,6 +909,8 @@ void cp0_ui_set_media_status(struct cp0_ui *ui,
 bool cp0_ui_tick(struct cp0_ui *ui);
 enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                                         enum cp0_ui_action action);
+bool cp0_ui_notification_mode_pixel_opaque(const struct cp0_ui *ui, int x,
+                                           int y);
 void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
                    int height, int stride_pixels);
 

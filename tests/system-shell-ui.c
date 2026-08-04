@@ -1675,6 +1675,14 @@ int main(int argc, char **argv)
         assert(ui.system_action_overlay);
         assert_foreground_background_isolated(&ui, frame, comparison);
         assert(pixel(frame, 62, 25) == GREEN);
+        assert(cp0_ui_notification_mode_pixel_opaque(&ui, 0, 0));
+        assert(cp0_ui_notification_mode_pixel_opaque(&ui, 319, 20));
+        assert(!cp0_ui_notification_mode_pixel_opaque(&ui, 0, 21));
+        assert(cp0_ui_notification_mode_pixel_opaque(&ui, 62, 25));
+        assert(cp0_ui_notification_mode_pixel_opaque(&ui, 257, 84));
+        assert(!cp0_ui_notification_mode_pixel_opaque(&ui, 61, 25));
+        assert(!cp0_ui_notification_mode_pixel_opaque(&ui, 258, 25));
+        assert(!cp0_ui_notification_mode_pixel_opaque(&ui, 62, 85));
     }
     ui.system_action_overlay = false;
     ui.system_action_ticks = 0;
@@ -1683,6 +1691,11 @@ int main(int argc, char **argv)
                                     "Foreground isolation check"));
     assert_foreground_background_isolated(&ui, frame, comparison);
     assert(pixel(frame, 5, 24) == GREEN);
+    assert(cp0_ui_notification_mode_pixel_opaque(&ui, 5, 24));
+    assert(cp0_ui_notification_mode_pixel_opaque(&ui, 314, 87));
+    assert(!cp0_ui_notification_mode_pixel_opaque(&ui, 4, 24));
+    assert(!cp0_ui_notification_mode_pixel_opaque(&ui, 315, 24));
+    assert(!cp0_ui_notification_mode_pixel_opaque(&ui, 5, 88));
     cp0_ui_clear_notification(&ui);
 
     cp0_ui_handle_action(&ui, CP0_UI_HELP);
@@ -1695,6 +1708,7 @@ int main(int argc, char **argv)
     assert(ui.power_dialog && ui.foreground_app_active);
     assert_foreground_background_isolated(&ui, frame, comparison);
     assert(pixel(frame, 36, 35) == GREEN);
+    assert(cp0_ui_notification_mode_pixel_opaque(&ui, 0, 169));
     cp0_ui_handle_action(&ui, CP0_UI_BACK);
     assert(!ui.power_dialog && ui.foreground_app_active);
 

@@ -1802,11 +1802,12 @@ static void shell_redraw(struct shell *shell)
             uint32_t *pixel = &buffer->pixels[y * shell->width + x];
             if (shell->overlay_mode ==
                     CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS &&
-                y >= 21) {
+                y >= CP0_UI_STATUS_BAR_HEIGHT) {
                 *pixel = 0;
             } else if (shell->overlay_mode ==
                            CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_NOTIFICATION &&
-                       y >= CP0_UI_NOTIFICATION_BOTTOM) {
+                       !cp0_ui_notification_mode_pixel_opaque(&shell->ui, x,
+                                                              y)) {
                 *pixel = 0;
             } else {
                 *pixel |= 0xff000000u;
@@ -1821,7 +1822,8 @@ static void shell_redraw(struct shell *shell)
             wl_region_add(input_region, 0, 0, shell->width, shell->height);
         else if (shell->overlay_mode ==
                  CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS)
-            wl_region_add(input_region, 0, 0, shell->width, 21);
+            wl_region_add(input_region, 0, 0, shell->width,
+                          CP0_UI_STATUS_BAR_HEIGHT);
         wl_surface_set_input_region(shell->surface, input_region);
         wl_region_destroy(input_region);
     }

@@ -201,6 +201,11 @@ grep -q 'weston_compositor_add_key_binding' "$policy"
 grep -q 'cp0_system_shell_v1_send_action' "$policy"
 grep -q 'cp0_overlay_transient_target(policy->overlay_mode)' "$policy"
 grep -q 'cp0_overlay_transient_base(' "$shell_client"
+grep -q 'cp0_ui_notification_mode_pixel_opaque(&shell->ui, x,' "$shell_client"
+if grep -q 'y >= CP0_UI_NOTIFICATION_BOTTOM' "$shell_client"; then
+    echo 'error: notification overlays cannot hide a full-width App strip' >&2
+    exit 1
+fi
 grep -q '(action == CP0_UI_GO_HOME || action == CP0_UI_SHOW_TASKS))' \
     "$shell_client"
 grep -q 'wl_event_loop_add_timer' "$policy"
