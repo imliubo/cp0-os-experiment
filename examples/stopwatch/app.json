@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "dev.cardputerzero.stopwatch",
+  "name": "Stopwatch",
+  "version": "0.1.0",
+  "sdk_version": "1.0",
+  "runtime": "wamr",
+  "entrypoint": "bin/stopwatch.wasm",
+  "display": "standard",
+  "resources": {
+    "memory_mb": 16,
+    "storage_mb": 1
+  },
+  "permissions": [],
+  "intents": []
+}

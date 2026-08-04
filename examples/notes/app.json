@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "dev.cardputerzero.notes",
+  "name": "Notes",
+  "version": "0.1.0",
+  "sdk_version": "1.0",
+  "runtime": "wamr",
+  "entrypoint": "bin/notes.wasm",
+  "display": "standard",
+  "resources": {
+    "memory_mb": 16,
+    "storage_mb": 1
+  },
+  "permissions": [],
+  "intents": []
+}

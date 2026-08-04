@@ -1,5 +1,6 @@
 #![no_std]
 
+#[cfg(not(test))]
 use core::panic::PanicInfo;
 use cp0_sdk::{
     display::{self, Rect},
@@ -29,8 +30,19 @@ impl Calculator {
         }
     }
 
-    fn key(&mut self, code: u16) {
-        if let Some(digit) = digit_for_key(code) {
+    fn key(&mut self, code: u16, modifiers: u8) {
+        if let Some(operator) = operator_for_key(code, modifiers) {
+            if operator == KEY_EQUAL {
+                self.apply();
+                self.pending = 0;
+            } else {
+                self.apply();
+                self.pending = operator;
+                self.entering = false;
+            }
+            return;
+        }
+        if let Some(digit) = digit_for_key(code, modifiers) {
             if self.error || !self.entering {
                 self.value = 0;
                 self.error = false;
@@ -49,11 +61,6 @@ impl Calculator {
             28 | 96 => {
                 self.apply();
                 self.pending = 0;
-            }
-            12 | 74 | 13 | 78 | 55 | 98 => {
-                self.apply();
-                self.pending = code;
-                self.entering = false;
             }
             _ => {}
         }
@@ -83,7 +90,34 @@ impl Calculator {
     }
 }
 
-fn digit_for_key(code: u16) -> Option<i32> {
+const KEY_8: u16 = 9;
+const KEY_MINUS: u16 = 12;
+const KEY_EQUAL: u16 = 13;
+const KEY_SLASH: u16 = 53;
+const KEY_KPASTERISK: u16 = 55;
+const KEY_KPMINUS: u16 = 74;
+const KEY_KPPLUS: u16 = 78;
+const KEY_KPSLASH: u16 = 98;
+
+fn shifted(modifiers: u8) -> bool {
+    modifiers & input::MODIFIER_SHIFT != 0
+}
+
+fn operator_for_key(code: u16, modifiers: u8) -> Option<u16> {
+    match (code, shifted(modifiers)) {
+        (KEY_EQUAL, true) | (KEY_KPPLUS, _) => Some(KEY_KPPLUS),
+        (KEY_MINUS, false) | (KEY_KPMINUS, _) => Some(KEY_KPMINUS),
+        (KEY_8, true) | (KEY_KPASTERISK, _) => Some(KEY_KPASTERISK),
+        (KEY_SLASH, false) | (KEY_KPSLASH, _) => Some(KEY_KPSLASH),
+        (KEY_EQUAL, false) => Some(KEY_EQUAL),
+        _ => None,
+    }
+}
+
+fn digit_for_key(code: u16, modifiers: u8) -> Option<i32> {
+    if shifted(modifiers) {
+        return None;
+    }
     match code {
         11 => Some(0),
         2..=10 => Some(i32::from(code - 1)),
@@ -184,6 +218,7 @@ fn format_i32(value: i32, buffer: &mut [u8; 12]) -> &str {
     unsafe { core::str::from_utf8_unchecked(&buffer[cursor..]) }
 }
 
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
     let pixels = frame();
@@ -198,7 +233,7 @@ pub extern "C" fn main() -> i32 {
         }
         match input::poll_key_event(250) {
             Ok(Some(event)) if event.pressed => {
-                calculator.key(event.code);
+                calculator.key(event.code, event.modifiers);
                 dirty = true;
             }
             Ok(_) => {}
@@ -207,6 +242,48 @@ pub extern "C" fn main() -> i32 {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cardputer_symbol_keys_drive_all_operations() {
+        let shift = input::MODIFIER_SHIFT;
+        let mut calculator = Calculator::new();
+
+        calculator.key(8, 0);
+        calculator.key(KEY_8, shift);
+        calculator.key(7, 0);
+        calculator.key(KEY_EQUAL, 0);
+        assert_eq!(calculator.value, 42);
+
+        calculator.key(KEY_MINUS, 0);
+        calculator.key(3, 0);
+        calculator.key(KEY_EQUAL, 0);
+        assert_eq!(calculator.value, 40);
+
+        calculator.key(KEY_SLASH, 0);
+        calculator.key(5, 0);
+        calculator.key(KEY_EQUAL, 0);
+        assert_eq!(calculator.value, 10);
+
+        calculator.key(KEY_EQUAL, shift);
+        calculator.key(2, 0);
+        calculator.key(KEY_EQUAL, 0);
+        assert_eq!(calculator.value, 11);
+    }
+
+    #[test]
+    fn shifted_number_is_not_entered_as_a_digit() {
+        assert_eq!(digit_for_key(KEY_8, input::MODIFIER_SHIFT), None);
+        assert_eq!(
+            operator_for_key(KEY_8, input::MODIFIER_SHIFT),
+            Some(KEY_KPASTERISK)
+        );
+    }
+}
+
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(_information: &PanicInfo<'_>) -> ! {
     loop {
