@@ -19,7 +19,13 @@ grep -Fq 'cp0ctl store submit' "$skill/references/store-submission.md"
 grep -Fq 'Pair New Computer' "$skill/references/developer-mode.md"
 grep -Fq 'Owner SSH Shell may remain Off' "$skill/SKILL.md"
 grep -Fq 'simulation-first' "$skill/references/platform-contract.md"
-for reference in platform-contract workflows distribution troubleshooting store-submission developer-mode; do
+grep -Fq 'first physical key' "$skill/references/platform-contract.md"
+grep -Fq 'photos::list_page' "$skill/references/photos.md"
+grep -Fq 'cannot change its parent shell' "$skill/SKILL.md"
+grep -Fq 'inherits the active Cargo toolchain' "$skill/references/workflows.md"
+grep -Fq 'Manifest v1 has no packaged Launcher icon field' \
+    "$skill/references/platform-contract.md"
+for reference in platform-contract workflows distribution troubleshooting store-submission developer-mode photos; do
     test -s "$skill/references/$reference.md"
     grep -Fq "references/$reference.md" "$skill/SKILL.md"
 done

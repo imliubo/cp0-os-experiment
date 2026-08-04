@@ -7,8 +7,15 @@ Select `cp0ctl` from an extracted DevKit:
 ```sh
 export CP0_DEVKIT_ROOT=/path/to/cardputerzero-app-devkit
 export PATH="$CP0_DEVKIT_ROOT/bin:$PATH"
-export RUSTUP_TOOLCHAIN=1.85.1
+export RUSTUP_TOOLCHAIN=$(awk -F '"' '$1 ~ /^rust_version = / { print $2 }' \
+  "$CP0_DEVKIT_ROOT/devkit/toolchain.toml")
 ```
+
+Keep `RUSTUP_TOOLCHAIN` exported for `new`, `build`, `run`, `package` and host
+tests. `doctor.sh` checks availability but cannot update its parent shell, and
+the current `cp0ctl` inherits the active Cargo toolchain instead of overriding
+it. A valid signature does not prove that the pinned compiler produced the
+packaged WASM.
 
 In a source checkout, replace `cp0ctl` below with
 `cargo run --quiet -p cp0ctl --`.
@@ -42,6 +49,11 @@ Optional lifecycle checkpoint exports are an advanced, simulation-first API.
 Read `platform-contract.md` before adding them, keep payloads versioned and at
 most 8 KiB, and retain a clean-start path. The bundled simulator does not yet
 exercise checkpoint/restore.
+
+For a shared-photo App, use `photos::LIST_PAGE_PHOTOS` and one fixed camera-size
+pixel buffer. Test both permission modes; a deterministic save and read in one
+simulator run can verify the complete brokered API. See `photos.md` for the
+contract and failure states.
 
 ## C and C++
 

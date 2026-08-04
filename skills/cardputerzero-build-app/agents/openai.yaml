@@ -1,4 +1,4 @@
 interface:
   display_name: "CardputerZero App Developer"
-  short_description: "Build, test, pair, and deploy CardputerZero apps"
-  default_prompt: "Use $cardputerzero-build-app to create, verify, and safely deploy a CardputerZero application through Developer Mode."
+  short_description: "Build, test, pair, and deploy isolated CardputerZero apps"
+  default_prompt: "Use $cardputerzero-build-app to create, verify, package, and safely deploy a CardputerZero SDK application through Developer Mode."

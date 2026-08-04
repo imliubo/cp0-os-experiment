@@ -41,6 +41,16 @@
 - Media action is not consumed: register a non-inactive session with the exact
   supported mask, use `--media-actions` rather than raw `--keys`, and inspect
   `media_session_updates` plus `media_actions_taken` in the profile.
+- Photo count is unexpectedly zero: simulator photo state lasts for one run;
+  save and list in the same App execution or test Gallery's empty state.
+- Photo call is denied: `photos.read`, `photos.write` and `camera.capture` are
+  separate declarations. Add only the capability used and test allow/deny.
+- Photo load is damaged or incomplete: require an exact 320x170 RGB565 buffer,
+  preserve the broker error, and never reconstruct index/chunk keys yourself.
+- Photo save returns `ResourceLimit`: keep the previous library unchanged and
+  show a recoverable storage-full state; do not retry in a tight loop.
+- First key appears missing only after screen sleep: this is the compositor's
+  wake-key contract. Require a fresh deliberate key for the App action.
 
 ## Package or install fails
 

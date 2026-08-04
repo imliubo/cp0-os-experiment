@@ -25,8 +25,14 @@ The native archive is named
 - `sdk/{rust,c,lvgl,wit,abi}`;
 - `simulator/cp0-simulator.mjs`;
 - this Skill under `skills/`;
-- verified Neon Snake and Media Controls examples, version metadata and
+- App and Store Listing schemas;
+- the complete eight-App product example set with reference screenshots;
+- Developer Mode, photo-library and icon documentation, version metadata and
   checksums.
+
+The examples are Hello Card, Calculator, Neon Snake, Camera, Gallery, Media
+Controls, Notes and Stopwatch. Camera and Gallery use protected built-in IDs;
+they are reference source, not third-party packages to install unchanged.
 
 Set `CP0_DEVKIT_ROOT` to the extracted root and add its `bin` directory to
 `PATH`. Select the Rust version in `devkit/toolchain.toml` and run this Skill's
@@ -37,7 +43,8 @@ shasum -a 256 -c cardputerzero-app-devkit-VERSION-HOST.tar.xz.sha256
 tar -xJf cardputerzero-app-devkit-VERSION-HOST.tar.xz
 export CP0_DEVKIT_ROOT="$PWD/cardputerzero-app-devkit-VERSION-HOST"
 export PATH="$CP0_DEVKIT_ROOT/bin:$PATH"
-export RUSTUP_TOOLCHAIN=1.85.1
+export RUSTUP_TOOLCHAIN=$(awk -F '"' '$1 ~ /^rust_version = / { print $2 }' \
+  "$CP0_DEVKIT_ROOT/devkit/toolchain.toml")
 (cd "$CP0_DEVKIT_ROOT" && shasum -a 256 -c SHA256SUMS)
 "$CP0_DEVKIT_ROOT/skills/cardputerzero-build-app/scripts/doctor.sh" \
   "$CP0_DEVKIT_ROOT" rust
@@ -46,6 +53,9 @@ export RUSTUP_TOOLCHAIN=1.85.1
 Native archives are host-specific because `bin/cp0ctl` is native. Use the
 matching macOS/Linux CPU archive. On Windows or a mismatched CPU, use the OCI
 image rather than attempting to run another host's binary.
+
+Keep `RUSTUP_TOOLCHAIN` set for the complete App session. Passing doctor alone
+does not select a toolchain for later `cp0ctl` child processes.
 
 A public macOS archive also needs project-approved Developer ID signing and
 notarization. If Gatekeeper rejects an internal ad-hoc build, use the verified

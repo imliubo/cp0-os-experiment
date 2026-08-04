@@ -1,6 +1,6 @@
 ---
 name: cardputerzero-build-app
-description: Build, modify, debug, simulate, package, sign, pair, deploy, and submit applications for CardputerZero OS with its isolated WebAssembly SDK. Use for CardputerZero app ideas, app.json manifests, 320x170 or 320x150 UI, keyboard and global media input, Rust/C/C++ SDK code, lifecycle checkpoints, cp0ctl workflows, permissions, cross-computer DevKit setup, Developer Mode pairing and deployment, simulator failures, .capp signing, Store listings, OAuth submission, and provisioned-device installation.
+description: Build, modify, debug, simulate, package, sign, pair, deploy, and submit applications for CardputerZero OS with its isolated WebAssembly SDK. Use for CardputerZero app ideas, app.json manifests, 320x170 or 320x150 UI, keyboard wake behavior, global media input, shared photos, Rust/C/C++ SDK code, lifecycle checkpoints, cp0ctl workflows, permissions, cross-computer DevKit setup, Developer Mode pairing and deployment, simulator failures, .capp signing, Store icons/screenshots, OAuth submission, and provisioned-device installation.
 ---
 
 # Build CardputerZero Apps
@@ -15,7 +15,10 @@ capabilities.
 1. Set `SKILL_DIR` to the directory containing this `SKILL.md`. Locate `ROOT`
    in this order: `$CP0_DEVKIT_ROOT`, an extracted DevKit that contains this
    Skill, or the CardputerZero-OS repository root.
-2. Run `"$SKILL_DIR/scripts/doctor.sh" "$ROOT" rust`. If it fails, read
+2. Read `rust_version` from `ROOT/devkit/toolchain.toml`, export it as
+   `RUSTUP_TOOLCHAIN` for the complete build/run/package session, then run
+   `"$SKILL_DIR/scripts/doctor.sh" "$ROOT" rust`. Doctor validates the pinned
+   toolchain but cannot change its parent shell. If it fails, read
    [references/distribution.md](references/distribution.md) and use the pinned
    toolchain image or install only the reported missing component.
 3. Prefer `ROOT/bin/cp0ctl` in a released DevKit. In a source checkout, use
@@ -25,6 +28,9 @@ capabilities.
 
 Do not download unversioned SDK files, copy private host imports from an
 example, or substitute a compiler/toolchain version without reporting it.
+Do not assume passing doctor changes the shell: confirm `rustc --version`
+matches the pinned version before every manually assembled build or package
+workflow.
 When moving an App to another computer, read the migration section of
 [references/distribution.md](references/distribution.md); generated Rust
 projects currently bind `cp0-sdk` to the creating DevKit's absolute path.
@@ -46,6 +52,9 @@ projects currently bind `cp0-sdk` to the creating DevKit's absolute path.
 - For media applications, use the targetless `media` SDK and read the media
   section of [references/platform-contract.md](references/platform-contract.md).
   Never treat global media actions as raw focused key events.
+- For photo applications, read [references/photos.md](references/photos.md).
+  Use only `photos` SDK objects and caller-owned RGB565 frames; no App receives
+  a Gallery path, index file or raw SD-card access.
 - Treat lifecycle checkpoint exports as a forward-compatible simulation
   preview until the target image confirms Runtime support. Do not claim that
   current hardware will invoke them merely because the SDK declarations exist.
@@ -63,10 +72,13 @@ generated files: `app.json`, `Cargo.toml`, and `src/lib.rs`. Preserve the
 generated `cdylib`, release profile, SDK path and exported `main` contract.
 
 For an existing app, inspect those files plus the exact SDK modules it imports.
-Follow local patterns from a nearby current example. Use `examples/neon-snake`
-for stateful UI and storage, and `examples/media-controls` for global media
-actions. Do not add an abstraction unless it removes real application
-complexity.
+Follow local patterns from a nearby current example. The DevKit contains the
+fixed eight-App product example set: Hello Card for the minimum loop,
+Calculator for key mapping, Neon Snake for a stateful game and private storage,
+Camera/Gallery for shared photos, Media Controls for global actions, Notes for
+text and private storage, and Stopwatch for monotonic time. Camera and Gallery
+use protected product identities, so create a new project with an owned App ID
+instead of deploying those manifests as a third-party replacement.
 
 Implement the smallest complete interaction loop:
 
@@ -86,6 +98,9 @@ to work around an implementation failure.
 
 Media-session registration needs no permission and grants no audio access.
 Declare `audio.playback` separately when the app actually submits PCM audio.
+Shared-photo access is separate from private storage: declare `photos.read`
+for count/list/load and `photos.write` for import/delete. Camera capture also
+requires `camera.capture`.
 
 Read [references/platform-contract.md](references/platform-contract.md) for the
 closed permission vocabulary, limits and input codes. Confirm imports and
@@ -110,6 +125,10 @@ Then inspect both the rendered PPM and JSON profile. Exercise at least the
 initial state, main success path, boundary inputs, restart/back behavior and
 every permission allow/deny state used by the app. Add deterministic logic
 tests for games or stateful tools.
+
+The device consumes the first physical key that wakes a sleeping display. App
+logic must remain correct when that key is never delivered; do not require a
+single wake-triggering press to perform a destructive or one-shot action.
 
 Do not accept a build alone. Completion requires a valid manifest, successful
 WASM build, at least one simulator frame, bounded memory, expected input count
@@ -154,6 +173,8 @@ narrowest layer before continuing.
 - `doctor.sh` passes for the selected language.
 - Manifest identity, entrypoint, SDK version, display, resources and permissions
   match the implementation.
+- Shared-photo Apps cover empty, allow, deny, missing/deleted and full-resource
+  states without assuming a host path or a fixed library size.
 - Logic tests and `verify-app.sh` pass with representative input.
 - The final frame is visually inspected at its real 320-pixel dimensions.
 - Package signature verification passes when distribution is requested.

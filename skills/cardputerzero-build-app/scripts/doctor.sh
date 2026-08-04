@@ -36,9 +36,11 @@ require_command() {
 require_file "$root/sdk/rust/Cargo.toml"
 require_file "$root/sdk/rust/src/media.rs"
 require_file "$root/sdk/rust/src/lifecycle.rs"
+require_file "$root/sdk/rust/src/photos.rs"
 require_file "$root/sdk/c/include/cardputerzero.h"
 require_file "$root/sdk/wit/cardputerzero-sdk.wit"
 require_file "$root/simulator/cp0-simulator.mjs"
+require_file "$root/schemas/app-manifest-v1.schema.json"
 require_file "$root/schemas/store-listing-v1.schema.json"
 require_file "$root/devkit/toolchain.toml"
 require_command node

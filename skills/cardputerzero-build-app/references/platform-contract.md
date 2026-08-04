@@ -53,6 +53,11 @@ F1-F4 may be intercepted as global System Shell actions on the device. Do not
 make them the only route to an app feature. Letter and number codes follow the
 closed simulator map in `simulator/cp0-simulator.mjs`.
 
+When the display is asleep, the compositor consumes the first physical key's
+press/repeat/release sequence while waking the panel. That key is intentionally
+not delivered to the foreground App. Make every flow tolerate the missing
+wake-triggering key, especially confirmation, save, send and delete actions.
+
 ## Global media actions
 
 Media Play/Pause, Previous and Next are trusted System Shell actions (`Fn+Q`,
@@ -85,8 +90,8 @@ Use exactly one permission entry per capability used by the app:
 | `camera.capture` | `camera` | one fixed 320x170 RGB565 frame |
 | `hardware.gpio` | `gpio` | four logical V0.6 connector lines only |
 | `radio.lora` | `radio` | fixed external SX1276 policy; disabled by default |
-| `photos.read` | `photos` | read the bounded shared photo library |
-| `photos.write` | `photos` | save or explicitly delete shared photos |
+| `photos.read` | `photos` | count, page and load shared 320x170 frames |
+| `photos.write` | `photos` | atomically import or explicitly delete a frame |
 
 Private `storage` is always identity-bound and limited by
 `resources.storage_mb`; it has no permission name. Intents must be explicitly
@@ -94,6 +99,14 @@ declared and use reverse-domain actions. Apps cannot select another app by ID.
 
 The `media` module is targetless coordination state and has no permission name.
 It never substitutes for `audio.playback`.
+
+The shared photo library has no fixed count or automatic eviction. Use bounded
+eight-item SDK pages and one 108,800-byte frame, and read `photos.md` before
+implementing photo access. No App receives a path or may mutate indexes.
+
+Manifest v1 has no packaged Launcher icon field. Third-party Apps currently use
+a System Shell monogram in the 40x40 grid slot. The separate Store Listing uses
+a 48x48 PNG icon and 320x170 screenshots; do not add these fields to `app.json`.
 
 ## Isolation rules
 
