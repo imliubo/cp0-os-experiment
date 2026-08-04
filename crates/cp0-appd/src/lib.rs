@@ -239,6 +239,9 @@ pub fn build_sandbox_plan(
         "--ro-bind".into(),
         broker_socket,
         "/run/cardputerzero/broker.sock".into(),
+        "--ro-bind".into(),
+        wayland_socket,
+        "/run/cardputerzero/wayland-0".into(),
         "--chdir".into(),
         "/app".into(),
         "--setenv".into(),
@@ -254,8 +257,11 @@ pub fn build_sandbox_plan(
         "CP0_BROKER_SOCKET".into(),
         "/run/cardputerzero/broker.sock".into(),
         "--setenv".into(),
-        "WAYLAND_SOCKET".into(),
-        "3".into(),
+        "XDG_RUNTIME_DIR".into(),
+        "/run/cardputerzero".into(),
+        "--setenv".into(),
+        "WAYLAND_DISPLAY".into(),
+        "wayland-0".into(),
         "--setenv".into(),
         "CP0_APP_ID".into(),
         manifest.id.clone(),
@@ -270,6 +276,7 @@ pub fn build_sandbox_plan(
     let systemd_properties = vec![
         format!("User={app_user}"),
         format!("Group={app_user}"),
+        "SupplementaryGroups=cp0-wayland".into(),
         format!("MemoryMax={memory_max_bytes}"),
         "MemorySwapMax=0".into(),
         "CPUQuota=60%".into(),
@@ -290,8 +297,6 @@ pub fn build_sandbox_plan(
         "LockPersonality=yes".into(),
         "RestrictRealtime=yes".into(),
         "SystemCallArchitectures=native".into(),
-        "Environment=WAYLAND_SOCKET=3".into(),
-        format!("OpenFile={wayland_socket}:wayland"),
     ];
 
     Ok(SandboxPlan {
@@ -438,6 +443,7 @@ mod tests {
                 DEFAULT_RUNTIME,
                 "/var/lib/cardputerzero/apps/dev.cardputerzero.hello/1.2.3",
                 DEFAULT_BROKER_SOCKET,
+                DEFAULT_WAYLAND_SOCKET,
             ]
         );
         for forbidden in [
@@ -480,12 +486,26 @@ mod tests {
             plan.systemd_properties
                 .contains(&"PrivateDevices=yes".into())
         );
-        assert_eq!(
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|values| values == ["--setenv", "XDG_RUNTIME_DIR", "/run/cardputerzero"])
+        );
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|values| values == ["--setenv", "WAYLAND_DISPLAY", "wayland-0"])
+        );
+        assert!(!plan.arguments.iter().any(|value| value == "WAYLAND_SOCKET"));
+        assert!(
             plan.systemd_properties
+                .contains(&"SupplementaryGroups=cp0-wayland".into())
+        );
+        assert!(
+            !plan
+                .systemd_properties
                 .iter()
-                .filter(|property| property.starts_with("OpenFile="))
-                .count(),
-            1
+                .any(|property| property.starts_with("OpenFile="))
         );
         assert!(
             plan.systemd_properties
@@ -496,10 +516,6 @@ mod tests {
                 .systemd_properties
                 .iter()
                 .any(|property| property.starts_with("ReadWritePaths="))
-        );
-        assert!(
-            plan.systemd_properties
-                .contains(&"OpenFile=/run/cardputerzero/wayland-0:wayland".into())
         );
     }
 

@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-bool cp0_display_initialize(int socket_fd, const char *app_id, bool immersive);
+bool cp0_display_initialize(const char *app_id, bool immersive);
 void cp0_display_destroy(void);
 uint32_t cp0_display_dimensions(void);
 int cp0_display_present_rgb565(const uint8_t *pixels, size_t pixel_bytes,

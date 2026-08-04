@@ -81,6 +81,8 @@ int main(int argc, char **argv) {
     int result = EXIT_FAILURE;
     const char *app_id;
     const char *display_mode;
+    const char *runtime_directory;
+    const char *wayland_display;
     const char *wayland_socket;
     bool immersive;
 
@@ -95,11 +97,16 @@ int main(int argc, char **argv) {
 
     app_id = getenv("CP0_APP_ID");
     display_mode = getenv("CP0_DISPLAY_MODE");
+    runtime_directory = getenv("XDG_RUNTIME_DIR");
+    wayland_display = getenv("WAYLAND_DISPLAY");
     wayland_socket = getenv("WAYLAND_SOCKET");
     if (display_mode == NULL ||
         (strcmp(display_mode, "standard") != 0 &&
          strcmp(display_mode, "immersive") != 0) ||
-        wayland_socket == NULL || strcmp(wayland_socket, "3") != 0) {
+        runtime_directory == NULL ||
+        strcmp(runtime_directory, "/run/cardputerzero") != 0 ||
+        wayland_display == NULL || strcmp(wayland_display, "wayland-0") != 0 ||
+        wayland_socket != NULL) {
         fprintf(stderr, "app-runtime: invalid display launch contract\n");
         goto cleanup;
     }
@@ -113,7 +120,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "app-runtime: WAMR initialization failed\n");
         goto cleanup;
     }
-    if (!cp0_display_initialize(3, app_id, immersive)) {
+    if (!cp0_display_initialize(app_id, immersive)) {
         fprintf(stderr, "app-runtime: Wayland display initialization failed\n");
         goto runtime_cleanup;
     }

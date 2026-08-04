@@ -14,7 +14,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <sys/socket.h>
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
@@ -432,16 +431,11 @@ static bool create_buffers(struct cp0_display_state *display) {
     return true;
 }
 
-bool cp0_display_initialize(int socket_fd, const char *app_id, bool immersive) {
+bool cp0_display_initialize(const char *app_id, bool immersive) {
     const char *display_title;
-    int socket_type = 0;
-    socklen_t socket_type_bytes = sizeof(socket_type);
     unsigned int roundtrip;
 
-    if (state.display != NULL || socket_fd != 3 || !valid_app_id(app_id) ||
-        getsockopt(socket_fd, SOL_SOCKET, SO_TYPE, &socket_type,
-                   &socket_type_bytes) != 0 ||
-        socket_type != SOCK_STREAM)
+    if (state.display != NULL || !valid_app_id(app_id))
         return false;
 
     state.content_height =
@@ -453,7 +447,7 @@ bool cp0_display_initialize(int socket_fd, const char *app_id, bool immersive) {
     if (state.shadow == NULL)
         return false;
 
-    state.display = wl_display_connect_to_fd(socket_fd);
+    state.display = wl_display_connect(NULL);
     if (state.display == NULL)
         goto failure;
     state.registry = wl_display_get_registry(state.display);

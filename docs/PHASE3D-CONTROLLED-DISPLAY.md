@@ -2,19 +2,20 @@
 
 ## Security boundary
 
-Application accounts are not members of `cp0-wayland` and cannot traverse the
-compositor runtime directory. `appd` asks systemd PID 1 to connect the exact
-root-controlled Wayland socket with `OpenFile=`. The resulting connected stream
-is descriptor 3 in the transient service. The pinned bubblewrap 0.11.0 passes
-that inherited descriptor to its PID-namespace child while its monitor closes
-its own copy; no socket path is mounted into the sandbox. The transient unit
-does not inherit any other non-standard descriptor.
+Application accounts are not persistent members of `cp0-wayland`. Each
+transient service receives that supplementary group only while its trusted
+bubblewrap command is starting. bubblewrap read-only binds the exact
+compositor-owned socket into an otherwise empty `/run/cardputerzero` directory
+inside the sandbox. No other file from the host compositor runtime directory is
+visible.
 
-The Runtime requires the fixed `WAYLAND_SOCKET=3` launch contract and calls
-`wl_display_connect_to_fd(3)`. App identity and display mode are copied from the
-trusted installed manifest into the cleared bubblewrap environment. A WASM
-module cannot create another Wayland connection, access a host path or supply
-its own xdg app-id.
+The Runtime requires the fixed `XDG_RUNTIME_DIR=/run/cardputerzero` and
+`WAYLAND_DISPLAY=wayland-0` launch contract and rejects an inherited
+`WAYLAND_SOCKET`. It connects only after systemd has applied the dedicated App
+UID, so the compositor's `SO_PEERCRED` identity agrees with appd task metadata.
+App identity and display mode are copied from the trusted installed manifest
+into the cleared bubblewrap environment. A WASM module cannot create another
+Wayland connection, access a host path or supply its own xdg app-id.
 
 ## Rendering path
 
@@ -49,16 +50,16 @@ the standard-mode offset and hostile damage bounds independently of hardware.
 
 Hardware acceptance additionally requires the SDK-only Hello application to
 render through the appd/systemd/bubblewrap path, compositor discovery and
-single-foreground activation. The app account must remain unable to open the
-Wayland socket path directly.
+single-foreground activation. The App sandbox must expose only the bound
+Wayland endpoint, not its host runtime directory.
 
 ## V0.6 validation
 
-The controlled path was hot-deployed to the 512 MB V0.6 device without an
-image flash. systemd opened the compositor endpoint and the Runtime inherited
-FD 3 as `socket:[34366]` while running with UID/GID 20000, seccomp mode 2 and
-the exact application cgroup. The application account remained outside the
-`cp0-wayland` group and could not traverse `/run/cardputerzero`.
+The original V0.6 acceptance used systemd `OpenFile=` and inherited FD 3. That
+proved rendering isolation, but systemd PID 1 created the Wayland connection,
+so compositor peer credentials were root rather than the App UID. Task resume
+and trusted thumbnail association correctly rejected that identity. The direct
+Runtime connection above replaces that invalid launch contract.
 
 Weston announced `app token=1` after the SDK-only Hello WASM committed its
 first buffer. A trusted 30-second activation client exposed the surface, and a
