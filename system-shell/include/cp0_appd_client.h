@@ -35,6 +35,8 @@ enum cp0_app_permission {
     CP0_APP_PERMISSION_NETWORK_CLIENT = 1U << 5,
     CP0_APP_PERMISSION_NOTIFICATIONS_POST = 1U << 6,
     CP0_APP_PERMISSION_RADIO_LORA = 1U << 7,
+    CP0_APP_PERMISSION_PHOTOS_READ = 1U << 8,
+    CP0_APP_PERMISSION_PHOTOS_WRITE = 1U << 9,
 };
 
 enum cp0_management_authority {

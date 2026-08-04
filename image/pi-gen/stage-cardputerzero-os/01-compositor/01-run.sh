@@ -50,8 +50,14 @@ install -D -m 0644 \
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/cp0_system_info.h" \
     "${shell_source}/cp0_system_info.h"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/cp0_task_thumbnail.h" \
+    "${shell_source}/cp0_task_thumbnail.h"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/ui.c" \
     "${shell_source}/ui.c"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/task_thumbnail.c" \
+    "${shell_source}/task_thumbnail.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/json.c" \
     "${shell_source}/json.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/appd_client.c" \
@@ -215,6 +221,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     -I/tmp/cardputerzero-weston-build/protocol \
     /tmp/cardputerzero-system-shell/main.c \
     /tmp/cardputerzero-system-shell/ui.c \
+    /tmp/cardputerzero-system-shell/task_thumbnail.c \
     /tmp/cardputerzero-system-shell/screenshot_store.c \
     /tmp/cardputerzero-system-shell/json.c \
     /tmp/cardputerzero-system-shell/appd_client.c \

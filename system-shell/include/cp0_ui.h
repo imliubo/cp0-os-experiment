@@ -7,8 +7,11 @@
 
 #define CP0_UI_WIDTH 320
 #define CP0_UI_HEIGHT 170
+#define CP0_UI_HOME_ITEM_COUNT 5
+#define CP0_UI_HOME_COLUMNS 3
 #define CP0_UI_MAX_APPS 32
 #define CP0_UI_MAX_TASKS 10
+#define CP0_UI_NAVIGATION_DEPTH 8
 #define CP0_UI_TASK_THUMBNAIL_WIDTH 160
 #define CP0_UI_TASK_THUMBNAIL_HEIGHT 85
 #define CP0_UI_TASK_THUMBNAIL_PIXELS \
@@ -52,6 +55,8 @@
 #define CP0_UI_SETUP_WIFI_MAX 24
 #define CP0_UI_SETUP_ERROR_MAX 160
 #define CP0_UI_SETUP_IPV4_MAX 15
+#define CP0_UI_PASSWORD_MAX 64
+#define CP0_UI_PASSWORD_ERROR_MAX 160
 #define CP0_UI_MAX_DEVELOPER_HOSTS 8
 #define CP0_UI_DEVELOPER_LABEL_MAX 32
 #define CP0_UI_DEVELOPER_FINGERPRINT_MAX 50
@@ -75,6 +80,7 @@ enum cp0_ui_action {
     CP0_UI_BACK,
     CP0_UI_GO_HOME,
     CP0_UI_SHOW_TASKS,
+    CP0_UI_TOGGLE_APP_VIEW,
     CP0_UI_SHOW_POWER,
     CP0_UI_BRIGHTNESS_DOWN,
     CP0_UI_BRIGHTNESS_UP,
@@ -143,6 +149,7 @@ enum cp0_ui_event {
     CP0_UI_EVENT_TIMEOUT_PREVIOUS,
     CP0_UI_EVENT_TIMEOUT_NEXT,
     CP0_UI_EVENT_KEY_SOUNDS_TOGGLE,
+    CP0_UI_EVENT_CHANGE_PASSWORD,
     CP0_UI_EVENT_SETUP_SET_REGION,
     CP0_UI_EVENT_SETUP_SET_OWNER,
     CP0_UI_EVENT_SETUP_SET_PASSWORD,
@@ -175,6 +182,21 @@ enum cp0_ui_setup_page {
     CP0_UI_SETUP_COMPLETE,
     CP0_UI_SETUP_ERROR,
     CP0_UI_SETUP_REPAIR,
+};
+
+enum cp0_ui_password_page {
+    CP0_UI_PASSWORD_CURRENT,
+    CP0_UI_PASSWORD_NEW,
+    CP0_UI_PASSWORD_CONFIRM,
+    CP0_UI_PASSWORD_APPLYING,
+    CP0_UI_PASSWORD_COMPLETE,
+};
+
+struct cp0_ui_password_secrets {
+    char current[CP0_UI_PASSWORD_MAX + 1];
+    char new_password[CP0_UI_PASSWORD_MAX + 1];
+    char confirm[CP0_UI_PASSWORD_MAX + 1];
+    char error[CP0_UI_PASSWORD_ERROR_MAX + 1];
 };
 
 struct cp0_ui_setup_wifi {
@@ -433,6 +455,42 @@ struct cp0_ui_developer_host {
     const char *ssh_fingerprint;
 };
 
+struct cp0_ui_navigation_entry {
+    enum cp0_ui_screen screen;
+    unsigned int selected;
+    unsigned int app_selected;
+    bool app_grid_view;
+    unsigned int store_selected;
+    unsigned int store_section;
+    unsigned int store_browse_selected;
+    unsigned int store_search_selected;
+    unsigned int store_recent_selected;
+    unsigned int store_today_selected;
+    unsigned int store_today_collection_selected;
+    unsigned int store_today_open_collection;
+    unsigned int store_detail_page;
+    unsigned int store_operation_action_selected;
+    unsigned int store_screenshot_index;
+    unsigned int store_detail_text_offset;
+    unsigned int task_action_selected;
+    unsigned int task_selected;
+    unsigned int settings_selected;
+    unsigned int settings_item_selected;
+    unsigned int app_detail_page;
+    unsigned int app_permission_offset;
+    unsigned int app_action_selected;
+    unsigned int device_page;
+    unsigned int network_page;
+    unsigned int developer_host_selected;
+    bool store_search_input;
+    bool store_update_all_selected;
+    bool store_detail;
+    bool store_today_collection_open;
+    bool app_detail;
+    bool settings_detail;
+    bool developer_hosts_view;
+};
+
 struct cp0_ui {
     bool setup_active;
     bool setup_show_password;
@@ -468,9 +526,12 @@ struct cp0_ui {
     uint8_t setup_wifi_signal[CP0_UI_SETUP_WIFI_MAX];
     bool setup_wifi_connected[CP0_UI_SETUP_WIFI_MAX];
     enum cp0_ui_screen screen;
+    struct cp0_ui_navigation_entry *navigation;
+    unsigned int navigation_depth;
     unsigned int selected;
     unsigned int app_selected;
     unsigned int app_count;
+    bool app_grid_view;
     unsigned int store_selected;
     unsigned int store_count;
     unsigned int store_section;
@@ -532,6 +593,10 @@ struct cp0_ui {
     bool settings_confirm;
     bool settings_confirm_recovery;
     bool settings_confirm_metrics;
+    bool password_change_active;
+    bool password_change_show;
+    enum cp0_ui_password_page password_change_page;
+    struct cp0_ui_password_secrets *password_secrets;
     bool developer_hosts_view;
     bool developer_revoke_confirm;
     bool developer_revoke_all;
@@ -622,6 +687,7 @@ struct cp0_ui {
     char network_interface[17];
     char network_ipv4[16];
     char clock_text[6];
+    char foreground_app_name[CP0_UI_APP_NAME_MAX + 1];
     uint64_t prompt_id;
     unsigned int prompt_selected;
     char prompt_app_name[CP0_UI_PROMPT_APP_NAME_MAX + 1];
@@ -698,6 +764,7 @@ const char *cp0_ui_setup_country_code(const struct cp0_ui *ui);
 const char *cp0_ui_setup_timezone_name(const struct cp0_ui *ui);
 void cp0_ui_set_status(struct cp0_ui *ui, const char *clock_text,
                        bool network_online, int battery_percent);
+void cp0_ui_set_foreground_app(struct cp0_ui *ui, const char *app_name);
 void cp0_ui_set_device_info(struct cp0_ui *ui,
                             const struct cp0_ui_device_info *info);
 void cp0_ui_set_display_state(struct cp0_ui *ui, bool available,
@@ -725,6 +792,12 @@ void cp0_ui_set_auto_update(
     bool charging, bool unmetered_network, bool due, bool checking);
 void cp0_ui_set_metrics(struct cp0_ui *ui, bool available, bool enabled,
                         bool policy_allowed, bool configured, bool pending);
+bool cp0_ui_password_accepts_text(const struct cp0_ui *ui);
+bool cp0_ui_password_input_ascii(struct cp0_ui *ui, char character);
+bool cp0_ui_password_backspace(struct cp0_ui *ui);
+void cp0_ui_password_change_result(struct cp0_ui *ui, bool success,
+                                   bool authentication_failed,
+                                   const char *error);
 void cp0_ui_add_app(struct cp0_ui *ui, uint32_t token, const char *app_id);
 void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
                              const struct cp0_ui_catalog_app *apps,

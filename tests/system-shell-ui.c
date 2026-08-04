@@ -54,6 +54,23 @@ static void write_snapshot(const char *directory, const char *name,
     write_ppm(path, frame);
 }
 
+static void input_password_text(struct cp0_ui *ui, const char *text)
+{
+    for (; *text != '\0'; text++)
+        assert(cp0_ui_password_input_ascii(ui, *text));
+}
+
+static bool memory_is_zero(const void *memory, size_t size)
+{
+    const unsigned char *bytes = memory;
+
+    for (size_t index = 0; index < size; index++) {
+        if (bytes[index] != 0)
+            return false;
+    }
+    return true;
+}
+
 static void write_snapshots(const char *directory, struct cp0_ui *ui,
                             struct guarded_frame *frame)
 {
@@ -76,6 +93,19 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
          .package_bytes = 8U * 1024U * 1024U,
          .data_bytes = 2U * 1024U * 1024U,
          .permissions = (1U << 0) | (1U << 6)},
+    };
+    static const struct cp0_ui_catalog_app grid_apps[] = {
+        {.app_id = "dev.cardputerzero.hello", .name = "Hello Card"},
+        {.app_id = "dev.cardputerzero.calculator", .name = "Calculator"},
+        {.app_id = "dev.cardputerzero.neon-snake", .name = "Neon Snake"},
+        {.running = true,
+         .app_id = "dev.cardputerzero.camera",
+         .name = "Camera"},
+        {.app_id = "dev.cardputerzero.gallery", .name = "Gallery"},
+        {.app_id = "dev.cardputerzero.media-controls",
+         .name = "Media"},
+        {.app_id = "dev.cardputerzero.notes", .name = "Notes"},
+        {.app_id = "dev.cardputerzero.stopwatch", .name = "Stopwatch"},
     };
     static const struct cp0_ui_catalog_task tasks[] = {
         {.task_id = 2,
@@ -280,6 +310,13 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
     cp0_ui_handle_action(ui, CP0_UI_DOWN);
     write_snapshot(directory, "apps", ui, frame);
+    cp0_ui_sync_app_catalog(ui, grid_apps, 8, false);
+    ui->app_selected = 3;
+    cp0_ui_handle_action(ui, CP0_UI_TOGGLE_APP_VIEW);
+    write_snapshot(directory, "apps-grid", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_TOGGLE_APP_VIEW);
+    cp0_ui_sync_app_catalog(ui, apps, 2, false);
+    ui->app_selected = 1;
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     write_snapshot(directory, "app-overview", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
@@ -458,6 +495,35 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     write_snapshot(directory, "settings-confirm", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_BACK);
 
+    ui->settings_selected = 7;
+    ui->settings_item_selected = 5;
+    ui->settings_detail = true;
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    write_snapshot(directory, "settings-password-current", ui, frame);
+    input_password_text(ui, "current password");
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    write_snapshot(directory, "settings-password-new", ui, frame);
+    input_password_text(ui, "replacement password");
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    write_snapshot(directory, "settings-password-confirm", ui, frame);
+    input_password_text(ui, "replacement password");
+    assert(cp0_ui_handle_action(ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_CHANGE_PASSWORD);
+    write_snapshot(directory, "settings-password-applying", ui, frame);
+    cp0_ui_password_change_result(ui, false, true, NULL);
+    write_snapshot(directory, "settings-password-error", ui, frame);
+    input_password_text(ui, "current password");
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    input_password_text(ui, "replacement password");
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    input_password_text(ui, "replacement password");
+    assert(cp0_ui_handle_action(ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_CHANGE_PASSWORD);
+    cp0_ui_password_change_result(ui, true, false, NULL);
+    write_snapshot(directory, "settings-password-complete", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    ui->settings_item_selected = 1;
+
     cp0_ui_handle_action(ui, CP0_UI_BRIGHTNESS_UP);
     write_snapshot(directory, "system-brightness", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_MEDIA_PLAY_PAUSE);
@@ -582,6 +648,213 @@ int main(int argc, char **argv)
     assert(cp0_ui_key_character(12, true) == '_');
     assert(cp0_ui_key_character(57, false) == ' ');
     assert(cp0_ui_key_character(0, false) == '\0');
+
+    struct cp0_ui home_navigation_ui;
+    cp0_ui_init(&home_navigation_ui);
+    assert(home_navigation_ui.selected == 0);
+    cp0_ui_handle_action(&home_navigation_ui, CP0_UI_LEFT);
+    assert(home_navigation_ui.selected == 4);
+    cp0_ui_handle_action(&home_navigation_ui, CP0_UI_RIGHT);
+    assert(home_navigation_ui.selected == 0);
+    home_navigation_ui.selected = 2;
+    cp0_ui_handle_action(&home_navigation_ui, CP0_UI_RIGHT);
+    assert(home_navigation_ui.selected == 3);
+    cp0_ui_handle_action(&home_navigation_ui, CP0_UI_LEFT);
+    assert(home_navigation_ui.selected == 2);
+    home_navigation_ui.selected = 4;
+    cp0_ui_handle_action(&home_navigation_ui, CP0_UI_RIGHT);
+    assert(home_navigation_ui.selected == 0);
+    cp0_ui_deinit(&home_navigation_ui);
+
+    struct cp0_ui navigation_ui;
+    cp0_ui_init(&navigation_ui);
+    navigation_ui.selected = 0;
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_ACCEPT);
+    assert(navigation_ui.screen == CP0_UI_APPS &&
+           navigation_ui.navigation_depth == 1);
+    navigation_ui.app_selected = 3;
+    cp0_ui_set_foreground_app(&navigation_ui, "Neon Snake");
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_BACK);
+    assert(navigation_ui.screen == CP0_UI_APPS &&
+           navigation_ui.app_selected == 3 &&
+           navigation_ui.navigation_depth == 1 &&
+           navigation_ui.foreground_app_name[0] == '\0');
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_BACK);
+    assert(navigation_ui.screen == CP0_UI_HOME &&
+           navigation_ui.selected == 0 &&
+           navigation_ui.navigation_depth == 0);
+
+    navigation_ui.selected = 1;
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_ACCEPT);
+    navigation_ui.store_selected = 2;
+    navigation_ui.store_detail = true;
+    navigation_ui.store_detail_page = 3;
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_SHOW_TASKS);
+    assert(navigation_ui.screen == CP0_UI_TASKS &&
+           navigation_ui.navigation_depth == 2);
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_BACK);
+    assert(navigation_ui.screen == CP0_UI_STORE &&
+           navigation_ui.store_detail &&
+           navigation_ui.store_selected == 2 &&
+           navigation_ui.store_detail_page == 3);
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_BACK);
+    assert(navigation_ui.screen == CP0_UI_STORE &&
+           !navigation_ui.store_detail && navigation_ui.store_selected == 2);
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_BACK);
+    assert(navigation_ui.screen == CP0_UI_HOME &&
+           navigation_ui.selected == 1);
+
+    navigation_ui.selected = 4;
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_ACCEPT);
+    assert(navigation_ui.screen == CP0_UI_SETTINGS);
+    navigation_ui.settings_selected = 0;
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_ACCEPT);
+    navigation_ui.settings_item_selected = 2;
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_ACCEPT);
+    assert(navigation_ui.screen == CP0_UI_NETWORK &&
+           navigation_ui.network_page == 0 &&
+           navigation_ui.navigation_depth == 2);
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_BACK);
+    assert(navigation_ui.screen == CP0_UI_SETTINGS &&
+           navigation_ui.settings_detail &&
+           navigation_ui.settings_selected == 0 &&
+           navigation_ui.settings_item_selected == 2);
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_BACK);
+    assert(navigation_ui.screen == CP0_UI_SETTINGS &&
+           !navigation_ui.settings_detail &&
+           navigation_ui.settings_selected == 0);
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_BACK);
+    assert(navigation_ui.screen == CP0_UI_HOME &&
+           navigation_ui.selected == 4 &&
+           navigation_ui.navigation_depth == 0);
+
+    navigation_ui.selected = 4;
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_ACCEPT);
+    navigation_ui.settings_selected = 4;
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_ACCEPT);
+    navigation_ui.settings_item_selected = 3;
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_ACCEPT);
+    assert(navigation_ui.power_dialog && navigation_ui.settings_detail &&
+           navigation_ui.dialog_selected == 1);
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_BACK);
+    assert(!navigation_ui.power_dialog && navigation_ui.settings_detail &&
+           navigation_ui.settings_selected == 4 &&
+           navigation_ui.settings_item_selected == 3);
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_GO_HOME);
+
+    navigation_ui.selected = 4;
+    navigation_ui.app_selected = 3;
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_ACCEPT);
+    navigation_ui.settings_selected = 5;
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_ACCEPT);
+    navigation_ui.settings_item_selected = 0;
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_ACCEPT);
+    assert(navigation_ui.screen == CP0_UI_APPS &&
+           navigation_ui.app_selected == 3);
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_BACK);
+    assert(navigation_ui.screen == CP0_UI_SETTINGS &&
+           navigation_ui.settings_detail &&
+           navigation_ui.settings_selected == 5 &&
+           navigation_ui.settings_item_selected == 0);
+    cp0_ui_handle_action(&navigation_ui, CP0_UI_GO_HOME);
+    assert(navigation_ui.screen == CP0_UI_HOME &&
+           navigation_ui.navigation_depth == 0);
+    cp0_ui_deinit(&navigation_ui);
+
+    struct cp0_ui password_ui;
+    cp0_ui_init(&password_ui);
+    password_ui.screen = CP0_UI_SETTINGS;
+    password_ui.settings_selected = 7;
+    password_ui.settings_item_selected = 5;
+    password_ui.settings_detail = true;
+    assert(cp0_ui_handle_action(&password_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_NONE);
+    assert(password_ui.password_change_active &&
+           password_ui.password_change_page == CP0_UI_PASSWORD_CURRENT &&
+           cp0_ui_password_accepts_text(&password_ui));
+    cp0_ui_handle_action(&password_ui, CP0_UI_SHOW_TASKS);
+    cp0_ui_handle_action(&password_ui, CP0_UI_GO_HOME);
+    cp0_ui_handle_action(&password_ui, CP0_UI_SHOW_POWER);
+    assert(password_ui.screen == CP0_UI_SETTINGS &&
+           password_ui.password_change_active && !password_ui.power_dialog);
+    cp0_ui_handle_action(&password_ui, CP0_UI_ACCEPT);
+    assert(strstr(password_ui.password_secrets->error, "current") != NULL);
+    input_password_text(&password_ui, "old owner password");
+    assert(cp0_ui_password_backspace(&password_ui));
+    assert(cp0_ui_password_input_ascii(&password_ui, 'd'));
+    cp0_ui_handle_action(&password_ui, CP0_UI_RIGHT);
+    assert(password_ui.password_change_show);
+    cp0_ui_handle_action(&password_ui, CP0_UI_ACCEPT);
+    assert(password_ui.password_change_page == CP0_UI_PASSWORD_NEW &&
+           !password_ui.password_change_show);
+    input_password_text(&password_ui, "short");
+    cp0_ui_handle_action(&password_ui, CP0_UI_ACCEPT);
+    assert(password_ui.password_change_page == CP0_UI_PASSWORD_NEW &&
+           strstr(password_ui.password_secrets->error, "10") != NULL);
+    cp0_ui_handle_action(&password_ui, CP0_UI_BACK);
+    assert(password_ui.password_change_page == CP0_UI_PASSWORD_CURRENT &&
+           password_ui.password_secrets->new_password[0] == '\0' &&
+           strcmp(password_ui.password_secrets->current,
+                  "old owner password") == 0);
+    cp0_ui_handle_action(&password_ui, CP0_UI_ACCEPT);
+    input_password_text(&password_ui, "new owner password");
+    cp0_ui_handle_action(&password_ui, CP0_UI_ACCEPT);
+    input_password_text(&password_ui, "does not match");
+    assert(cp0_ui_handle_action(&password_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_NONE);
+    assert(password_ui.password_change_page == CP0_UI_PASSWORD_CONFIRM &&
+           password_ui.password_secrets->confirm[0] == '\0' &&
+           strstr(password_ui.password_secrets->error, "match") != NULL);
+    input_password_text(&password_ui, "new owner password");
+    assert(cp0_ui_handle_action(&password_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_CHANGE_PASSWORD);
+    assert(password_ui.password_change_page == CP0_UI_PASSWORD_APPLYING &&
+           !cp0_ui_password_accepts_text(&password_ui));
+    cp0_ui_handle_action(&password_ui, CP0_UI_BACK);
+    assert(password_ui.password_change_page == CP0_UI_PASSWORD_APPLYING);
+    cp0_ui_password_change_result(&password_ui, false, true, NULL);
+    assert(password_ui.password_change_page == CP0_UI_PASSWORD_CURRENT &&
+           memory_is_zero(password_ui.password_secrets->current,
+                          sizeof(password_ui.password_secrets->current)) &&
+           memory_is_zero(password_ui.password_secrets->new_password,
+                          sizeof(password_ui.password_secrets->new_password)) &&
+           memory_is_zero(password_ui.password_secrets->confirm,
+                          sizeof(password_ui.password_secrets->confirm)) &&
+           strstr(password_ui.password_secrets->error, "incorrect") != NULL);
+    input_password_text(&password_ui, "old owner password");
+    cp0_ui_handle_action(&password_ui, CP0_UI_ACCEPT);
+    input_password_text(&password_ui, "new owner password");
+    cp0_ui_handle_action(&password_ui, CP0_UI_ACCEPT);
+    input_password_text(&password_ui, "new owner password");
+    assert(cp0_ui_handle_action(&password_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_CHANGE_PASSWORD);
+    cp0_ui_password_change_result(&password_ui, true, false, NULL);
+    assert(password_ui.password_change_page == CP0_UI_PASSWORD_COMPLETE &&
+           memory_is_zero(password_ui.password_secrets->current,
+                          sizeof(password_ui.password_secrets->current)) &&
+           memory_is_zero(password_ui.password_secrets->new_password,
+                          sizeof(password_ui.password_secrets->new_password)) &&
+           memory_is_zero(password_ui.password_secrets->confirm,
+                          sizeof(password_ui.password_secrets->confirm)));
+    cp0_ui_handle_action(&password_ui, CP0_UI_ACCEPT);
+    assert(!password_ui.password_change_active &&
+           password_ui.screen == CP0_UI_SETTINGS &&
+           password_ui.settings_detail &&
+           password_ui.settings_item_selected == 5);
+    cp0_ui_handle_action(&password_ui, CP0_UI_ACCEPT);
+    input_password_text(&password_ui, "cancelled password");
+    cp0_ui_handle_action(&password_ui, CP0_UI_BACK);
+    assert(!password_ui.password_change_active &&
+           memory_is_zero(password_ui.password_secrets->current,
+                          sizeof(password_ui.password_secrets->current)));
+    snprintf(password_ui.password_secrets->current,
+             sizeof(password_ui.password_secrets->current), "deinit secret");
+    snprintf(password_ui.setup_password, sizeof(password_ui.setup_password),
+             "setup secret");
+    cp0_ui_deinit(&password_ui);
+    assert(password_ui.password_secrets == NULL &&
+           memory_is_zero(password_ui.setup_password,
+                          sizeof(password_ui.setup_password)));
 
     cp0_ui_init(&ui);
     cp0_ui_set_local_simulation(&ui, true);
@@ -1264,7 +1537,7 @@ int main(int argc, char **argv)
     cp0_ui_handle_action(&ui, CP0_UI_SHOW_TASKS);
     assert(ui.screen == CP0_UI_TASKS);
     cp0_ui_handle_action(&ui, CP0_UI_BACK);
-    assert(ui.screen == CP0_UI_HOME);
+    assert(ui.screen == CP0_UI_STORE && ui.selected == 1);
 
     cp0_ui_init(&ui);
     cp0_ui_set_local_simulation(&ui, true);
@@ -1302,7 +1575,7 @@ int main(int argc, char **argv)
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_OPEN_APP);
     render(&ui, frame);
-    assert(pixel(frame, 8, 60) == GREEN);
+    assert(pixel(frame, 8, 71) == GREEN);
     cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
     assert(ui.app_detail);
     assert(ui.app_detail_page == 0);
@@ -1314,9 +1587,9 @@ int main(int argc, char **argv)
     assert(ui.app_permission_offset == 1);
     for (unsigned int index = 0; index < 8; index++)
         cp0_ui_handle_action(&ui, CP0_UI_DOWN);
-    assert(ui.app_permission_offset == 4);
+    assert(ui.app_permission_offset == 6);
     cp0_ui_handle_action(&ui, CP0_UI_UP);
-    assert(ui.app_permission_offset == 3);
+    assert(ui.app_permission_offset == 5);
     cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
     assert(ui.app_detail_page == 3);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
@@ -1362,6 +1635,10 @@ int main(int argc, char **argv)
     };
     cp0_ui_sync_task_catalog(&ui, task_catalog, 3);
     cp0_ui_handle_action(&ui, CP0_UI_SHOW_TASKS);
+    cp0_ui_set_foreground_app(&ui, "Second Card");
+    assert(strcmp(ui.foreground_app_name, "Second Card") == 0);
+    cp0_ui_set_foreground_app(&ui, NULL);
+    assert(ui.foreground_app_name[0] == '\0');
     assert(cp0_ui_selected_task_id(&ui) == 9);
     assert(strcmp(cp0_ui_selected_task_app_id(&ui),
                   "dev.cardputerzero.second") == 0);
@@ -1388,7 +1665,7 @@ int main(int argc, char **argv)
         {.app_id = "dev.cardputerzero.c", .name = "C"},
         {.app_id = "dev.cardputerzero.d", .name = "D"},
         {.app_id = "dev.cardputerzero.e", .name = "E"},
-        {.app_id = "dev.cardputerzero.f", .name = "F"},
+        {.running = true, .app_id = "dev.cardputerzero.f", .name = "F"},
     };
     cp0_ui_sync_app_catalog(&ui, many, 6, true);
     cp0_ui_handle_action(&ui, CP0_UI_GO_HOME);
@@ -1398,6 +1675,46 @@ int main(int argc, char **argv)
     assert(ui.app_selected == 5);
     assert(ui.app_list_truncated);
     render(&ui, frame);
+
+    cp0_ui_handle_action(&ui, CP0_UI_TOGGLE_APP_VIEW);
+    assert(ui.app_grid_view && ui.app_selected == 5);
+    render(&ui, frame);
+    assert(pixel(frame, 100, 102) == GREEN);
+    assert(pixel(frame, 84, 102) == 0x00f2c14eu);
+    cp0_ui_handle_action(&ui, CP0_UI_LEFT);
+    assert(ui.app_selected == 4);
+    cp0_ui_handle_action(&ui, CP0_UI_UP);
+    assert(ui.app_selected == 0);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    assert(ui.app_selected == 1);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(ui.app_selected == 5);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_OPEN_APP);
+    cp0_ui_handle_action(&ui, CP0_UI_TOGGLE_APP_VIEW);
+    assert(!ui.app_grid_view);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    assert(ui.app_detail);
+    cp0_ui_handle_action(&ui, CP0_UI_BACK);
+
+    static const struct cp0_ui_catalog_app paged[] = {
+        {.app_id = "dev.cardputerzero.1", .name = "One"},
+        {.app_id = "dev.cardputerzero.2", .name = "Two"},
+        {.app_id = "dev.cardputerzero.3", .name = "Three"},
+        {.app_id = "dev.cardputerzero.4", .name = "Four"},
+        {.app_id = "dev.cardputerzero.5", .name = "Five"},
+        {.app_id = "dev.cardputerzero.6", .name = "Six"},
+        {.app_id = "dev.cardputerzero.7", .name = "Seven"},
+        {.app_id = "dev.cardputerzero.8", .name = "Eight"},
+        {.app_id = "dev.cardputerzero.9", .name = "Nine"},
+    };
+    cp0_ui_sync_app_catalog(&ui, paged, 9, false);
+    cp0_ui_handle_action(&ui, CP0_UI_TOGGLE_APP_VIEW);
+    for (unsigned int index = 0; index < 8; index++)
+        cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    assert(ui.app_selected == 8);
+    render(&ui, frame);
+    assert(pixel(frame, 8, 41) == 0x00f2c14eu);
 
     unsigned int original_brightness = ui.brightness_percent;
     cp0_ui_handle_action(&ui, CP0_UI_BRIGHTNESS_UP);

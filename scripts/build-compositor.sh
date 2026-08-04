@@ -40,13 +40,14 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     -I"$weston_build/protocol" \
     "$repo_root/system-shell/src/main.c" \
     "$repo_root/system-shell/src/ui.c" \
+    "$repo_root/system-shell/src/task_thumbnail.c" \
     "$repo_root/system-shell/src/screenshot_store.c" \
-    "$repo_root/system-shell/src/shell_settings.c" \
     "$repo_root/system-shell/src/json.c" \
     "$repo_root/system-shell/src/appd_client.c" \
     "$repo_root/system-shell/src/audio_settings_client.c" \
     "$repo_root/system-shell/src/connectivity_client.c" \
     "$repo_root/system-shell/src/provision_client.c" \
+    "$repo_root/system-shell/src/shell_settings.c" \
     "$repo_root/system-shell/src/display_client.c" \
     "$repo_root/system-shell/src/developer_client.c" \
     "$repo_root/system-shell/src/power_client.c" \

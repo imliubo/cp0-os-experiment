@@ -12,6 +12,7 @@
 #include "cp0_shell_settings.h"
 #include "cp0_store_client.h"
 #include "cp0_system_info.h"
+#include "cp0_task_thumbnail.h"
 #include "cp0_ui.h"
 #include "overlay-state.h"
 #include "weston-output-capture-client-protocol.h"
@@ -38,11 +39,19 @@
 
 #define BUFFER_COUNT 2
 #define SCREENSHOT_RETRY_MAX 2U
+#define TASK_THUMBNAIL_INTERVAL_TICKS 1U
 #define CP0_APP_SURFACE_MAX 32U
 #define CP0_SHELL_SETTINGS_PATH "/var/lib/cardputerzero/shell/settings.conf"
 
 _Static_assert(CP0_STORE_INSTALL_BATCH_MAX == CP0_UI_STORE_UPDATE_BATCH_MAX,
                "Store batch limits must match");
+_Static_assert(CP0_APPD_MAX_TASKS == CP0_UI_MAX_TASKS,
+               "Task cache and UI limits must match");
+_Static_assert(CP0_TASK_FRAME_WIDTH == CP0_SCREENSHOT_WIDTH &&
+                   CP0_TASK_FRAME_HEIGHT == CP0_SCREENSHOT_HEIGHT &&
+                   CP0_TASK_THUMBNAIL_WIDTH == CP0_UI_TASK_THUMBNAIL_WIDTH &&
+                   CP0_TASK_THUMBNAIL_HEIGHT == CP0_UI_TASK_THUMBNAIL_HEIGHT,
+               "Task capture and UI dimensions must match");
 _Static_assert((uint32_t)CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL ==
                        (uint32_t)CP0_OVERLAY_STATE_FULL &&
                    (uint32_t)CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS ==
@@ -69,6 +78,19 @@ struct screenshot_buffer {
     struct wl_buffer *wl_buffer;
     uint32_t *pixels;
     size_t size;
+};
+
+enum capture_purpose {
+    CAPTURE_NONE,
+    CAPTURE_SCREENSHOT,
+    CAPTURE_TASK_THUMBNAIL,
+};
+
+struct task_thumbnail {
+    uint64_t task_id;
+    uint64_t runtime_generation;
+    uint64_t thumbnail_generation;
+    uint16_t pixels[CP0_UI_TASK_THUMBNAIL_PIXELS];
 };
 
 struct app_surface_binding {
@@ -108,6 +130,9 @@ struct shell {
     int32_t capture_height;
     unsigned int capture_retries;
     bool capture_busy;
+    enum capture_purpose capture_purpose;
+    uint64_t capture_task_id;
+    uint64_t capture_runtime_generation;
     struct screenshot_buffer screenshot_buffer;
     int timer_fd;
     bool provision_retry_pending;
@@ -124,11 +149,14 @@ struct shell {
     unsigned int catalog_ticks;
     unsigned int store_poll_delay;
     unsigned int notification_ticks;
+    unsigned int task_thumbnail_ticks;
+    uint64_t next_thumbnail_generation;
     uint64_t store_notification_serial;
     uint64_t store_catalog_sequence;
     struct cp0_store_install_preflight store_preflight;
     struct cp0_app_list installed_apps;
     struct cp0_task_list task_list;
+    struct task_thumbnail *task_thumbnails;
     uint32_t store_icon_pixels[CP0_STORE_ICON_MAX_PIXELS];
     uint32_t store_screenshot_pixels[CP0_STORE_SCREENSHOT_PIXELS];
     char pending_activation[CP0_APP_ID_BYTES];
@@ -142,6 +170,7 @@ static unsigned int shm_serial;
 
 static void shell_redraw(struct shell *shell);
 static void begin_screenshot(struct shell *shell);
+static void maybe_capture_task_thumbnail(struct shell *shell);
 static void maybe_create_capture_source(struct shell *shell);
 static void poll_app_catalog(struct shell *shell);
 static void poll_task_catalog(struct shell *shell);
@@ -203,16 +232,117 @@ static void forget_surface(struct shell *shell, uint32_t token)
     }
 }
 
-static uint32_t token_for_account_uid(const struct shell *shell,
-                                      uint32_t account_uid)
+static uint32_t token_for_task_identity(const struct shell *shell,
+                                        uint32_t account_uid,
+                                        const char *app_id)
 {
-    if (account_uid == 0)
+    if (account_uid == 0 || app_id == NULL || app_id[0] == '\0')
         return 0;
     for (size_t index = shell->app_surface_count; index > 0; index--) {
-        if (shell->app_surfaces[index - 1].account_uid == account_uid)
+        if (shell->app_surfaces[index - 1].account_uid == account_uid &&
+            strcmp(shell->app_surfaces[index - 1].app_id, app_id) == 0)
             return shell->app_surfaces[index - 1].token;
     }
     return 0;
+}
+
+static const char *app_name_for_id(const struct shell *shell,
+                                   const char *app_id)
+{
+    if (app_id == NULL || app_id[0] == '\0')
+        return "APP";
+    for (size_t index = 0; index < shell->installed_apps.count; index++) {
+        if (strcmp(shell->installed_apps.apps[index].app_id, app_id) == 0)
+            return shell->installed_apps.apps[index].name;
+    }
+    return app_id;
+}
+
+static void activate_surface(struct shell *shell, uint32_t token,
+                             bool immersive, const char *app_name)
+{
+    shell->overlay_mode = immersive
+                              ? CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN
+                              : CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS;
+    cp0_ui_set_foreground_app(&shell->ui, app_name);
+    cp0_system_shell_v1_activate_app(shell->system_control, token);
+}
+
+static const struct cp0_task_summary *task_summary(const struct shell *shell,
+                                                   uint64_t task_id)
+{
+    for (size_t index = 0; index < shell->task_list.count; index++) {
+        if (shell->task_list.tasks[index].task_id == task_id)
+            return &shell->task_list.tasks[index];
+    }
+    return NULL;
+}
+
+static struct task_thumbnail *task_thumbnail(struct shell *shell,
+                                             uint64_t task_id, bool create)
+{
+    struct task_thumbnail *empty = NULL;
+
+    if (shell->task_thumbnails == NULL || task_id == 0)
+        return NULL;
+    for (size_t index = 0; index < CP0_APPD_MAX_TASKS; index++) {
+        struct task_thumbnail *thumbnail = &shell->task_thumbnails[index];
+        if (thumbnail->task_id == task_id)
+            return thumbnail;
+        if (empty == NULL && thumbnail->task_id == 0)
+            empty = thumbnail;
+    }
+    if (!create || empty == NULL)
+        return NULL;
+    empty->task_id = task_id;
+    return empty;
+}
+
+static void reconcile_task_thumbnails(struct shell *shell)
+{
+    if (shell->task_thumbnails == NULL)
+        return;
+    for (size_t index = 0; index < CP0_APPD_MAX_TASKS; index++) {
+        struct task_thumbnail *thumbnail = &shell->task_thumbnails[index];
+        const struct cp0_task_summary *task =
+            task_summary(shell, thumbnail->task_id);
+        if (thumbnail->task_id == 0)
+            continue;
+        if (task == NULL ||
+            (task->runtime_generation != 0 &&
+             task->runtime_generation != thumbnail->runtime_generation))
+            memset(thumbnail, 0, sizeof(*thumbnail));
+    }
+}
+
+static void maybe_activate_pending_task(struct shell *shell)
+{
+    const struct cp0_task_summary *task = NULL;
+    uint32_t token;
+
+    if (shell->pending_activation_uid == 0 ||
+        shell->pending_activation[0] == '\0')
+        return;
+    for (size_t index = 0; index < shell->task_list.count; index++) {
+        const struct cp0_task_summary *candidate =
+            &shell->task_list.tasks[index];
+        if (candidate->state == CP0_TASK_FOREGROUND &&
+            candidate->account_uid == shell->pending_activation_uid &&
+            strcmp(candidate->app_id, shell->pending_activation) == 0) {
+            task = candidate;
+            break;
+        }
+    }
+    if (task == NULL)
+        return;
+    token = token_for_task_identity(shell, task->account_uid, task->app_id);
+    if (token == 0)
+        return;
+
+    shell->pending_activation[0] = '\0';
+    shell->pending_activation_uid = 0;
+    activate_surface(shell, token, task->immersive, task->name);
+    fprintf(stderr, "system-shell: pending task token=%u activated\n", token);
 }
 
 static void apply_provision_status(struct shell *shell,
@@ -607,7 +737,10 @@ static void poll_task_catalog(struct shell *shell)
     if (cp0_appd_list_tasks(&list) != 0)
         return;
     shell->task_list = list;
+    reconcile_task_thumbnails(shell);
     for (size_t index = 0; index < list.count; index++) {
+        struct task_thumbnail *thumbnail =
+            task_thumbnail(shell, list.tasks[index].task_id, false);
         enum cp0_ui_task_state state;
         switch (shell->task_list.tasks[index].state) {
         case CP0_TASK_FOREGROUND:
@@ -638,7 +771,8 @@ static void poll_task_catalog(struct shell *shell)
             .runtime_generation =
                 shell->task_list.tasks[index].runtime_generation,
             .thumbnail_generation =
-                shell->task_list.tasks[index].thumbnail_generation,
+                thumbnail != NULL ? thumbnail->thumbnail_generation
+                                  : 0,
             .state = state,
             .immersive = shell->task_list.tasks[index].immersive,
             .checkpoint_available =
@@ -649,6 +783,16 @@ static void poll_task_catalog(struct shell *shell)
         };
     }
     cp0_ui_sync_task_catalog(&shell->ui, catalog, list.count);
+    for (size_t index = 0; index < list.count; index++) {
+        struct task_thumbnail *thumbnail =
+            task_thumbnail(shell, list.tasks[index].task_id, false);
+        if (thumbnail != NULL && thumbnail->thumbnail_generation != 0) {
+            cp0_ui_set_task_thumbnail(
+                &shell->ui, thumbnail->task_id,
+                thumbnail->thumbnail_generation, thumbnail->pixels,
+                CP0_UI_TASK_THUMBNAIL_PIXELS);
+        }
+    }
 }
 
 static void apply_device_settings(
@@ -1358,9 +1502,55 @@ static bool issue_screenshot_capture(struct shell *shell)
 static void finish_screenshot_capture(struct shell *shell, bool saved)
 {
     shell->capture_busy = false;
+    shell->capture_purpose = CAPTURE_NONE;
+    shell->capture_task_id = 0;
+    shell->capture_runtime_generation = 0;
     destroy_screenshot_buffer(&shell->screenshot_buffer);
     show_screenshot_status(shell, saved ? CP0_UI_SCREENSHOT_SAVED
                                        : CP0_UI_SCREENSHOT_FAILED);
+}
+
+static bool task_capture_is_current(const struct shell *shell)
+{
+    const struct cp0_task_summary *task =
+        task_summary(shell, shell->capture_task_id);
+    return task != NULL && task->state == CP0_TASK_FOREGROUND &&
+           task->runtime_generation == shell->capture_runtime_generation &&
+           (shell->overlay_mode ==
+                CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS ||
+            shell->overlay_mode ==
+                CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN) &&
+           token_for_task_identity(shell, task->account_uid, task->app_id) != 0;
+}
+
+static void finish_task_thumbnail_capture(struct shell *shell, bool complete)
+{
+    struct task_thumbnail *thumbnail = NULL;
+
+    if (complete && task_capture_is_current(shell)) {
+        thumbnail = task_thumbnail(shell, shell->capture_task_id, true);
+        if (thumbnail != NULL && cp0_task_thumbnail_from_xrgb8888(
+                                     shell->screenshot_buffer.pixels,
+                                     CP0_TASK_FRAME_PIXELS, thumbnail->pixels,
+                                     CP0_TASK_THUMBNAIL_PIXELS)) {
+            uint64_t generation = shell->next_thumbnail_generation++;
+            if (generation == 0)
+                generation = shell->next_thumbnail_generation++;
+            thumbnail->runtime_generation =
+                shell->capture_runtime_generation;
+            thumbnail->thumbnail_generation = generation;
+            cp0_ui_set_task_thumbnail(
+                &shell->ui, thumbnail->task_id, generation,
+                thumbnail->pixels, CP0_UI_TASK_THUMBNAIL_PIXELS);
+        }
+    }
+    shell->capture_busy = false;
+    shell->capture_purpose = CAPTURE_NONE;
+    shell->capture_task_id = 0;
+    shell->capture_runtime_generation = 0;
+    destroy_screenshot_buffer(&shell->screenshot_buffer);
+    if (thumbnail != NULL)
+        shell_redraw(shell);
 }
 
 static void handle_capture_format(void *data,
@@ -1390,6 +1580,15 @@ static void handle_capture_complete(void *data,
     int result;
     (void)source;
 
+    if (shell->capture_purpose == CAPTURE_TASK_THUMBNAIL) {
+        finish_task_thumbnail_capture(shell, true);
+        return;
+    }
+    if (shell->capture_purpose != CAPTURE_SCREENSHOT) {
+        finish_task_thumbnail_capture(shell, false);
+        return;
+    }
+
     result = cp0_screenshot_store_save(
         CP0_SCREENSHOT_DIRECTORY, shell->screenshot_buffer.pixels,
         CP0_SCREENSHOT_WIDTH * CP0_SCREENSHOT_HEIGHT, name);
@@ -1412,8 +1611,13 @@ static void handle_capture_retry(void *data,
     shell->capture_retries++;
     if (shell->capture_retries > SCREENSHOT_RETRY_MAX ||
         !issue_screenshot_capture(shell)) {
-        fprintf(stderr, "system-shell: screenshot retry failed\n");
-        finish_screenshot_capture(shell, false);
+        if (shell->capture_purpose == CAPTURE_SCREENSHOT) {
+            fprintf(stderr, "system-shell: screenshot retry failed\n");
+            finish_screenshot_capture(shell, false);
+        } else {
+            fprintf(stderr, "system-shell: task thumbnail retry failed\n");
+            finish_task_thumbnail_capture(shell, false);
+        }
     }
 }
 
@@ -1423,9 +1627,15 @@ static void handle_capture_failed(void *data,
 {
     struct shell *shell = data;
     (void)source;
-    fprintf(stderr, "system-shell: screenshot capture failed: %s\n",
-            message == NULL ? "unknown error" : message);
-    finish_screenshot_capture(shell, false);
+    if (shell->capture_purpose == CAPTURE_SCREENSHOT) {
+        fprintf(stderr, "system-shell: screenshot capture failed: %s\n",
+                message == NULL ? "unknown error" : message);
+        finish_screenshot_capture(shell, false);
+    } else {
+        fprintf(stderr, "system-shell: task thumbnail capture failed: %s\n",
+                message == NULL ? "unknown error" : message);
+        finish_task_thumbnail_capture(shell, false);
+    }
 }
 
 static const struct weston_capture_source_v1_listener capture_listener = {
@@ -1460,17 +1670,53 @@ static void begin_screenshot(struct shell *shell)
         return;
     }
     shell->screenshot_restore_mode = screenshot_base_overlay_mode(shell);
+    shell->capture_purpose = CAPTURE_SCREENSHOT;
+    shell->capture_task_id = 0;
+    shell->capture_runtime_generation = 0;
     shell->capture_retries = 0;
     if (shell->capture_source == NULL || shell->capture_width == 0 ||
         shell->capture_height == 0 || shell->capture_format == 0) {
         fprintf(stderr, "system-shell: screenshot capture unavailable\n");
+        shell->capture_purpose = CAPTURE_NONE;
         show_screenshot_status(shell, CP0_UI_SCREENSHOT_UNAVAILABLE);
         return;
     }
     if (!issue_screenshot_capture(shell)) {
         fprintf(stderr,
                 "system-shell: screenshot capture contract unsupported\n");
+        shell->capture_purpose = CAPTURE_NONE;
         show_screenshot_status(shell, CP0_UI_SCREENSHOT_UNAVAILABLE);
+    }
+}
+
+static void maybe_capture_task_thumbnail(struct shell *shell)
+{
+    const struct cp0_task_summary *foreground = NULL;
+
+    if (shell->capture_busy || shell->capture_source == NULL ||
+        (shell->overlay_mode != CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS &&
+         shell->overlay_mode != CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN))
+        return;
+    for (size_t index = 0; index < shell->task_list.count; index++) {
+        const struct cp0_task_summary *task = &shell->task_list.tasks[index];
+        if (task->state == CP0_TASK_FOREGROUND &&
+            task->runtime_generation != 0 &&
+            token_for_task_identity(shell, task->account_uid, task->app_id) != 0) {
+            foreground = task;
+            break;
+        }
+    }
+    if (foreground == NULL)
+        return;
+
+    shell->capture_purpose = CAPTURE_TASK_THUMBNAIL;
+    shell->capture_task_id = foreground->task_id;
+    shell->capture_runtime_generation = foreground->runtime_generation;
+    shell->capture_retries = 0;
+    if (!issue_screenshot_capture(shell)) {
+        shell->capture_purpose = CAPTURE_NONE;
+        shell->capture_task_id = 0;
+        shell->capture_runtime_generation = 0;
     }
 }
 
@@ -1604,7 +1850,7 @@ static const struct cp0_ui_store_app *store_ui_app(
 static uint8_t permission_count(uint16_t permissions)
 {
     uint8_t count = 0;
-    for (unsigned int bit = 0; bit < 8; bit++)
+    for (unsigned int bit = 0; bit < 10; bit++)
         count += (permissions & (1U << bit)) != 0;
     return count;
 }
@@ -1695,12 +1941,39 @@ static void begin_store_preflight(struct shell *shell,
 static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
 {
     enum cp0_ui_screen previous_screen = shell->ui.screen;
-    if (action == CP0_UI_SHOW_TASKS)
+    bool power_dialog_was_open = shell->ui.power_dialog;
+    bool password_change_was_active = shell->ui.password_change_active;
+    if (!password_change_was_active &&
+        (action == CP0_UI_GO_HOME || action == CP0_UI_SHOW_TASKS ||
+         action == CP0_UI_SHOW_POWER))
+        cp0_ui_set_foreground_app(&shell->ui, NULL);
+    if (!password_change_was_active && action == CP0_UI_SHOW_TASKS)
         poll_task_catalog(shell);
     enum cp0_ui_event event = cp0_ui_handle_action(&shell->ui, action);
+    if (power_dialog_was_open && !shell->ui.power_dialog &&
+        event == CP0_UI_EVENT_NONE &&
+        (action == CP0_UI_BACK || action == CP0_UI_ACCEPT))
+        restore_power_overlay(shell);
     if (event >= CP0_UI_EVENT_SETUP_SET_REGION &&
         event <= CP0_UI_EVENT_SETUP_START) {
         handle_setup_event(shell, event);
+    } else if (event == CP0_UI_EVENT_CHANGE_PASSWORD) {
+        struct cp0_provision_status status = {0};
+        char error[CP0_PROVISION_ERROR_MAX + 1] = {0};
+        int result;
+
+        shell_redraw(shell);
+        wl_display_flush(shell->display);
+        if (shell->ui.local_simulation) {
+            result = CP0_PROVISION_OK;
+        } else {
+            result = cp0_provision_change_password(
+                shell->ui.password_secrets->current,
+                shell->ui.password_secrets->new_password, &status, error);
+        }
+        cp0_ui_password_change_result(
+            &shell->ui, result == CP0_PROVISION_OK,
+            result == CP0_PROVISION_AUTHENTICATION, error);
     } else if (event == CP0_UI_EVENT_PERMISSION_ONCE ||
         event == CP0_UI_EVENT_PERMISSION_ALWAYS ||
         event == CP0_UI_EVENT_PERMISSION_DENY) {
@@ -1763,10 +2036,9 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         const char *selected_id = cp0_ui_selected_app_id(&shell->ui);
         uint32_t token = cp0_ui_selected_app_token(&shell->ui);
         if (token != 0) {
-            shell->overlay_mode = cp0_ui_selected_app_is_immersive(&shell->ui)
-                                      ? CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN
-                                      : CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS;
-            cp0_system_shell_v1_activate_app(shell->system_control, token);
+            activate_surface(
+                shell, token, cp0_ui_selected_app_is_immersive(&shell->ui),
+                app_name_for_id(shell, selected_id));
         } else if (selected_id != NULL &&
                    snprintf(app_id, sizeof(app_id), "%s", selected_id) > 0) {
             if (cp0_ui_selected_app_state(&shell->ui) == CP0_UI_APP_RUNNING ||
@@ -1801,35 +2073,47 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         }
     } else if (event == CP0_UI_EVENT_ACTIVATE_TASK) {
         uint64_t task_id = cp0_ui_selected_task_id(&shell->ui);
-        uint32_t account_uid =
-            cp0_ui_selected_task_account_uid(&shell->ui);
         const char *selected_id = cp0_ui_selected_task_app_id(&shell->ui);
         char app_id[CP0_APP_ID_BYTES] = {0};
-        bool immersive = cp0_ui_selected_task_is_immersive(&shell->ui);
         uint64_t runtime_generation = 0;
         if (task_id != 0 && selected_id != NULL &&
             snprintf(app_id, sizeof(app_id), "%s", selected_id) > 0 &&
             cp0_appd_activate_task(task_id, &runtime_generation) == 0) {
-            uint32_t token = token_for_account_uid(shell, account_uid);
-            shell->overlay_mode = immersive
-                                      ? CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN
-                                      : CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS;
-            if (token != 0) {
+            const struct cp0_task_summary *activated;
+            uint32_t token;
+
+            poll_task_catalog(shell);
+            activated = task_summary(shell, task_id);
+            if (activated == NULL ||
+                activated->runtime_generation != runtime_generation ||
+                activated->state != CP0_TASK_FOREGROUND ||
+                strcmp(activated->app_id, app_id) != 0) {
+                fprintf(stderr,
+                        "system-shell: task=%llu activation identity changed\n",
+                        (unsigned long long)task_id);
                 shell->pending_activation[0] = '\0';
                 shell->pending_activation_uid = 0;
-                cp0_system_shell_v1_activate_app(shell->system_control, token);
             } else {
-                snprintf(shell->pending_activation,
-                         sizeof(shell->pending_activation), "%s", app_id);
-                shell->pending_activation_uid = account_uid;
+                token = token_for_task_identity(
+                    shell, activated->account_uid, activated->app_id);
+                if (token != 0) {
+                    shell->pending_activation[0] = '\0';
+                    shell->pending_activation_uid = 0;
+                    activate_surface(shell, token, activated->immersive,
+                                     activated->name);
+                } else {
+                    snprintf(shell->pending_activation,
+                             sizeof(shell->pending_activation), "%s", app_id);
+                    shell->pending_activation_uid = activated->account_uid;
+                }
+                fprintf(stderr,
+                        "system-shell: task=%llu runtime=%llu activation requested\n",
+                        (unsigned long long)task_id,
+                        (unsigned long long)runtime_generation);
             }
-            poll_task_catalog(shell);
-            fprintf(stderr,
-                    "system-shell: task=%llu runtime=%llu activation requested\n",
-                    (unsigned long long)task_id,
-                    (unsigned long long)runtime_generation);
         } else {
-            fprintf(stderr, "system-shell: task activation failed\n");
+            fprintf(stderr, "system-shell: task=%llu appd activation failed\n",
+                    (unsigned long long)task_id);
             poll_task_catalog(shell);
         }
     } else if (event == CP0_UI_EVENT_CLOSE_TASK) {
@@ -1866,6 +2150,7 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                                      CP0_UI_APP_STOPPED);
                 shell->overlay_mode =
                     CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+                cp0_ui_set_foreground_app(&shell->ui, NULL);
                 cp0_system_shell_v1_set_overlay_mode(shell->system_control,
                                                       shell->overlay_mode);
                 fprintf(stderr,
@@ -2268,16 +2553,6 @@ static void handle_app_added(void *data,
     remember_surface(shell, token, app_id);
     cp0_ui_add_app(&shell->ui, token, app_id);
     fprintf(stderr, "system-shell: app token=%u available\n", token);
-    if (shell->pending_activation_uid == 0 &&
-        strcmp(shell->pending_activation, app_id) == 0) {
-        shell->pending_activation[0] = '\0';
-        shell->pending_activation_uid = 0;
-        shell->overlay_mode = cp0_ui_app_is_immersive(&shell->ui, token)
-                                  ? CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN
-                                  : CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS;
-        cp0_system_shell_v1_activate_app(shell->system_control, token);
-        fprintf(stderr, "system-shell: app token=%u auto-activated\n", token);
-    }
     shell_redraw(shell);
 }
 
@@ -2301,11 +2576,41 @@ static void handle_activation_failed(
     void *data, struct cp0_system_shell_v1 *system_control, uint32_t token)
 {
     struct shell *shell = data;
+    struct app_surface_binding *binding = surface_binding(shell, token);
+    const struct cp0_task_summary *retry_task = NULL;
+    char app_id[CP0_APP_ID_BYTES] = {0};
+    uint32_t account_uid = 0;
     (void)system_control;
+
+    if (binding != NULL) {
+        snprintf(app_id, sizeof(app_id), "%s", binding->app_id);
+        account_uid = binding->account_uid;
+        for (size_t index = 0; index < shell->task_list.count; index++) {
+            const struct cp0_task_summary *candidate =
+                &shell->task_list.tasks[index];
+            if (candidate->state == CP0_TASK_FOREGROUND &&
+                candidate->account_uid == account_uid &&
+                strcmp(candidate->app_id, app_id) == 0) {
+                retry_task = candidate;
+                break;
+            }
+        }
+    }
+    forget_surface(shell, token);
     cp0_ui_remove_app(&shell->ui, token);
-    shell->pending_activation[0] = '\0';
-    shell->pending_activation_uid = 0;
-    shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+    if (retry_task != NULL) {
+        snprintf(shell->pending_activation, sizeof(shell->pending_activation),
+                 "%s", retry_task->app_id);
+        shell->pending_activation_uid = retry_task->account_uid;
+        shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+    } else {
+        shell->pending_activation[0] = '\0';
+        shell->pending_activation_uid = 0;
+        shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+    }
+    cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                          shell->overlay_mode);
+    cp0_ui_set_foreground_app(&shell->ui, NULL);
     fprintf(stderr, "system-shell: app token=%u activation failed\n", token);
     shell_redraw(shell);
 }
@@ -2332,15 +2637,12 @@ static void handle_app_identity(
     if (binding == NULL || account_uid == 0)
         return;
     binding->account_uid = account_uid;
-    if (shell->pending_activation_uid == account_uid &&
-        strcmp(shell->pending_activation, binding->app_id) == 0) {
-        shell->pending_activation[0] = '\0';
-        shell->pending_activation_uid = 0;
-        cp0_system_shell_v1_activate_app(shell->system_control, token);
-        fprintf(stderr,
-                "system-shell: app token=%u authenticated and activated\n",
-                token);
-    }
+    if (shell->pending_activation_uid == 0 &&
+        strcmp(shell->pending_activation, binding->app_id) == 0)
+        shell->pending_activation_uid = account_uid;
+    poll_task_catalog(shell);
+    maybe_activate_pending_task(shell);
+    shell->task_thumbnail_ticks = TASK_THUMBNAIL_INTERVAL_TICKS;
 }
 
 static const struct cp0_system_shell_v1_listener system_control_listener = {
@@ -2437,7 +2739,8 @@ static bool translate_key(struct shell *shell, uint32_t key,
             *action = CP0_UI_SHOW_TASKS;
             return true;
         }
-        break;
+        *action = CP0_UI_TOGGLE_APP_VIEW;
+        return true;
     default:
         break;
     }
@@ -2538,6 +2841,22 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
             char character = cp0_ui_key_character(key, shell_shift_active(shell));
             if (character != '\0')
                 handled = cp0_ui_setup_input_ascii(&shell->ui, character);
+        }
+        if (handled) {
+            shell_redraw(shell);
+            return;
+        }
+    }
+    if (pressed && cp0_ui_password_accepts_text(&shell->ui)) {
+        bool handled = false;
+        if (key == KEY_BACKSPACE) {
+            (void)cp0_ui_password_backspace(&shell->ui);
+            handled = true;
+        } else {
+            char character =
+                cp0_ui_key_character(key, shell_shift_active(shell));
+            if (character != '\0')
+                handled = cp0_ui_password_input_ascii(&shell->ui, character);
         }
         if (handled) {
             shell_redraw(shell);
@@ -2700,6 +3019,10 @@ static void handle_registry_remove(void *data, struct wl_registry *registry,
         shell->capture_width = 0;
         shell->capture_height = 0;
         shell->capture_format = 0;
+        shell->capture_purpose = CAPTURE_NONE;
+        shell->capture_task_id = 0;
+        shell->capture_runtime_generation = 0;
+        destroy_screenshot_buffer(&shell->screenshot_buffer);
     } else if (name == shell->capture_factory_name) {
         if (shell->capture_source != NULL)
             weston_capture_source_v1_destroy(shell->capture_source);
@@ -2713,6 +3036,10 @@ static void handle_registry_remove(void *data, struct wl_registry *registry,
         shell->capture_width = 0;
         shell->capture_height = 0;
         shell->capture_format = 0;
+        shell->capture_purpose = CAPTURE_NONE;
+        shell->capture_task_id = 0;
+        shell->capture_runtime_generation = 0;
+        destroy_screenshot_buffer(&shell->screenshot_buffer);
     }
 }
 
@@ -2768,6 +3095,13 @@ static bool shell_connect(struct shell *shell)
     shell->width = CP0_UI_WIDTH;
     shell->height = CP0_UI_HEIGHT;
     cp0_ui_init(&shell->ui);
+    shell->task_thumbnails =
+        calloc(CP0_APPD_MAX_TASKS, sizeof(*shell->task_thumbnails));
+    if (shell->task_thumbnails == NULL) {
+        fprintf(stderr, "system-shell: cannot allocate task thumbnails\n");
+        return false;
+    }
+    shell->next_thumbnail_generation = 1;
     load_shell_preferences(shell);
     initialize_provisioning(shell);
     shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
@@ -2865,6 +3199,8 @@ static void shell_destroy(struct shell *shell)
         wl_display_disconnect(shell->display);
     }
     cp0_ui_deinit(&shell->ui);
+    free(shell->task_thumbnails);
+    shell->task_thumbnails = NULL;
 }
 
 static int shell_dispatch(struct shell *shell)
@@ -2961,6 +3297,7 @@ static int shell_dispatch(struct shell *shell)
                     shell->catalog_ticks = 0;
                 } else if (shell->catalog_ticks >= 5) {
                     poll_app_catalog(shell);
+                    poll_task_catalog(shell);
                     poll_store_catalog(shell);
                     show_store_completion_notification(shell);
                     if (shell->ui.screen == CP0_UI_SETTINGS) {
@@ -2972,6 +3309,13 @@ static int shell_dispatch(struct shell *shell)
                         poll_metrics_status(shell);
                     }
                     shell->catalog_ticks = 0;
+                }
+                shell->task_thumbnail_ticks++;
+                if (shell->task_thumbnail_ticks >=
+                    TASK_THUMBNAIL_INTERVAL_TICKS) {
+                    maybe_activate_pending_task(shell);
+                    maybe_capture_task_thumbnail(shell);
+                    shell->task_thumbnail_ticks = 0;
                 }
                 shell_redraw(shell);
             }

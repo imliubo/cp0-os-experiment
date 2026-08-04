@@ -125,7 +125,9 @@ cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$repo_root/system-shell/include/cp0_screenshot_store.h" \
     "$repo_root/system-shell/include/cp0_store_client.h" \
     "$repo_root/system-shell/include/cp0_system_info.h" \
+    "$repo_root/system-shell/include/cp0_task_thumbnail.h" \
     "$repo_root/system-shell/src/ui.c" \
+    "$repo_root/system-shell/src/task_thumbnail.c" \
     "$repo_root/system-shell/src/json.c" \
     "$repo_root/system-shell/src/appd_client.c" \
     "$repo_root/system-shell/src/audio_settings_client.c" \

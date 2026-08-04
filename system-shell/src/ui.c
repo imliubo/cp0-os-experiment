@@ -248,6 +248,29 @@ static bool copy_optional_text(char *output, size_t capacity,
                                const char *input);
 static void format_bytes(char output[16], uint64_t bytes);
 
+static void clear_sensitive(void *memory, size_t size)
+{
+    volatile unsigned char *bytes = memory;
+
+    while (size-- > 0)
+        *bytes++ = 0;
+}
+
+static void clear_password_change_secrets(struct cp0_ui *ui)
+{
+    if (ui->password_secrets == NULL)
+        return;
+    clear_sensitive(ui->password_secrets, sizeof(*ui->password_secrets));
+}
+
+static void cancel_password_change(struct cp0_ui *ui)
+{
+    clear_password_change_secrets(ui);
+    ui->password_change_active = false;
+    ui->password_change_show = false;
+    ui->password_change_page = CP0_UI_PASSWORD_CURRENT;
+}
+
 char cp0_ui_key_character(uint32_t key, bool shifted)
 {
     char character = '\0';
@@ -316,6 +339,8 @@ static const char *screen_title(const struct cp0_ui *ui)
         return "PERMISSION";
     if (ui->document_prompt)
         return "DOCUMENT";
+    if (ui->foreground_app_name[0] != '\0')
+        return ui->foreground_app_name;
     switch (ui->screen) {
     case CP0_UI_HOME:
         return "HOME";
@@ -328,6 +353,8 @@ static const char *screen_title(const struct cp0_ui *ui)
     case CP0_UI_NETWORK:
         return "NETWORK";
     case CP0_UI_SETTINGS:
+        if (ui->password_change_active)
+            return "CHANGE PASSWORD";
         if (ui->developer_hosts_view)
             return "PAIRED COMPUTERS";
         if (ui->settings_detail) {
@@ -704,9 +731,12 @@ static void draw_home(struct canvas *canvas, const struct cp0_ui *ui)
 {
     static const char *labels[] = {"APPS", "STORE", "DEVICE", "NETWORK",
                                    "SETTINGS"};
-    for (unsigned int index = 0; index < 5; index++) {
-        int x = 8 + (int)(index % 3) * 103;
-        int y = 28 + (int)(index / 3) * 68;
+    _Static_assert(sizeof(labels) / sizeof(labels[0]) ==
+                       CP0_UI_HOME_ITEM_COUNT,
+                   "Home labels must match the navigation item count");
+    for (unsigned int index = 0; index < CP0_UI_HOME_ITEM_COUNT; index++) {
+        int x = 8 + (int)(index % CP0_UI_HOME_COLUMNS) * 103;
+        int y = 28 + (int)(index / CP0_UI_HOME_COLUMNS) * 68;
         bool selected = index == ui->selected;
         fill_rect(canvas, x, y, 98, 61,
                   selected ? COLOR_SELECTED : COLOR_SURFACE);
@@ -743,11 +773,130 @@ static void draw_empty_page(struct canvas *canvas, const char *title,
     draw_text(canvas, 28, 91, detail, 1, COLOR_MUTED);
 }
 
+static void draw_apps_view_switch(struct canvas *canvas,
+                                  const struct cp0_ui *ui)
+{
+    draw_text(canvas, 9, 28, "TAB", 1, COLOR_MUTED);
+    fill_rect(canvas, 224, 24, 44, 14,
+              ui->app_grid_view ? COLOR_BAR : COLOR_SELECTED);
+    fill_rect(canvas, 268, 24, 44, 14,
+              ui->app_grid_view ? COLOR_SELECTED : COLOR_BAR);
+    stroke_rect(canvas, 224, 24, 88, 14, 1, COLOR_MUTED);
+    draw_text(canvas, 231, 28, "LIST", 1,
+              ui->app_grid_view ? COLOR_MUTED : COLOR_TEXT);
+    draw_text(canvas, 277, 28, "GRID", 1,
+              ui->app_grid_view ? COLOR_TEXT : COLOR_MUTED);
+}
+
+static void draw_app_icon(struct canvas *canvas, const struct cp0_ui_app *app,
+                          int x, int y, uint32_t color)
+{
+    const char *id = app->app_id;
+
+    if (strstr(id, "calculator") != NULL) {
+        stroke_rect(canvas, x + 7, y + 4, 26, 32, 2, color);
+        fill_rect(canvas, x + 11, y + 8, 18, 6, color);
+        for (int row = 0; row < 3; row++)
+            for (int column = 0; column < 3; column++)
+                fill_rect(canvas, x + 11 + column * 7, y + 18 + row * 5,
+                          4, 3, color);
+    } else if (strstr(id, "camera") != NULL) {
+        stroke_rect(canvas, x + 4, y + 11, 32, 23, 2, color);
+        fill_rect(canvas, x + 11, y + 7, 12, 5, color);
+        stroke_rect(canvas, x + 15, y + 16, 11, 11, 2, color);
+    } else if (strstr(id, "gallery") != NULL) {
+        stroke_rect(canvas, x + 5, y + 7, 27, 25, 2, color);
+        stroke_rect(canvas, x + 9, y + 11, 27, 25, 1, color);
+        fill_rect(canvas, x + 11, y + 13, 5, 5, color);
+        fill_rect(canvas, x + 12, y + 27, 18, 2, color);
+        fill_rect(canvas, x + 17, y + 22, 13, 2, color);
+    } else if (strstr(id, "snake") != NULL) {
+        fill_rect(canvas, x + 7, y + 8, 6, 6, color);
+        fill_rect(canvas, x + 12, y + 13, 6, 6, color);
+        fill_rect(canvas, x + 17, y + 18, 12, 6, color);
+        fill_rect(canvas, x + 24, y + 23, 6, 9, color);
+        fill_rect(canvas, x + 28, y + 27, 5, 5, color);
+    } else if (strstr(id, "media") != NULL) {
+        for (int row = 0; row < 19; row++)
+            fill_rect(canvas, x + 9 + row / 2, y + 10 + row, 2, 1, color);
+        fill_rect(canvas, x + 28, y + 10, 3, 19, color);
+    } else if (strstr(id, "notes") != NULL) {
+        stroke_rect(canvas, x + 8, y + 5, 24, 31, 2, color);
+        for (int row = 0; row < 4; row++)
+            fill_rect(canvas, x + 13, y + 12 + row * 6, 14, 2, color);
+    } else if (strstr(id, "stopwatch") != NULL) {
+        stroke_rect(canvas, x + 8, y + 9, 24, 25, 2, color);
+        fill_rect(canvas, x + 16, y + 5, 8, 4, color);
+        fill_rect(canvas, x + 19, y + 14, 2, 9, color);
+        fill_rect(canvas, x + 19, y + 22, 7, 2, color);
+    } else if (strstr(id, "hello") != NULL) {
+        stroke_rect(canvas, x + 5, y + 8, 30, 24, 2, color);
+        fill_rect(canvas, x + 11, y + 15, 3, 3, color);
+        fill_rect(canvas, x + 26, y + 15, 3, 3, color);
+        fill_rect(canvas, x + 13, y + 24, 14, 2, color);
+    } else {
+        char monogram[2] = {'A', '\0'};
+        for (size_t index = 0; app->name[index] != '\0'; index++) {
+            char character = app->name[index];
+            if (character >= 'A' && character <= 'Z') {
+                monogram[0] = character;
+                break;
+            }
+            if (character >= 'a' && character <= 'z') {
+                monogram[0] = (char)(character - 'a' + 'A');
+                break;
+            }
+        }
+        draw_text(canvas, x + 14, y + 12, monogram, 2, color);
+    }
+}
+
+static void draw_apps_grid(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    unsigned int first = (ui->app_selected / 8U) * 8U;
+    unsigned int visible = ui->app_count - first;
+    if (visible > 8U)
+        visible = 8U;
+
+    for (unsigned int offset = 0; offset < visible; offset++) {
+        unsigned int index = first + offset;
+        int x = 8 + (int)(offset % 4U) * 76;
+        int y = 41 + (int)(offset / 4U) * 58;
+        bool selected = index == ui->app_selected;
+        uint32_t state_color =
+            ui->apps[index].state == CP0_UI_APP_RUNNING ? COLOR_GREEN
+                                                        : COLOR_MUTED;
+        fill_rect(canvas, x, y, 72, 55,
+                  selected ? COLOR_SELECTED : COLOR_SURFACE);
+        if (selected)
+            stroke_rect(canvas, x, y, 72, 55, 2, COLOR_YELLOW);
+        stroke_rect(canvas, x + 16, y + 3, 40, 40, 2, state_color);
+        draw_app_icon(canvas, &ui->apps[index], x + 16, y + 3,
+                      selected ? COLOR_TEXT : COLOR_MUTED);
+        draw_text_slice(canvas, x + 6, y + 47, ui->apps[index].name, 0, 10,
+                        selected ? COLOR_TEXT : COLOR_MUTED);
+    }
+    if (ui->app_count > 8U) {
+        char page[24];
+        unsigned int pages = (ui->app_count + 7U) / 8U;
+        snprintf(page, sizeof(page), "%u/%u", first / 8U + 1U, pages);
+        draw_text(canvas, 282, 159, page, 1, COLOR_MUTED);
+    }
+    if (ui->app_list_truncated)
+        draw_text(canvas, 8, 159, "32+", 1, COLOR_YELLOW);
+}
+
 static void draw_apps_page(struct canvas *canvas, const struct cp0_ui *ui)
 {
     static const char *states[] = {"READY", "STARTING", "RUNNING", "FAILED"};
     if (ui->app_count == 0) {
         draw_empty_page(canvas, "APPS", "NO APPS INSTALLED", COLOR_GREEN);
+        return;
+    }
+
+    draw_apps_view_switch(canvas, ui);
+    if (ui->app_grid_view) {
+        draw_apps_grid(canvas, ui);
         return;
     }
 
@@ -757,19 +906,19 @@ static void draw_apps_page(struct canvas *canvas, const struct cp0_ui *ui)
         visible = 4;
     for (unsigned int row = 0; row < visible; row++) {
         unsigned int index = first + row;
-        int y = 28 + (int)row * 32;
+        int y = 42 + (int)row * 29;
         bool selected = index == ui->app_selected;
-        fill_rect(canvas, 8, y, 304, 28,
+        fill_rect(canvas, 8, y, 304, 25,
                   selected ? COLOR_SELECTED : COLOR_SURFACE);
-        stroke_rect(canvas, 8, y, 304, 28, selected ? 2 : 1,
+        stroke_rect(canvas, 8, y, 304, 25, selected ? 2 : 1,
                     selected ? COLOR_GREEN : COLOR_BAR);
-        fill_rect(canvas, 17, y + 9, 10, 10,
+        fill_rect(canvas, 17, y + 8, 10, 10,
                   ui->apps[index].state == CP0_UI_APP_RUNNING
                       ? COLOR_GREEN
                       : (selected ? COLOR_YELLOW : COLOR_MUTED));
         draw_text_slice(canvas, 36, y + 6, ui->apps[index].name, 0, 28,
                         selected ? COLOR_TEXT : COLOR_MUTED);
-        draw_text(canvas, 218, y + 17, states[ui->apps[index].state], 1,
+        draw_text(canvas, 218, y + 15, states[ui->apps[index].state], 1,
                   ui->apps[index].state == CP0_UI_APP_FAILED
                       ? COLOR_RED
                       : COLOR_MUTED);
@@ -833,6 +982,7 @@ static void draw_app_detail(struct canvas *canvas, const struct cp0_ui *ui)
     static const char *permission_names[] = {
         "MICROPHONE", "AUDIO", "CAMERA", "DOCUMENTS",
         "GPIO",       "NETWORK", "NOTIFICATIONS", "LORA",
+        "PHOTOS READ", "PHOTOS WRITE",
     };
     const struct cp0_ui_app *app = &ui->apps[ui->app_selected];
     char value[32];
@@ -873,9 +1023,9 @@ static void draw_app_detail(struct canvas *canvas, const struct cp0_ui *ui)
         unsigned int row = 0;
         unsigned int seen = 0;
         unsigned int count = 0;
-        for (unsigned int bit = 0; bit < 8; bit++)
+        for (unsigned int bit = 0; bit < 10; bit++)
             count += (app->permissions & (1U << bit)) != 0;
-        for (unsigned int bit = 0; bit < 8 && row < 4; bit++) {
+        for (unsigned int bit = 0; bit < 10 && row < 4; bit++) {
             if ((app->permissions & (1U << bit)) == 0)
                 continue;
             if (seen++ < ui->app_permission_offset)
@@ -1448,13 +1598,14 @@ static void draw_store_permissions(struct canvas *canvas,
     static const char *permission_names[] = {
         "AUDIO CAPTURE", "AUDIO PLAYBACK", "CAMERA", "DOCUMENTS",
         "GPIO",          "NETWORK",        "NOTIFICATIONS", "LORA",
+        "PHOTOS READ",   "PHOTOS WRITE",
     };
     unsigned int visible = 0;
     unsigned int new_permissions = 0;
     bool update = app->update_available;
     fill_rect(canvas, 8, 27, 304, 136, COLOR_SURFACE);
     fill_rect(canvas, 8, 27, 4, 136, COLOR_GREEN);
-    for (unsigned int bit = 0; bit < 8; bit++)
+    for (unsigned int bit = 0; bit < 10; bit++)
         new_permissions += update && (app->permissions & (1U << bit)) != 0 &&
                            (app->installed_permissions & (1U << bit)) == 0;
     char heading[24];
@@ -1465,7 +1616,7 @@ static void draw_store_permissions(struct canvas *canvas,
         snprintf(heading, sizeof(heading), "REQUESTED PERMISSIONS");
     draw_text(canvas, 20, 34, heading, 1,
               new_permissions > 0 ? COLOR_YELLOW : COLOR_GREEN);
-    for (unsigned int bit = 0; bit < 8; bit++) {
+    for (unsigned int bit = 0; bit < 10; bit++) {
         if ((app->permissions & (1U << bit)) == 0)
             continue;
         int x = 20 + (int)(visible % 2U) * 146;
@@ -1848,7 +1999,7 @@ static void draw_settings_page(struct canvas *canvas, const struct cp0_ui *ui)
 
 static unsigned int settings_item_count(unsigned int category)
 {
-    static const unsigned int counts[] = {6, 3, 4, 4, 5, 6, 6, 7};
+    static const unsigned int counts[] = {6, 3, 4, 4, 5, 6, 6, 8};
     return category < 8 ? counts[category] : 0;
 }
 
@@ -2037,7 +2188,8 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
     default: {
         static const char *labels[] = {
             "AUTHORITY", "DEVELOPER MODE", "PAIR NEW COMPUTER",
-            "PAIRED COMPUTERS", "RECOVERY BOOT", "SCREEN LOCK", "ENCRYPTION",
+            "PAIRED COMPUTERS", "RECOVERY BOOT", "CHANGE PASSWORD",
+            "SCREEN LOCK", "ENCRYPTION",
         };
         *label = labels[item];
         if (item == 0)
@@ -2055,6 +2207,8 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
         else if (item == 4)
             snprintf(value, 24, "%s",
                      settings_state(ui->recovery_mode, ui->recovery_mode_allowed));
+        else if (item == 5)
+            snprintf(value, 24, "ACTION");
         else {
             snprintf(value, 24, "NOT SUPPORTED");
             *available = false;
@@ -2186,6 +2340,51 @@ static void draw_settings_confirm(struct canvas *canvas,
     }
 }
 
+static void draw_password_change(struct canvas *canvas,
+                                 const struct cp0_ui *ui)
+{
+    char status[48];
+    const char *label;
+    const char *value;
+
+    draw_text(canvas, 12, 36, "OWNER CREDENTIAL", 2, COLOR_TEXT);
+    if (ui->password_change_page == CP0_UI_PASSWORD_APPLYING) {
+        draw_text(canvas, 12, 77, "UPDATING PASSWORD", 2, COLOR_GREEN);
+        draw_text(canvas, 12, 109, "DO NOT POWER OFF", 1, COLOR_YELLOW);
+        draw_setup_footer(canvas, "PLEASE WAIT", NULL);
+        return;
+    }
+    if (ui->password_change_page == CP0_UI_PASSWORD_COMPLETE) {
+        draw_text(canvas, 12, 75, "PASSWORD UPDATED", 2, COLOR_GREEN);
+        draw_text(canvas, 12, 106, "NEW CREDENTIAL IS ACTIVE", 1,
+                  COLOR_MUTED);
+        draw_setup_footer(canvas, "ESC CLOSE", "ENTER DONE");
+        return;
+    }
+    if (ui->password_change_page == CP0_UI_PASSWORD_CURRENT) {
+        label = "CURRENT PASSWORD";
+        value = ui->password_secrets->current;
+    } else if (ui->password_change_page == CP0_UI_PASSWORD_NEW) {
+        label = "NEW PASSWORD";
+        value = ui->password_secrets->new_password;
+    } else {
+        label = "CONFIRM NEW PASSWORD";
+        value = ui->password_secrets->confirm;
+    }
+    draw_text(canvas, 12, 63, label, 1, COLOR_MUTED);
+    draw_setup_input(canvas, value, !ui->password_change_show);
+    snprintf(status, sizeof(status), "%s  %u%s",
+             ui->password_change_show ? "VISIBLE" : "HIDDEN",
+             (unsigned int)strlen(value),
+             ui->password_change_page == CP0_UI_PASSWORD_NEW ? "/10 MIN"
+                                                              : " CHARS");
+    draw_text(canvas, 12, 123, status, 1, COLOR_MUTED);
+    if (ui->password_secrets->error[0] != '\0')
+        draw_text_slice(canvas, 12, 136, ui->password_secrets->error, 0, 46,
+                        COLOR_RED);
+    draw_setup_footer(canvas, "RIGHT SHOW/HIDE", "ENTER NEXT");
+}
+
 static void draw_store_install_prompt(struct canvas *canvas,
                                       const struct cp0_ui *ui)
 {
@@ -2266,7 +2465,9 @@ static void draw_page(struct canvas *canvas, const struct cp0_ui *ui)
         draw_network_page(canvas, ui);
         break;
     case CP0_UI_SETTINGS:
-        if (ui->developer_hosts_view)
+        if (ui->password_change_active)
+            draw_password_change(canvas, ui);
+        else if (ui->developer_hosts_view)
             draw_developer_hosts(canvas, ui);
         else if (ui->settings_detail)
             draw_settings_detail(canvas, ui);
@@ -2558,6 +2759,9 @@ void cp0_ui_init(struct cp0_ui *ui)
 {
     memset(ui, 0, sizeof(*ui));
     ui->tasks = calloc(CP0_UI_MAX_TASKS, sizeof(*ui->tasks));
+    ui->navigation =
+        calloc(CP0_UI_NAVIGATION_DEPTH, sizeof(*ui->navigation));
+    ui->password_secrets = calloc(1, sizeof(*ui->password_secrets));
     ui->screen = CP0_UI_HOME;
     ui->store_status = CP0_UI_STORE_LOADING;
     ui->store_browse_status = CP0_UI_STORE_LOADING;
@@ -2576,8 +2780,19 @@ void cp0_ui_deinit(struct cp0_ui *ui)
 {
     if (ui == NULL)
         return;
+    clear_sensitive(ui->setup_password, sizeof(ui->setup_password));
+    clear_sensitive(ui->setup_password_confirm,
+                    sizeof(ui->setup_password_confirm));
+    clear_sensitive(ui->setup_wifi_password,
+                    sizeof(ui->setup_wifi_password));
+    cancel_password_change(ui);
+    free(ui->password_secrets);
+    ui->password_secrets = NULL;
     free(ui->tasks);
     ui->tasks = NULL;
+    free(ui->navigation);
+    ui->navigation = NULL;
+    ui->navigation_depth = 0;
     ui->task_count = 0;
     ui->task_selected = 0;
 }
@@ -2837,6 +3052,90 @@ bool cp0_ui_setup_backspace(struct cp0_ui *ui)
     buffer[length - 1U] = '\0';
     ui->setup_error[0] = '\0';
     return true;
+}
+
+static char *password_change_input_buffer(struct cp0_ui *ui)
+{
+    switch (ui->password_change_page) {
+    case CP0_UI_PASSWORD_CURRENT:
+        return ui->password_secrets->current;
+    case CP0_UI_PASSWORD_NEW:
+        return ui->password_secrets->new_password;
+    case CP0_UI_PASSWORD_CONFIRM:
+        return ui->password_secrets->confirm;
+    default:
+        return NULL;
+    }
+}
+
+bool cp0_ui_password_accepts_text(const struct cp0_ui *ui)
+{
+    return ui != NULL && ui->password_change_active &&
+           ui->password_secrets != NULL &&
+           ui->password_change_page <= CP0_UI_PASSWORD_CONFIRM;
+}
+
+bool cp0_ui_password_input_ascii(struct cp0_ui *ui, char character)
+{
+    char *buffer;
+    size_t length;
+
+    if (!cp0_ui_password_accepts_text(ui) || character < ' ' ||
+        character > '~')
+        return false;
+    buffer = password_change_input_buffer(ui);
+    if (buffer == NULL)
+        return false;
+    length = strlen(buffer);
+    if (length >= CP0_UI_PASSWORD_MAX)
+        return false;
+    buffer[length] = character;
+    buffer[length + 1U] = '\0';
+    clear_sensitive(ui->password_secrets->error,
+                    sizeof(ui->password_secrets->error));
+    return true;
+}
+
+bool cp0_ui_password_backspace(struct cp0_ui *ui)
+{
+    char *buffer;
+    size_t length;
+
+    if (!cp0_ui_password_accepts_text(ui))
+        return false;
+    buffer = password_change_input_buffer(ui);
+    if (buffer == NULL)
+        return false;
+    length = strlen(buffer);
+    if (length == 0)
+        return false;
+    buffer[length - 1U] = '\0';
+    clear_sensitive(ui->password_secrets->error,
+                    sizeof(ui->password_secrets->error));
+    return true;
+}
+
+void cp0_ui_password_change_result(struct cp0_ui *ui, bool success,
+                                   bool authentication_failed,
+                                   const char *error)
+{
+    if (ui == NULL || !ui->password_change_active ||
+        ui->password_change_page != CP0_UI_PASSWORD_APPLYING)
+        return;
+    clear_password_change_secrets(ui);
+    ui->password_change_show = false;
+    if (success) {
+        ui->password_change_page = CP0_UI_PASSWORD_COMPLETE;
+        return;
+    }
+    ui->password_change_page = CP0_UI_PASSWORD_CURRENT;
+    copy_optional_text(ui->password_secrets->error,
+                       sizeof(ui->password_secrets->error),
+                       authentication_failed
+                           ? "Current password is incorrect"
+                           : (error != NULL && error[0] != '\0'
+                                  ? error
+                                  : "Password update failed"));
 }
 
 const char *cp0_ui_setup_locale(const struct cp0_ui *ui)
@@ -3142,6 +3441,18 @@ void cp0_ui_set_status(struct cp0_ui *ui, const char *clock_text,
     ui->battery_percent = battery_percent;
 }
 
+void cp0_ui_set_foreground_app(struct cp0_ui *ui, const char *app_name)
+{
+    if (ui == NULL)
+        return;
+    if (app_name == NULL) {
+        ui->foreground_app_name[0] = '\0';
+        return;
+    }
+    snprintf(ui->foreground_app_name, sizeof(ui->foreground_app_name), "%.13s",
+             app_name);
+}
+
 void cp0_ui_set_device_settings(
     struct cp0_ui *ui, enum cp0_ui_authority authority,
     bool developer_mode, bool developer_mode_allowed, bool recovery_mode,
@@ -3149,7 +3460,7 @@ void cp0_ui_set_device_settings(
     bool app_launch_restricted, uint8_t denied_permission_count)
 {
     if (ui == NULL || authority > CP0_UI_AUTHORITY_ORGANIZATION ||
-        denied_permission_count > 8)
+        denied_permission_count > 10)
         return;
     ui->settings_authority = authority;
     ui->developer_mode = developer_mode && developer_mode_allowed;
@@ -4687,6 +4998,193 @@ bool cp0_ui_tick(struct cp0_ui *ui)
     return false;
 }
 
+static void push_navigation(struct cp0_ui *ui)
+{
+    struct cp0_ui_navigation_entry *entry;
+
+    if (ui->navigation == NULL ||
+        ui->navigation_depth >= CP0_UI_NAVIGATION_DEPTH)
+        return;
+    entry = &ui->navigation[ui->navigation_depth++];
+    *entry = (struct cp0_ui_navigation_entry){
+        .screen = ui->screen,
+        .selected = ui->selected,
+        .app_selected = ui->app_selected,
+        .app_grid_view = ui->app_grid_view,
+        .store_selected = ui->store_selected,
+        .store_section = ui->store_section,
+        .store_browse_selected = ui->store_browse_selected,
+        .store_search_selected = ui->store_search_selected,
+        .store_recent_selected = ui->store_recent_selected,
+        .store_today_selected = ui->store_today_selected,
+        .store_today_collection_selected =
+            ui->store_today_collection_selected,
+        .store_today_open_collection = ui->store_today_open_collection,
+        .store_detail_page = ui->store_detail_page,
+        .store_operation_action_selected =
+            ui->store_operation_action_selected,
+        .store_screenshot_index = ui->store_screenshot_index,
+        .store_detail_text_offset = ui->store_detail_text_offset,
+        .task_action_selected = ui->task_action_selected,
+        .task_selected = ui->task_selected,
+        .settings_selected = ui->settings_selected,
+        .settings_item_selected = ui->settings_item_selected,
+        .app_detail_page = ui->app_detail_page,
+        .app_permission_offset = ui->app_permission_offset,
+        .app_action_selected = ui->app_action_selected,
+        .device_page = ui->device_page,
+        .network_page = ui->network_page,
+        .developer_host_selected = ui->developer_host_selected,
+        .store_search_input = ui->store_search_input,
+        .store_update_all_selected = ui->store_update_all_selected,
+        .store_detail = ui->store_detail,
+        .store_today_collection_open = ui->store_today_collection_open,
+        .app_detail = ui->app_detail,
+        .settings_detail = ui->settings_detail,
+        .developer_hosts_view = ui->developer_hosts_view,
+    };
+}
+
+static bool pop_navigation(struct cp0_ui *ui)
+{
+    const struct cp0_ui_navigation_entry *entry;
+
+    if (ui->navigation == NULL || ui->navigation_depth == 0)
+        return false;
+    entry = &ui->navigation[--ui->navigation_depth];
+    ui->screen = entry->screen;
+    ui->selected = entry->selected;
+    ui->app_selected = entry->app_selected;
+    ui->app_grid_view = entry->app_grid_view;
+    ui->store_selected = entry->store_selected;
+    ui->store_section = entry->store_section;
+    ui->store_browse_selected = entry->store_browse_selected;
+    ui->store_search_selected = entry->store_search_selected;
+    ui->store_recent_selected = entry->store_recent_selected;
+    ui->store_today_selected = entry->store_today_selected;
+    ui->store_today_collection_selected =
+        entry->store_today_collection_selected;
+    ui->store_today_open_collection = entry->store_today_open_collection;
+    ui->store_detail_page = entry->store_detail_page;
+    ui->store_operation_action_selected =
+        entry->store_operation_action_selected;
+    ui->store_screenshot_index = entry->store_screenshot_index;
+    ui->store_detail_text_offset = entry->store_detail_text_offset;
+    ui->task_action_selected = entry->task_action_selected;
+    ui->task_selected = entry->task_selected;
+    ui->settings_selected = entry->settings_selected;
+    ui->settings_item_selected = entry->settings_item_selected;
+    ui->app_detail_page = entry->app_detail_page;
+    ui->app_permission_offset = entry->app_permission_offset;
+    ui->app_action_selected = entry->app_action_selected;
+    ui->device_page = entry->device_page;
+    ui->network_page = entry->network_page;
+    ui->developer_host_selected = entry->developer_host_selected;
+    ui->store_search_input = entry->store_search_input;
+    ui->store_update_all_selected = entry->store_update_all_selected;
+    ui->store_detail = entry->store_detail;
+    ui->store_today_collection_open = entry->store_today_collection_open;
+    ui->app_detail = entry->app_detail;
+    ui->settings_detail = entry->settings_detail;
+    ui->developer_hosts_view = entry->developer_hosts_view;
+    return true;
+}
+
+static void enter_screen(struct cp0_ui *ui, enum cp0_ui_screen screen)
+{
+    if (ui->screen == screen)
+        return;
+    push_navigation(ui);
+    ui->screen = screen;
+}
+
+static enum cp0_ui_event handle_password_change_action(
+    struct cp0_ui *ui, enum cp0_ui_action action)
+{
+    if (ui->password_change_page == CP0_UI_PASSWORD_APPLYING)
+        return CP0_UI_EVENT_NONE;
+    if (ui->password_change_page == CP0_UI_PASSWORD_COMPLETE) {
+        if (action == CP0_UI_BACK || action == CP0_UI_ACCEPT)
+            cancel_password_change(ui);
+        return CP0_UI_EVENT_NONE;
+    }
+    if (action == CP0_UI_RIGHT) {
+        ui->password_change_show = !ui->password_change_show;
+        return CP0_UI_EVENT_NONE;
+    }
+    if (ui->password_change_page == CP0_UI_PASSWORD_CURRENT) {
+        if (action == CP0_UI_BACK) {
+            cancel_password_change(ui);
+        } else if (action == CP0_UI_ACCEPT) {
+            if (ui->password_secrets->current[0] == '\0') {
+                copy_optional_text(ui->password_secrets->error,
+                                   sizeof(ui->password_secrets->error),
+                                   "Enter the current password");
+            } else {
+                clear_sensitive(ui->password_secrets->new_password,
+                                sizeof(ui->password_secrets->new_password));
+                clear_sensitive(ui->password_secrets->confirm,
+                                sizeof(ui->password_secrets->confirm));
+                clear_sensitive(ui->password_secrets->error,
+                                sizeof(ui->password_secrets->error));
+                ui->password_change_show = false;
+                ui->password_change_page = CP0_UI_PASSWORD_NEW;
+            }
+        }
+        return CP0_UI_EVENT_NONE;
+    }
+    if (ui->password_change_page == CP0_UI_PASSWORD_NEW) {
+        if (action == CP0_UI_BACK) {
+            clear_sensitive(ui->password_secrets->new_password,
+                            sizeof(ui->password_secrets->new_password));
+            clear_sensitive(ui->password_secrets->confirm,
+                            sizeof(ui->password_secrets->confirm));
+            clear_sensitive(ui->password_secrets->error,
+                            sizeof(ui->password_secrets->error));
+            ui->password_change_show = false;
+            ui->password_change_page = CP0_UI_PASSWORD_CURRENT;
+        } else if (action == CP0_UI_ACCEPT) {
+            if (strlen(ui->password_secrets->new_password) < 10U) {
+                copy_optional_text(ui->password_secrets->error,
+                                   sizeof(ui->password_secrets->error),
+                                   "Use at least 10 characters");
+            } else {
+                clear_sensitive(ui->password_secrets->confirm,
+                                sizeof(ui->password_secrets->confirm));
+                clear_sensitive(ui->password_secrets->error,
+                                sizeof(ui->password_secrets->error));
+                ui->password_change_show = false;
+                ui->password_change_page = CP0_UI_PASSWORD_CONFIRM;
+            }
+        }
+        return CP0_UI_EVENT_NONE;
+    }
+    if (action == CP0_UI_BACK) {
+        clear_sensitive(ui->password_secrets->confirm,
+                        sizeof(ui->password_secrets->confirm));
+        clear_sensitive(ui->password_secrets->error,
+                        sizeof(ui->password_secrets->error));
+        ui->password_change_show = false;
+        ui->password_change_page = CP0_UI_PASSWORD_NEW;
+    } else if (action == CP0_UI_ACCEPT) {
+        if (strcmp(ui->password_secrets->new_password,
+                   ui->password_secrets->confirm) != 0) {
+            clear_sensitive(ui->password_secrets->confirm,
+                            sizeof(ui->password_secrets->confirm));
+            copy_optional_text(ui->password_secrets->error,
+                               sizeof(ui->password_secrets->error),
+                               "New passwords do not match");
+        } else {
+            clear_sensitive(ui->password_secrets->error,
+                            sizeof(ui->password_secrets->error));
+            ui->password_change_show = false;
+            ui->password_change_page = CP0_UI_PASSWORD_APPLYING;
+            return CP0_UI_EVENT_CHANGE_PASSWORD;
+        }
+    }
+    return CP0_UI_EVENT_NONE;
+}
+
 enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                                         enum cp0_ui_action action)
 {
@@ -4694,6 +5192,8 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         return CP0_UI_EVENT_NONE;
     if (ui->setup_active)
         return handle_setup_action(ui, action);
+    if (ui->password_change_active)
+        return handle_password_change_action(ui, action);
     if (action == CP0_UI_BRIGHTNESS_DOWN || action == CP0_UI_BRIGHTNESS_UP) {
         if (ui->local_simulation && action == CP0_UI_BRIGHTNESS_DOWN)
             ui->brightness_percent = ui->brightness_percent >= 10
@@ -4828,14 +5328,15 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         ui->app_detail = false;
         ui->settings_detail = false;
         ui->screen = CP0_UI_HOME;
+        ui->navigation_depth = 0;
         return CP0_UI_EVENT_NONE;
     }
     if (action == CP0_UI_SHOW_TASKS) {
+        enter_screen(ui, CP0_UI_TASKS);
         ui->power_dialog = false;
         ui->settings_confirm = false;
         ui->developer_hosts_view = false;
         ui->developer_revoke_confirm = false;
-        ui->screen = CP0_UI_TASKS;
         ui->task_action_selected = 0;
         ui->task_selected = 0;
         for (unsigned int index = 0; index < ui->task_count; index++) {
@@ -4929,6 +5430,10 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     }
 
     if (action == CP0_UI_BACK) {
+        if (ui->foreground_app_name[0] != '\0') {
+            ui->foreground_app_name[0] = '\0';
+            return CP0_UI_EVENT_NONE;
+        }
         if (ui->screen == CP0_UI_APPS && ui->app_detail) {
             ui->app_detail = false;
             return CP0_UI_EVENT_NONE;
@@ -4968,7 +5473,8 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             ui->settings_detail = false;
             return CP0_UI_EVENT_NONE;
         }
-        ui->screen = CP0_UI_HOME;
+        if (!pop_navigation(ui))
+            ui->screen = CP0_UI_HOME;
         return CP0_UI_EVENT_NONE;
     }
 
@@ -4999,7 +5505,7 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 ui->app_permission_offset--;
             } else if (ui->app_detail_page == 2 && action == CP0_UI_DOWN) {
                 unsigned int permission_count = 0;
-                for (unsigned int bit = 0; bit < 8; bit++)
+                for (unsigned int bit = 0; bit < 10; bit++)
                     permission_count +=
                         (ui->apps[ui->app_selected].permissions & (1U << bit)) !=
                         0;
@@ -5027,14 +5533,30 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             }
             return CP0_UI_EVENT_NONE;
         }
-        if (action == CP0_UI_UP && ui->app_selected > 0)
+        if (action == CP0_UI_TOGGLE_APP_VIEW) {
+            ui->app_grid_view = !ui->app_grid_view;
+        } else if (ui->app_grid_view && action == CP0_UI_LEFT &&
+                   ui->app_selected > 0) {
             ui->app_selected--;
-        else if (action == CP0_UI_DOWN &&
-                 ui->app_selected + 1 < ui->app_count)
+        } else if (ui->app_grid_view && action == CP0_UI_RIGHT &&
+                   ui->app_selected + 1 < ui->app_count) {
             ui->app_selected++;
+        } else if (ui->app_grid_view && action == CP0_UI_UP &&
+                   ui->app_selected >= 4) {
+            ui->app_selected -= 4;
+        } else if (ui->app_grid_view && action == CP0_UI_DOWN &&
+                   ui->app_selected + 4 < ui->app_count) {
+            ui->app_selected += 4;
+        } else if (action == CP0_UI_UP && ui->app_selected > 0) {
+            ui->app_selected--;
+        } else if (action == CP0_UI_DOWN &&
+                   ui->app_selected + 1 < ui->app_count) {
+            ui->app_selected++;
+        }
         else if (action == CP0_UI_ACCEPT && ui->app_count > 0)
             return CP0_UI_EVENT_OPEN_APP;
-        else if (action == CP0_UI_RIGHT && ui->app_count > 0)
+        else if (!ui->app_grid_view && action == CP0_UI_RIGHT &&
+                 ui->app_count > 0)
             ui->app_detail = true, ui->app_detail_page = 0,
             ui->app_permission_offset = 0, ui->app_action_selected = 0;
         return CP0_UI_EVENT_NONE;
@@ -5380,7 +5902,7 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 }
             } else if (ui->settings_selected == 0 && item == 2 &&
                        action == CP0_UI_ACCEPT) {
-                ui->screen = CP0_UI_NETWORK;
+                enter_screen(ui, CP0_UI_NETWORK);
                 ui->network_page = 0;
                 ui->settings_detail = false;
             } else if ((ui->local_simulation || ui->brightness_available) &&
@@ -5438,32 +5960,30 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 ui->camera_mirror = !ui->camera_mirror;
             } else if (ui->settings_selected == 4 && item == 0 &&
                        action == CP0_UI_ACCEPT) {
-                ui->screen = CP0_UI_DEVICE;
+                enter_screen(ui, CP0_UI_DEVICE);
                 ui->device_page = 2;
                 ui->settings_detail = false;
             } else if (ui->settings_selected == 4 && item == 3 &&
                        action == CP0_UI_ACCEPT) {
                 ui->power_dialog = true;
                 ui->dialog_selected = 1;
-                ui->settings_detail = false;
             } else if (ui->settings_selected == 4 && item == 4 &&
                        action == CP0_UI_ACCEPT) {
                 ui->power_dialog = true;
                 ui->dialog_selected = 2;
-                ui->settings_detail = false;
             } else if (ui->settings_selected == 5 && item == 0 &&
                        action == CP0_UI_ACCEPT) {
-                ui->screen = CP0_UI_APPS;
+                enter_screen(ui, CP0_UI_APPS);
                 ui->app_detail = false;
                 ui->settings_detail = false;
             } else if (ui->settings_selected == 5 && item == 1 &&
                        action == CP0_UI_ACCEPT) {
-                ui->screen = CP0_UI_APPS;
+                enter_screen(ui, CP0_UI_APPS);
                 ui->app_detail = false;
                 ui->settings_detail = false;
             } else if (ui->settings_selected == 5 && item == 2 &&
                        action == CP0_UI_ACCEPT) {
-                ui->screen = CP0_UI_DEVICE;
+                enter_screen(ui, CP0_UI_DEVICE);
                 ui->device_page = 1;
                 ui->settings_detail = false;
             } else if (ui->settings_selected == 5 && item == 4 &&
@@ -5486,7 +6006,7 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 }
             } else if (ui->settings_selected == 6 && item <= 1 &&
                        action == CP0_UI_ACCEPT) {
-                ui->screen = CP0_UI_DEVICE;
+                enter_screen(ui, CP0_UI_DEVICE);
                 ui->device_page = item == 0 ? 0 : 3;
                 ui->settings_detail = false;
             } else if (ui->settings_selected == 7 && item == 2 &&
@@ -5498,6 +6018,16 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                        ui->developer_access_available) {
                 ui->developer_hosts_view = true;
                 ui->developer_host_selected = 0;
+            } else if (ui->settings_selected == 7 && item == 5 &&
+                       action == CP0_UI_ACCEPT &&
+                       ui->password_secrets != NULL) {
+                clear_password_change_secrets(ui);
+                ui->password_change_active = true;
+                ui->password_change_show = false;
+                ui->password_change_page = CP0_UI_PASSWORD_CURRENT;
+                ui->power_dialog = false;
+                ui->help_overlay = false;
+                ui->system_action_overlay = false;
             } else if (ui->settings_selected == 7 && (item == 1 || item == 4) &&
                        action == CP0_UI_ACCEPT) {
                 bool recovery = item == 4;
@@ -5530,16 +6060,18 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     if (ui->screen != CP0_UI_HOME)
         return CP0_UI_EVENT_NONE;
 
-    if (action == CP0_UI_LEFT && (ui->selected % 3) != 0)
-        ui->selected--;
-    else if (action == CP0_UI_RIGHT && (ui->selected % 3) != 2 &&
-             ui->selected + 1 < 5)
-        ui->selected++;
-    else if (action == CP0_UI_UP && ui->selected >= 3)
-        ui->selected -= 3;
-    else if (action == CP0_UI_DOWN && ui->selected + 3 < 5)
-        ui->selected += 3;
+    if (action == CP0_UI_LEFT)
+        ui->selected = ui->selected == 0 ? CP0_UI_HOME_ITEM_COUNT - 1
+                                         : ui->selected - 1;
+    else if (action == CP0_UI_RIGHT)
+        ui->selected = (ui->selected + 1) % CP0_UI_HOME_ITEM_COUNT;
+    else if (action == CP0_UI_UP && ui->selected >= CP0_UI_HOME_COLUMNS)
+        ui->selected -= CP0_UI_HOME_COLUMNS;
+    else if (action == CP0_UI_DOWN &&
+             ui->selected + CP0_UI_HOME_COLUMNS < CP0_UI_HOME_ITEM_COUNT)
+        ui->selected += CP0_UI_HOME_COLUMNS;
     else if (action == CP0_UI_ACCEPT) {
+        push_navigation(ui);
         switch (ui->selected) {
         case 0:
             ui->screen = CP0_UI_APPS;
@@ -5588,6 +6120,8 @@ void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
     else
         draw_page(&canvas, ui);
     if (ui->setup_active)
+        goto apply_theme;
+    if (ui->password_change_active)
         goto apply_theme;
     if (ui->notification_banner && !ui->power_dialog &&
         !ui->settings_confirm && !ui->developer_revoke_confirm &&

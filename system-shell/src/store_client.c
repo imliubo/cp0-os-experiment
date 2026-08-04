@@ -569,6 +569,8 @@ static bool permission_bit(const char *document,
         {"network.client", CP0_STORE_PERMISSION_NETWORK_CLIENT},
         {"notifications.post", CP0_STORE_PERMISSION_NOTIFICATIONS_POST},
         {"radio.lora", CP0_STORE_PERMISSION_RADIO_LORA},
+        {"photos.read", CP0_STORE_PERMISSION_PHOTOS_READ},
+        {"photos.write", CP0_STORE_PERMISSION_PHOTOS_WRITE},
     };
     for (size_t index = 0; index < sizeof(permissions) / sizeof(permissions[0]);
          index++) {
