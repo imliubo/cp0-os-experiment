@@ -77,6 +77,7 @@ enum cp0_ui_action {
     CP0_UI_LEFT,
     CP0_UI_RIGHT,
     CP0_UI_ACCEPT,
+    CP0_UI_STOP_SELECTED,
     CP0_UI_BACK,
     CP0_UI_GO_HOME,
     CP0_UI_SHOW_TASKS,
@@ -295,6 +296,7 @@ enum cp0_ui_store_preflight_error {
 
 struct cp0_ui_catalog_app {
     bool running;
+    bool removable;
     bool immersive;
     const char *app_id;
     const char *name;
@@ -308,6 +310,7 @@ struct cp0_ui_catalog_app {
 struct cp0_ui_app {
     uint32_t token;
     bool installed;
+    bool removable;
     bool immersive;
     enum cp0_ui_app_state state;
     uint16_t permissions;

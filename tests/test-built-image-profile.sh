@@ -24,7 +24,7 @@ package_is_installed() {
 
 for package in \
     apparmor bubblewrap firmware-brcm80211 network-manager openssh-server \
-    raspberrypi-sys-mods rpi-swap \
+    raspberrypi-sys-mods rpi-swap rpicam-apps-lite \
     linux-image-rpi-v8 \
     libcairo2 libdisplay-info2 libdrm2 libevdev2 libinput10 libpixman-1-0 \
     libpng16-16t64 libseat1 libwayland-client0 libwayland-server0 \

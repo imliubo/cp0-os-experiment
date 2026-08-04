@@ -95,9 +95,11 @@ and runtime generation. Unmatched compositor surfaces are not shown as cards;
 tasks without a current thumbnail use a Shell-owned placeholder.
 
 F3 shows a horizontally navigable card stack sized for 320x170. Left and right
-change the selected card, Enter activates it, Up closes it and Esc/Home returns
-Home. Up models the upward dismissal gesture used by touch task switchers. Only
-the center card uses the full 160x85 thumbnail; adjacent
+change the selected card, Up and Down select its OPEN or STOP action, Enter
+executes the selected action, Space stops it directly, and Esc/Home returns
+Home. OPEN is selected whenever F3 opens or the selected card changes so an
+accidental Enter cannot terminate a task. Only the center card uses the full
+160x85 thumbnail; adjacent
 cards are partially visible to make navigation discoverable. Card allocation
 is fixed so labels, badges and thumbnails cannot shift the layout.
 

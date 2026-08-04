@@ -91,6 +91,7 @@ struct cp0_permission_prompt {
 
 struct cp0_app_summary {
     bool running;
+    bool removable;
     bool immersive;
     uint16_t permissions;
     uint64_t installed_at_unix_seconds;
@@ -167,5 +168,7 @@ int cp0_appd_set_device_mode(enum cp0_device_mode mode, bool enabled,
                              struct cp0_device_settings *settings);
 int cp0_appd_dispatch_media_action(enum cp0_media_action action,
                                    char app_id[CP0_APP_ID_BYTES]);
+int cp0_appd_import_screenshot(const uint32_t *xrgb8888, size_t pixel_count,
+                               uint64_t *photo_id);
 
 #endif

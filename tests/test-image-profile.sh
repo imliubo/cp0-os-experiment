@@ -15,6 +15,13 @@ makefile="$repo_root/Makefile"
 grep -q '^PI_GEN_BRANCH=arm64$' "$repo_root/image/pi-gen/upstream.env"
 grep -Eq '^PI_GEN_COMMIT=[0-9a-f]{40}$' "$repo_root/image/pi-gen/upstream.env"
 grep -q '^dtoverlay=vc4-kms-v3d,cma-64$' "$stage"
+grep -q '^camera_auto_detect=0$' "$stage"
+grep -q '^dtoverlay=imx219$' "$stage"
+grep -q "'/^camera_auto_detect=/d'" "$stage"
+if grep -q '^dtoverlay=camera-gpio16-high-overlay$' "$stage"; then
+    echo "error: V0.6 must not enable the legacy camera GPIO16 overlay" >&2
+    exit 1
+fi
 grep -q '^gpu_mem=64$' "$stage"
 grep -q '^gpu_mem_512=64$' "$stage"
 grep -q 'consoleblank=0' "$stage"

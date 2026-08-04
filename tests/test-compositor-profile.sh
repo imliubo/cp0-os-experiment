@@ -47,6 +47,8 @@ grep -q 'pkg-config --cflags --libs pixman-1 wayland-server' "$stage"
 grep -q 'pkg-config --cflags --libs wayland-client libpng libdrm xkbcommon' "$stage"
 grep -q 'xkb_keymap_mod_get_index(keymap, XKB_MOD_NAME_SHIFT)' "$shell_client"
 grep -q 'mods_depressed & shell->shift_modifier_mask' "$shell_client"
+grep -q 'case KEY_SPACE:' "$shell_client"
+grep -q '\*action = CP0_UI_STOP_SELECTED;' "$shell_client"
 if grep -q 'mods_depressed | mods_latched | mods_locked' "$shell_client"; then
     echo "error: text input treats latched or locked Shift as physically held" >&2
     exit 1
@@ -80,7 +82,7 @@ grep -q '^After=cardputerzero-compositor.service cardputerzero-powerd.socket car
 grep -q '^SupplementaryGroups=.*cp0-power-control' "$shell_service"
 grep -q '^Restart=always$' "$shell_service"
 grep -q '^MemoryMax=32M$' "$shell_service"
-grep -q '^StateDirectory=cardputerzero/screenshots cardputerzero/shell$' "$shell_service"
+grep -q '^StateDirectory=cardputerzero/shell$' "$shell_service"
 grep -q '^StateDirectoryMode=0750$' "$shell_service"
 grep -q '^MemoryMax=32M$' "$service"
 grep -q '^MemorySwapMax=0$' "$service"
@@ -264,7 +266,13 @@ grep -q '^#define CP0_APP_ID_MAX 128$' "$policy"
 grep -q 'WL_SHM_FORMAT_ARGB8888' "$shell_client"
 grep -q 'DRM_FORMAT_ARGB8888' "$shell_client"
 grep -q 'weston_capture_source_v1_capture' "$shell_client"
-grep -q 'CP0_SCREENSHOT_DIRECTORY' "$shell_client"
+grep -q 'cp0_appd_import_screenshot' "$shell_client"
+if grep -q 'cp0_screenshot_store_save' "$shell_client"; then
+    echo 'production Shell must not retain a duplicate screenshot copy' >&2
+    exit 1
+fi
+grep -q 'import-screenshot' "$repo_root/system-shell/src/appd_client.c"
+grep -q 'F_ADD_SEALS' "$repo_root/system-shell/src/appd_client.c"
 grep -q 'weston-output-capture-protocol.c' "$builder"
 grep -q 'screenshot_store.c' "$builder"
 grep -q 'display_client.c' "$builder"

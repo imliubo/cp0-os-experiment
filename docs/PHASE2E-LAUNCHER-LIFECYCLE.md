@@ -24,11 +24,14 @@ trusted App Runtime later maps its surface through the compositor. The Shell
 matches the compositor event to that ID, applies the manifest display mode and
 activates the opaque surface token. A token can never be supplied by WASM.
 
-Home hides the application but does not terminate it. Tasks shows the single
-running slot and offers RESUME or STOP. STOP is sent to appd, which clears the
-application's session permissions and terminates its transient systemd unit.
-When the compositor withdraws the surface token, the installed Launcher row is
-retained and returns to READY.
+Home hides the application but does not terminate it. Tasks shows the active
+task cards with explicit OPEN and STOP actions; OPEN is the safe default and
+Space is a direct STOP shortcut. Apps exposes the same direct shortcut for a
+selected RUNNING or STARTING application, while its Actions detail page uses a
+state-specific OPEN APP or STOP APP command. STOP is sent to appd, which clears
+the application's session permissions and terminates its transient systemd
+unit. When the compositor withdraws the surface token, the installed Launcher
+row is retained and returns to READY.
 
 ## Defensive client
 

@@ -349,6 +349,18 @@ grep -qx 'kernel.unprivileged_bpf_disabled=1' \
 
 test -s "$bootfs/initramfs8"
 grep -qx 'auto_initramfs=1' "$bootfs/config.txt"
+if [[ $(grep -c '^camera_auto_detect=0$' "$bootfs/config.txt") -ne 1 ]]; then
+    echo "error: image does not disable camera auto-detection exactly once" >&2
+    exit 1
+fi
+if [[ $(grep -c '^dtoverlay=imx219$' "$bootfs/config.txt") -ne 1 ]]; then
+    echo "error: image does not enable the IMX219 sensor exactly once" >&2
+    exit 1
+fi
+if grep -qx 'dtoverlay=camera-gpio16-high-overlay' "$bootfs/config.txt"; then
+    echo "error: image enables the legacy camera GPIO16 overlay on V0.6" >&2
+    exit 1
+fi
 if [[ $image_profile == product ]]; then
     factory_bundle=/usr/share/cardputerzero/factory-data-v1.cp0backup
     test -s "$rootfs$factory_bundle"

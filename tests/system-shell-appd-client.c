@@ -33,6 +33,11 @@ int cp0_appd_test_parse_device_settings_response(
 int cp0_appd_test_parse_media_action_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *expected_action, char app_id[CP0_APP_ID_BYTES]);
+void cp0_appd_test_convert_xrgb8888_to_rgb565_le(
+    const uint32_t *source, unsigned char *destination, size_t pixel_count);
+int cp0_appd_test_parse_screenshot_import_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    uint64_t *photo_id);
 
 int main(void)
 {
@@ -41,13 +46,13 @@ int main(void)
         "\"status\":\"ok\",\"data\":{\"kind\":\"applications\","
         "\"apps\":[{\"app_id\":\"dev.cardputerzero.first\","
         "\"name\":\"First Card\",\"version\":\"1.0.0\","
-        "\"display\":\"standard\",\"running\":false,"
+        "\"display\":\"standard\",\"running\":false,\"removable\":true,"
         "\"installed_at_unix_seconds\":1722470400,"
         "\"package_bytes\":65536,\"data_bytes\":4096,"
         "\"permissions\":[\"network.client\",\"camera.capture\"]},{"
         "\"app_id\":\"dev.cardputerzero.second\","
         "\"name\":\"Second Card\",\"version\":\"2.1.0\","
-        "\"display\":\"immersive\",\"running\":true,"
+        "\"display\":\"immersive\",\"running\":true,\"removable\":false,"
         "\"installed_at_unix_seconds\":1722470500,"
         "\"package_bytes\":1000,\"data_bytes\":2000,"
         "\"permissions\":[]}],"
@@ -61,14 +66,14 @@ int main(void)
                &next_offset) == 0);
     assert(count == 2 && has_next && next_offset == 10);
     assert(strcmp(apps[0].name, "First Card") == 0);
-    assert(!apps[0].running && !apps[0].immersive);
+    assert(!apps[0].running && apps[0].removable && !apps[0].immersive);
     assert(apps[0].installed_at_unix_seconds == 1722470400);
     assert(apps[0].package_bytes == 65536 && apps[0].data_bytes == 4096);
     assert(apps[0].permissions ==
            (CP0_APP_PERMISSION_NETWORK_CLIENT |
             CP0_APP_PERMISSION_CAMERA_CAPTURE));
     assert(strcmp(apps[1].version, "2.1.0") == 0);
-    assert(apps[1].running && apps[1].immersive);
+    assert(apps[1].running && !apps[1].removable && apps[1].immersive);
     assert(cp0_appd_test_parse_app_page(
                page, strlen(page), 8, 8, apps, 2, &count, &has_next,
                &next_offset) < 0);
@@ -81,7 +86,7 @@ int main(void)
         "\"status\":\"ok\",\"data\":{\"kind\":\"applications\","
         "\"apps\":[{\"app_id\":\"dev.cardputerzero.bad\","
         "\"name\":\"Bad\",\"version\":\"1.0.0\","
-        "\"display\":\"overlay\",\"running\":true,"
+        "\"display\":\"overlay\",\"running\":true,\"removable\":true,"
         "\"installed_at_unix_seconds\":1,\"package_bytes\":1,"
         "\"data_bytes\":0,\"permissions\":[]}],"
         "\"next_offset\":null}}}";
@@ -287,5 +292,40 @@ int main(void)
     assert(cp0_appd_test_parse_media_action_response(
                media_extra, strlen(media_extra), 20, "play-pause",
                media_app_id) == CP0_MEDIA_DISPATCH_FAILED);
+
+    static const uint32_t xrgb[] = {
+        0x00000000U,
+        0x00ffffffU,
+        0x00ff0000U,
+        0x0000ff00U,
+        0x000000ffU,
+    };
+    static const unsigned char expected_rgb565[] = {
+        0x00, 0x00, 0xff, 0xff, 0x00, 0xf8, 0xe0, 0x07, 0x1f, 0x00,
+    };
+    unsigned char rgb565[sizeof(expected_rgb565)];
+    cp0_appd_test_convert_xrgb8888_to_rgb565_le(
+        xrgb, rgb565, sizeof(xrgb) / sizeof(xrgb[0]));
+    assert(memcmp(rgb565, expected_rgb565, sizeof(rgb565)) == 0);
+
+    static const char screenshot_imported[] =
+        "{\"protocol_version\":2,\"request_id\":21,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"screenshot-imported\","
+        "\"photo_id\":1722470400123}}}";
+    static const char screenshot_extra[] =
+        "{\"protocol_version\":2,\"request_id\":21,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"screenshot-imported\","
+        "\"photo_id\":1722470400123,\"path\":\"/host/leak\"}}}";
+    uint64_t photo_id = 0;
+    assert(cp0_appd_test_parse_screenshot_import_response(
+               screenshot_imported, strlen(screenshot_imported), 21,
+               &photo_id) == 0);
+    assert(photo_id == 1722470400123ULL);
+    assert(cp0_appd_test_parse_screenshot_import_response(
+               screenshot_imported, strlen(screenshot_imported), 22,
+               &photo_id) < 0);
+    assert(cp0_appd_test_parse_screenshot_import_response(
+               screenshot_extra, strlen(screenshot_extra), 21, &photo_id) <
+           0);
     return 0;
 }

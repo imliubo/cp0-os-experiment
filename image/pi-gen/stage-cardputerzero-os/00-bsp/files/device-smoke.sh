@@ -125,13 +125,19 @@ else
     fail i2c-bus "kernel i2c-1 bus missing"
 fi
 
-for node in /dev/spidev0.1 /dev/video0; do
-    if [[ -e "$node" ]]; then
-        pass "device-${node##*/}" "$node"
-    else
-        warn "device-${node##*/}" "$node missing"
-    fi
-done
+if [[ -e /dev/spidev0.1 ]]; then
+    pass device-spidev0.1 /dev/spidev0.1
+else
+    warn device-spidev0.1 "/dev/spidev0.1 missing"
+fi
+
+camera_sensor=$(find /sys/bus/i2c/drivers/imx219 -mindepth 1 -maxdepth 1 \
+    -type l -name '*-0010' -print -quit 2>/dev/null || true)
+if [[ -n "$camera_sensor" ]]; then
+    pass camera-sensor "IMX219 bound at $(basename "$camera_sensor")"
+else
+    fail camera-sensor "IMX219 is not bound to an I2C device"
+fi
 
 if command -v systemd-analyze >/dev/null; then
     boot_time=$(systemd-analyze 2>/dev/null | tr '\n' ' ')

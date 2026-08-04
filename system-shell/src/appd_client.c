@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
@@ -20,6 +21,10 @@
 #define CP0_APPD_JSON_TOKENS 384U
 #define CP0_APPD_PAGE_SIZE 8U
 #define CP0_APPD_TASK_PAGE_SIZE 10U
+#define CP0_SCREENSHOT_WIDTH 320U
+#define CP0_SCREENSHOT_HEIGHT 170U
+#define CP0_SCREENSHOT_PIXELS (CP0_SCREENSHOT_WIDTH * CP0_SCREENSHOT_HEIGHT)
+#define CP0_SCREENSHOT_RGB565_BYTES (CP0_SCREENSHOT_PIXELS * 2U)
 
 static uint64_t next_request_id = 1;
 
@@ -37,9 +42,52 @@ static int write_all(int descriptor, const char *buffer, size_t length)
     return 0;
 }
 
-static int exchange(const char *request, size_t request_length, char *response,
-                    size_t response_capacity, size_t *response_length,
-                    unsigned int timeout_ms)
+static int write_request_with_fd(int socket_descriptor, const char *request,
+                                 size_t request_length, int passed_descriptor)
+{
+    if (passed_descriptor < 0)
+        return write_all(socket_descriptor, request, request_length);
+
+    struct iovec vector = {
+        .iov_base = (void *)request,
+        .iov_len = request_length,
+    };
+    union {
+        struct cmsghdr align;
+        unsigned char bytes[CMSG_SPACE(sizeof(int))];
+    } control = {0};
+    struct msghdr message = {
+        .msg_iov = &vector,
+        .msg_iovlen = 1,
+        .msg_control = control.bytes,
+        .msg_controllen = sizeof(control.bytes),
+    };
+    struct cmsghdr *header = CMSG_FIRSTHDR(&message);
+    if (header == NULL)
+        return -1;
+    header->cmsg_level = SOL_SOCKET;
+    header->cmsg_type = SCM_RIGHTS;
+    header->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(header), &passed_descriptor, sizeof(passed_descriptor));
+
+    ssize_t count;
+    do {
+#ifdef MSG_NOSIGNAL
+        count = sendmsg(socket_descriptor, &message, MSG_NOSIGNAL);
+#else
+        count = sendmsg(socket_descriptor, &message, 0);
+#endif
+    } while (count < 0 && errno == EINTR);
+    if (count <= 0 || (size_t)count > request_length)
+        return -1;
+    return write_all(socket_descriptor, request + count,
+                     request_length - (size_t)count);
+}
+
+static int exchange_internal(const char *request, size_t request_length,
+                             char *response, size_t response_capacity,
+                             size_t *response_length, unsigned int timeout_ms,
+                             int passed_descriptor)
 {
     const struct timeval timeout = {
         .tv_sec = (time_t)(timeout_ms / 1000U),
@@ -69,7 +117,8 @@ static int exchange(const char *request, size_t request_length, char *response,
 #endif
     if (connect(descriptor, (const struct sockaddr *)&address,
                 address_length) != 0 ||
-        write_all(descriptor, request, request_length) != 0)
+        write_request_with_fd(descriptor, request, request_length,
+                              passed_descriptor) != 0)
         goto cleanup;
 
     while (length < response_capacity - 1U) {
@@ -96,6 +145,15 @@ cleanup:
     if (descriptor >= 0)
         close(descriptor);
     return result;
+}
+
+static int exchange(const char *request, size_t request_length, char *response,
+                    size_t response_capacity, size_t *response_length,
+                    unsigned int timeout_ms)
+{
+    return exchange_internal(request, request_length, response,
+                             response_capacity, response_length, timeout_ms,
+                             -1);
 }
 
 static int parse_success(const char *document, size_t length,
@@ -243,6 +301,7 @@ static int parse_app_page(const char *response, size_t response_length,
         int item = cp0_json_array_get(tokens, token_count, array, index);
         struct cp0_app_summary decoded = {0};
         int running;
+        int removable;
         int display;
         int installed_at;
         int package_bytes;
@@ -260,6 +319,8 @@ static int parse_app_page(const char *response, size_t response_length,
             return -1;
         running = cp0_json_object_get(response, tokens, token_count, item,
                                       "running");
+        removable = cp0_json_object_get(response, tokens, token_count, item,
+                                        "removable");
         display = cp0_json_object_get(response, tokens, token_count, item,
                                       "display");
         installed_at = cp0_json_object_get(response, tokens, token_count, item,
@@ -270,9 +331,11 @@ static int parse_app_page(const char *response, size_t response_length,
                                          "data_bytes");
         permissions = cp0_json_object_get(response, tokens, token_count, item,
                                           "permissions");
-        if (running < 0 || display < 0 || installed_at < 0 ||
+        if (running < 0 || removable < 0 || display < 0 || installed_at < 0 ||
             package_bytes < 0 || data_bytes < 0 || permissions < 0 ||
             !cp0_json_get_bool(response, &tokens[running], &decoded.running) ||
+            !cp0_json_get_bool(response, &tokens[removable],
+                               &decoded.removable) ||
             !cp0_json_get_u64(response, &tokens[installed_at],
                               &decoded.installed_at_unix_seconds) ||
             !cp0_json_get_u64(response, &tokens[package_bytes],
@@ -960,7 +1023,137 @@ int cp0_appd_dispatch_media_action(enum cp0_media_action action,
                                        actions[action], app_id);
 }
 
+static void convert_xrgb8888_to_rgb565_le(const uint32_t *source,
+                                          unsigned char *destination,
+                                          size_t pixel_count)
+{
+    for (size_t index = 0; index < pixel_count; index++) {
+        uint32_t pixel = source[index];
+        uint16_t rgb565 = (uint16_t)(((pixel >> 8U) & 0xf800U) |
+                                     ((pixel >> 5U) & 0x07e0U) |
+                                     ((pixel >> 3U) & 0x001fU));
+        destination[index * 2U] = (unsigned char)(rgb565 & 0xffU);
+        destination[index * 2U + 1U] = (unsigned char)(rgb565 >> 8U);
+    }
+}
+
+static int parse_screenshot_import_response(const char *response,
+                                            size_t response_length,
+                                            uint64_t request_id,
+                                            uint64_t *photo_id)
+{
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    size_t token_count;
+    int data;
+
+    if (photo_id == NULL ||
+        parse_success(response, response_length, request_id, tokens,
+                      &token_count, &data) != 0 ||
+        tokens[data].children != 4)
+        return -1;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int id = cp0_json_object_get(response, tokens, token_count, data,
+                                 "photo_id");
+    uint64_t decoded_id;
+    if (kind < 0 || id < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind],
+                                "screenshot-imported") ||
+        !cp0_json_get_u64(response, &tokens[id], &decoded_id) ||
+        decoded_id == 0)
+        return -1;
+    *photo_id = decoded_id;
+    return 0;
+}
+
+#ifdef __linux__
+static int sealed_screenshot_descriptor(const uint32_t *pixels)
+{
+    int writable = memfd_create("cp0-screenshot", MFD_CLOEXEC |
+                                                    MFD_ALLOW_SEALING);
+    int read_only = -1;
+    void *mapping = MAP_FAILED;
+    char path[64];
+
+    if (writable < 0 ||
+        ftruncate(writable, (off_t)CP0_SCREENSHOT_RGB565_BYTES) != 0)
+        goto cleanup;
+    mapping = mmap(NULL, CP0_SCREENSHOT_RGB565_BYTES, PROT_READ | PROT_WRITE,
+                   MAP_SHARED, writable, 0);
+    if (mapping == MAP_FAILED)
+        goto cleanup;
+    convert_xrgb8888_to_rgb565_le(pixels, mapping, CP0_SCREENSHOT_PIXELS);
+    if (munmap(mapping, CP0_SCREENSHOT_RGB565_BYTES) != 0)
+        goto cleanup;
+    mapping = MAP_FAILED;
+    int seals = F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE;
+    if (fcntl(writable, F_ADD_SEALS, seals) != 0)
+        goto cleanup;
+    int length = snprintf(path, sizeof(path), "/proc/self/fd/%d", writable);
+    if (length <= 0 || (size_t)length >= sizeof(path))
+        goto cleanup;
+    read_only = open(path, O_RDONLY | O_CLOEXEC);
+
+cleanup:
+    if (mapping != MAP_FAILED)
+        munmap(mapping, CP0_SCREENSHOT_RGB565_BYTES);
+    if (writable >= 0)
+        close(writable);
+    return read_only;
+}
+#endif
+
+int cp0_appd_import_screenshot(const uint32_t *xrgb8888, size_t pixel_count,
+                               uint64_t *photo_id)
+{
+    if (xrgb8888 == NULL || pixel_count != CP0_SCREENSHOT_PIXELS ||
+        photo_id == NULL)
+        return -1;
+#ifdef __linux__
+    char request[256];
+    char response[CP0_APPD_FRAME_BYTES];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int descriptor = sealed_screenshot_descriptor(xrgb8888);
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"import-screenshot\"}}\n",
+        (unsigned long long)request_id);
+    int result = -1;
+
+    if (descriptor >= 0 && request_length > 0 &&
+        (size_t)request_length < sizeof(request) &&
+        exchange_internal(request, (size_t)request_length, response,
+                          sizeof(response), &response_length, 5000,
+                          descriptor) == 0)
+        result = parse_screenshot_import_response(
+            response, response_length, request_id, photo_id);
+    if (descriptor >= 0)
+        close(descriptor);
+    return result;
+#else
+    (void)xrgb8888;
+    (void)photo_id;
+    errno = ENOTSUP;
+    return -1;
+#endif
+}
+
 #ifdef CP0_APPD_CLIENT_TEST
+void cp0_appd_test_convert_xrgb8888_to_rgb565_le(
+    const uint32_t *source, unsigned char *destination, size_t pixel_count)
+{
+    convert_xrgb8888_to_rgb565_le(source, destination, pixel_count);
+}
+
+int cp0_appd_test_parse_screenshot_import_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    uint64_t *photo_id)
+{
+    return parse_screenshot_import_response(response, response_length,
+                                            request_id, photo_id);
+}
+
 int cp0_appd_test_parse_app_page(
     const char *response, size_t response_length, uint64_t request_id,
     uint16_t offset, struct cp0_app_summary *apps, size_t capacity,

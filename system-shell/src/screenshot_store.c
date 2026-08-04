@@ -3,7 +3,6 @@
 
 #include "cp0_screenshot_store.h"
 
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <png.h>
@@ -15,70 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define CP0_SCREENSHOT_SCAN_MAX 256U
-
 static unsigned int screenshot_serial;
-
-static bool screenshot_name(const char *name)
-{
-    size_t length;
-
-    if (name == NULL || strncmp(name, "cp0-", 4) != 0)
-        return false;
-    length = strlen(name);
-    return length > 8 && length < CP0_SCREENSHOT_NAME_MAX &&
-           strcmp(name + length - 4, ".png") == 0;
-}
-
-static int compare_names(const void *left, const void *right)
-{
-    return strcmp(left, right);
-}
-
-static int prune_screenshots(int directory_fd)
-{
-    char names[CP0_SCREENSHOT_SCAN_MAX][CP0_SCREENSHOT_NAME_MAX];
-    int scan_fd = dup(directory_fd);
-    DIR *directory;
-    struct dirent *entry;
-    size_t count = 0;
-
-    if (scan_fd < 0)
-        return -1;
-    directory = fdopendir(scan_fd);
-    if (directory == NULL) {
-        close(scan_fd);
-        return -1;
-    }
-    errno = 0;
-    while ((entry = readdir(directory)) != NULL) {
-        if (!screenshot_name(entry->d_name))
-            continue;
-        if (count == CP0_SCREENSHOT_SCAN_MAX) {
-            closedir(directory);
-            errno = EOVERFLOW;
-            return -1;
-        }
-        memcpy(names[count], entry->d_name, strlen(entry->d_name) + 1U);
-        count++;
-    }
-    if (errno != 0) {
-        int saved_errno = errno;
-        closedir(directory);
-        errno = saved_errno;
-        return -1;
-    }
-    if (closedir(directory) < 0)
-        return -1;
-
-    qsort(names, count, sizeof(names[0]), compare_names);
-    for (size_t index = 0; index + CP0_SCREENSHOT_MAX_FILES < count;
-         index++) {
-        if (unlinkat(directory_fd, names[index], 0) < 0 && errno != ENOENT)
-            return -1;
-    }
-    return fsync(directory_fd);
-}
 
 static int write_png(FILE *file, const uint32_t *pixels)
 {
@@ -212,8 +148,6 @@ int cp0_screenshot_store_save(
     if (unlinkat(directory_fd, temporary_name, 0) < 0)
         goto out;
     temporary_exists = false;
-    if (prune_screenshots(directory_fd) < 0)
-        goto out;
     snprintf(saved_name, CP0_SCREENSHOT_NAME_MAX, "%s", final_name);
     result = 0;
 

@@ -104,7 +104,7 @@ int main(int argc, char **argv)
                                      saved_name) == -1);
     assert(unlink(link_path) == 0);
 
-    for (size_t index = 0; index < CP0_SCREENSHOT_MAX_FILES + 3U; index++) {
+    for (size_t index = 0; index < 35U; index++) {
         pixels[0] = (uint32_t)index;
         assert(cp0_screenshot_store_save(directory, pixels,
                                          CP0_SCREENSHOT_WIDTH *
@@ -113,7 +113,7 @@ int main(int argc, char **argv)
         assert(strncmp(saved_name, "cp0-", 4) == 0);
         verify_png(directory, saved_name);
     }
-    assert(png_count(directory) == CP0_SCREENSHOT_MAX_FILES);
+    assert(png_count(directory) == 35U);
 
     DIR *stream = opendir(directory);
     struct dirent *entry;

@@ -8,7 +8,11 @@
 
 #define GUARD 0x5aa55aa5u
 #define BACKGROUND 0x000e1112u
+#define SELECTED 0x00232e29u
+#define TEXT 0x00f4f6f5u
 #define GREEN 0x0035d07fu
+#define YELLOW 0x00f2c14eu
+#define RED 0x00ef5b5bu
 
 struct guarded_frame {
     uint32_t before;
@@ -92,6 +96,7 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
 {
     static const struct cp0_ui_catalog_app apps[] = {
         {.running = false,
+         .removable = true,
          .immersive = false,
          .app_id = "dev.cardputerzero.first",
          .name = "First Card",
@@ -101,6 +106,7 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
          .data_bytes = 512U * 1024U,
          .permissions = (1U << 2) | (1U << 5)},
         {.running = true,
+         .removable = true,
          .immersive = true,
          .app_id = "dev.cardputerzero.second",
          .name = "Second Card",
@@ -1562,11 +1568,13 @@ int main(int argc, char **argv)
     cp0_ui_set_local_simulation(&ui, true);
     static const struct cp0_ui_catalog_app catalog[] = {
         {.running = false,
+         .removable = true,
          .immersive = false,
          .app_id = "dev.cardputerzero.first",
          .name = "First Card",
          .permissions = UINT16_MAX},
         {.running = true,
+         .removable = true,
          .immersive = true,
          .app_id = "dev.cardputerzero.second",
          .name = "Second Card",
@@ -1591,12 +1599,25 @@ int main(int argc, char **argv)
     assert(cp0_ui_selected_app_token(&ui) == 42);
     cp0_ui_set_app_display_mode(&ui, 42, false);
     assert(!cp0_ui_selected_app_is_immersive(&ui));
+    assert(cp0_ui_handle_action(&ui, CP0_UI_STOP_SELECTED) ==
+           CP0_UI_EVENT_STOP_APP);
+    cp0_ui_set_app_state(&ui, "dev.cardputerzero.second",
+                         CP0_UI_APP_STARTING);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_STOP_SELECTED) ==
+           CP0_UI_EVENT_STOP_APP);
+    cp0_ui_set_app_state(&ui, "dev.cardputerzero.second", CP0_UI_APP_RUNNING);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_OPEN_APP);
     render(&ui, frame);
     assert(pixel(frame, 8, 71) == GREEN);
     cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
     assert(ui.app_detail);
+    assert(ui.app_detail_page == 0);
+    cp0_ui_handle_action(&ui, CP0_UI_LEFT);
+    assert(ui.app_detail_page == 3);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_STOP_APP);
+    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
     assert(ui.app_detail_page == 0);
     cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
     cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
@@ -1619,6 +1640,8 @@ int main(int argc, char **argv)
     assert(ui.app_count == 2);
     assert(cp0_ui_selected_app_token(&ui) == 0);
     assert(cp0_ui_selected_app_state(&ui) == CP0_UI_APP_STOPPED);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_STOP_SELECTED) ==
+           CP0_UI_EVENT_NONE);
     cp0_ui_remove_app(&ui, 99);
     assert(ui.app_count == 2);
 
@@ -1738,8 +1761,21 @@ int main(int argc, char **argv)
     assert(cp0_ui_selected_task_runtime_generation(&ui) == 19);
     assert(cp0_ui_selected_task_account_uid(&ui) == 20001);
     assert(cp0_ui_selected_task_is_immersive(&ui));
+    assert(ui.task_action_selected == 0);
+    render(&ui, frame);
+    assert(pixel(frame, 183, 126) == GREEN);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_STOP_SELECTED) ==
+           CP0_UI_EVENT_CLOSE_TASK);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_ACTIVATE_TASK);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(ui.task_action_selected == 1);
+    render(&ui, frame);
+    assert(pixel(frame, 183, 140) == RED);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_CLOSE_TASK);
+    cp0_ui_handle_action(&ui, CP0_UI_UP);
+    assert(ui.task_action_selected == 0);
     cp0_ui_handle_action(&ui, CP0_UI_LEFT);
     assert(cp0_ui_selected_task_id(&ui) == 8);
     cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
@@ -1747,10 +1783,12 @@ int main(int argc, char **argv)
     assert(cp0_ui_selected_task_id(&ui) == 10);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_ACTIVATE_TASK);
-    assert(cp0_ui_handle_action(&ui, CP0_UI_UP) ==
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_CLOSE_TASK);
     cp0_ui_sync_task_catalog(&ui, NULL, 0);
     assert(cp0_ui_selected_task_id(&ui) == 0);
+    assert(ui.task_action_selected == 0);
 
     static const struct cp0_ui_catalog_app many[] = {
         {.app_id = "dev.cardputerzero.a", .name = "A"},
@@ -1772,8 +1810,14 @@ int main(int argc, char **argv)
     cp0_ui_handle_action(&ui, CP0_UI_TOGGLE_APP_VIEW);
     assert(ui.app_grid_view && ui.app_selected == 5);
     render(&ui, frame);
-    assert(pixel(frame, 100, 102) == GREEN);
-    assert(pixel(frame, 84, 102) == 0x00f2c14eu);
+    assert(pixel(frame, 84, 102) == YELLOW);
+    assert(pixel(frame, 100, 105) == GREEN);
+    assert(pixel(frame, 10, 99) == BACKGROUND);
+    assert(pixel(frame, 90, 149) == SELECTED);
+    assert(pixel(frame, 117, 149) == TEXT);
+    assert(pixel(frame, 117, 155) == TEXT);
+    assert(pixel(frame, 117, 156) == SELECTED);
+    assert(pixel(frame, 117, 157) == YELLOW);
     cp0_ui_handle_action(&ui, CP0_UI_LEFT);
     assert(ui.app_selected == 4);
     cp0_ui_handle_action(&ui, CP0_UI_UP);
@@ -1807,7 +1851,7 @@ int main(int argc, char **argv)
         cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
     assert(ui.app_selected == 8);
     render(&ui, frame);
-    assert(pixel(frame, 8, 41) == 0x00f2c14eu);
+    assert(pixel(frame, 8, 40) == YELLOW);
 
     unsigned int original_brightness = ui.brightness_percent;
     cp0_ui_handle_action(&ui, CP0_UI_BRIGHTNESS_UP);
@@ -1961,6 +2005,23 @@ int main(int argc, char **argv)
     cp0_ui_handle_action(&uninstall_ui, CP0_UI_LEFT);
     assert(cp0_ui_handle_action(&uninstall_ui, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_UNINSTALL_APP);
+
+    static const struct cp0_ui_catalog_app built_in[] = {
+        {.running = false,
+         .removable = false,
+         .app_id = "dev.cardputerzero.gallery",
+         .name = "Gallery"},
+    };
+    cp0_ui_init(&uninstall_ui);
+    cp0_ui_set_local_simulation(&uninstall_ui, true);
+    cp0_ui_sync_app_catalog(&uninstall_ui, built_in, 1, false);
+    cp0_ui_handle_action(&uninstall_ui, CP0_UI_ACCEPT);
+    for (unsigned int index = 0; index < 4; index++)
+        cp0_ui_handle_action(&uninstall_ui, CP0_UI_RIGHT);
+    cp0_ui_handle_action(&uninstall_ui, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&uninstall_ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_NONE);
+    assert(!uninstall_ui.app_uninstall_confirm);
 
     assert(cp0_ui_show_permission(
         &ui, 77, "Hello Card", "camera.capture",

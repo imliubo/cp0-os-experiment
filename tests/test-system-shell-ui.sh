@@ -133,13 +133,13 @@ else
     actual=$(cd "$snapshot_dir" && shasum -a 256 $snapshot_files)
 fi
 
-expected='b252a095d38eac93567ff1d5c8d2fa8edee762151cc72b442616ae59a60eeb3f  app-actions.ppm
+expected='3df671c5d56c7d6a771951e7a435fed3c4ab8f1ce6034787fc1b3751cc3ac939  app-actions.ppm
 7449565bc568403d51d8dadc9743193a8c97f85d32feb772d263863a83bcedcc  app-overview.ppm
 e5854e36cef4114241b0ba61cd4a7c4192e023726388c63357f31d27f982ff5f  app-permissions.ppm
 bc829a4605fdee296b28bf5949812daa3a39b455929ba0201987d856d5d1a3a2  app-storage.ppm
 d5cf7400f7a9475a611ba8bc19b3316ba18e0ee26597785308726f33a1b9d837  app-uninstall.ppm
 e690bfa55247afebf1858fbf0151e805f7446ed1d5ae990f5f0680f8b4b03e5a  apps-empty.ppm
-c490d13466a3a36cf43e4492f5d58f1f743d80ede8849546c422c6b8019e1eb7  apps-grid.ppm
+12d3fb77ad8f451f5f9939b27c60506953f590b7ac3400966dbd5555a3f5e287  apps-grid.ppm
 6c1d96d72e1ead787952c8a58a2b8271e4a8f308488a0a461c17cd19ce77649a  apps.ppm
 51d593360c9ec9f091537181168bc45be67270e3a09969a7b1d94ee78c74bc39  device-diagnostics.ppm
 6b3086625deb17dcad52cff31bd44c781f21535b21a12570bdbd7d4a830ca985  device-power.ppm
@@ -151,7 +151,7 @@ be31b0f7cee2ecde9c9d6b5521af41686019f0873fb7f88398174976db85f434  document.ppm
 d0f6c4fb530e418af657af2cf5297d52cbe42b612eb1005537fc855c63be6dae  network-detail.ppm
 efa8b35b22372eaf879a4e47ad5b5b7c30247ce008738a979fddabb78b389c37  network-offline.ppm
 653692ea351514d9813b17ca261790d546c45404bf95ce5a6056e993acc38f6c  network.ppm
-9339f99f3b7134f1df3089248ecfacc60a7f461a01971eda10c780360ac2f1ec  notification.ppm
+313b696906f097b6ea90845ed321e76c2762e204b05bfa8bec7e70c3ba79c397  notification.ppm
 5ad4e7360ef38b27d0a416e62840e42b8aa88aaccdfe7aa54da944659b261728  permission.ppm
 8b0cfe3da3a68f5c4ebd8138eb56c024a06c4261581430a1ab3bf5e0a62d082b  power.ppm
 3decae67fc0f937c1c97d6585395a98525233494ae7d888cc50cdea2a6da3cc5  settings-apps-privacy.ppm
@@ -213,7 +213,7 @@ fc96fcedf7693abcd6b3b6aa2b50dd93f627b083825a8ffd9f943dbafdba2ccd  system-media-b
 7f9cf7b91d90ab5402bc3568c00ac40bdb905b7eabe280668a980dd8caee7990  system-screenshot-unavailable.ppm
 40282b5968d09bb496b93f2da90ead99dc0c943ed7241387c7035d6e64c25245  theme-high-contrast.ppm
 fac71c6343c1f694fd23b2c617e5da4ad7c87f53c0bc76b6260fddf2be6ce7ee  theme-light.ppm
-879c45ff089f2ef29fbbeb019199dfd4797d06c9bd4e01590b47d1c381f95d80  tasks.ppm'
+c82049af1e7242cff688e07538ab3f61e786e35992950d1b7ce2eaff612557c5  tasks.ppm'
 
 if [ "$actual" != "$expected" ]; then
     echo "System Shell screenshot regression:" >&2

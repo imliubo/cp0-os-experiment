@@ -863,6 +863,14 @@ static void draw_app_icon(struct canvas *canvas, const struct cp0_ui_app *app,
 
 static void draw_apps_grid(struct canvas *canvas, const struct cp0_ui *ui)
 {
+    enum {
+        columns = 4,
+        card_width = 72,
+        card_height = 57,
+        column_stride = 76,
+        row_stride = 62,
+        label_maximum = 10,
+    };
     unsigned int first = (ui->app_selected / 8U) * 8U;
     unsigned int visible = ui->app_count - first;
     if (visible > 8U)
@@ -870,20 +878,27 @@ static void draw_apps_grid(struct canvas *canvas, const struct cp0_ui *ui)
 
     for (unsigned int offset = 0; offset < visible; offset++) {
         unsigned int index = first + offset;
-        int x = 8 + (int)(offset % 4U) * 76;
-        int y = 41 + (int)(offset / 4U) * 58;
+        int x = 8 + (int)(offset % columns) * column_stride;
+        int y = 40 + (int)(offset / columns) * row_stride;
         bool selected = index == ui->app_selected;
         uint32_t state_color =
             ui->apps[index].state == CP0_UI_APP_RUNNING ? COLOR_GREEN
                                                         : COLOR_MUTED;
-        fill_rect(canvas, x, y, 72, 55,
+        fill_rect(canvas, x, y, card_width, card_height,
                   selected ? COLOR_SELECTED : COLOR_SURFACE);
         if (selected)
-            stroke_rect(canvas, x, y, 72, 55, 2, COLOR_YELLOW);
+            stroke_rect(canvas, x, y, card_width, card_height, 2,
+                        COLOR_YELLOW);
         stroke_rect(canvas, x + 16, y + 3, 40, 40, 2, state_color);
         draw_app_icon(canvas, &ui->apps[index], x + 16, y + 3,
                       selected ? COLOR_TEXT : COLOR_MUTED);
-        draw_text_slice(canvas, x + 6, y + 47, ui->apps[index].name, 0, 10,
+        size_t label_length = strlen(ui->apps[index].name);
+        if (label_length > label_maximum)
+            label_length = label_maximum;
+        int label_width = (int)label_length * 6;
+        int label_x = x + (card_width - label_width) / 2;
+        draw_text_slice(canvas, label_x, y + 47, ui->apps[index].name, 0,
+                        label_maximum,
                         selected ? COLOR_TEXT : COLOR_MUTED);
     }
     if (ui->app_count > 8U) {
@@ -1057,7 +1072,10 @@ static void draw_app_detail(struct canvas *canvas, const struct cp0_ui *ui)
             snprintf(value, sizeof(value), "%u TOTAL", count);
         draw_text(canvas, 20, 151, value, 1, COLOR_MUTED);
     } else {
-        static const char *actions[] = {"OPEN / STOP", "UNINSTALL"};
+        bool can_stop = app->state == CP0_UI_APP_RUNNING ||
+                        app->state == CP0_UI_APP_STARTING;
+        const char *actions[] = {can_stop ? "STOP APP" : "OPEN APP",
+                                 app->removable ? "UNINSTALL" : "BUILT-IN"};
         for (unsigned int row = 0; row < 2; row++) {
             int y = 45 + (int)row * 43;
             bool selected = ui->app_action_selected == row;
@@ -1067,14 +1085,17 @@ static void draw_app_detail(struct canvas *canvas, const struct cp0_ui *ui)
                         selected ? (row == 1 ? COLOR_RED : COLOR_GREEN)
                                  : COLOR_MUTED);
             draw_text(canvas, 40, y + 12, actions[row], 1,
-                      selected ? COLOR_TEXT : COLOR_MUTED);
+                      row == 1 && !app->removable
+                          ? COLOR_MUTED
+                          : (selected ? COLOR_TEXT : COLOR_MUTED));
         }
         draw_text(canvas, 24, 139,
-                  app->state == CP0_UI_APP_RUNNING
-                      ? "STOP APP BEFORE UNINSTALL"
-                      : "PRIVATE DATA WILL BE RETAINED",
-                  1, app->state == CP0_UI_APP_RUNNING ? COLOR_YELLOW
-                                                      : COLOR_MUTED);
+                  !app->removable
+                      ? "PRODUCTION SYSTEM APP"
+                      : (can_stop
+                             ? "STOP APP BEFORE UNINSTALL"
+                             : "PRIVATE DATA WILL BE RETAINED"),
+                  1, app->removable && can_stop ? COLOR_YELLOW : COLOR_MUTED);
     }
     snprintf(value, sizeof(value), "%u/4", ui->app_detail_page + 1U);
     draw_text(canvas, 286, 154, value, 1, COLOR_MUTED);
@@ -1750,7 +1771,8 @@ static const char *task_state_text(enum cp0_ui_task_state state)
 
 static void draw_task_card(struct canvas *canvas,
                            const struct cp0_ui_task *task, int x, int y,
-                           int width, int thumbnail_height, bool selected)
+                           int width, int thumbnail_height, bool selected,
+                           unsigned int action_selected)
 {
     int card_height = thumbnail_height + 31;
     fill_rect(canvas, x, y, width, card_height, COLOR_SURFACE);
@@ -1758,15 +1780,36 @@ static void draw_task_card(struct canvas *canvas,
                         thumbnail_height);
     stroke_rect(canvas, x, y, width, card_height, selected ? 2 : 1,
                 selected ? COLOR_GREEN : COLOR_MUTED);
-    draw_text_slice(canvas, x + 7, y + thumbnail_height + 9, task->name, 0,
-                    selected ? 20 : 15, selected ? COLOR_TEXT : COLOR_MUTED);
-    if (selected)
-        draw_text(canvas, x + 7, y + thumbnail_height + 21,
-                  task_state_text(task->state), 1,
-                  task->state == CP0_UI_TASK_CRASHED ? COLOR_RED
-                  : task->state == CP0_UI_TASK_CHECKPOINTED
-                      ? COLOR_YELLOW
-                      : COLOR_GREEN);
+    if (!selected) {
+        draw_text_slice(canvas, x + 7, y + thumbnail_height + 9, task->name, 0,
+                        15, COLOR_MUTED);
+        return;
+    }
+
+    const char *state = task_state_text(task->state);
+    draw_text_slice(canvas, x + 7, y + thumbnail_height + 6, task->name, 0,
+                    15, COLOR_TEXT);
+    draw_text(canvas, x + 7, y + thumbnail_height + 19, state, 1,
+              task->state == CP0_UI_TASK_CRASHED ? COLOR_RED
+              : task->state == CP0_UI_TASK_CHECKPOINTED
+                  ? COLOR_YELLOW
+                  : COLOR_GREEN);
+
+    static const char *actions[] = {"OPEN", "STOP"};
+    for (unsigned int index = 0; index < 2; index++) {
+        int action_x = x + 107;
+        int action_y = y + thumbnail_height + 3 + (int)index * 14;
+        bool action_active = action_selected == index;
+        fill_rect(canvas, action_x, action_y, 54, 12,
+                  action_active ? COLOR_SELECTED : COLOR_BAR);
+        stroke_rect(canvas, action_x, action_y, 54, 12,
+                    action_active ? 2 : 1,
+                    action_active
+                        ? (index == 0 ? COLOR_GREEN : COLOR_RED)
+                        : COLOR_MUTED);
+        draw_text(canvas, action_x + 15, action_y + 3, actions[index], 1,
+                  action_active ? COLOR_TEXT : COLOR_MUTED);
+    }
 }
 
 static void draw_tasks_page(struct canvas *canvas, const struct cp0_ui *ui)
@@ -1782,12 +1825,12 @@ static void draw_tasks_page(struct canvas *canvas, const struct cp0_ui *ui)
 
     if (ui->task_selected > 0)
         draw_task_card(canvas, &ui->tasks[ui->task_selected - 1], -86, 47,
-                       148, 78, false);
+                       148, 78, false, 0);
     if (ui->task_selected + 1 < ui->task_count)
         draw_task_card(canvas, &ui->tasks[ui->task_selected + 1], 258, 47,
-                       148, 78, false);
+                       148, 78, false, 0);
     draw_task_card(canvas, &ui->tasks[ui->task_selected], 76, 38, 168, 85,
-                   true);
+                   true, ui->task_action_selected);
 }
 
 static const char *settings_state(bool enabled, bool allowed)
@@ -3670,6 +3713,7 @@ void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
     for (size_t source = 0; source < app_count; source++) {
         struct cp0_ui_app app = {
             .installed = true,
+            .removable = apps[source].removable,
             .immersive = apps[source].immersive,
             .permissions = apps[source].permissions,
             .installed_at_unix_seconds = apps[source].installed_at_unix_seconds,
@@ -3716,6 +3760,7 @@ void cp0_ui_sync_task_catalog(struct cp0_ui *ui,
                               size_t task_count)
 {
     uint64_t selected_id = cp0_ui_selected_task_id(ui);
+    bool selected_preserved = false;
 
     if (ui == NULL || ui->tasks == NULL ||
         (tasks == NULL && task_count != 0))
@@ -3779,9 +3824,12 @@ void cp0_ui_sync_task_catalog(struct cp0_ui *ui,
     for (unsigned int index = 0; index < ui->task_count; index++) {
         if (ui->tasks[index].task_id == selected_id) {
             ui->task_selected = index;
+            selected_preserved = true;
             break;
         }
     }
+    if (!selected_preserved)
+        ui->task_action_selected = 0;
 }
 
 void cp0_ui_set_task_thumbnail(struct cp0_ui *ui, uint64_t task_id,
@@ -5496,26 +5544,39 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     }
 
     if (ui->screen == CP0_UI_TASKS) {
-        if (action == CP0_UI_LEFT && ui->task_selected > 0)
-            ui->task_selected--;
-        else if (action == CP0_UI_RIGHT &&
-                 ui->task_selected + 1 < ui->task_count)
-            ui->task_selected++;
-        else if (action == CP0_UI_ACCEPT && ui->task_count > 0)
-            return CP0_UI_EVENT_ACTIVATE_TASK;
-        else if (action == CP0_UI_UP && ui->task_count > 0)
+        if (action == CP0_UI_STOP_SELECTED && ui->task_count > 0)
             return CP0_UI_EVENT_CLOSE_TASK;
+        if (action == CP0_UI_LEFT && ui->task_selected > 0) {
+            ui->task_selected--;
+            ui->task_action_selected = 0;
+        } else if (action == CP0_UI_RIGHT &&
+                   ui->task_selected + 1 < ui->task_count) {
+            ui->task_selected++;
+            ui->task_action_selected = 0;
+        } else if (action == CP0_UI_UP && ui->task_count > 0) {
+            ui->task_action_selected = 0;
+        } else if (action == CP0_UI_DOWN && ui->task_count > 0) {
+            ui->task_action_selected = 1;
+        } else if (action == CP0_UI_ACCEPT && ui->task_count > 0) {
+            return ui->task_action_selected == 0
+                       ? CP0_UI_EVENT_ACTIVATE_TASK
+                       : CP0_UI_EVENT_CLOSE_TASK;
+        }
         return CP0_UI_EVENT_NONE;
     }
 
     if (ui->screen == CP0_UI_APPS) {
+        enum cp0_ui_app_state state = cp0_ui_selected_app_state(ui);
+        bool can_stop = state == CP0_UI_APP_RUNNING ||
+                        state == CP0_UI_APP_STARTING;
+        if (action == CP0_UI_STOP_SELECTED && can_stop)
+            return CP0_UI_EVENT_STOP_APP;
         if (ui->app_detail) {
-            enum cp0_ui_app_state state = cp0_ui_selected_app_state(ui);
-            if (action == CP0_UI_LEFT && ui->app_detail_page > 0) {
-                ui->app_detail_page--;
+            if (action == CP0_UI_LEFT) {
+                ui->app_detail_page = (ui->app_detail_page + 3U) % 4U;
                 ui->app_permission_offset = 0;
-            } else if (action == CP0_UI_RIGHT && ui->app_detail_page < 3) {
-                ui->app_detail_page++;
+            } else if (action == CP0_UI_RIGHT) {
+                ui->app_detail_page = (ui->app_detail_page + 1U) % 4U;
                 ui->app_permission_offset = 0;
             } else if (ui->app_detail_page == 2 && action == CP0_UI_UP &&
                        ui->app_permission_offset > 0) {
@@ -5534,13 +5595,14 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 ui->app_action_selected = 1;
             } else if (ui->app_detail_page == 3 && action == CP0_UI_ACCEPT &&
                        ui->app_action_selected == 1 &&
+                       ui->apps[ui->app_selected].removable &&
                        state != CP0_UI_APP_RUNNING &&
                        state != CP0_UI_APP_STARTING) {
                 ui->app_uninstall_confirm = true;
                 ui->dialog_selected = 1;
             } else if (ui->app_detail_page == 3 && action == CP0_UI_ACCEPT &&
                        ui->app_action_selected == 0 &&
-                       state == CP0_UI_APP_RUNNING) {
+                       can_stop) {
                 return CP0_UI_EVENT_STOP_APP;
             } else if (ui->app_detail_page == 3 && action == CP0_UI_ACCEPT &&
                        ui->app_action_selected == 0 &&

@@ -64,8 +64,9 @@ Left/Right changes bounded values only when a row is editable.
 - Per-app version, install time, package bytes, private-data bytes, display
   mode, lifecycle state and declared permissions.
 - F3 Tasks keeps one foreground view while presenting at most ten horizontally
-  stacked 160x85 cards. Left/Right selects, Enter activates, Up closes and
-  Esc/Home returns to the trusted Home surface.
+  stacked 160x85 cards. Left/Right selects a task, Up/Down selects its
+  OPEN/STOP action, Enter executes it, Space stops the selected task directly,
+  and Esc/Home returns to the trusted Home surface.
 - Task cards are ordered by most recent activation, while capacity eviction is
   strict creation-order FIFO. A checkpointed or crashed task remains an active
   logical task and blocks package replacement until explicitly closed.

@@ -24,6 +24,10 @@ for app_id in \
     dev.cardputerzero.stopwatch; do
     grep -q "$app_id" "$repo_root/config/builtin-apps.tsv"
 done
+grep -q 'dev.cardputerzero.camera' "$repo_root/crates/cp0-appd/src/lifecycle.rs"
+grep -q 'dev.cardputerzero.gallery' "$repo_root/crates/cp0-appd/src/lifecycle.rs"
+grep -q 'ProtectedBuiltin' "$repo_root/crates/cp0-appd/src/lifecycle.rs"
+grep -q 'removable: crate::is_removable_app' "$repo_root/crates/cp0-appd/src/server.rs"
 grep -q 'CP0_KEYBOARD_DIAGNOSTICS' "$build"
 grep -q 'examples/keyboard-diagnostics' "$build"
 grep -q '02-app-platform/payload' "$build"

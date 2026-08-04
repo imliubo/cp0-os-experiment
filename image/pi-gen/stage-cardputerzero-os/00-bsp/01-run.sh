@@ -103,6 +103,7 @@ boot_config="${ROOTFS_DIR}/boot/firmware/config.txt"
 cmdline="${ROOTFS_DIR}/boot/firmware/cmdline.txt"
 
 sed -i -E '/^dtoverlay=vc4-kms-v3d(,cma-[0-9]+)?[[:space:]]*$/d' "$boot_config"
+sed -i -E '/^camera_auto_detect=/d' "$boot_config"
 sed -i '/^gpu_mem=/d' "$boot_config"
 sed -i '/^gpu_mem_512=/d' "$boot_config"
 sed -i '/^# CardputerZero OS CM0 V0.6 BSP$/d' "$boot_config"
@@ -111,6 +112,7 @@ sed -i '/^# BEGIN CardputerZero OS BSP$/,/^# END CardputerZero OS BSP$/d' \
 for managed_line in \
     'enable_uart=1' \
     'dtoverlay=dwc2' \
+    'dtoverlay=imx219' \
     'dtoverlay=cardputerzero-v5-overlay' \
     'dtoverlay=bq27220_v5' \
     'dtoverlay=bmi270_bmm150_overlay' \
@@ -126,6 +128,8 @@ cat >>"$boot_config" <<'CONFIG'
 gpu_mem=64
 gpu_mem_512=64
 dtoverlay=vc4-kms-v3d,cma-64
+camera_auto_detect=0
+dtoverlay=imx219
 enable_uart=1
 dtoverlay=dwc2
 dtoverlay=cardputerzero-v5-overlay

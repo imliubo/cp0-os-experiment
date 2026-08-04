@@ -715,6 +715,7 @@ static void poll_app_catalog(struct shell *shell)
     for (size_t index = 0; index < list.count; index++) {
         catalog[index] = (struct cp0_ui_catalog_app){
             .running = list.apps[index].running,
+            .removable = list.apps[index].removable,
             .immersive = list.apps[index].immersive,
             .app_id = list.apps[index].app_id,
             .name = list.apps[index].name,
@@ -1576,8 +1577,8 @@ static void handle_capture_complete(void *data,
                                     struct weston_capture_source_v1 *source)
 {
     struct shell *shell = data;
-    char name[CP0_SCREENSHOT_NAME_MAX];
-    int result;
+    uint64_t photo_id = 0;
+    int import_result;
     (void)source;
 
     if (shell->capture_purpose == CAPTURE_TASK_THUMBNAIL) {
@@ -1589,15 +1590,17 @@ static void handle_capture_complete(void *data,
         return;
     }
 
-    result = cp0_screenshot_store_save(
-        CP0_SCREENSHOT_DIRECTORY, shell->screenshot_buffer.pixels,
-        CP0_SCREENSHOT_WIDTH * CP0_SCREENSHOT_HEIGHT, name);
-    if (result == 0)
-        fprintf(stderr, "system-shell: screenshot saved as %s\n", name);
+    import_result = cp0_appd_import_screenshot(
+        shell->screenshot_buffer.pixels,
+        CP0_SCREENSHOT_WIDTH * CP0_SCREENSHOT_HEIGHT, &photo_id);
+    if (import_result == 0)
+        fprintf(stderr,
+                "system-shell: screenshot imported into Gallery as %llu\n",
+                (unsigned long long)photo_id);
     else
-        fprintf(stderr, "system-shell: screenshot save failed: %s\n",
-                strerror(errno));
-    finish_screenshot_capture(shell, result == 0);
+        fprintf(stderr, "system-shell: screenshot Gallery import failed\n");
+
+    finish_screenshot_capture(shell, import_result == 0);
 }
 
 static void handle_capture_retry(void *data,
@@ -2686,6 +2689,9 @@ static bool translate_key(struct shell *shell, uint32_t key,
     case KEY_ENTER:
     case KEY_KPENTER:
         *action = CP0_UI_ACCEPT;
+        return true;
+    case KEY_SPACE:
+        *action = CP0_UI_STOP_SELECTED;
         return true;
     case KEY_ESC:
     case KEY_BACKSPACE:

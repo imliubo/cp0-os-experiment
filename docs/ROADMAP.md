@@ -231,6 +231,14 @@ Shell 和其他应用数据。
 - [ ] Phase 6L-G：经授权部署同版本 appd/Shell/compositor/Runtime bundle，正常重启后
   验证 F3、Intent、开发者安装/停止/卸载、11th-App、appd 重启和断电恢复；通过后才
   进入新镜像发布验收。
+- [x] Phase 6M-A：实现 Photo Library v2 分页索引、v1 原位迁移、单帧原子 blob、
+  appd 原子导入/删除事务、断电尾部恢复、storaged 启动清理、SD 系统保留空间和
+  Gallery 八张分页缓存；取消 32 张淘汰及 Shell PNG 重复副本。
+- [x] Phase 6M-B：在 appd 生命周期层保护 Camera/Gallery 不可卸载，并向 Shell 暴露
+  `removable` 元数据；Store 签名升级保持可用。
+- [ ] Phase 6M-C：实现独立于 Developer Mode/Owner Shell 的 Owner Photo Transfer，
+  包含独立配对密钥、限时 UI、只读分页/断点协议、`cp0ctl photos pull`、PNG/hash 和
+  V0.6 大图库验收；协议冻结见 `PHOTO-TRANSFER-V1.md`。
 - [x] 实现不接入当前启动链的 OS 发布元数据策略、rootfs/hash tree/FIT 摘要门禁、
   dm-verity 离线验证、三次启动回滚状态机、双副本撕裂写检测和 100 轮断电模型；
   RAUC CMS、签名 FIT 与硬件信任根仍是独立启用门禁。
