@@ -1,7 +1,6 @@
 #!/bin/bash -e
 
 payload="${STAGE_DIR}/02-app-platform/payload"
-hello_root="${ROOTFS_DIR}/var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0"
 keyboard_root="${ROOTFS_DIR}/var/lib/cardputerzero/apps/dev.cardputerzero.keyboard-diagnostics/0.1.0"
 image_profile=$(cat "${STAGE_DIR}/image-profile")
 access_profile=$(cat "${STAGE_DIR}/access-profile")
@@ -190,9 +189,17 @@ install -D -m 0755 "${payload}/diagnostics/device-store-acceptance.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-store-acceptance"
 install -D -m 0755 "${payload}/diagnostics/device-support-bundle.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-support-bundle"
-install -D -m 0644 "${payload}/hello/app.json" "${hello_root}/app.json"
-install -D -m 0644 "${payload}/hello/bin/hello-card.wasm" \
-    "${hello_root}/bin/hello-card.wasm"
+install -D -o root -g root -m 0644 "${payload}/builtin-apps.tsv" \
+    "${ROOTFS_DIR}/usr/share/cardputerzero/builtin-apps.tsv"
+while IFS=$'\t' read -r example app_id version artifact entrypoint; do
+    [[ -n $example && ${example:0:1} != '#' ]] || continue
+    source_root="${payload}/apps/${app_id}/${version}"
+    destination_root="${ROOTFS_DIR}/var/lib/cardputerzero/apps/${app_id}/${version}"
+    install -D -o root -g root -m 0644 "${source_root}/app.json" \
+        "${destination_root}/app.json"
+    install -D -o root -g root -m 0644 "${source_root}/${entrypoint}" \
+        "${destination_root}/${entrypoint}"
+done <"${payload}/builtin-apps.tsv"
 if [[ -f ${payload}/keyboard-diagnostics/app.json && \
       -f ${payload}/keyboard-diagnostics/bin/keyboard_diagnostics.wasm ]]; then
     install -D -m 0644 "${payload}/keyboard-diagnostics/app.json" \
@@ -309,10 +316,7 @@ done
 
 install -d -o root -g root -m 0755 \
     /var/lib/cardputerzero \
-    /var/lib/cardputerzero/apps \
-    /var/lib/cardputerzero/apps/dev.cardputerzero.hello \
-    /var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0 \
-    /var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/bin
+    /var/lib/cardputerzero/apps
 install -d -o root -g root -m 0700 /var/lib/cardputerzero/registry
 install -d -o cp0-storage -g cp0-storage -m 0700 \
     /var/lib/cardputerzero/data
@@ -323,10 +327,12 @@ printf '%s\n' 'CardputerZero Document Portal is ready.' \
 chown cp0-document:cp0-document \
     /var/lib/cardputerzero/documents/welcome.txt
 chmod 0640 /var/lib/cardputerzero/documents/welcome.txt
-chown -R root:root /var/lib/cardputerzero/apps/dev.cardputerzero.hello
-chmod -R go-w /var/lib/cardputerzero/apps/dev.cardputerzero.hello
-/usr/libexec/cardputerzero/cp0-appd register-installed \
-    dev.cardputerzero.hello 0.1.0
+while IFS="$(printf '\t')" read -r example app_id version artifact entrypoint; do
+    [ -n "$example" ] || continue
+    chown -R root:root "/var/lib/cardputerzero/apps/$app_id"
+    chmod -R go-w "/var/lib/cardputerzero/apps/$app_id"
+    /usr/libexec/cardputerzero/cp0-appd register-installed "$app_id" "$version"
+done </usr/share/cardputerzero/builtin-apps.tsv
 if [ -f /var/lib/cardputerzero/apps/dev.cardputerzero.keyboard-diagnostics/0.1.0/app.json ]; then
     chown -R root:root \
         /var/lib/cardputerzero/apps/dev.cardputerzero.keyboard-diagnostics

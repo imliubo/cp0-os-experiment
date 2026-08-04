@@ -161,7 +161,7 @@ if [[ $keyboard_diagnostics == 1 ]]; then
         build "$repo_root/examples/keyboard-diagnostics"
 fi
 platform_payload="$pi_gen_dir/stage-cardputerzero-os/02-app-platform/payload"
-mkdir -p "$platform_payload/systemd" "$platform_payload/hello/bin" \
+mkdir -p "$platform_payload/systemd" "$platform_payload/apps" \
     "$platform_payload/trust/store" \
     "$platform_payload/diagnostics"
 cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
@@ -208,10 +208,17 @@ cp "$repo_root/scripts/device-core-recovery.sh" \
     "$repo_root/scripts/device-store-acceptance.sh" \
     "$repo_root/scripts/device-support-bundle.sh" \
     "$platform_payload/diagnostics/"
-cp "$repo_root/target/apps/dev.cardputerzero.hello/0.1.0/app.json" \
-    "$platform_payload/hello/"
-cp "$repo_root/target/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm" \
-    "$platform_payload/hello/bin/"
+install -m 0644 "$repo_root/config/builtin-apps.tsv" \
+    "$platform_payload/builtin-apps.tsv"
+while IFS=$'\t' read -r example app_id version artifact entrypoint; do
+    [[ -n $example && ${example:0:1} != '#' ]] || continue
+    source_root="$repo_root/target/apps/$app_id/$version"
+    destination_root="$platform_payload/apps/$app_id/$version"
+    mkdir -p "$destination_root/$(dirname "$entrypoint")"
+    install -m 0644 "$source_root/app.json" "$destination_root/app.json"
+    install -m 0644 "$source_root/$entrypoint" \
+        "$destination_root/$entrypoint"
+done <"$repo_root/config/builtin-apps.tsv"
 if [[ $keyboard_diagnostics == 1 ]]; then
     keyboard_root="$repo_root/examples/keyboard-diagnostics/target/cardputerzero/dev.cardputerzero.keyboard-diagnostics/0.1.0"
     mkdir -p "$platform_payload/keyboard-diagnostics/bin"

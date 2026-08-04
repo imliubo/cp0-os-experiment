@@ -73,8 +73,23 @@ required_files=(
     usr/lib/aarch64-linux-gnu/weston/cardputerzero-policy.so
     etc/cardputerzero/device-policy.json
     etc/avahi/avahi-daemon.conf
+    usr/share/cardputerzero/builtin-apps.tsv
     var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/app.json
     var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm
+    var/lib/cardputerzero/apps/dev.cardputerzero.calculator/0.1.0/app.json
+    var/lib/cardputerzero/apps/dev.cardputerzero.calculator/0.1.0/bin/calculator.wasm
+    var/lib/cardputerzero/apps/dev.cardputerzero.neon-snake/0.1.0/app.json
+    var/lib/cardputerzero/apps/dev.cardputerzero.neon-snake/0.1.0/bin/neon_snake.wasm
+    var/lib/cardputerzero/apps/dev.cardputerzero.camera/0.1.0/app.json
+    var/lib/cardputerzero/apps/dev.cardputerzero.camera/0.1.0/bin/camera.wasm
+    var/lib/cardputerzero/apps/dev.cardputerzero.gallery/0.1.0/app.json
+    var/lib/cardputerzero/apps/dev.cardputerzero.gallery/0.1.0/bin/gallery.wasm
+    var/lib/cardputerzero/apps/dev.cardputerzero.media-controls/0.1.0/app.json
+    var/lib/cardputerzero/apps/dev.cardputerzero.media-controls/0.1.0/bin/media_controls.wasm
+    var/lib/cardputerzero/apps/dev.cardputerzero.notes/0.1.0/app.json
+    var/lib/cardputerzero/apps/dev.cardputerzero.notes/0.1.0/bin/notes.wasm
+    var/lib/cardputerzero/apps/dev.cardputerzero.stopwatch/0.1.0/app.json
+    var/lib/cardputerzero/apps/dev.cardputerzero.stopwatch/0.1.0/bin/stopwatch.wasm
 )
 for path in "${required_files[@]}"; do
     if [[ ! -f $rootfs/$path || -L $rootfs/$path ]]; then
@@ -82,6 +97,27 @@ for path in "${required_files[@]}"; do
         exit 1
     fi
 done
+
+expected_builtin_ids=(
+    dev.cardputerzero.calculator
+    dev.cardputerzero.camera
+    dev.cardputerzero.gallery
+    dev.cardputerzero.hello
+    dev.cardputerzero.media-controls
+    dev.cardputerzero.neon-snake
+    dev.cardputerzero.notes
+    dev.cardputerzero.stopwatch
+)
+mapfile -t builtin_ids < <(
+    awk -F '\t' 'NF && $1 !~ /^#/ {print $2}' \
+        "$rootfs/usr/share/cardputerzero/builtin-apps.tsv" | sort -u
+)
+if [[ ${#builtin_ids[@]} -ne ${#expected_builtin_ids[@]} ]] ||
+    [[ $(printf '%s\n' "${builtin_ids[@]}") != \
+       $(printf '%s\n' "${expected_builtin_ids[@]}") ]]; then
+    echo "error: image built-in application allowlist is not the fixed eight-app set" >&2
+    exit 1
+fi
 
 keyboard_manifest="$rootfs/var/lib/cardputerzero/apps/dev.cardputerzero.keyboard-diagnostics/0.1.0/app.json"
 keyboard_wasm="$rootfs/var/lib/cardputerzero/apps/dev.cardputerzero.keyboard-diagnostics/0.1.0/bin/keyboard_diagnostics.wasm"

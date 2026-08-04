@@ -2,19 +2,27 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-example_dir="$repo_root/examples/hello-card"
-package_dir="$repo_root/target/apps/dev.cardputerzero.hello/0.1.0"
+builtin_apps="$repo_root/config/builtin-apps.tsv"
 
-cargo build \
-    --manifest-path "$example_dir/Cargo.toml" \
-    --target wasm32-unknown-unknown \
-    --release
+while IFS=$'\t' read -r example app_id version artifact entrypoint; do
+    [[ -n $example && ${example:0:1} != '#' ]] || continue
+    example_dir="$repo_root/examples/$example"
+    package_dir="$repo_root/target/apps/$app_id/$version"
+    source_wasm="$example_dir/target/wasm32-unknown-unknown/release/$artifact"
 
-mkdir -p "$package_dir/bin"
-install -m 0644 "$example_dir/target/wasm32-unknown-unknown/release/hello_card.wasm" \
-    "$package_dir/bin/hello-card.wasm"
-install -m 0644 "$example_dir/app.json" "$package_dir/app.json"
+    cargo build \
+        --manifest-path "$example_dir/Cargo.toml" \
+        --target wasm32-unknown-unknown \
+        --release
 
-cargo run -q -p cp0ctl -- manifest validate "$package_dir/app.json"
-test -s "$package_dir/bin/hello-card.wasm"
-sha256sum "$package_dir/bin/hello-card.wasm"
+    mkdir -p "$package_dir/$(dirname "$entrypoint")"
+    install -m 0644 "$source_wasm" "$package_dir/$entrypoint"
+    install -m 0644 "$example_dir/app.json" "$package_dir/app.json"
+    cargo run -q -p cp0ctl -- manifest validate "$package_dir/app.json"
+    jq -e --arg id "$app_id" --arg version "$version" \
+        --arg entrypoint "$entrypoint" \
+        '.id == $id and .version == $version and .entrypoint == $entrypoint' \
+        "$package_dir/app.json" >/dev/null
+    test -s "$package_dir/$entrypoint"
+    sha256sum "$package_dir/$entrypoint"
+done <"$builtin_apps"

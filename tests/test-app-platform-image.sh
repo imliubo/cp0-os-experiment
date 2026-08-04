@@ -11,6 +11,19 @@ grep -q 'scripts/build-appd.sh' "$build"
 grep -q 'scripts/build-app-runtime.sh' "$build"
 grep -Fq 'build_triplet=$(sh "$libffi_dir/config.guess")' "$runtime_builder"
 grep -q 'scripts/build-example-app.sh' "$build"
+grep -q 'config/builtin-apps.tsv' "$build"
+grep -q 'builtin-apps.tsv' "$stage"
+for app_id in \
+    dev.cardputerzero.hello \
+    dev.cardputerzero.calculator \
+    dev.cardputerzero.neon-snake \
+    dev.cardputerzero.camera \
+    dev.cardputerzero.gallery \
+    dev.cardputerzero.media-controls \
+    dev.cardputerzero.notes \
+    dev.cardputerzero.stopwatch; do
+    grep -q "$app_id" "$repo_root/config/builtin-apps.tsv"
+done
 grep -q 'CP0_KEYBOARD_DIAGNOSTICS' "$build"
 grep -q 'examples/keyboard-diagnostics' "$build"
 grep -q '02-app-platform/payload' "$build"

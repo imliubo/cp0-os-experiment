@@ -1,0 +1,8 @@
+hello-card	dev.cardputerzero.hello	0.1.0	hello_card.wasm	bin/hello-card.wasm
+calculator	dev.cardputerzero.calculator	0.1.0	calculator.wasm	bin/calculator.wasm
+neon-snake	dev.cardputerzero.neon-snake	0.1.0	neon_snake.wasm	bin/neon_snake.wasm
+camera	dev.cardputerzero.camera	0.1.0	camera.wasm	bin/camera.wasm
+gallery	dev.cardputerzero.gallery	0.1.0	gallery.wasm	bin/gallery.wasm
+media-controls	dev.cardputerzero.media-controls	0.1.0	media_controls.wasm	bin/media_controls.wasm
+notes	dev.cardputerzero.notes	0.1.0	notes.wasm	bin/notes.wasm
+stopwatch	dev.cardputerzero.stopwatch	0.1.0	stopwatch.wasm	bin/stopwatch.wasm
