@@ -44,6 +44,10 @@ int main(void)
         "{\"protocol_version\":1,\"request_id\":9,\"outcome\":{"
         "\"status\":\"error\",\"code\":\"repair-required\","
         "\"message\":\"Recovery is required\"}}";
+    static const char authentication_response[] =
+        "{\"protocol_version\":1,\"request_id\":12,\"outcome\":{"
+        "\"status\":\"error\",\"code\":\"authentication\","
+        "\"message\":\"current password is incorrect\"}}";
     static const char invalid_signal[] =
         "{\"protocol_version\":1,\"request_id\":10,\"outcome\":{"
         "\"status\":\"wifi-list\",\"networks\":[{\"ssid\":\"Lab\","
@@ -85,6 +89,10 @@ int main(void)
                error_response, strlen(error_response), 9, &status, error) ==
            CP0_PROVISION_REPAIR_REQUIRED);
     assert(strcmp(error, "Recovery is required") == 0);
+    assert(cp0_provision_test_parse_state(
+               authentication_response, strlen(authentication_response), 12,
+               &status, error) == CP0_PROVISION_AUTHENTICATION);
+    assert(strcmp(error, "current password is incorrect") == 0);
     assert(cp0_provision_test_parse_wifi(
                invalid_signal, strlen(invalid_signal), 10, &wifi, error) ==
            CP0_PROVISION_FAILED);

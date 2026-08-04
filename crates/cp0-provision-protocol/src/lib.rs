@@ -3,6 +3,7 @@ use std::io::{self, BufRead, Write};
 use std::net::Ipv4Addr;
 
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 pub const PROVISION_PROTOCOL_VERSION: u32 = 1;
 pub const MAX_PROVISION_FRAME_BYTES: usize = 16 * 1024;
@@ -123,6 +124,10 @@ pub enum ProvisioningCommand {
     SetPassword {
         password: String,
     },
+    ChangePassword {
+        current_password: String,
+        new_password: String,
+    },
     ListWifi {},
     ConnectWifi {
         ssid: String,
@@ -168,6 +173,7 @@ pub enum ProvisioningErrorCode {
     Unauthorized,
     InvalidState,
     InvalidValue,
+    Authentication,
     Unavailable,
     Operation,
     RepairRequired,
@@ -244,6 +250,13 @@ impl ProvisioningRequest {
                 validate_username(username)
             }
             ProvisioningCommand::SetPassword { password } => validate_password(password),
+            ProvisioningCommand::ChangePassword {
+                current_password,
+                new_password,
+            } => {
+                validate_current_password(current_password)?;
+                validate_password(new_password)
+            }
             ProvisioningCommand::ConnectWifi {
                 ssid,
                 security,
@@ -269,6 +282,23 @@ impl ProvisioningRequest {
                 }
             }
             ProvisioningCommand::SetSshEnabled { .. } => Ok(()),
+        }
+    }
+
+    pub fn zeroize_secrets(&mut self) {
+        match &mut self.command {
+            ProvisioningCommand::SetPassword { password }
+            | ProvisioningCommand::ConnectWifi { password, .. } => {
+                password.zeroize();
+            }
+            ProvisioningCommand::ChangePassword {
+                current_password,
+                new_password,
+            } => {
+                current_password.zeroize();
+                new_password.zeroize();
+            }
+            _ => {}
         }
     }
 }
@@ -444,6 +474,19 @@ pub fn validate_password(value: &str) -> Result<(), ProvisioningProtocolError> {
     Ok(())
 }
 
+fn validate_current_password(value: &str) -> Result<(), ProvisioningProtocolError> {
+    let count = value.chars().count();
+    if count == 0
+        || count > MAX_PASSWORD_CHARS
+        || !value
+            .chars()
+            .all(|character| character.is_ascii() && !character.is_control())
+    {
+        return Err(ProvisioningProtocolError::InvalidValue("current password"));
+    }
+    Ok(())
+}
+
 pub fn validate_hostname(value: &str) -> Result<(), ProvisioningProtocolError> {
     if value.is_empty()
         || value.len() > 63
@@ -520,11 +563,16 @@ fn validate_version(version: u32) -> Result<(), ProvisioningProtocolError> {
 pub fn read_request(
     reader: &mut impl BufRead,
 ) -> Result<Option<ProvisioningRequest>, ProvisioningProtocolError> {
-    let Some(frame) = read_frame(reader)? else {
+    let Some(mut frame) = read_frame(reader)? else {
         return Ok(None);
     };
-    let request: ProvisioningRequest = serde_json::from_slice(&frame)?;
-    request.validate()?;
+    let parsed = serde_json::from_slice(&frame);
+    frame.fill(0);
+    let mut request: ProvisioningRequest = parsed?;
+    if let Err(error) = request.validate() {
+        request.zeroize_secrets();
+        return Err(error);
+    }
     Ok(Some(request))
 }
 
@@ -625,6 +673,10 @@ mod tests {
             ProvisioningCommand::SetPassword {
                 password: "correct horse".into(),
             },
+            ProvisioningCommand::ChangePassword {
+                current_password: "correct horse".into(),
+                new_password: "new password".into(),
+            },
             ProvisioningCommand::UseOffline {},
             ProvisioningCommand::SetSshEnabled { enabled: true },
         ];
@@ -647,6 +699,26 @@ mod tests {
         assert!(validate_username("Owner").is_err());
         assert!(validate_password("short").is_err());
         assert!(validate_password("ten-chars!").is_ok());
+        let mut secrets = request(ProvisioningCommand::ChangePassword {
+            current_password: "current password".into(),
+            new_password: "replacement password".into(),
+        });
+        secrets.zeroize_secrets();
+        assert!(matches!(
+            secrets.command,
+            ProvisioningCommand::ChangePassword {
+                current_password,
+                new_password,
+            } if current_password.is_empty() && new_password.is_empty()
+        ));
+        assert!(
+            request(ProvisioningCommand::ChangePassword {
+                current_password: String::new(),
+                new_password: "new password".into(),
+            })
+            .validate()
+            .is_err()
+        );
         assert!(
             request(ProvisioningCommand::ConnectWifi {
                 ssid: "Corp".into(),

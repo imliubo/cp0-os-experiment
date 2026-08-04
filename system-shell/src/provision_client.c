@@ -192,6 +192,8 @@ static int parse_error(const char *document,
         return CP0_PROVISION_INVALID_STATE;
     if (cp0_json_string_equals(document, &tokens[code], "invalid-value"))
         return CP0_PROVISION_INVALID_VALUE;
+    if (cp0_json_string_equals(document, &tokens[code], "authentication"))
+        return CP0_PROVISION_AUTHENTICATION;
     if (cp0_json_string_equals(document, &tokens[code], "repair-required"))
         return CP0_PROVISION_REPAIR_REQUIRED;
     return CP0_PROVISION_FAILED;
@@ -576,6 +578,36 @@ int cp0_provision_set_password(
     clear_secret(request, sizeof(request));
     if (password != NULL)
         clear_secret(password, password_length);
+    return result;
+}
+
+int cp0_provision_change_password(
+    char *current_password, char *new_password,
+    struct cp0_provision_status *status,
+    char error[CP0_PROVISION_ERROR_MAX + 1])
+{
+    char request[1024] = {0};
+    size_t offset = 0;
+    uint64_t request_id = next_request_id++;
+    size_t current_length =
+        current_password == NULL ? 0 : strlen(current_password);
+    size_t new_length = new_password == NULL ? 0 : strlen(new_password);
+    int result = CP0_PROVISION_FAILED;
+    if (current_password != NULL && new_password != NULL && status != NULL &&
+        begin_command(request, sizeof(request), &offset, request_id,
+                      "change-password") &&
+        append_member(request, sizeof(request), &offset, "current_password",
+                      current_password) &&
+        append_member(request, sizeof(request), &offset, "new_password",
+                      new_password) &&
+        finish_command(request, sizeof(request), &offset))
+        result = run_request(request, offset, status, NULL, request_id,
+                             CP0_PROVISION_TIMEOUT_PASSWORD, error);
+    clear_secret(request, sizeof(request));
+    if (current_password != NULL)
+        clear_secret(current_password, current_length);
+    if (new_password != NULL)
+        clear_secret(new_password, new_length);
     return result;
 }
 

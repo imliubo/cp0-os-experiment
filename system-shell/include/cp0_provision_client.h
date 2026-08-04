@@ -20,6 +20,7 @@ enum cp0_provision_result {
     CP0_PROVISION_INVALID_STATE = 2,
     CP0_PROVISION_INVALID_VALUE = 3,
     CP0_PROVISION_REPAIR_REQUIRED = 4,
+    CP0_PROVISION_AUTHENTICATION = 5,
 };
 
 enum cp0_provision_phase {
@@ -92,6 +93,10 @@ int cp0_provision_set_owner(const char *display_name, const char *username,
                             char error[CP0_PROVISION_ERROR_MAX + 1]);
 int cp0_provision_set_password(
     char *password, struct cp0_provision_status *status,
+    char error[CP0_PROVISION_ERROR_MAX + 1]);
+int cp0_provision_change_password(
+    char *current_password, char *new_password,
+    struct cp0_provision_status *status,
     char error[CP0_PROVISION_ERROR_MAX + 1]);
 int cp0_provision_list_wifi(struct cp0_provision_wifi_list *list,
                             char error[CP0_PROVISION_ERROR_MAX + 1]);

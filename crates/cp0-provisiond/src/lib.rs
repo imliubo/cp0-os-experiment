@@ -24,7 +24,7 @@ use cp0_provision_protocol::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 pub const OWNER_UID: u32 = 1000;
 pub const DEVELOPER_ACCESS_GROUP_GID: u32 = 1998;
@@ -39,6 +39,7 @@ pub enum ProvisioningError {
     Json(serde_json::Error),
     InvalidState(&'static str),
     InvalidValue(&'static str),
+    Authentication,
     Unavailable(&'static str),
     Operation(&'static str),
 }
@@ -54,6 +55,7 @@ impl fmt::Display for ProvisioningError {
             Self::InvalidValue(message) => {
                 write!(formatter, "invalid provisioning value: {message}")
             }
+            Self::Authentication => formatter.write_str("owner authentication failed"),
             Self::Unavailable(message) => write!(formatter, "provisioning unavailable: {message}"),
             Self::Operation(message) => {
                 write!(formatter, "provisioning operation failed: {message}")
@@ -273,6 +275,34 @@ impl ExtrausersIdentityStore {
         )
     }
 
+    pub fn password_hash(&self, username: &str) -> Result<String, ProvisioningError> {
+        let shadow_path = self.path("shadow");
+        reject_symlink(&shadow_path)?;
+        let shadow = fs::read_to_string(shadow_path)?;
+        let mut lines = shadow.lines();
+        let line = lines
+            .next()
+            .ok_or(ProvisioningError::InvalidState("owner password is missing"))?;
+        if lines.next().is_some() {
+            return Err(ProvisioningError::InvalidState(
+                "owner password database contains extra records",
+            ));
+        }
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() != 9 || fields[0] != username {
+            return Err(ProvisioningError::InvalidState(
+                "owner password record does not match",
+            ));
+        }
+        let hash = fields[1];
+        if !valid_yescrypt_hash(hash) {
+            return Err(ProvisioningError::InvalidState(
+                "owner password hash is invalid",
+            ));
+        }
+        Ok(hash.to_owned())
+    }
+
     pub fn set_ssh_membership(
         &self,
         username: &str,
@@ -340,6 +370,46 @@ impl ExtrausersIdentityStore {
     }
 }
 
+fn valid_yescrypt_hash(hash: &str) -> bool {
+    yescrypt_salt(hash).is_ok() && hash.len() <= 256 && !hash.contains([':', '\n', '\r'])
+}
+
+fn yescrypt_salt(hash: &str) -> Result<&str, ProvisioningError> {
+    let mut fields = hash.split('$');
+    if fields.next() != Some("")
+        || fields.next() != Some("y")
+        || fields.next().is_none_or(str::is_empty)
+    {
+        return Err(ProvisioningError::InvalidState(
+            "owner password hash is invalid",
+        ));
+    }
+    let salt =
+        fields
+            .next()
+            .filter(|value| !value.is_empty())
+            .ok_or(ProvisioningError::InvalidState(
+                "owner password hash is invalid",
+            ))?;
+    if fields.next().is_none_or(str::is_empty) || fields.next().is_some() {
+        return Err(ProvisioningError::InvalidState(
+            "owner password hash is invalid",
+        ));
+    }
+    Ok(salt)
+}
+
+fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut difference = 0_u8;
+    for (left, right) in left.iter().zip(right) {
+        difference |= left ^ right;
+    }
+    difference == 0
+}
+
 fn ensure_empty_or_owner_file(path: &Path, username: &str) -> Result<(), ProvisioningError> {
     if !path.exists() {
         return Ok(());
@@ -377,6 +447,11 @@ fn system_identity_uid(username: &str) -> Result<Option<u32>, ProvisioningError>
 
 pub trait PlatformBackend {
     fn hash_password(&mut self, password: &str) -> Result<String, ProvisioningError>;
+    fn verify_password(
+        &mut self,
+        password: &str,
+        expected_hash: &str,
+    ) -> Result<bool, ProvisioningError>;
     fn list_wifi(&mut self) -> Result<Vec<WifiNetwork>, ProvisioningError>;
     fn connect_wifi(
         &mut self,
@@ -412,6 +487,54 @@ impl LinuxPlatformBackend {
             hostnamectl: "/usr/bin/hostnamectl".into(),
             iw: "/usr/sbin/iw".into(),
         }
+    }
+
+    fn run_password_hash(
+        &self,
+        password: &str,
+        salt: Option<&str>,
+    ) -> Result<String, ProvisioningError> {
+        let mut command = Command::new(&self.mkpasswd);
+        command.args(["--method=yescrypt", "--stdin"]);
+        if let Some(salt) = salt {
+            command.arg(format!("--salt={salt}"));
+        }
+        let mut child = command
+            .env("LC_ALL", "C")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| {
+                ProvisioningError::Unavailable("yescrypt password hasher is unavailable")
+            })?;
+        let mut secret = password.as_bytes().to_vec();
+        secret.push(b'\n');
+        let write_result = child
+            .stdin
+            .as_mut()
+            .ok_or(ProvisioningError::Operation(
+                "password hasher stdin is unavailable",
+            ))?
+            .write_all(&secret);
+        secret.zeroize();
+        write_result?;
+        drop(child.stdin.take());
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
+            return Err(ProvisioningError::Operation(
+                "yescrypt password hashing failed",
+            ));
+        }
+        let hash = String::from_utf8(output.stdout)
+            .map_err(|_| ProvisioningError::Operation("password hash is invalid"))?;
+        let hash = hash.trim_end_matches(['\r', '\n']).to_owned();
+        if !valid_yescrypt_hash(&hash) {
+            return Err(ProvisioningError::Operation(
+                "password hasher did not produce yescrypt",
+            ));
+        }
+        Ok(hash)
     }
 
     fn command_ok(
@@ -478,43 +601,19 @@ impl LinuxPlatformBackend {
 
 impl PlatformBackend for LinuxPlatformBackend {
     fn hash_password(&mut self, password: &str) -> Result<String, ProvisioningError> {
-        let mut child = Command::new(&self.mkpasswd)
-            .args(["--method=yescrypt", "--stdin"])
-            .env("LC_ALL", "C")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|_| {
-                ProvisioningError::Unavailable("yescrypt password hasher is unavailable")
-            })?;
-        let mut secret = password.as_bytes().to_vec();
-        secret.push(b'\n');
-        let write_result = child
-            .stdin
-            .as_mut()
-            .ok_or(ProvisioningError::Operation(
-                "password hasher stdin is unavailable",
-            ))?
-            .write_all(&secret);
-        secret.zeroize();
-        write_result?;
-        drop(child.stdin.take());
-        let output = child.wait_with_output()?;
-        if !output.status.success() {
-            return Err(ProvisioningError::Operation(
-                "yescrypt password hashing failed",
-            ));
-        }
-        let hash = String::from_utf8(output.stdout)
-            .map_err(|_| ProvisioningError::Operation("password hash is invalid"))?;
-        let hash = hash.trim_end_matches(['\r', '\n']).to_owned();
-        if !hash.starts_with("$y$") {
-            return Err(ProvisioningError::Operation(
-                "password hasher did not produce yescrypt",
-            ));
-        }
-        Ok(hash)
+        self.run_password_hash(password, None)
+    }
+
+    fn verify_password(
+        &mut self,
+        password: &str,
+        expected_hash: &str,
+    ) -> Result<bool, ProvisioningError> {
+        let salt = yescrypt_salt(expected_hash)?;
+        let mut candidate = self.run_password_hash(password, Some(salt))?;
+        let matches = constant_time_equal(candidate.as_bytes(), expected_hash.as_bytes());
+        candidate.zeroize();
+        Ok(matches)
     }
 
     fn list_wifi(&mut self) -> Result<Vec<WifiNetwork>, ProvisioningError> {
@@ -947,6 +1046,13 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                 state: self.status()?,
             });
         }
+        let command = match command {
+            ProvisioningCommand::ChangePassword {
+                current_password,
+                new_password,
+            } => return self.change_password(current_password, new_password),
+            command => command,
+        };
         let mut state = self.status()?;
         if state.phase == ProvisioningPhase::RepairRequired {
             return Err(ProvisioningError::InvalidState("repair is required"));
@@ -1051,6 +1157,16 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                 self.state_store.save(&state)?;
                 Ok(ProvisioningOutcome::State { state })
             }
+            ProvisioningCommand::ChangePassword {
+                mut current_password,
+                mut new_password,
+            } => {
+                current_password.zeroize();
+                new_password.zeroize();
+                Err(ProvisioningError::InvalidState(
+                    "password changes require completed setup",
+                ))
+            }
             ProvisioningCommand::ListWifi {} => Ok(ProvisioningOutcome::WifiList {
                 networks: self.backend.list_wifi()?,
             }),
@@ -1140,6 +1256,38 @@ impl<B: PlatformBackend> ProvisioningService<B> {
         }
     }
 
+    fn change_password(
+        &mut self,
+        current_password: String,
+        new_password: String,
+    ) -> Result<ProvisioningOutcome, ProvisioningError> {
+        let current_password = Zeroizing::new(current_password);
+        let new_password = Zeroizing::new(new_password);
+        let state = self.status()?;
+        if state.phase == ProvisioningPhase::RepairRequired {
+            return Err(ProvisioningError::InvalidState("repair is required"));
+        }
+        if state.phase != ProvisioningPhase::Complete {
+            return Err(ProvisioningError::InvalidState(
+                "password changes require completed setup",
+            ));
+        }
+        let username = state
+            .username
+            .as_deref()
+            .ok_or(ProvisioningError::InvalidState("owner username is missing"))?;
+        let expected_hash = Zeroizing::new(self.identity_store.password_hash(username)?);
+        if !self
+            .backend
+            .verify_password(&current_password, &expected_hash)?
+        {
+            return Err(ProvisioningError::Authentication);
+        }
+        let hash = Zeroizing::new(self.backend.hash_password(&new_password)?);
+        self.identity_store.set_password_hash(username, &hash)?;
+        Ok(ProvisioningOutcome::State { state })
+    }
+
     pub fn apply_boot_configuration(&mut self) -> Result<(), ProvisioningError> {
         let state = self.status()?;
         if state.phase != ProvisioningPhase::Complete {
@@ -1156,6 +1304,7 @@ fn command_name(command: &ProvisioningCommand) -> &'static str {
         ProvisioningCommand::SetRegion { .. } => "set-region",
         ProvisioningCommand::SetOwner { .. } => "set-owner",
         ProvisioningCommand::SetPassword { .. } => "set-password",
+        ProvisioningCommand::ChangePassword { .. } => "change-password",
         ProvisioningCommand::ListWifi {} => "list-wifi",
         ProvisioningCommand::ConnectWifi { .. } => "connect-wifi",
         ProvisioningCommand::UseEthernet {} => "use-ethernet",
@@ -1189,7 +1338,7 @@ impl<B: PlatformBackend> ProvisioningServer<B> {
         stream.set_write_timeout(Some(CLIENT_TIMEOUT))?;
         let uid = peer_uid(&stream)?;
         let mut reader = BufReader::new(stream.try_clone()?);
-        let request = match read_request(&mut reader) {
+        let mut request = match read_request(&mut reader) {
             Ok(Some(request)) => request,
             Ok(None) => return Ok(()),
             Err(_) => {
@@ -1208,8 +1357,10 @@ impl<B: PlatformBackend> ProvisioningServer<B> {
         let response = if uid == self.shell_uid {
             self.service.dispatch(request)
         } else {
+            let request_id = request.request_id;
+            request.zeroize_secrets();
             ProvisioningResponse::error(
-                request.request_id,
+                request_id,
                 ProvisioningErrorCode::Unauthorized,
                 "peer UID is not authorized for provisioning",
             )
@@ -1231,6 +1382,10 @@ fn error_response(request_id: u64, error: ProvisioningError) -> ProvisioningResp
         ProvisioningError::InvalidValue(_) => (
             ProvisioningErrorCode::InvalidValue,
             "provisioning value is invalid",
+        ),
+        ProvisioningError::Authentication => (
+            ProvisioningErrorCode::Authentication,
+            "current password is incorrect",
         ),
         ProvisioningError::Unavailable(_) => (
             ProvisioningErrorCode::Unavailable,
@@ -1365,6 +1520,7 @@ mod tests {
     struct MockBackend {
         ssh: bool,
         hash_calls: usize,
+        verify_calls: usize,
         fail_hash_once: bool,
         fail_configure_once: bool,
         fail_activate_once: bool,
@@ -1380,6 +1536,14 @@ mod tests {
                 ));
             }
             Ok("$y$j9T$testsalt$testhash".into())
+        }
+        fn verify_password(
+            &mut self,
+            password: &str,
+            expected_hash: &str,
+        ) -> Result<bool, ProvisioningError> {
+            self.verify_calls += 1;
+            Ok(password == "correct horse" && expected_hash == "$y$j9T$testsalt$testhash")
         }
         fn list_wifi(&mut self) -> Result<Vec<WifiNetwork>, ProvisioningError> {
             Ok(vec![WifiNetwork {
@@ -1701,6 +1865,50 @@ mod tests {
             service.status().unwrap().phase,
             ProvisioningPhase::RepairRequired
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn changes_completed_owner_password_only_after_authentication() {
+        let (root, paths) = fixture();
+        let mut service = ProvisioningService::new(&paths, MockBackend::default());
+        advance_to_review(&mut service, false);
+        state(service.dispatch(request(6, ProvisioningCommand::Commit {})));
+        let original_shadow = fs::read_to_string(paths.extrausers_dir.join("shadow")).unwrap();
+        let rejected = service.dispatch(request(
+            7,
+            ProvisioningCommand::ChangePassword {
+                current_password: "wrong password".into(),
+                new_password: "replacement password".into(),
+            },
+        ));
+        assert!(matches!(
+            rejected.outcome,
+            ProvisioningOutcome::Error {
+                code: ProvisioningErrorCode::Authentication,
+                ..
+            }
+        ));
+        assert_eq!(
+            fs::read_to_string(paths.extrausers_dir.join("shadow")).unwrap(),
+            original_shadow
+        );
+        assert_eq!(service.backend.verify_calls, 1);
+        assert_eq!(service.backend.hash_calls, 1);
+
+        let changed = state(service.dispatch(request(
+            8,
+            ProvisioningCommand::ChangePassword {
+                current_password: "correct horse".into(),
+                new_password: "replacement password".into(),
+            },
+        )));
+        assert_eq!(changed.phase, ProvisioningPhase::Complete);
+        assert_eq!(service.backend.verify_calls, 2);
+        assert_eq!(service.backend.hash_calls, 2);
+        let persisted = fs::read_to_string(&paths.state_file).unwrap();
+        assert!(!persisted.contains("correct horse"));
+        assert!(!persisted.contains("replacement password"));
         fs::remove_dir_all(root).unwrap();
     }
 

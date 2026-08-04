@@ -179,15 +179,17 @@ The service uses bounded `SOCK_SEQPACKET` messages with strict versioned JSON.
 The implemented commands are:
 
 - `GetStatus` and `SetRegion` (locale, country, time zone and hostname);
-- `SetOwner` and `SetPassword`;
+- `SetOwner`, `SetPassword`, and the post-setup `ChangePassword`;
 - `ListWifi`, `ConnectWifi`, `UseEthernet` and `UseOffline`;
 - `SetSshEnabled` and `Commit`.
 
 Responses never echo password or Wi-Fi secrets. Unknown fields, duplicate
 fields, oversized frames, invalid state transitions and calls from the wrong
-peer fail closed. After `COMPLETE`, mutating provisioning commands are
-permanently unavailable. Normal post-setup changes use the existing Settings
-brokers; factory reset remains a separate physical/recovery ceremony.
+peer fail closed. After `COMPLETE`, setup mutations remain permanently
+unavailable; `ChangePassword` is the sole runtime credential mutation and
+requires the current owner password. Other post-setup changes use their
+existing Settings brokers; factory reset remains a separate physical/recovery
+ceremony.
 
 The daemon owns the setup-only NetworkManager keyfile/connection path;
 `cp0-connectivityd` continues to own post-setup radio and airplane toggles.
@@ -239,6 +241,27 @@ Password hashing uses the platform yescrypt/libxcrypt implementation in the
 daemon. Cleartext secrets are never passed in argv or environment variables,
 written to a temporary file, logged or stored in `state.json`; their buffers
 are explicitly cleared after use.
+
+### Runtime owner password change
+
+`Settings -> Security -> Change Password` is a trusted System Shell flow, not
+an SDK application. It asks for the current password, a 10-64 character new
+password, and an exact confirmation. Input is masked by default and Right
+temporarily toggles visibility. ESC returns one page at a time; ESC on the
+current-password page cancels and returns to the same selected Security row.
+Home, Tasks, Power, media, brightness, notifications, and application prompts
+cannot interrupt or overlay the credential flow. The applying page does not
+accept input.
+
+The Shell sends both passwords over the existing root-owned provisioning
+socket. `cp0-provisiond` accepts this command only in `COMPLETE`, reads the
+single owner shadow record, verifies the current password against its yescrypt
+hash, generates a new yescrypt hash, and atomically replaces the shadow file.
+An incorrect current password returns the distinct `authentication` result;
+the UI clears all three password buffers before showing the error and requires
+the full flow again. Success, cancellation, service failure, and Shell teardown
+also clear the complete allocated secret region. JSON request/response frames
+that can contain credentials are explicitly overwritten after parsing or use.
 
 The owner home is stored on `cp0-data` and mounted at `/home/<username>` with
 mode `0700`. The first release relies on the existing `cp0-data` capacity rather
