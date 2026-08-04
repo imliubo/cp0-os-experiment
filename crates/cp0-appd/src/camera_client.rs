@@ -11,7 +11,9 @@ use cp0_camera_protocol::{
 };
 
 pub const DEFAULT_CAMERA_SOCKET: &str = "/run/cardputerzero-camerad/camera.sock";
-const CAMERA_SERVICE_TIMEOUT: Duration = Duration::from_secs(5);
+// cp0-camerad allows twelve seconds for the CM0's first libcamera pipeline
+// start. Leave time for response validation and descriptor transfer.
+const CAMERA_SERVICE_TIMEOUT: Duration = Duration::from_secs(13);
 
 #[derive(Debug)]
 pub struct CapturedCameraFrame {

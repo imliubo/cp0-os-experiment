@@ -26,7 +26,9 @@ const RGB888_PIXEL_BYTES: usize = 3;
 const RGB888_FRAME_BYTES: usize =
     CAMERA_WIDTH as usize * CAMERA_HEIGHT as usize * RGB888_PIXEL_BYTES;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
-const CAPTURE_TIMEOUT: Duration = Duration::from_secs(4);
+// Camera pipeline discovery and the first ISP allocation are slow on CM0.
+// Keep this below the appd camera-client deadline so failures remain explicit.
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(12);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CameraCaptureError {
@@ -96,13 +98,16 @@ impl CameraBackend for RpicamBackend {
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
-            .map_err(|error| match error.kind() {
-                io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied => {
-                    CameraCaptureError::Unavailable
+            .map_err(|error| {
+                eprintln!("cp0-camerad: cannot start rpicam-still: {error}");
+                match error.kind() {
+                    io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied => {
+                        CameraCaptureError::Unavailable
+                    }
+                    _ => CameraCaptureError::Internal,
                 }
-                _ => CameraCaptureError::Internal,
             })?;
         let result = capture_child_output(&mut child);
         if result.is_err() {
@@ -114,12 +119,17 @@ impl CameraBackend for RpicamBackend {
         )?;
         let output = result?;
         if !status.success() {
+            eprintln!("cp0-camerad: rpicam-still exited with {status}");
             return Err(match status.code() {
                 Some(2) => CameraCaptureError::Busy,
                 _ => CameraCaptureError::CaptureFailed,
             });
         }
         if output.len() != RGB888_FRAME_BYTES {
+            eprintln!(
+                "cp0-camerad: rpicam-still returned {} bytes, expected {RGB888_FRAME_BYTES}",
+                output.len()
+            );
             return Err(CameraCaptureError::InvalidFrame);
         }
         Ok(output)

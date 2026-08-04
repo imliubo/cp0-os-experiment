@@ -110,8 +110,17 @@ grep -qx 'DevicePolicy=closed' "$camera_service"
 grep -qx 'DeviceAllow=char-video4linux rw' "$camera_service"
 grep -qx 'DeviceAllow=char-media rw' "$camera_service"
 grep -qx 'DeviceAllow=char-dma_heap rw' "$camera_service"
+grep -Fqx 'DeviceAllow=/dev/dma_heap/linux,cma rw' "$camera_service"
+grep -qx 'DeviceAllow=/dev/dma_heap/default_cma_region rw' "$camera_service"
+grep -qx 'DeviceAllow=/dev/dma_heap/system rw' "$camera_service"
 grep -qx 'DeviceAllow=/dev/vchiq rw' "$camera_service"
-grep -qx 'RestrictAddressFamilies=AF_UNIX' "$camera_service"
+grep -qx 'RestrictAddressFamilies=AF_UNIX AF_NETLINK' "$camera_service"
+if grep -qx 'ProcSubset=pid' "$camera_service"; then
+    echo 'camera broker must retain /proc/device-tree for libcamera discovery' >&2
+    exit 1
+fi
+grep -qx 'LogRateLimitIntervalSec=30s' "$camera_service"
+grep -qx 'LogRateLimitBurst=30' "$camera_service"
 grep -qx 'FileDescriptorName=camera' "$camera_socket"
 grep -qx 'SocketMode=0600' "$camera_socket"
 grep -qx 'Service=cardputerzero-camerad.service' "$camera_socket"

@@ -177,13 +177,12 @@ static int32_t decode_result(const char *response) {
     return CP0_BROKER_INTERNAL;
 }
 
-static int32_t broker_exchange_with_fd(const char *request,
-                                       size_t request_length, char *response,
-                                       size_t response_capacity,
-                                       int passed_descriptor,
-                                       int *received_descriptor) {
+static int32_t broker_exchange_with_fd_timeout(
+    const char *request, size_t request_length, char *response,
+    size_t response_capacity, int passed_descriptor, int *received_descriptor,
+    time_t timeout_seconds) {
     struct sockaddr_un address;
-    const struct timeval timeout = {.tv_sec = 6, .tv_usec = 0};
+    const struct timeval timeout = {.tv_sec = timeout_seconds, .tv_usec = 0};
     const char *socket_path = getenv("CP0_BROKER_SOCKET");
     size_t response_length = 0;
     int descriptor = -1;
@@ -296,6 +295,16 @@ cleanup:
     }
     close(descriptor);
     return result;
+}
+
+static int32_t broker_exchange_with_fd(const char *request,
+                                       size_t request_length, char *response,
+                                       size_t response_capacity,
+                                       int passed_descriptor,
+                                       int *received_descriptor) {
+    return broker_exchange_with_fd_timeout(
+        request, request_length, response, response_capacity,
+        passed_descriptor, received_descriptor, 6);
 }
 
 static int32_t broker_exchange(const char *request, size_t request_length,
@@ -771,9 +780,10 @@ int32_t cp0_broker_capture_camera(int *descriptor) {
     if (descriptor == NULL)
         return CP0_BROKER_INVALID_ARGUMENT;
     *descriptor = -1;
-    result = broker_exchange_with_fd(request, sizeof(request) - 1U, response,
-                                     sizeof(response), -1,
-                                     &received_descriptor);
+    /* Camera discovery can take twelve seconds on a cold CM0 pipeline. */
+    result = broker_exchange_with_fd_timeout(
+        request, sizeof(request) - 1U, response, sizeof(response), -1,
+        &received_descriptor, 14);
     if (result != CP0_BROKER_OK)
         return result;
     return cp0_broker_decode_camera_response(response, received_descriptor,
