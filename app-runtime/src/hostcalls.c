@@ -188,6 +188,20 @@ static int32_t cp0_photos_delete(wasm_exec_env_t execution_environment,
     return cp0_broker_photo_delete(key, (size_t)key_length);
 }
 
+static int64_t cp0_photos_import_rgb565(
+    wasm_exec_env_t execution_environment, const uint8_t *pixels,
+    uint32_t pixel_bytes, uint64_t suggested_id) {
+    (void)execution_environment;
+    return cp0_broker_photo_import_rgb565(pixels, (size_t)pixel_bytes,
+                                          suggested_id);
+}
+
+static int32_t cp0_photos_remove(wasm_exec_env_t execution_environment,
+                                 uint64_t photo_id) {
+    (void)execution_environment;
+    return cp0_broker_photo_remove(photo_id);
+}
+
 static int32_t cp0_intent_send(wasm_exec_env_t execution_environment,
                                const uint8_t *action, uint32_t action_length,
                                const uint8_t *payload,

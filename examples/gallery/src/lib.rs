@@ -26,9 +26,11 @@ enum ViewStatus {
 }
 
 struct Gallery {
-    photos: [photos::Photo; photos::MAX_PHOTOS],
-    count: usize,
-    selected: usize,
+    photos: [photos::Photo; photos::LIST_PAGE_PHOTOS],
+    page_start: u64,
+    page_count: usize,
+    total: u64,
+    selected: u64,
     status: ViewStatus,
     confirm_delete: bool,
     delete_selected: bool,
@@ -37,8 +39,10 @@ struct Gallery {
 impl Gallery {
     const fn new() -> Self {
         Self {
-            photos: [photos::Photo { id: 0 }; photos::MAX_PHOTOS],
-            count: 0,
+            photos: [photos::Photo { id: 0 }; photos::LIST_PAGE_PHOTOS],
+            page_start: 0,
+            page_count: 0,
+            total: 0,
             selected: 0,
             status: ViewStatus::Empty,
             confirm_delete: false,
@@ -47,21 +51,24 @@ impl Gallery {
     }
 
     fn refresh(&mut self, latest: bool) {
-        match photos::list(&mut self.photos) {
-            Ok(count) => {
-                self.count = count;
-                self.selected = if count == 0 {
+        match photos::count() {
+            Ok(total) => {
+                self.total = total;
+                self.selected = if total == 0 {
                     0
                 } else if latest {
-                    count - 1
+                    total - 1
                 } else {
-                    self.selected.min(count - 1)
+                    self.selected.min(total - 1)
                 };
-                self.status = if count == 0 {
+                self.status = if total == 0 {
                     ViewStatus::Empty
                 } else {
                     ViewStatus::Photo
                 };
+                if total != 0 && self.load_selected_page().is_err() {
+                    self.status = ViewStatus::Damaged;
+                }
             }
             Err(Error::Unavailable) => self.status = ViewStatus::Authorize,
             Err(Error::Denied) => self.status = ViewStatus::Denied,
@@ -72,13 +79,46 @@ impl Gallery {
     fn move_left(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
+            if self.load_selected_page().is_err() {
+                self.status = ViewStatus::Damaged;
+            }
         }
     }
 
     fn move_right(&mut self) {
-        if self.selected + 1 < self.count {
+        if self.selected + 1 < self.total {
             self.selected += 1;
+            if self.load_selected_page().is_err() {
+                self.status = ViewStatus::Damaged;
+            }
         }
+    }
+
+    fn load_selected_page(&mut self) -> Result<(), Error> {
+        let page_size = photos::LIST_PAGE_PHOTOS as u64;
+        let page_start = self.selected / page_size * page_size;
+        if self.page_count != 0
+            && page_start == self.page_start
+            && self.selected - page_start < self.page_count as u64
+        {
+            return Ok(());
+        }
+        self.photos.fill(photos::Photo { id: 0 });
+        let count = photos::list_page(page_start, &mut self.photos)?;
+        if count == 0 || self.selected - page_start >= count as u64 {
+            return Err(Error::Internal);
+        }
+        self.page_start = page_start;
+        self.page_count = count;
+        Ok(())
+    }
+
+    fn selected_photo(&self) -> Result<photos::Photo, Error> {
+        let position = self.selected.saturating_sub(self.page_start);
+        if position >= self.page_count as u64 {
+            return Err(Error::Internal);
+        }
+        Ok(self.photos[position as usize])
     }
 }
 
@@ -94,7 +134,10 @@ fn frame_bytes(pixels: &mut [u16]) -> &mut [u8] {
 
 fn render(gallery: &mut Gallery, pixels: &mut [u16]) {
     if matches!(gallery.status, ViewStatus::Photo)
-        && photos::load_rgb565(gallery.photos[gallery.selected], pixels).is_err()
+        && gallery
+            .selected_photo()
+            .and_then(|photo| photos::load_rgb565(photo, pixels))
+            .is_err()
     {
         gallery.status = ViewStatus::Damaged;
     }
@@ -141,18 +184,18 @@ fn render(gallery: &mut Gallery, pixels: &mut [u16]) {
         color::SURFACE,
     );
     canvas.draw_text(16, 13, "GALLERY", color::TEXT, 1);
-    let mut position = [0_u8; 8];
-    let text = format_position(gallery.selected + 1, gallery.count, &mut position);
+    let mut position = [0_u8; 41];
+    let text = format_position(gallery.selected + 1, gallery.total, &mut position);
     canvas.fill_rect(
         Rect {
-            x: 262,
+            x: 212,
             y: 145,
-            width: 50,
+            width: 100,
             height: 17,
         },
         color::SURFACE,
     );
-    canvas.draw_text(269, 151, text, color::TEXT, 1);
+    canvas.draw_text(220, 151, text, color::TEXT, 1);
 
     if gallery.confirm_delete {
         canvas.fill_rect(
@@ -205,7 +248,7 @@ fn render(gallery: &mut Gallery, pixels: &mut [u16]) {
     }
 }
 
-fn format_position<'a>(current: usize, total: usize, output: &'a mut [u8; 8]) -> &'a str {
+fn format_position<'a>(current: u64, total: u64, output: &'a mut [u8; 41]) -> &'a str {
     let mut length = write_number(current, output, 0);
     output[length] = b'/';
     length += 1;
@@ -213,15 +256,19 @@ fn format_position<'a>(current: usize, total: usize, output: &'a mut [u8; 8]) ->
     unsafe { core::str::from_utf8_unchecked(&output[..length]) }
 }
 
-fn write_number(value: usize, output: &mut [u8], offset: usize) -> usize {
-    if value >= 10 {
-        output[offset] = b'0' + (value / 10) as u8;
-        output[offset + 1] = b'0' + (value % 10) as u8;
-        offset + 2
-    } else {
-        output[offset] = b'0' + value as u8;
-        offset + 1
+fn write_number(mut value: u64, output: &mut [u8], offset: usize) -> usize {
+    if value == 0 {
+        output[offset] = b'0';
+        return offset + 1;
     }
+    let mut length = offset;
+    while value != 0 {
+        output[length] = b'0' + (value % 10) as u8;
+        value /= 10;
+        length += 1;
+    }
+    output[offset..length].reverse();
+    length
 }
 
 #[cfg(not(test))]
@@ -246,8 +293,7 @@ pub extern "C" fn main() -> i32 {
                         KEY_LEFT => gallery.delete_selected = false,
                         KEY_RIGHT => gallery.delete_selected = true,
                         KEY_ENTER if gallery.delete_selected => {
-                            let photo = gallery.photos[gallery.selected];
-                            match photos::delete(photo) {
+                            match gallery.selected_photo().and_then(photos::delete) {
                                 Ok(_) => gallery.refresh(false),
                                 Err(Error::Unavailable) => gallery.status = ViewStatus::Authorize,
                                 Err(Error::Denied) => gallery.status = ViewStatus::Denied,
@@ -262,7 +308,7 @@ pub extern "C" fn main() -> i32 {
                     match event.code {
                         KEY_LEFT => gallery.move_left(),
                         KEY_RIGHT => gallery.move_right(),
-                        KEY_ENTER if gallery.count > 0 => {
+                        KEY_ENTER if gallery.total > 0 => {
                             gallery.confirm_delete = true;
                             gallery.delete_selected = false;
                         }

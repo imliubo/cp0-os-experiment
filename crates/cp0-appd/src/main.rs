@@ -125,7 +125,8 @@ fn serve() -> Result<(), String> {
     let (shell_uid, _) = lookup_unix_account("cp0-shell").map_err(|error| error.to_string())?;
     let (store_uid, _) = lookup_unix_account("cp0-store").map_err(|error| error.to_string())?;
     let listeners = systemd_listeners()?;
-    let server = AppdServer::new(manager, permissions, [0, shell_uid])
+    let server = AppdServer::new(manager, permissions, [0])
+        .allow_shell(shell_uid)
         .allow_store_installer(store_uid)
         .with_device_policy(policy);
     match listeners.broker {

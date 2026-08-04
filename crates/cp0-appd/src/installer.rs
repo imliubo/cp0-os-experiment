@@ -316,6 +316,12 @@ impl PackageInstaller {
                 .ok_or_else(|| InstallError::Invalid("app.json is missing".into()))?,
         )?;
         require_compatible_sdk(&manifest.sdk_version)?;
+        if trust == TrustDecision::DeveloperMode && !crate::is_removable_app(&manifest.id) {
+            return Err(InstallError::Untrusted(format!(
+                "built-in application {} accepts only Store-signed updates",
+                manifest.id
+            )));
+        }
         if let IncomingPolicy::Store {
             expected_app_id,
             expected_version,
@@ -846,6 +852,56 @@ mod tests {
             fixture.installer().install(&path),
             Err(InstallError::Untrusted(_))
         ));
+    }
+
+    #[test]
+    fn builtins_reject_developer_replacement_but_accept_store_updates() {
+        let fixture = Fixture::new("builtin-trust");
+        fs::write(&fixture.trust_paths.developer_mode, b"enabled\n").unwrap();
+        let developer_public = public_key(&fixture.developer_key);
+        fs::write(
+            fixture
+                .trust_paths
+                .developer_keys
+                .join(format!("{}.pub", hex(&key_id(&developer_public)))),
+            developer_public,
+        )
+        .unwrap();
+
+        let mut manifest = fixture.manifest();
+        manifest.id = "dev.cardputerzero.camera".into();
+        manifest.name = "Camera".into();
+        let package = |store_signed| {
+            let mut package = CApp::new(vec![
+                PackageEntry {
+                    path: "app.json".into(),
+                    contents: serde_json::to_vec_pretty(&manifest).unwrap(),
+                },
+                PackageEntry {
+                    path: "bin/app.wasm".into(),
+                    contents: b"camera wasm".to_vec(),
+                },
+            ])
+            .unwrap();
+            package.sign_developer(&fixture.developer_key).unwrap();
+            if store_signed {
+                package.sign_store(&fixture.store_key).unwrap();
+            }
+            package
+        };
+
+        let developer = fixture.write_package("camera-developer.capp", &package(false));
+        assert!(matches!(
+            fixture.installer().install(&developer),
+            Err(InstallError::Untrusted(_))
+        ));
+        assert!(!fixture.apps.join("dev.cardputerzero.camera").exists());
+
+        let store = fixture.write_package("camera-store.capp", &package(true));
+        assert_eq!(
+            fixture.installer().install(&store).unwrap().trust,
+            TrustDecision::Store
+        );
     }
 
     #[test]

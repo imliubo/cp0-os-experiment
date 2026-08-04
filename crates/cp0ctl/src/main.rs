@@ -554,6 +554,7 @@ fn send_broker_command(command: BrokerCommand) -> Result<(), String> {
         | BrokerOutcome::StorageValue { .. }
         | BrokerOutcome::StorageNotFound
         | BrokerOutcome::StorageDeleted { .. }
+        | BrokerOutcome::PhotoImported { .. }
         | BrokerOutcome::IntentAccepted { .. }
         | BrokerOutcome::IntentMessage { .. }
         | BrokerOutcome::IntentEmpty

@@ -27,11 +27,12 @@
 #define CP0_CAMERA_WIDTH 320U
 #define CP0_CAMERA_HEIGHT 170U
 #define CP0_CAMERA_PIXEL_COUNT (CP0_CAMERA_WIDTH * CP0_CAMERA_HEIGHT)
+#define CP0_CAMERA_FRAME_BYTES (CP0_CAMERA_PIXEL_COUNT * 2U)
 #define CP0_MAX_LORA_PAYLOAD_BYTES 64U
 #define CP0_LORA_METADATA_BYTES 4U
 #define CP0_MAX_STORAGE_KEY_BYTES 64U
 #define CP0_MAX_STORAGE_VALUE_BYTES (8U * 1024U)
-#define CP0_MAX_PHOTOS 32U
+#define CP0_PHOTO_LIST_PAGE_SIZE 8U
 #define CP0_MAX_INTENT_ACTION_BYTES 96U
 #define CP0_MAX_INTENT_PAYLOAD_BYTES 1024U
 #define CP0_MAX_CHECKPOINT_BYTES (8U * 1024U)
@@ -435,6 +436,41 @@ static inline cp0_result_t cp0_photos_delete(const uint8_t *key,
     if (!cp0_storage_key_is_valid(key, key_length) || existed == NULL)
         return CP0_ERROR_INVALID_ARGUMENT;
     result = cp0_photos_delete_raw(key, key_length);
+    if (result < 0)
+        return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
+                                           : CP0_ERROR_INTERNAL;
+    if (result > 1)
+        return CP0_ERROR_INTERNAL;
+    *existed = (uint8_t)result;
+    return CP0_OK;
+}
+
+static inline cp0_result_t cp0_photos_import_rgb565(
+    const uint16_t *pixels, uint32_t pixel_count, uint64_t suggested_id,
+    uint64_t *photo_id) {
+    int64_t result;
+
+    if (pixels == NULL || pixel_count != CP0_CAMERA_PIXEL_COUNT ||
+        suggested_id > INT64_MAX || photo_id == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    result = cp0_photos_import_rgb565_raw(
+        (const uint8_t *)pixels, CP0_CAMERA_FRAME_BYTES, suggested_id);
+    if (result < 0)
+        return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
+                                           : CP0_ERROR_INTERNAL;
+    if (result == 0)
+        return CP0_ERROR_INTERNAL;
+    *photo_id = (uint64_t)result;
+    return CP0_OK;
+}
+
+static inline cp0_result_t cp0_photos_remove(uint64_t photo_id,
+                                             uint8_t *existed) {
+    int32_t result;
+
+    if (photo_id == 0U || photo_id > INT64_MAX || existed == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    result = cp0_photos_remove_raw(photo_id);
     if (result < 0)
         return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
                                            : CP0_ERROR_INTERNAL;

@@ -75,9 +75,9 @@ jq -e '
     .key_events == 1 and
     .frames_presented >= 2 and
     .capability_calls["camera.capture"] >= 1 and
-    .capability_calls["photos.write"] == 16 and
-    .photo_library_keys == 15 and
-    .photo_library_bytes == 108816
+    .capability_calls["photos.write"] == 1 and
+    .photo_library_keys == 3 and
+    .photo_library_bytes == 110896
 ' "$output/camera.json" >/dev/null
 jq -e '
     .frames_presented >= 1 and

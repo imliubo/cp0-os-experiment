@@ -74,6 +74,12 @@ int32_t cp0_photos_index_get_raw(uint8_t *value, uint32_t value_capacity);
 CP0_IMPORT("cp0_photos_delete")
 int32_t cp0_photos_delete_raw(const uint8_t *key, uint32_t key_length);
 
+CP0_IMPORT("cp0_photos_import_rgb565")
+int64_t cp0_photos_import_rgb565_raw(const uint8_t *pixels, uint32_t pixel_bytes, uint64_t suggested_id);
+
+CP0_IMPORT("cp0_photos_remove")
+int32_t cp0_photos_remove_raw(uint64_t photo_id);
+
 CP0_IMPORT("cp0_intent_send")
 cp0_result_t cp0_intent_send_raw(const uint8_t *action, uint32_t action_length, const uint8_t *payload, uint32_t payload_length);
 

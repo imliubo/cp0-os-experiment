@@ -133,6 +133,7 @@ function generateRust() {
     "",
     "#[rustfmt::skip]",
     "#[cfg(target_arch = \"wasm32\")]",
+    "#[allow(dead_code)]",
     "mod target {",
     `    #[link(wasm_import_module = \"${contract.module}\")]`,
     "    unsafe extern \"C\" {",
@@ -158,6 +159,7 @@ function generateRust() {
     "",
     "#[rustfmt::skip]",
     "#[cfg(not(target_arch = \"wasm32\"))]",
+    "#[allow(dead_code)]",
     "mod target {",
   );
   for (const entry of contract.imports) {

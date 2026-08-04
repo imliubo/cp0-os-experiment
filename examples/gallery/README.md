@@ -4,6 +4,10 @@ Gallery reads photos through the shared photo-library capability. It never
 receives a filesystem path and can delete a photo only after an explicit
 confirmation.
 
+The production library has no photo-count eviction policy. Gallery caches only
+the current eight-ID page and loads another page when navigation crosses its
+boundary, so memory use does not grow with the library.
+
 ![Gallery empty-library state](assets/screenshot.png)
 
 ## Controls
@@ -24,4 +28,5 @@ cargo run -p cp0ctl -- run examples/gallery \
   --output target/gallery.ppm
 ```
 
-Gallery is one of the eight applications included in the product image.
+Gallery is one of the eight applications included in the product image and is
+a non-removable production built-in.

@@ -13,6 +13,12 @@ use cp0_manifest::AppManifest;
 use crate::{AppAccount, AppLayout, AppRegistry, RegistryError, SandboxPlan, build_sandbox_plan};
 
 pub const DEFAULT_REGISTRY_PATH: &str = "/var/lib/cardputerzero/registry/apps.json";
+pub const IMMUTABLE_BUILTIN_APP_IDS: &[&str] =
+    &["dev.cardputerzero.camera", "dev.cardputerzero.gallery"];
+
+pub fn is_removable_app(app_id: &str) -> bool {
+    !IMMUTABLE_BUILTIN_APP_IDS.contains(&app_id)
+}
 const SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
 const SYSTEMCTL_PATH: &str = "/usr/bin/systemctl";
 const COMPOSITOR_USER: &str = "cp0-compositor";
@@ -60,6 +66,7 @@ pub enum AppManagerError {
     Registry(RegistryError),
     Manifest(cp0_manifest::ManifestError),
     NotInstalled(String),
+    ProtectedBuiltin(String),
     IdentityMismatch,
     InvalidPackagePath(&'static str),
     InvalidHostIdentity(String),
@@ -80,6 +87,12 @@ impl fmt::Display for AppManagerError {
             Self::Manifest(error) => write!(formatter, "{error}"),
             Self::NotInstalled(app_id) => {
                 write!(formatter, "application {app_id} is not installed")
+            }
+            Self::ProtectedBuiltin(app_id) => {
+                write!(
+                    formatter,
+                    "built-in application {app_id} cannot be uninstalled"
+                )
             }
             Self::IdentityMismatch => formatter.write_str(
                 "installed manifest identity does not match the trusted application registry",
@@ -320,6 +333,9 @@ impl AppManager {
     }
 
     pub fn uninstall(&mut self, app_id: &str) -> Result<UninstalledApp, AppManagerError> {
+        if !is_removable_app(app_id) {
+            return Err(AppManagerError::ProtectedBuiltin(app_id.into()));
+        }
         if self.is_running(app_id)? {
             return Err(AppManagerError::AlreadyRunning(app_id.into()));
         }
@@ -894,5 +910,12 @@ mod tests {
             installed.account_uid
         );
         assert!(manager.installed_apps().is_empty());
+    }
+
+    #[test]
+    fn camera_and_gallery_are_immutable_builtins() {
+        assert!(!is_removable_app("dev.cardputerzero.camera"));
+        assert!(!is_removable_app("dev.cardputerzero.gallery"));
+        assert!(is_removable_app("dev.cardputerzero.neon-snake"));
     }
 }

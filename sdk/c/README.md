@@ -61,6 +61,8 @@ state and supported Play/Pause, Previous and Next actions.
 cannot name another application or attach media metadata, and registration
 does not replace the `audio.playback` permission required for sound output.
 The `cp0_photos_*` calls expose the separately permissioned shared photo
-library transport. Use `photos.read` for reads and `photos.write` for index
-updates, writes, and deletes; the fixed v1 layout is described in
-`docs/PHOTO-LIBRARY-V1.md`.
+library. Use `cp0_photos_import_rgb565` to atomically add one fixed frame and
+`cp0_photos_remove` to remove one selected ID; applications do not update
+Gallery indexes directly. `photos.read` and `photos.write` remain independent
+permissions. The paginated format and migration contract are described in
+`docs/PHOTO-LIBRARY-V2.md`.

@@ -2,6 +2,7 @@
 
 #[rustfmt::skip]
 #[cfg(target_arch = "wasm32")]
+#[allow(dead_code)]
 mod target {
     #[link(wasm_import_module = "cardputerzero")]
     unsafe extern "C" {
@@ -53,6 +54,10 @@ mod target {
         fn raw_cp0_photos_index_get(value: *mut u8, value_capacity: u32) -> i32;
         #[link_name = "cp0_photos_delete"]
         fn raw_cp0_photos_delete(key: *const u8, key_length: u32) -> i32;
+        #[link_name = "cp0_photos_import_rgb565"]
+        fn raw_cp0_photos_import_rgb565(pixels: *const u8, pixel_bytes: u32, suggested_id: u64) -> i64;
+        #[link_name = "cp0_photos_remove"]
+        fn raw_cp0_photos_remove(photo_id: u64) -> i32;
         #[link_name = "cp0_intent_send"]
         fn raw_cp0_intent_send(action: *const u8, action_length: u32, payload: *const u8, payload_length: u32) -> i32;
         #[link_name = "cp0_intent_take"]
@@ -159,6 +164,14 @@ mod target {
         unsafe { raw_cp0_photos_delete(key, key_length) }
     }
 
+    pub(crate) fn cp0_photos_import_rgb565(pixels: *const u8, pixel_bytes: u32, suggested_id: u64) -> i64 {
+        unsafe { raw_cp0_photos_import_rgb565(pixels, pixel_bytes, suggested_id) }
+    }
+
+    pub(crate) fn cp0_photos_remove(photo_id: u64) -> i32 {
+        unsafe { raw_cp0_photos_remove(photo_id) }
+    }
+
     pub(crate) fn cp0_intent_send(action: *const u8, action_length: u32, payload: *const u8, payload_length: u32) -> i32 {
         unsafe { raw_cp0_intent_send(action, action_length, payload, payload_length) }
     }
@@ -179,6 +192,7 @@ mod target {
 
 #[rustfmt::skip]
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
 mod target {
     pub(crate) const fn cp0_monotonic_milliseconds() -> u64 {
         0
@@ -273,6 +287,14 @@ mod target {
     }
 
     pub(crate) const fn cp0_photos_delete(_key: *const u8, _key_length: u32) -> i32 {
+        -2
+    }
+
+    pub(crate) const fn cp0_photos_import_rgb565(_pixels: *const u8, _pixel_bytes: u32, _suggested_id: u64) -> i64 {
+        -2
+    }
+
+    pub(crate) const fn cp0_photos_remove(_photo_id: u64) -> i32 {
         -2
     }
 

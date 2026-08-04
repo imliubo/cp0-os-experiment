@@ -20,7 +20,9 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
         [command] if command == "serve" => {
             let listener = systemd_listener()?;
             let owner_uid = unsafe { libc::geteuid() };
-            StorageServer::new(StorageService::new(DEFAULT_STORAGE_ROOT, owner_uid), [0])
+            let service = StorageService::new(DEFAULT_STORAGE_ROOT, owner_uid);
+            service.initialize().map_err(|error| error.to_string())?;
+            StorageServer::new(service, [0])
                 .serve(listener)
                 .map_err(|error| error.to_string())
         }

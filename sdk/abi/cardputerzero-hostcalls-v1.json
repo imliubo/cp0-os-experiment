@@ -318,6 +318,30 @@
       "wit": "photos.delete"
     },
     {
+      "name": "cp0_photos_import_rgb565",
+      "runtime_function": "cp0_photos_import_rgb565",
+      "c_name": "cp0_photos_import_rgb565_raw",
+      "wamr_signature": "(*~I)I",
+      "result": "i64",
+      "parameters": [
+        { "name": "pixels", "type": "const-u8-ptr" },
+        { "name": "pixel_bytes", "type": "u32" },
+        { "name": "suggested_id", "type": "u64" }
+      ],
+      "native_fallback": -2,
+      "wit": "photos.import-rgb565"
+    },
+    {
+      "name": "cp0_photos_remove",
+      "runtime_function": "cp0_photos_remove",
+      "c_name": "cp0_photos_remove_raw",
+      "wamr_signature": "(I)i",
+      "result": "i32",
+      "parameters": [{ "name": "photo_id", "type": "u64" }],
+      "native_fallback": -2,
+      "wit": "photos.remove"
+    },
+    {
       "name": "cp0_intent_send",
       "runtime_function": "cp0_intent_send",
       "c_name": "cp0_intent_send_raw",

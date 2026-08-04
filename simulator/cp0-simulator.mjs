@@ -139,6 +139,77 @@ async function runApplication() {
     return allowed(capability) ? 0 : ERROR_DENIED;
   }
 
+  function setPhotoValue(key, value) {
+    const existing = photoStorage.get(key);
+    photoStorageBytes -= existing?.length || 0;
+    photoStorage.set(key, value);
+    photoStorageBytes += value.length;
+  }
+
+  function photoPageKey(pageNumber) {
+    return `index.v2.${pageNumber.toString(16).padStart(8, "0")}`;
+  }
+
+  function photoBlobKey(photoId) {
+    return `p${photoId.toString(16).padStart(16, "0")}.rgb565`;
+  }
+
+  function encodePhotoHead(activeCount, slotCount, lastId) {
+    const value = new Uint8Array(32);
+    value.set([0x43, 0x50, 0x30, 0x48, 2]);
+    const view = new DataView(value.buffer);
+    view.setBigUint64(8, activeCount, true);
+    view.setBigUint64(16, slotCount, true);
+    view.setBigUint64(24, lastId, true);
+    return value;
+  }
+
+  function decodePhotoHead(value) {
+    if (
+      !value || value.length !== 32 || value[0] !== 0x43 || value[1] !== 0x50 ||
+      value[2] !== 0x30 || value[3] !== 0x48 || value[4] !== 2
+    ) return null;
+    const view = new DataView(value.buffer, value.byteOffset, value.byteLength);
+    return {
+      activeCount: view.getBigUint64(8, true),
+      slotCount: view.getBigUint64(16, true),
+      lastId: view.getBigUint64(24, true),
+    };
+  }
+
+  function emptyPhotoPage(pageNumber) {
+    const value = new Uint8Array(16 + 256 * 8);
+    value.set([0x43, 0x50, 0x30, 0x47, 2]);
+    new DataView(value.buffer).setUint32(8, pageNumber, true);
+    return value;
+  }
+
+  function ensurePhotoHead() {
+    const current = photoStorage.get("head.v2");
+    if (current) return decodePhotoHead(current);
+    const legacy = photoStorage.get("index.v1");
+    let count = 0;
+    let lastId = 0n;
+    if (legacy && legacy.length >= 8 && legacy[0] === 0x43 && legacy[1] === 0x50 &&
+        legacy[2] === 0x30 && legacy[3] === 0x50 && legacy[4] === 1) {
+      count = legacy[5];
+      if (legacy.length !== 8 + count * 8 || count > 32) return null;
+      const page = emptyPhotoPage(0);
+      const legacyView = new DataView(legacy.buffer, legacy.byteOffset, legacy.byteLength);
+      const pageView = new DataView(page.buffer);
+      pageView.setUint16(6, count, true);
+      for (let index = 0; index < count; index += 1) {
+        const id = legacyView.getBigUint64(8 + index * 8, true);
+        pageView.setBigUint64(16 + index * 8, id, true);
+        lastId = id;
+      }
+      if (count > 0) setPhotoValue(photoPageKey(0), page);
+    }
+    const head = { activeCount: BigInt(count), slotCount: BigInt(count), lastId };
+    setPhotoValue("head.v2", encodePhotoHead(head.activeCount, head.slotCount, head.lastId));
+    return head;
+  }
+
   function snapshot(frame = null) {
     metrics.memory_pages = memory().buffer.byteLength / 65536;
     metrics.storage_bytes = storageBytes;
@@ -311,21 +382,23 @@ async function runApplication() {
     cp0_photos_put(keyPointer, keyLength, valuePointer, valueLength) {
       metrics.host_calls += 1;
       if (!allowed("photos.write")) return ERROR_DENIED;
-      const key = text(keyPointer, keyLength);
-      const value = range(valuePointer, valueLength).slice();
-      const existing = photoStorage.get(key);
-      if (!existing && photoStorage.size >= 512) return ERROR_LIMIT;
-      const projected = photoStorageBytes - (existing?.length || 0) + value.length;
-      if (projected > 8 * 1024 * 1024) return ERROR_LIMIT;
-      photoStorage.set(key, value);
-      photoStorageBytes = projected;
-      return 0;
+      text(keyPointer, keyLength);
+      range(valuePointer, valueLength);
+      return ERROR_INVALID;
     },
     cp0_photos_get(keyPointer, keyLength, valuePointer, valueCapacity) {
       metrics.host_calls += 1;
       const key = text(keyPointer, keyLength);
       if (!allowed("photos.read")) return ERROR_DENIED;
-      const value = photoStorage.get(key);
+      const chunk = /^p([0-9a-f]{16})\.c([0-9]{2})$/.exec(key);
+      let value = photoStorage.get(key);
+      if (!value && chunk) {
+        const blob = photoStorage.get(`p${chunk[1]}.rgb565`);
+        const index = Number(chunk[2]);
+        const start = index * 8192;
+        if (blob && start < blob.length)
+          value = blob.slice(start, Math.min(start + 8192, blob.length));
+      }
       if (!value) return 0;
       if (value.length > (valueCapacity >>> 0)) return ERROR_LIMIT;
       range(valuePointer, valueCapacity).set(value);
@@ -334,7 +407,7 @@ async function runApplication() {
     cp0_photos_index_get(valuePointer, valueCapacity) {
       metrics.host_calls += 1;
       if (!allowed("photos.write")) return ERROR_DENIED;
-      const value = photoStorage.get("index.v1");
+      const value = photoStorage.get("head.v2");
       if (!value) return 0;
       if (value.length > (valueCapacity >>> 0)) return ERROR_LIMIT;
       range(valuePointer, valueCapacity).set(value);
@@ -343,12 +416,75 @@ async function runApplication() {
     cp0_photos_delete(keyPointer, keyLength) {
       metrics.host_calls += 1;
       if (!allowed("photos.write")) return ERROR_DENIED;
-      const key = text(keyPointer, keyLength);
-      const value = photoStorage.get(key);
-      if (!value) return 0;
-      photoStorage.delete(key);
-      photoStorageBytes -= value.length;
-      return 1;
+      text(keyPointer, keyLength);
+      return ERROR_INVALID;
+    },
+    cp0_photos_import_rgb565(pixelPointer, pixelBytes, suggestedId) {
+      metrics.host_calls += 1;
+      if (!allowed("photos.write")) return BigInt(ERROR_DENIED);
+      if ((pixelBytes >>> 0) !== CAMERA_WIDTH * CAMERA_HEIGHT * 2)
+        return BigInt(ERROR_INVALID);
+      const head = ensurePhotoHead();
+      if (!head) return -5n;
+      BigInt(suggestedId);
+      const photoId = head.lastId + 1n > 1n ? head.lastId + 1n : 1n;
+      if (photoId > 0x7fffffffffffffffn) return BigInt(ERROR_LIMIT);
+      const pageNumberBig = head.slotCount / 256n;
+      if (pageNumberBig > 0xffffffffn) return BigInt(ERROR_LIMIT);
+      const pageNumber = Number(pageNumberBig);
+      const position = Number(head.slotCount % 256n);
+      const pageKey = photoPageKey(pageNumber);
+      const page = position === 0
+        ? emptyPhotoPage(pageNumber)
+        : photoStorage.get(pageKey)?.slice();
+      if (!page) return -5n;
+      const pageView = new DataView(page.buffer, page.byteOffset, page.byteLength);
+      pageView.setBigUint64(16 + position * 8, photoId, true);
+      pageView.setUint16(6, pageView.getUint16(6, true) + 1, true);
+      setPhotoValue(photoBlobKey(photoId), range(pixelPointer, pixelBytes).slice());
+      setPhotoValue(pageKey, page);
+      setPhotoValue(
+        "head.v2",
+        encodePhotoHead(head.activeCount + 1n, head.slotCount + 1n, photoId),
+      );
+      return photoId;
+    },
+    cp0_photos_remove(photoId) {
+      metrics.host_calls += 1;
+      if (!allowed("photos.write")) return ERROR_DENIED;
+      const id = BigInt(photoId);
+      if (id === 0n || id > 0x7fffffffffffffffn) return ERROR_INVALID;
+      const head = ensurePhotoHead();
+      if (!head) return -5;
+      const pageCount = Number((head.slotCount + 255n) / 256n);
+      for (let pageNumber = 0; pageNumber < pageCount; pageNumber += 1) {
+        const key = photoPageKey(pageNumber);
+        const page = photoStorage.get(key)?.slice();
+        if (!page) return -5;
+        const pageView = new DataView(page.buffer, page.byteOffset, page.byteLength);
+        const slots = Number(
+          (head.slotCount - BigInt(pageNumber) * 256n) > 256n
+            ? 256n
+            : head.slotCount - BigInt(pageNumber) * 256n,
+        );
+        for (let position = 0; position < slots; position += 1) {
+          if (pageView.getBigUint64(16 + position * 8, true) !== id) continue;
+          pageView.setBigUint64(16 + position * 8, 0n, true);
+          pageView.setUint16(6, pageView.getUint16(6, true) - 1, true);
+          setPhotoValue(key, page);
+          setPhotoValue(
+            "head.v2",
+            encodePhotoHead(head.activeCount - 1n, head.slotCount, head.lastId),
+          );
+          const blob = photoStorage.get(photoBlobKey(id));
+          if (blob) {
+            photoStorage.delete(photoBlobKey(id));
+            photoStorageBytes -= blob.length;
+          }
+          return 1;
+        }
+      }
+      return 0;
     },
     cp0_intent_send(actionPointer, actionLength, payloadPointer, payloadLength) {
       metrics.host_calls += 1;

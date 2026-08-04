@@ -1,12 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::io::BufReader;
-use std::os::fd::{AsFd, OwnedFd};
+use std::fs::File;
+use std::io::{Read, Seek};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cp0_audio_protocol::AudioErrorCode as ServiceAudioErrorCode;
 use cp0_camera_protocol::CameraErrorCode as ServiceCameraErrorCode;
@@ -18,6 +19,10 @@ use cp0_radio_protocol::RadioErrorCode as ServiceRadioErrorCode;
 use cp0_storage_protocol::StorageErrorCode as ServiceStorageErrorCode;
 use cp0_store_protocol::StoreRuntimeMetricEvent;
 
+use crate::photo_library::{
+    PHOTO_FRAME_BYTES, PHOTO_LIBRARY_HEAD_KEY, PHOTO_LIBRARY_ID, PHOTO_LIBRARY_QUOTA_BYTES,
+    PhotoImportError, import_app_photo, import_screenshot, remove_photo,
+};
 use crate::protocol::APPD_PROTOCOL_VERSION;
 use crate::{
     AppManager, AppManagerError, AppSummary, AppdCommand, AppdRequest, AppdResponse, AudioClient,
@@ -30,16 +35,13 @@ use crate::{
     PermissionCoordinator, PermissionPromptError, PermissionRequestResult, PolicyError,
     RadioClient, RadioClientError, ResponseData, RuntimeBinding, StorageClient, StorageClientError,
     StoreMetricsClient, TaskError, TaskId, TaskRegistry, TaskState, TaskSummary, TrustPaths,
-    TrustPolicy, encode_broker_response, peer_credentials, read_broker_request, read_request,
-    write_broker_response, write_response,
+    TrustPolicy, encode_broker_response, peer_credentials, recv_broker_request_with_fd,
+    recv_request_with_fd, write_broker_response, write_response,
 };
 
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
 const BROKER_CLIENT_TIMEOUT: Duration = Duration::from_millis(500);
 const RUNTIME_MONITOR_RETRY: Duration = Duration::from_secs(5);
-const PHOTO_LIBRARY_ID: &str = "dev.cardputerzero.photo-library";
-const PHOTO_LIBRARY_QUOTA_BYTES: u64 = 8 * cp0_storage_protocol::MIB;
-const PHOTO_LIBRARY_INDEX_KEY: &str = "index.v1";
 
 #[derive(Debug)]
 pub enum ServerError {
@@ -71,11 +73,13 @@ pub struct AppdServer {
     state: Arc<Mutex<ServerState>>,
     trusted_uids: BTreeSet<u32>,
     store_installer_uids: BTreeSet<u32>,
+    shell_uid: Option<u32>,
     capabilities: CapabilityServices,
     installer: PackageInstaller,
     store_metrics: StoreMetricsClient,
     lifecycle: Arc<Mutex<()>>,
     runtime: Arc<Mutex<RuntimeState>>,
+    photo_library: Arc<Mutex<()>>,
     runtime_sequence: Arc<AtomicU64>,
 }
 
@@ -185,10 +189,12 @@ impl AppdServer {
             })),
             trusted_uids: trusted_uids.into_iter().collect(),
             store_installer_uids: BTreeSet::new(),
+            shell_uid: None,
             capabilities,
             store_metrics: StoreMetricsClient::default(),
             lifecycle: Arc::new(Mutex::new(())),
             runtime: Arc::new(Mutex::new(RuntimeState::default())),
+            photo_library: Arc::new(Mutex::new(())),
             runtime_sequence: Arc::new(AtomicU64::new(1)),
             installer: PackageInstaller::new(
                 crate::DEFAULT_APPS_ROOT,
@@ -201,6 +207,12 @@ impl AppdServer {
     pub fn allow_store_installer(mut self, uid: u32) -> Self {
         self.trusted_uids.insert(uid);
         self.store_installer_uids.insert(uid);
+        self
+    }
+
+    pub fn allow_shell(mut self, uid: u32) -> Self {
+        self.trusted_uids.insert(uid);
+        self.shell_uid = Some(uid);
         self
     }
 
@@ -259,8 +271,7 @@ impl AppdServer {
         stream.set_read_timeout(Some(CLIENT_TIMEOUT))?;
         stream.set_write_timeout(Some(CLIENT_TIMEOUT))?;
         let credentials = peer_credentials(&stream)?;
-        let mut reader = BufReader::new(stream.try_clone()?);
-        let request = match read_request(&mut reader) {
+        let (request, descriptor) = match recv_request_with_fd(&stream) {
             Ok(Some(request)) => request,
             Ok(None) => return Ok(()),
             Err(error) => {
@@ -272,11 +283,29 @@ impl AppdServer {
                 return Ok(());
             }
         };
+        let imports_screenshot = matches!(request.command, AppdCommand::ImportScreenshot);
+        if imports_screenshot != descriptor.is_some() {
+            write_response(
+                &mut stream,
+                &AppdResponse::error(
+                    request.request_id,
+                    ErrorCode::InvalidRequest,
+                    if imports_screenshot {
+                        "screenshot import requires exactly one frame descriptor"
+                    } else {
+                        "application command does not accept a descriptor"
+                    },
+                ),
+            )
+            .map_err(protocol_io)?;
+            return Ok(());
+        }
         if !control_command_authorized(
             credentials.uid,
             &request.command,
             &self.trusted_uids,
             &self.store_installer_uids,
+            self.shell_uid,
         ) {
             write_response(
                 &mut stream,
@@ -290,9 +319,54 @@ impl AppdServer {
             return Ok(());
         }
 
-        let response = self.dispatch(request, credentials.uid);
+        let response = if imports_screenshot {
+            self.import_screenshot_control(
+                request.request_id,
+                descriptor.expect("screenshot descriptor was checked"),
+            )
+        } else {
+            self.dispatch(request, credentials.uid)
+        };
         write_response(&mut stream, &response).map_err(protocol_io)?;
         Ok(())
+    }
+
+    fn import_screenshot_control(&self, request_id: u64, descriptor: OwnedFd) -> AppdResponse {
+        let frame = match read_photo_frame(descriptor) {
+            Ok(frame) => frame,
+            Err(error) => {
+                eprintln!("cp0-appd: rejected screenshot descriptor: {error}");
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::InvalidRequest,
+                    "screenshot frame descriptor does not satisfy the fixed contract",
+                );
+            }
+        };
+        let _transaction = match self.photo_library.lock() {
+            Ok(transaction) => transaction,
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "photo library transaction state is unavailable",
+                );
+            }
+        };
+        let suggested_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(1, |duration| {
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+            });
+        match import_screenshot(&self.capabilities.storage, request_id, &frame, suggested_id) {
+            Ok(photo_id) => {
+                AppdResponse::success(request_id, ResponseData::ScreenshotImported { photo_id })
+            }
+            Err(error) => {
+                eprintln!("cp0-appd: screenshot photo import failed: {error}");
+                photo_import_error_response(request_id, &error)
+            }
+        }
     }
 
     fn dispatch(&self, request: AppdRequest, peer_uid: u32) -> AppdResponse {
@@ -340,6 +414,9 @@ impl AppdServer {
             AppdCommand::DispatchMediaAction { .. } => {
                 unreachable!("media dispatch returned before state lock")
             }
+            AppdCommand::ImportScreenshot => {
+                unreachable!("screenshot import returned before state lock")
+            }
             AppdCommand::Ping => Ok(ResponseData::Pong),
             AppdCommand::List { offset, limit } => {
                 self.list_apps(&state, request_id, offset, limit)
@@ -358,32 +435,41 @@ impl AppdServer {
             }
             AppdCommand::Uninstall { app_id } => {
                 let has_task = task_blocks_package_change(&state.tasks, &app_id);
-                let result = state
-                    .manager
-                    .is_running(&app_id)
-                    .map_err(CommandError::Manager)
-                    .and_then(|running| {
-                        if running || has_task {
-                            Err(CommandError::Manager(AppManagerError::AlreadyRunning(
-                                app_id.clone(),
-                            )))
-                        } else {
-                            Ok(())
-                        }
-                    })
-                    .and_then(|()| {
-                        state
-                            .permissions
-                            .reset_app(&app_id)
-                            .map_err(CommandError::Permission)
-                    })
-                    .and_then(|()| {
-                        state.document_prompts.clear_app(&app_id);
-                        state
-                            .manager
-                            .uninstall(&app_id)
-                            .map_err(CommandError::Manager)
-                    });
+                let result = if crate::is_removable_app(&app_id) {
+                    Ok(())
+                } else {
+                    Err(CommandError::Manager(AppManagerError::ProtectedBuiltin(
+                        app_id.clone(),
+                    )))
+                }
+                .and_then(|()| {
+                    state
+                        .manager
+                        .is_running(&app_id)
+                        .map_err(CommandError::Manager)
+                })
+                .and_then(|running| {
+                    if running || has_task {
+                        Err(CommandError::Manager(AppManagerError::AlreadyRunning(
+                            app_id.clone(),
+                        )))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .and_then(|()| {
+                    state
+                        .permissions
+                        .reset_app(&app_id)
+                        .map_err(CommandError::Permission)
+                })
+                .and_then(|()| {
+                    state.document_prompts.clear_app(&app_id);
+                    state
+                        .manager
+                        .uninstall(&app_id)
+                        .map_err(CommandError::Manager)
+                });
                 result.map(|removed| {
                     state.media_sessions.clear_app(&app_id);
                     ResponseData::Uninstalled {
@@ -1178,6 +1264,7 @@ impl AppdServer {
                 .map_err(CommandError::Storage)?;
             apps.push(AppSummary {
                 running: state.manager.is_running(&installed.app_id)?,
+                removable: crate::is_removable_app(&installed.app_id),
                 app_id: installed.app_id.clone(),
                 name: manifest.name,
                 version: installed.version.clone(),
@@ -1296,10 +1383,8 @@ impl AppdServer {
         stream.set_read_timeout(Some(BROKER_CLIENT_TIMEOUT))?;
         stream.set_write_timeout(Some(BROKER_CLIENT_TIMEOUT))?;
         let credentials = peer_credentials(&stream)?;
-        let mut reader = BufReader::new(stream.try_clone()?);
-        let request = match read_broker_request(&mut reader) {
-            Ok(Some(request)) => request,
-            Ok(None) => return Ok(()),
+        let (request, descriptor) = match recv_broker_request_with_fd(&stream) {
+            Ok(request) => request,
             Err(error) => {
                 write_broker_response(
                     &mut stream,
@@ -1309,9 +1394,34 @@ impl AppdServer {
                 return Ok(());
             }
         };
+        let imports_photo = matches!(request.command, BrokerCommand::PhotoImportRgb565 { .. });
+        if imports_photo != descriptor.is_some() {
+            write_broker_response(
+                &mut stream,
+                &BrokerResponse::error(
+                    request.request_id,
+                    BrokerErrorCode::InvalidRequest,
+                    if imports_photo {
+                        "photo import requires exactly one sealed frame descriptor"
+                    } else {
+                        "broker command does not accept a descriptor"
+                    },
+                ),
+            )
+            .map_err(broker_io)?;
+            return Ok(());
+        }
         let dispatch = match &request.command {
             BrokerCommand::OpenDocument => self.dispatch_document(credentials, request.request_id),
             BrokerCommand::CaptureCamera => self.dispatch_camera(credentials, request.request_id),
+            BrokerCommand::PhotoImportRgb565 { suggested_id } => {
+                BrokerDispatch::response(self.dispatch_photo_import(
+                    credentials,
+                    request.request_id,
+                    *suggested_id,
+                    descriptor.expect("photo descriptor was checked"),
+                ))
+            }
             BrokerCommand::SendIntent {
                 action,
                 payload_base64,
@@ -1576,35 +1686,17 @@ impl AppdServer {
                     }
                 }
             }
-            BrokerCommand::PhotoPut { key, value_base64 } => {
+            BrokerCommand::PhotoPut { .. } => {
                 if let Err(response) =
                     self.authorize_broker_caller(peer, request_id, Permission::PhotosWrite)
                 {
                     return response;
                 }
-                let value = match cp0_storage_protocol::decode_value(&value_base64) {
-                    Ok(value) => value,
-                    Err(_) => {
-                        return BrokerResponse::error(
-                            request_id,
-                            BrokerErrorCode::InvalidRequest,
-                            "invalid bounded photo library value",
-                        );
-                    }
-                };
-                match self.capabilities.storage.put(
+                BrokerResponse::error(
                     request_id,
-                    PHOTO_LIBRARY_ID,
-                    PHOTO_LIBRARY_QUOTA_BYTES,
-                    &key,
-                    &value,
-                ) {
-                    Ok(used_bytes) => BrokerResponse::storage_stored(request_id, used_bytes),
-                    Err(error) => {
-                        eprintln!("cp0-appd: photo library put failed: {error}");
-                        storage_error_response(request_id, &error)
-                    }
-                }
+                    BrokerErrorCode::InvalidRequest,
+                    "legacy direct photo writes are disabled; use photo-import-rgb565",
+                )
             }
             BrokerCommand::PhotoGet { key } => {
                 if let Err(response) =
@@ -1612,12 +1704,44 @@ impl AppdServer {
                 {
                     return response;
                 }
-                match self.capabilities.storage.get(
-                    request_id,
-                    PHOTO_LIBRARY_ID,
-                    PHOTO_LIBRARY_QUOTA_BYTES,
-                    &key,
-                ) {
+                let _transaction = match self.lock_photo_library(request_id) {
+                    Ok(transaction) => transaction,
+                    Err(response) => return response,
+                };
+                let result = if let Some((photo_id, chunk)) = parse_photo_chunk_key(&key) {
+                    match self.capabilities.storage.get_blob_chunk(
+                        request_id,
+                        PHOTO_LIBRARY_ID,
+                        PHOTO_LIBRARY_QUOTA_BYTES,
+                        &photo_blob_key(photo_id),
+                        u32::try_from(chunk * cp0_storage_protocol::MAX_STORAGE_VALUE_BYTES)
+                            .expect("photo chunk offset fits u32"),
+                        photo_chunk_length(chunk) as u32,
+                    ) {
+                        Ok(Some(value)) => Ok(Some(value)),
+                        Ok(None) => self.capabilities.storage.get(
+                            request_id,
+                            PHOTO_LIBRARY_ID,
+                            PHOTO_LIBRARY_QUOTA_BYTES,
+                            &key,
+                        ),
+                        Err(error) => Err(error),
+                    }
+                } else if valid_photo_metadata_key(&key) {
+                    self.capabilities.storage.get(
+                        request_id,
+                        PHOTO_LIBRARY_ID,
+                        PHOTO_LIBRARY_QUOTA_BYTES,
+                        &key,
+                    )
+                } else {
+                    return BrokerResponse::error(
+                        request_id,
+                        BrokerErrorCode::InvalidRequest,
+                        "photo library key is outside the versioned format",
+                    );
+                };
+                match result {
                     Ok(Some(value)) => BrokerResponse::storage_value(request_id, &value),
                     Ok(None) => BrokerResponse::storage_not_found(request_id),
                     Err(error) => {
@@ -1632,11 +1756,15 @@ impl AppdServer {
                 {
                     return response;
                 }
+                let _transaction = match self.lock_photo_library(request_id) {
+                    Ok(transaction) => transaction,
+                    Err(response) => return response,
+                };
                 match self.capabilities.storage.get(
                     request_id,
                     PHOTO_LIBRARY_ID,
                     PHOTO_LIBRARY_QUOTA_BYTES,
-                    PHOTO_LIBRARY_INDEX_KEY,
+                    PHOTO_LIBRARY_HEAD_KEY,
                 ) {
                     Ok(Some(value)) => BrokerResponse::storage_value(request_id, &value),
                     Ok(None) => BrokerResponse::storage_not_found(request_id),
@@ -1646,24 +1774,38 @@ impl AppdServer {
                     }
                 }
             }
-            BrokerCommand::PhotoDelete { key } => {
+            BrokerCommand::PhotoDelete { .. } => {
                 if let Err(response) =
                     self.authorize_broker_caller(peer, request_id, Permission::PhotosWrite)
                 {
                     return response;
                 }
-                match self.capabilities.storage.delete(
+                BrokerResponse::error(
                     request_id,
-                    PHOTO_LIBRARY_ID,
-                    PHOTO_LIBRARY_QUOTA_BYTES,
-                    &key,
-                ) {
+                    BrokerErrorCode::InvalidRequest,
+                    "legacy direct photo deletion is disabled; use photo-remove",
+                )
+            }
+            BrokerCommand::PhotoRemove { photo_id } => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::PhotosWrite)
+                {
+                    return response;
+                }
+                let _transaction = match self.lock_photo_library(request_id) {
+                    Ok(transaction) => transaction,
+                    Err(response) => return response,
+                };
+                match remove_photo(&self.capabilities.storage, request_id, photo_id) {
                     Ok(existed) => BrokerResponse::storage_deleted(request_id, existed),
                     Err(error) => {
-                        eprintln!("cp0-appd: photo library delete failed: {error}");
-                        storage_error_response(request_id, &error)
+                        eprintln!("cp0-appd: photo library removal failed: {error}");
+                        photo_broker_error_response(request_id, &error)
                     }
                 }
+            }
+            BrokerCommand::PhotoImportRgb565 { .. } => {
+                unreachable!("photo imports carry descriptors")
             }
             BrokerCommand::SendIntent { .. } => {
                 unreachable!("intent send requires an acknowledgement-bound transition")
@@ -1718,6 +1860,55 @@ impl AppdServer {
                     Some(action) => BrokerResponse::media_action(request_id, action),
                     None => BrokerResponse::media_action_empty(request_id),
                 }
+            }
+        }
+    }
+
+    fn lock_photo_library(
+        &self,
+        request_id: u64,
+    ) -> Result<std::sync::MutexGuard<'_, ()>, BrokerResponse> {
+        self.photo_library.lock().map_err(|_| {
+            BrokerResponse::error(
+                request_id,
+                BrokerErrorCode::Internal,
+                "photo library transaction state is unavailable",
+            )
+        })
+    }
+
+    fn dispatch_photo_import(
+        &self,
+        peer: crate::PeerCredentials,
+        request_id: u64,
+        suggested_id: u64,
+        descriptor: OwnedFd,
+    ) -> BrokerResponse {
+        if let Err(response) =
+            self.authorize_broker_caller(peer, request_id, Permission::PhotosWrite)
+        {
+            return response;
+        }
+        let frame = match read_photo_frame(descriptor) {
+            Ok(frame) => frame,
+            Err(error) => {
+                eprintln!("cp0-appd: rejected application photo descriptor: {error}");
+                return BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::InvalidRequest,
+                    "photo frame descriptor does not satisfy the fixed contract",
+                );
+            }
+        };
+        let _transaction = match self.lock_photo_library(request_id) {
+            Ok(transaction) => transaction,
+            Err(response) => return response,
+        };
+        match import_app_photo(&self.capabilities.storage, request_id, &frame, suggested_id) {
+            Ok(photo_id) => BrokerResponse::photo_imported(request_id, photo_id),
+            Err(error) => {
+                eprintln!("cp0-appd: application photo import failed: {error}");
+                photo_broker_error_response(request_id, &error)
             }
         }
     }
@@ -2196,7 +2387,11 @@ fn control_command_authorized(
     command: &AppdCommand,
     trusted_uids: &BTreeSet<u32>,
     store_installer_uids: &BTreeSet<u32>,
+    shell_uid: Option<u32>,
 ) -> bool {
+    if matches!(command, AppdCommand::ImportScreenshot) {
+        return shell_uid == Some(uid);
+    }
     if store_installer_uids.contains(&uid) {
         return matches!(
             command,
@@ -2213,6 +2408,154 @@ fn control_command_authorized(
         AppdCommand::StoreInstall { .. } | AppdCommand::StoreListInstalled { .. } => false,
         _ => true,
     }
+}
+
+fn read_photo_frame(descriptor: OwnedFd) -> std::io::Result<Vec<u8>> {
+    let mut status: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(descriptor.as_raw_fd(), &raw mut status) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if status.st_mode & libc::S_IFMT != libc::S_IFREG
+        || status.st_size != PHOTO_FRAME_BYTES as libc::off_t
+        || !valid_photo_descriptor_access(flags)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "descriptor is not an exact read-only screenshot frame",
+        ));
+    }
+    validate_screenshot_seals(&descriptor)?;
+
+    let mut file = File::from(descriptor);
+    file.seek(std::io::SeekFrom::Start(0))?;
+    let mut frame = vec![0_u8; PHOTO_FRAME_BYTES];
+    file.read_exact(&mut frame)?;
+    Ok(frame)
+}
+
+#[cfg(target_os = "linux")]
+fn valid_photo_descriptor_access(flags: libc::c_int) -> bool {
+    matches!(flags & libc::O_ACCMODE, libc::O_RDONLY | libc::O_RDWR)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn valid_photo_descriptor_access(flags: libc::c_int) -> bool {
+    flags & libc::O_ACCMODE == libc::O_RDONLY
+}
+
+#[cfg(target_os = "linux")]
+fn validate_screenshot_seals(descriptor: &OwnedFd) -> std::io::Result<()> {
+    let seals = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GET_SEALS) };
+    let required = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+    if seals < 0 || seals & required != required {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "screenshot descriptor is not fully sealed",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn validate_screenshot_seals(_descriptor: &OwnedFd) -> std::io::Result<()> {
+    Ok(())
+}
+
+fn parse_photo_chunk_key(key: &str) -> Option<(u64, usize)> {
+    let bytes = key.as_bytes();
+    if bytes.len() != 21
+        || bytes[0] != b'p'
+        || bytes[17] != b'.'
+        || bytes[18] != b'c'
+        || !bytes[19].is_ascii_digit()
+        || !bytes[20].is_ascii_digit()
+    {
+        return None;
+    }
+    let mut photo_id = 0_u64;
+    for byte in &bytes[1..17] {
+        let digit = match byte {
+            b'0'..=b'9' => u64::from(*byte - b'0'),
+            b'a'..=b'f' => u64::from(*byte - b'a' + 10),
+            _ => return None,
+        };
+        photo_id = photo_id.checked_mul(16)?.checked_add(digit)?;
+    }
+    let chunk = usize::from(bytes[19] - b'0') * 10 + usize::from(bytes[20] - b'0');
+    (photo_id != 0 && chunk < photo_chunk_count()).then_some((photo_id, chunk))
+}
+
+fn valid_photo_metadata_key(key: &str) -> bool {
+    if matches!(key, "head.v2" | "index.v1") {
+        return true;
+    }
+    let Some(suffix) = key.strip_prefix("index.v2.") else {
+        return false;
+    };
+    suffix.len() == 8
+        && suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn photo_chunk_count() -> usize {
+    PHOTO_FRAME_BYTES.div_ceil(cp0_storage_protocol::MAX_STORAGE_VALUE_BYTES)
+}
+
+fn photo_chunk_length(chunk: usize) -> usize {
+    let offset = chunk * cp0_storage_protocol::MAX_STORAGE_VALUE_BYTES;
+    (PHOTO_FRAME_BYTES - offset).min(cp0_storage_protocol::MAX_STORAGE_VALUE_BYTES)
+}
+
+fn photo_blob_key(photo_id: u64) -> String {
+    format!("p{photo_id:016x}.rgb565")
+}
+
+fn photo_import_error_response(request_id: u64, error: &PhotoImportError) -> AppdResponse {
+    let code = match error {
+        PhotoImportError::ResourceExhausted => ErrorCode::ResourceExhausted,
+        PhotoImportError::Storage(StorageClientError::Service(
+            ServiceStorageErrorCode::QuotaExceeded,
+        )) => ErrorCode::ResourceExhausted,
+        PhotoImportError::Storage(StorageClientError::Service(
+            ServiceStorageErrorCode::Unavailable,
+        ))
+        | PhotoImportError::Storage(StorageClientError::Io(_))
+        | PhotoImportError::Storage(StorageClientError::EmptyResponse) => ErrorCode::Unavailable,
+        PhotoImportError::InvalidFrame
+        | PhotoImportError::InvalidIndex
+        | PhotoImportError::Storage(_) => ErrorCode::Internal,
+    };
+    AppdResponse::error(
+        request_id,
+        code,
+        "screenshot could not be imported into Gallery",
+    )
+}
+
+fn photo_broker_error_response(request_id: u64, error: &PhotoImportError) -> BrokerResponse {
+    let code = match error {
+        PhotoImportError::ResourceExhausted => BrokerErrorCode::ResourceExhausted,
+        PhotoImportError::Storage(StorageClientError::Service(
+            ServiceStorageErrorCode::QuotaExceeded,
+        )) => BrokerErrorCode::ResourceExhausted,
+        PhotoImportError::Storage(StorageClientError::Service(
+            ServiceStorageErrorCode::Unavailable,
+        ))
+        | PhotoImportError::Storage(StorageClientError::Io(_))
+        | PhotoImportError::Storage(StorageClientError::EmptyResponse) => {
+            BrokerErrorCode::Unavailable
+        }
+        PhotoImportError::InvalidFrame
+        | PhotoImportError::InvalidIndex
+        | PhotoImportError::Storage(_) => BrokerErrorCode::Internal,
+    };
+    BrokerResponse::error(request_id, code, "photo library transaction failed")
 }
 
 #[derive(Debug)]
@@ -2403,6 +2746,10 @@ fn manager_error_response(request_id: u64, error: &AppManagerError) -> AppdRespo
         AppManagerError::NotInstalled(app_id) => (
             ErrorCode::NotFound,
             format!("application {app_id} is not installed"),
+        ),
+        AppManagerError::ProtectedBuiltin(app_id) => (
+            ErrorCode::Conflict,
+            format!("built-in application {app_id} cannot be uninstalled"),
         ),
         AppManagerError::AlreadyRunning(app_id) => (
             ErrorCode::AlreadyRunning,
@@ -2730,7 +3077,94 @@ fn take_runtime_end(runtime: &mut RuntimeState, token: u64) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::os::fd::OwnedFd;
+
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    fn valid_screenshot_descriptor(frame: &[u8]) -> OwnedFd {
+        use std::ffi::CString;
+        use std::io::Write;
+        use std::os::fd::FromRawFd;
+
+        let name = c"cp0-appd-screenshot-test";
+        let raw = unsafe {
+            libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING)
+        };
+        assert!(raw >= 0);
+        let mut file = unsafe { File::from_raw_fd(raw) };
+        file.write_all(frame).unwrap();
+        let seals =
+            libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+        assert_eq!(
+            unsafe { libc::fcntl(file.as_raw_fd(), libc::F_ADD_SEALS, seals) },
+            0
+        );
+        let path = CString::new(format!("/proc/self/fd/{}", file.as_raw_fd())).unwrap();
+        let read_only = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+        assert!(read_only >= 0);
+        unsafe { OwnedFd::from_raw_fd(read_only) }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn valid_screenshot_descriptor(frame: &[u8]) -> OwnedFd {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp/appd-screenshot-frame.rgb565");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, frame).unwrap();
+        File::open(path).unwrap().into()
+    }
+
+    #[test]
+    fn screenshot_descriptor_is_exact_read_only_and_sealed_on_linux() {
+        let frame = vec![0x5a; PHOTO_FRAME_BYTES];
+        assert_eq!(
+            read_photo_frame(valid_screenshot_descriptor(&frame)).unwrap(),
+            frame
+        );
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp/appd-screenshot-invalid.rgb565");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, vec![0_u8; PHOTO_FRAME_BYTES]).unwrap();
+        let writable: OwnedFd = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .into();
+        assert!(read_photo_frame(writable).is_err());
+
+        fs::write(&path, vec![0_u8; PHOTO_FRAME_BYTES - 1]).unwrap();
+        let wrong_size: OwnedFd = File::open(path).unwrap().into();
+        assert!(read_photo_frame(wrong_size).is_err());
+    }
+
+    #[test]
+    fn photo_storage_keys_are_canonical_and_bounded() {
+        assert_eq!(
+            parse_photo_chunk_key("p000000000000002a.c13"),
+            Some((42, 13))
+        );
+        for key in [
+            "p0000000000000000.c00",
+            "p000000000000002A.c00",
+            "p000000000000002a.c14",
+            "p000000000000002a.c1",
+            "other",
+        ] {
+            assert_eq!(parse_photo_chunk_key(key), None, "accepted {key}");
+        }
+        for key in ["head.v2", "index.v1", "index.v2.00000000"] {
+            assert!(valid_photo_metadata_key(key));
+        }
+        for key in ["head.v3", "index.v2.0", "index.v2.0000000A", "arbitrary"] {
+            assert!(!valid_photo_metadata_key(key), "accepted {key}");
+        }
+        assert_eq!(photo_chunk_length(13), 2304);
+        assert_eq!(photo_blob_key(42), "p000000000000002a.rgb565");
+    }
 
     #[test]
     fn store_installation_accepts_exact_replay_and_strict_upgrade() {
@@ -2754,6 +3188,14 @@ mod tests {
         let encoded = serde_json::to_string(&response).unwrap();
         assert!(encoded.contains("not-found"));
         assert!(encoded.contains("dev.cardputerzero.missing"));
+
+        let protected = manager_error_response(
+            11,
+            &AppManagerError::ProtectedBuiltin("dev.cardputerzero.gallery".into()),
+        );
+        let encoded = serde_json::to_string(&protected).unwrap();
+        assert!(encoded.contains("conflict"));
+        assert!(encoded.contains("cannot be uninstalled"));
 
         let internal = manager_error_response(
             10,
@@ -2876,6 +3318,8 @@ mod tests {
         let store = 101;
         let trusted = BTreeSet::from([root, shell, store]);
         let stores = BTreeSet::from([store]);
+        let authorized =
+            |uid, command| control_command_authorized(uid, command, &trusted, &stores, Some(shell));
         let normal = AppdCommand::List {
             offset: 0,
             limit: 1,
@@ -2896,64 +3340,29 @@ mod tests {
             limit: 8,
         };
 
-        assert!(control_command_authorized(
-            root,
-            &root_install,
-            &trusted,
-            &stores
-        ));
-        assert!(!control_command_authorized(
-            shell,
-            &root_install,
-            &trusted,
-            &stores
-        ));
-        assert!(!control_command_authorized(
-            store,
-            &root_install,
-            &trusted,
-            &stores
-        ));
-        assert!(control_command_authorized(
-            store,
-            &store_install,
-            &trusted,
-            &stores
-        ));
-        assert!(!control_command_authorized(
-            shell,
-            &store_install,
-            &trusted,
-            &stores
-        ));
-        assert!(control_command_authorized(
-            shell, &normal, &trusted, &stores
-        ));
-        assert!(!control_command_authorized(
-            store, &normal, &trusted, &stores
-        ));
-        assert!(control_command_authorized(
-            store,
-            &store_list,
-            &trusted,
-            &stores
-        ));
-        assert!(!control_command_authorized(
-            shell,
-            &store_list,
-            &trusted,
-            &stores
-        ));
-        assert!(!control_command_authorized(
+        assert!(authorized(root, &root_install));
+        assert!(!authorized(shell, &root_install));
+        assert!(!authorized(store, &root_install));
+        assert!(authorized(store, &store_install));
+        assert!(!authorized(shell, &store_install));
+        assert!(authorized(shell, &normal));
+        assert!(!authorized(store, &normal));
+        assert!(authorized(store, &store_list));
+        assert!(!authorized(shell, &store_list));
+        assert!(!authorized(
             store,
             &AppdCommand::SetDeviceMode {
                 mode: crate::DeviceMode::Developer,
                 enabled: true,
-            },
-            &trusted,
-            &stores
+            }
         ));
-        assert!(!control_command_authorized(999, &normal, &trusted, &stores));
+        assert!(!authorized(999, &normal));
+
+        let import = AppdCommand::ImportScreenshot;
+        assert!(authorized(shell, &import));
+        assert!(!authorized(root, &import));
+        assert!(!authorized(store, &import));
+        assert!(!authorized(999, &import));
     }
 
     #[test]

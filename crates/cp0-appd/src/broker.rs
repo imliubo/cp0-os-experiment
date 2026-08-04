@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::io::{self, BufRead, Write};
+use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixStream;
 
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +71,12 @@ pub enum BrokerCommand {
     PhotoIndexGet,
     PhotoDelete {
         key: String,
+    },
+    PhotoImportRgb565 {
+        suggested_id: u64,
+    },
+    PhotoRemove {
+        photo_id: u64,
     },
     SendIntent {
         action: String,
@@ -148,6 +156,9 @@ pub enum BrokerOutcome {
     StorageNotFound,
     StorageDeleted {
         existed: bool,
+    },
+    PhotoImported {
+        photo_id: u64,
     },
     IntentAccepted {
         intent_id: u64,
@@ -321,6 +332,9 @@ impl BrokerRequest {
             | BrokerCommand::PhotoGet { key }
             | BrokerCommand::PhotoDelete { key } => cp0_storage_protocol::validate_key(key)
                 .map_err(|_| BrokerProtocolError::InvalidStorage),
+            BrokerCommand::PhotoRemove { photo_id } if *photo_id == 0 => {
+                Err(BrokerProtocolError::InvalidStorage)
+            }
             BrokerCommand::SendIntent {
                 action,
                 payload_base64,
@@ -500,6 +514,14 @@ impl BrokerResponse {
         }
     }
 
+    pub fn photo_imported(request_id: u64, photo_id: u64) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::PhotoImported { photo_id },
+        }
+    }
+
     pub fn intent_accepted(request_id: u64, intent_id: u64) -> Self {
         Self {
             protocol_version: BROKER_PROTOCOL_VERSION,
@@ -625,13 +647,16 @@ impl BrokerResponse {
                 return Err(BrokerProtocolError::InvalidRadio);
             }
             BrokerOutcome::StorageStored { used_bytes }
-                if *used_bytes > cp0_storage_protocol::MAX_STORAGE_QUOTA_BYTES =>
+                if *used_bytes > cp0_storage_protocol::SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES =>
             {
                 return Err(BrokerProtocolError::InvalidStorage);
             }
             BrokerOutcome::StorageValue { value_base64 }
                 if cp0_storage_protocol::decode_value(value_base64).is_err() =>
             {
+                return Err(BrokerProtocolError::InvalidStorage);
+            }
+            BrokerOutcome::PhotoImported { photo_id } if *photo_id == 0 => {
                 return Err(BrokerProtocolError::InvalidStorage);
             }
             BrokerOutcome::IntentAccepted { intent_id } if *intent_id == 0 => {
@@ -679,9 +704,26 @@ pub fn read_broker_request(
     let Some(frame) = read_frame(reader)? else {
         return Ok(None);
     };
-    let request: BrokerRequest = serde_json::from_slice(&frame)?;
+    decode_broker_request(&frame).map(Some)
+}
+
+pub fn decode_broker_request(frame: &[u8]) -> Result<BrokerRequest, BrokerProtocolError> {
+    let request: BrokerRequest = serde_json::from_slice(frame)?;
     request.validate()?;
-    Ok(Some(request))
+    Ok(request)
+}
+
+pub fn recv_broker_request_with_fd(
+    stream: &UnixStream,
+) -> Result<(BrokerRequest, Option<OwnedFd>), BrokerProtocolError> {
+    let (frame, descriptor) =
+        cp0_document_protocol::recv_frame_with_fd(stream).map_err(|error| {
+            BrokerProtocolError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                error.to_string(),
+            ))
+        })?;
+    decode_broker_request(&frame).map(|request| (request, descriptor))
 }
 
 pub fn read_broker_response(
@@ -1076,6 +1118,19 @@ mod tests {
         );
         assert!(BrokerResponse::storage_not_found(12).validate().is_ok());
         assert!(BrokerResponse::storage_deleted(12, true).validate().is_ok());
+        assert!(
+            BrokerResponse::storage_stored(12, cp0_storage_protocol::MAX_STORAGE_QUOTA_BYTES + 1,)
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            BrokerResponse::storage_stored(
+                12,
+                cp0_storage_protocol::SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES + 1,
+            )
+            .validate()
+            .is_err()
+        );
 
         let photo_request = BrokerRequest {
             protocol_version: BROKER_PROTOCOL_VERSION,
@@ -1086,6 +1141,33 @@ mod tests {
             },
         };
         assert!(photo_request.validate().is_ok());
+        let import = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 14,
+            command: BrokerCommand::PhotoImportRgb565 {
+                suggested_id: 1_722_470_400_123,
+            },
+        };
+        let mut frame = Vec::new();
+        write_broker_request(&mut frame, &import).unwrap();
+        assert_eq!(
+            read_broker_request(&mut Cursor::new(frame)).unwrap(),
+            Some(import)
+        );
+        assert!(
+            BrokerResponse::photo_imported(14, 1_722_470_400_123)
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            BrokerRequest {
+                protocol_version: BROKER_PROTOCOL_VERSION,
+                request_id: 15,
+                command: BrokerCommand::PhotoRemove { photo_id: 0 },
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]

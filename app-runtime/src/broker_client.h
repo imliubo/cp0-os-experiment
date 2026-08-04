@@ -60,6 +60,12 @@ int32_t cp0_broker_photo_get(const uint8_t *key, size_t key_length,
                              uint8_t *value, size_t value_capacity);
 int32_t cp0_broker_photo_index_get(uint8_t *value, size_t value_capacity);
 int32_t cp0_broker_photo_delete(const uint8_t *key, size_t key_length);
+int64_t cp0_broker_photo_import_rgb565(const uint8_t *pixels,
+                                       size_t pixel_bytes,
+                                       uint64_t suggested_id);
+int64_t cp0_broker_decode_photo_import_response(const char *response);
+int32_t cp0_broker_photo_remove(uint64_t photo_id);
+int32_t cp0_broker_decode_photo_remove_response(const char *response);
 int32_t cp0_broker_intent_send(const uint8_t *action, size_t action_length,
                                const uint8_t *payload,
                                size_t payload_length);

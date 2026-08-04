@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufReader, Read, Seek, Write};
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
@@ -11,13 +11,16 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use cp0_storage_protocol::{
-    MAX_STORAGE_VALUE_BYTES, StorageCommand, StorageErrorCode, StorageProtocolError,
-    StorageRequest, StorageResponse, decode_value, read_request, validate_key, write_response,
+    MAX_STORAGE_BLOB_BYTES, MAX_STORAGE_VALUE_BYTES, SYSTEM_PHOTO_LIBRARY_ID, StorageCommand,
+    StorageErrorCode, StorageProtocolError, StorageRequest, StorageResponse, decode_value,
+    read_request, validate_key, write_response,
 };
 
 pub const DEFAULT_STORAGE_ROOT: &str = "/var/lib/cardputerzero/data";
 pub const MAX_STORAGE_KEYS: usize = 256;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(4);
+#[cfg(target_os = "linux")]
+const SYSTEM_FREE_SPACE_RESERVE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum StorageServiceError {
@@ -76,6 +79,18 @@ impl StorageService {
         }
     }
 
+    pub fn initialize(&self) -> Result<(), StorageServiceError> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| StorageServiceError::StatePoisoned)?;
+        self.verify_root()?;
+        let Some(directory) = self.app_directory(SYSTEM_PHOTO_LIBRARY_ID)? else {
+            return Ok(());
+        };
+        cleanup_staging_blobs(&directory, self.owner_uid)
+    }
+
     pub fn dispatch(&self, request: StorageRequest) -> StorageResponse {
         let request_id = request.request_id;
         let _guard = match self.lock.lock() {
@@ -103,6 +118,40 @@ impl StorageService {
                         StorageResponse::deleted(request_id, existed, used_bytes)
                     })
             }
+            StorageCommand::PutBlobChunk {
+                key,
+                offset,
+                total_bytes,
+                value_base64,
+            } => decode_value(&value_base64)
+                .map_err(|_| StorageServiceError::ValueTooLarge)
+                .and_then(|value| {
+                    self.put_blob_chunk(
+                        &request.app_id,
+                        request.quota_bytes,
+                        &key,
+                        offset,
+                        total_bytes,
+                        &value,
+                    )
+                    .map(|used_bytes| StorageResponse::stored(request_id, used_bytes))
+                }),
+            StorageCommand::GetBlobChunk {
+                key,
+                offset,
+                length,
+            } => self
+                .get_blob_chunk(&request.app_id, &key, offset, length)
+                .map(|value| match value {
+                    Some(value) => StorageResponse::value(request_id, &value),
+                    None => StorageResponse::not_found(request_id),
+                }),
+            StorageCommand::DeleteBlob { key } => {
+                self.delete_blob(&request.app_id, &key)
+                    .map(|(existed, used_bytes)| {
+                        StorageResponse::deleted(request_id, existed, used_bytes)
+                    })
+            }
             StorageCommand::Usage => self
                 .usage(&request.app_id)
                 .map(|used_bytes| StorageResponse::usage(request_id, used_bytes)),
@@ -119,13 +168,14 @@ impl StorageService {
     ) -> Result<u64, StorageServiceError> {
         validate_key(key).map_err(|_| StorageServiceError::InvalidEntry)?;
         let directory = self.ensure_app_directory(app_id, true)?;
-        let (used_bytes, keys) = inspect_directory(&directory, self.owner_uid)?;
+        let system_library = app_id == SYSTEM_PHOTO_LIBRARY_ID;
+        let (used_bytes, keys) = inspect_directory(&directory, self.owner_uid, system_library)?;
         let destination = directory.join(key);
         let existing_size = match open_value(&destination, self.owner_uid)? {
             Some(file) => file.metadata()?.len(),
             None => 0,
         };
-        if existing_size == 0 && keys >= MAX_STORAGE_KEYS {
+        if !system_library && existing_size == 0 && keys >= MAX_STORAGE_KEYS {
             return Err(StorageServiceError::TooManyKeys);
         }
         let projected = used_bytes
@@ -135,6 +185,7 @@ impl StorageService {
         if projected > quota_bytes {
             return Err(StorageServiceError::QuotaExceeded);
         }
+        require_free_space(&directory, value.len() as u64)?;
 
         let temporary = directory.join(format!(
             ".cp0-tmp-{}-{}",
@@ -188,12 +239,20 @@ impl StorageService {
         };
         let path = directory.join(key);
         if open_value(&path, self.owner_uid)?.is_none() {
-            let (used_bytes, _) = inspect_directory(&directory, self.owner_uid)?;
+            let (used_bytes, _) = inspect_directory(
+                &directory,
+                self.owner_uid,
+                app_id == SYSTEM_PHOTO_LIBRARY_ID,
+            )?;
             return Ok((false, used_bytes));
         }
         fs::remove_file(path)?;
         sync_directory(&directory)?;
-        let (used_bytes, _) = inspect_directory(&directory, self.owner_uid)?;
+        let (used_bytes, _) = inspect_directory(
+            &directory,
+            self.owner_uid,
+            app_id == SYSTEM_PHOTO_LIBRARY_ID,
+        )?;
         Ok((true, used_bytes))
     }
 
@@ -201,7 +260,137 @@ impl StorageService {
         let Some(directory) = self.app_directory(app_id)? else {
             return Ok(0);
         };
-        inspect_directory(&directory, self.owner_uid).map(|(used_bytes, _)| used_bytes)
+        inspect_directory(
+            &directory,
+            self.owner_uid,
+            app_id == SYSTEM_PHOTO_LIBRARY_ID,
+        )
+        .map(|(used_bytes, _)| used_bytes)
+    }
+
+    fn put_blob_chunk(
+        &self,
+        app_id: &str,
+        quota_bytes: u64,
+        key: &str,
+        offset: u32,
+        total_bytes: u32,
+        value: &[u8],
+    ) -> Result<u64, StorageServiceError> {
+        if app_id != SYSTEM_PHOTO_LIBRARY_ID
+            || value.is_empty()
+            || total_bytes == 0
+            || total_bytes as usize > MAX_STORAGE_BLOB_BYTES
+            || u64::from(offset) + value.len() as u64 > u64::from(total_bytes)
+        {
+            return Err(StorageServiceError::InvalidEntry);
+        }
+        validate_key(key).map_err(|_| StorageServiceError::InvalidEntry)?;
+        let directory = self.ensure_app_directory(app_id, true)?;
+        let destination = directory.join(key);
+        let temporary = directory.join(format!(".cp0-blob-{key}"));
+
+        let projected = if offset == 0 {
+            remove_stale_blob(&temporary, self.owner_uid)?;
+            let (used_bytes, _) = inspect_directory(&directory, self.owner_uid, true)?;
+            let existing_size = match open_blob(&destination, self.owner_uid)? {
+                Some(file) => file.metadata()?.len(),
+                None => 0,
+            };
+            let projected = used_bytes
+                .checked_sub(existing_size)
+                .and_then(|used| used.checked_add(u64::from(total_bytes)))
+                .ok_or(StorageServiceError::QuotaExceeded)?;
+            if projected > quota_bytes {
+                return Err(StorageServiceError::QuotaExceeded);
+            }
+            require_free_space(&directory, u64::from(total_bytes))?;
+            projected
+        } else {
+            quota_bytes.min(u64::from(total_bytes))
+        };
+
+        let mut options = OpenOptions::new();
+        options
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+        if offset == 0 {
+            options.create_new(true);
+        }
+        let mut file = options.open(&temporary)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.uid() != self.owner_uid
+            || metadata.mode() & 0o077 != 0
+            || metadata.len() != u64::from(offset)
+        {
+            return Err(StorageServiceError::InvalidEntry);
+        }
+        file.seek(std::io::SeekFrom::Start(u64::from(offset)))?;
+        file.write_all(value)?;
+        file.sync_all()?;
+        let final_length = u64::from(offset) + value.len() as u64;
+        if final_length == u64::from(total_bytes) {
+            fs::rename(&temporary, &destination)?;
+            sync_directory(&directory)?;
+            self.usage(app_id)
+        } else {
+            Ok(projected)
+        }
+    }
+
+    fn get_blob_chunk(
+        &self,
+        app_id: &str,
+        key: &str,
+        offset: u32,
+        length: u32,
+    ) -> Result<Option<Vec<u8>>, StorageServiceError> {
+        if app_id != SYSTEM_PHOTO_LIBRARY_ID
+            || length == 0
+            || length as usize > MAX_STORAGE_VALUE_BYTES
+        {
+            return Err(StorageServiceError::InvalidEntry);
+        }
+        validate_key(key).map_err(|_| StorageServiceError::InvalidEntry)?;
+        let Some(directory) = self.app_directory(app_id)? else {
+            return Ok(None);
+        };
+        let Some(mut file) = open_blob(&directory.join(key), self.owner_uid)? else {
+            return Ok(None);
+        };
+        if u64::from(offset) + u64::from(length) > file.metadata()?.len() {
+            return Err(StorageServiceError::InvalidEntry);
+        }
+        file.seek(std::io::SeekFrom::Start(u64::from(offset)))?;
+        let mut value = vec![0_u8; length as usize];
+        file.read_exact(&mut value)?;
+        Ok(Some(value))
+    }
+
+    fn delete_blob(&self, app_id: &str, key: &str) -> Result<(bool, u64), StorageServiceError> {
+        if app_id != SYSTEM_PHOTO_LIBRARY_ID {
+            return Err(StorageServiceError::InvalidEntry);
+        }
+        validate_key(key).map_err(|_| StorageServiceError::InvalidEntry)?;
+        let Some(directory) = self.app_directory(app_id)? else {
+            return Ok((false, 0));
+        };
+        let destination = directory.join(key);
+        let temporary = directory.join(format!(".cp0-blob-{key}"));
+        let mut existed = false;
+        if open_blob(&destination, self.owner_uid)?.is_some() {
+            fs::remove_file(&destination)?;
+            existed = true;
+        }
+        if fs::symlink_metadata(&temporary).is_ok() {
+            remove_stale_blob(&temporary, self.owner_uid)?;
+        }
+        if existed {
+            sync_directory(&directory)?;
+        }
+        self.usage(app_id).map(|used_bytes| (existed, used_bytes))
     }
 
     fn ensure_app_directory(
@@ -315,6 +504,7 @@ impl StorageServer {
 fn inspect_directory(
     directory: &Path,
     owner_uid: u32,
+    allow_blobs: bool,
 ) -> Result<(u64, usize), StorageServiceError> {
     let mut used_bytes = 0_u64;
     let mut keys = 0_usize;
@@ -325,28 +515,57 @@ fn inspect_directory(
             .into_string()
             .map_err(|_| StorageServiceError::InvalidEntry)?;
         let metadata = fs::symlink_metadata(entry.path())?;
+        let staging_blob = name.starts_with(".cp0-blob-");
+        let temporary_value = name.starts_with(".cp0-tmp-");
+        let size_limit =
+            if allow_blobs && (staging_blob || metadata.len() > MAX_STORAGE_VALUE_BYTES as u64) {
+                MAX_STORAGE_BLOB_BYTES as u64
+            } else {
+                MAX_STORAGE_VALUE_BYTES as u64
+            };
         if !metadata.is_file()
             || metadata.file_type().is_symlink()
             || metadata.uid() != owner_uid
             || metadata.mode() & 0o077 != 0
             || metadata.len() == 0
-            || metadata.len() > MAX_STORAGE_VALUE_BYTES as u64
+            || metadata.len() > size_limit
         {
             return Err(StorageServiceError::InvalidEntry);
         }
         used_bytes = used_bytes
             .checked_add(metadata.len())
             .ok_or(StorageServiceError::QuotaExceeded)?;
-        if name.starts_with(".cp0-tmp-") {
+        if temporary_value || staging_blob {
             continue;
         }
         validate_key(&name).map_err(|_| StorageServiceError::InvalidEntry)?;
         keys += 1;
-        if keys > MAX_STORAGE_KEYS {
+        if !allow_blobs && keys > MAX_STORAGE_KEYS {
             return Err(StorageServiceError::TooManyKeys);
         }
     }
     Ok((used_bytes, keys))
+}
+
+fn cleanup_staging_blobs(directory: &Path, owner_uid: u32) -> Result<(), StorageServiceError> {
+    let mut removed = false;
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| StorageServiceError::InvalidEntry)?;
+        let Some(key) = name.strip_prefix(".cp0-blob-") else {
+            continue;
+        };
+        validate_key(key).map_err(|_| StorageServiceError::InvalidEntry)?;
+        remove_stale_blob(&entry.path(), owner_uid)?;
+        removed = true;
+    }
+    if removed {
+        sync_directory(directory)?;
+    }
+    Ok(())
 }
 
 fn verify_directory_metadata(
@@ -385,6 +604,71 @@ fn open_value(path: &Path, owner_uid: u32) -> Result<Option<File>, StorageServic
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(StorageServiceError::Io(error)),
     }
+}
+
+fn open_blob(path: &Path, owner_uid: u32) -> Result<Option<File>, StorageServiceError> {
+    match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(path)
+    {
+        Ok(file) => {
+            let metadata = file.metadata()?;
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.uid() != owner_uid
+                || metadata.mode() & 0o077 != 0
+                || metadata.len() == 0
+                || metadata.len() > MAX_STORAGE_BLOB_BYTES as u64
+            {
+                return Err(StorageServiceError::InvalidEntry);
+            }
+            Ok(Some(file))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(StorageServiceError::Io(error)),
+    }
+}
+
+fn remove_stale_blob(path: &Path, owner_uid: u32) -> Result<(), StorageServiceError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.uid() != owner_uid
+                || metadata.mode() & 0o077 != 0
+                || metadata.len() > MAX_STORAGE_BLOB_BYTES as u64
+            {
+                return Err(StorageServiceError::InvalidEntry);
+            }
+            fs::remove_file(path)?;
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn require_free_space(path: &Path, write_bytes: u64) -> Result<(), StorageServiceError> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| StorageServiceError::InvalidEntry)?;
+        let mut status: libc::statvfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statvfs(path.as_ptr(), &raw mut status) } != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        let available = u64::from(status.f_bavail).saturating_mul(u64::from(status.f_frsize));
+        if available < write_bytes.saturating_add(SYSTEM_FREE_SPACE_RESERVE_BYTES) {
+            return Err(StorageServiceError::QuotaExceeded);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (path, write_bytes);
+    Ok(())
 }
 
 fn sync_directory(directory: &Path) -> io::Result<()> {
@@ -480,7 +764,9 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use cp0_storage_protocol::MIB;
+    use cp0_storage_protocol::{
+        MIB, SYSTEM_PHOTO_LIBRARY_ID, SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES, decode_value,
+    };
 
     use super::*;
 
@@ -563,6 +849,129 @@ mod tests {
                 ..
             }
         ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn photo_blob_is_published_only_after_the_final_chunk() {
+        let (root, service) = test_service();
+        let frame = vec![0x5a_u8; 320 * 170 * 2];
+        let key = "p000000000000002a.rgb565";
+        for (chunk, value) in frame.chunks(MAX_STORAGE_VALUE_BYTES).enumerate() {
+            let request = StorageRequest::put_blob_chunk(
+                10 + chunk as u64,
+                SYSTEM_PHOTO_LIBRARY_ID,
+                SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES,
+                key,
+                (chunk * MAX_STORAGE_VALUE_BYTES) as u32,
+                frame.len() as u32,
+                value,
+            );
+            assert!(matches!(
+                service.dispatch(request).outcome,
+                cp0_storage_protocol::StorageOutcome::Stored { .. }
+            ));
+            if chunk + 1 != frame.len().div_ceil(MAX_STORAGE_VALUE_BYTES) {
+                assert!(!root.join(SYSTEM_PHOTO_LIBRARY_ID).join(key).exists());
+            }
+        }
+        assert_eq!(
+            fs::metadata(root.join(SYSTEM_PHOTO_LIBRARY_ID).join(key))
+                .unwrap()
+                .len(),
+            frame.len() as u64
+        );
+
+        let response = service.dispatch(StorageRequest::get_blob_chunk(
+            30,
+            SYSTEM_PHOTO_LIBRARY_ID,
+            SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES,
+            key,
+            MAX_STORAGE_VALUE_BYTES as u32,
+            MAX_STORAGE_VALUE_BYTES as u32,
+        ));
+        let cp0_storage_protocol::StorageOutcome::Value { value_base64 } = response.outcome else {
+            panic!("photo blob chunk was not returned")
+        };
+        assert_eq!(
+            decode_value(&value_base64).unwrap(),
+            vec![0x5a; MAX_STORAGE_VALUE_BYTES]
+        );
+
+        assert!(matches!(
+            service
+                .dispatch(StorageRequest::delete_blob(
+                    31,
+                    SYSTEM_PHOTO_LIBRARY_ID,
+                    SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES,
+                    key,
+                ))
+                .outcome,
+            cp0_storage_protocol::StorageOutcome::Deleted { existed: true, .. }
+        ));
+        assert!(!root.join(SYSTEM_PHOTO_LIBRARY_ID).join(key).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_removes_incomplete_photo_blobs_without_touching_committed_values() {
+        let (root, service) = test_service();
+        let key = "p000000000000002a.rgb565";
+        let first = StorageRequest::put_blob_chunk(
+            40,
+            SYSTEM_PHOTO_LIBRARY_ID,
+            SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES,
+            key,
+            0,
+            (320 * 170 * 2) as u32,
+            &[0x7b; MAX_STORAGE_VALUE_BYTES],
+        );
+        assert!(matches!(
+            service.dispatch(first).outcome,
+            cp0_storage_protocol::StorageOutcome::Stored { .. }
+        ));
+        let directory = root.join(SYSTEM_PHOTO_LIBRARY_ID);
+        let staging = directory.join(format!(".cp0-blob-{key}"));
+        let retained = directory.join("head.v2");
+        fs::write(&retained, b"retained").unwrap();
+        fs::set_permissions(&retained, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(staging.exists());
+
+        StorageService::new(&root, unsafe { libc::geteuid() })
+            .initialize()
+            .unwrap();
+        assert!(!staging.exists());
+        assert_eq!(fs::read(retained).unwrap(), b"retained");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_refuses_a_symlink_disguised_as_photo_staging() {
+        use std::os::unix::fs::symlink;
+
+        let (root, service) = test_service();
+        let create = StorageRequest::put(
+            50,
+            SYSTEM_PHOTO_LIBRARY_ID,
+            SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES,
+            "head.v2",
+            b"retained",
+        );
+        assert!(matches!(
+            service.dispatch(create).outcome,
+            cp0_storage_protocol::StorageOutcome::Stored { .. }
+        ));
+        let directory = root.join(SYSTEM_PHOTO_LIBRARY_ID);
+        let retained = directory.join("head.v2");
+        let staging = directory.join(".cp0-blob-p000000000000002a.rgb565");
+        symlink(&retained, &staging).unwrap();
+
+        assert!(matches!(
+            StorageService::new(&root, unsafe { libc::geteuid() }).initialize(),
+            Err(StorageServiceError::InvalidEntry)
+        ));
+        assert!(staging.is_symlink());
+        assert_eq!(fs::read(retained).unwrap(), b"retained");
         fs::remove_dir_all(root).unwrap();
     }
 }

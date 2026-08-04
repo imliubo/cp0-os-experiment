@@ -18,6 +18,7 @@ mod media_session;
 mod network_client;
 mod permission_prompt;
 mod permissions;
+mod photo_library;
 mod policy;
 mod protocol;
 mod radio_client;
@@ -34,8 +35,9 @@ pub use audio_client::{AudioClient, AudioClientError, DEFAULT_AUDIO_SOCKET};
 pub use broker::{
     BROKER_PROTOCOL_VERSION, BrokerCommand, BrokerErrorCode, BrokerOutcome, BrokerProtocolError,
     BrokerRequest, BrokerResponse, MAX_BROKER_FRAME_BYTES, MAX_PENDING_NOTIFICATIONS, Notification,
-    NotificationQueue, NotificationQueueError, encode_broker_response, read_broker_request,
-    read_broker_response, write_broker_request, write_broker_response,
+    NotificationQueue, NotificationQueueError, decode_broker_request, encode_broker_response,
+    read_broker_request, read_broker_response, recv_broker_request_with_fd, write_broker_request,
+    write_broker_response,
 };
 pub use camera_client::{
     CameraClient, CameraClientError, CapturedCameraFrame, DEFAULT_CAMERA_SOCKET,
@@ -58,8 +60,8 @@ pub use intent::{
     IntentQueue, IntentQueueError, MAX_INTENT_PAYLOAD_BYTES, MAX_PENDING_INTENTS, PendingIntent,
 };
 pub use lifecycle::{
-    AppManager, AppManagerError, AppUsage, InstalledApp, ManagerPaths, UninstalledApp,
-    lookup_unix_account,
+    AppManager, AppManagerError, AppUsage, IMMUTABLE_BUILTIN_APP_IDS, InstalledApp, ManagerPaths,
+    UninstalledApp, is_removable_app, lookup_unix_account,
 };
 pub use media_session::{
     MAX_PENDING_MEDIA_ACTIONS, MEDIA_ACTION_ALL, MEDIA_ACTION_NEXT, MEDIA_ACTION_PLAY_PAUSE,
@@ -87,7 +89,7 @@ pub use protocol::{
     APPD_PROTOCOL_VERSION, AppSummary, AppdCommand, AppdRequest, AppdResponse, ErrorCode,
     MAX_APP_LIST_PAGE, MAX_LOG_LINES, MAX_TASK_LIST_PAGE, PeerCredentials, ProtocolError,
     ResponseData, ResponseOutcome, StoreInstalledApp, TaskSummary, peer_credentials, read_request,
-    read_response, write_request, write_response,
+    read_response, recv_request_with_fd, write_request, write_response,
 };
 pub use radio_client::{DEFAULT_RADIO_SOCKET, RadioClient, RadioClientError, ReceivedRadioPacket};
 pub use registry::{

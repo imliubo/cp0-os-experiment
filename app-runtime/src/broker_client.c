@@ -2,11 +2,17 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#ifdef __linux__
+#include <linux/memfd.h>
+#endif
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#ifdef __linux__
+#include <sys/syscall.h>
+#endif
 #include <sys/time.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -108,6 +114,42 @@ static int write_all(int descriptor, const char *buffer, size_t length) {
     return 0;
 }
 
+static int write_all_with_fd(int descriptor, const char *buffer, size_t length,
+                             int passed_descriptor) {
+    if (passed_descriptor < 0)
+        return write_all(descriptor, buffer, length);
+
+    struct iovec vector = {
+        .iov_base = (void *)buffer,
+        .iov_len = length,
+    };
+    union {
+        struct cmsghdr alignment;
+        unsigned char bytes[CMSG_SPACE(sizeof(int))];
+    } control = {0};
+    struct msghdr message = {
+        .msg_iov = &vector,
+        .msg_iovlen = 1,
+        .msg_control = control.bytes,
+        .msg_controllen = sizeof(control.bytes),
+    };
+    struct cmsghdr *header = CMSG_FIRSTHDR(&message);
+    if (header == NULL)
+        return -1;
+    header->cmsg_level = SOL_SOCKET;
+    header->cmsg_type = SCM_RIGHTS;
+    header->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(header), &passed_descriptor, sizeof(passed_descriptor));
+
+    ssize_t count;
+    do {
+        count = sendmsg(descriptor, &message, MSG_NOSIGNAL);
+    } while (count < 0 && errno == EINTR);
+    if (count <= 0 || (size_t)count > length)
+        return -1;
+    return write_all(descriptor, buffer + count, length - (size_t)count);
+}
+
 static int32_t decode_result(const char *response) {
     if (strstr(response, "\"status\":\"ok\"") != NULL)
         return CP0_BROKER_OK;
@@ -138,6 +180,7 @@ static int32_t decode_result(const char *response) {
 static int32_t broker_exchange_with_fd(const char *request,
                                        size_t request_length, char *response,
                                        size_t response_capacity,
+                                       int passed_descriptor,
                                        int *received_descriptor) {
     struct sockaddr_un address;
     const struct timeval timeout = {.tv_sec = 6, .tv_usec = 0};
@@ -179,7 +222,8 @@ static int32_t broker_exchange_with_fd(const char *request,
     memcpy(address.sun_path, socket_path, strlen(socket_path) + 1U);
     if (connect(descriptor, (const struct sockaddr *)&address,
                 sizeof(address)) != 0 ||
-        write_all(descriptor, request, request_length) != 0)
+        write_all_with_fd(descriptor, request, request_length,
+                          passed_descriptor) != 0)
         goto cleanup;
 
     while (response_length < response_capacity - 1U) {
@@ -206,7 +250,7 @@ static int32_t broker_exchange_with_fd(const char *request,
             break;
         for (struct cmsghdr *header = CMSG_FIRSTHDR(&message); header != NULL;
              header = CMSG_NXTHDR(&message, header)) {
-            int passed_descriptor;
+            int received_fd;
             size_t data_bytes;
             if (header->cmsg_level != SOL_SOCKET ||
                 header->cmsg_type != SCM_RIGHTS ||
@@ -216,22 +260,22 @@ static int32_t broker_exchange_with_fd(const char *request,
             if (data_bytes != sizeof(int)) {
                 size_t descriptor_count = data_bytes / sizeof(int);
                 for (size_t index = 0; index < descriptor_count; index++) {
-                    memcpy(&passed_descriptor,
+                    memcpy(&received_fd,
                            CMSG_DATA(header) + index * sizeof(int), sizeof(int));
-                    if (passed_descriptor >= 0)
-                        close(passed_descriptor);
+                    if (received_fd >= 0)
+                        close(received_fd);
                 }
                 goto cleanup;
             }
-            memcpy(&passed_descriptor, CMSG_DATA(header), sizeof(int));
-            if (passed_descriptor < 0 || received_descriptor == NULL ||
+            memcpy(&received_fd, CMSG_DATA(header), sizeof(int));
+            if (received_fd < 0 || received_descriptor == NULL ||
                 *received_descriptor >= 0 ||
-                fcntl(passed_descriptor, F_SETFD, FD_CLOEXEC) != 0) {
-                if (passed_descriptor >= 0)
-                    close(passed_descriptor);
+                fcntl(received_fd, F_SETFD, FD_CLOEXEC) != 0) {
+                if (received_fd >= 0)
+                    close(received_fd);
                 goto cleanup;
             }
-            *received_descriptor = passed_descriptor;
+            *received_descriptor = received_fd;
         }
         if ((message.msg_flags & (MSG_CTRUNC | MSG_TRUNC)) != 0)
             goto cleanup;
@@ -257,7 +301,7 @@ cleanup:
 static int32_t broker_exchange(const char *request, size_t request_length,
                                char *response, size_t response_capacity) {
     return broker_exchange_with_fd(request, request_length, response,
-                                   response_capacity, NULL);
+                                   response_capacity, -1, NULL);
 }
 
 static const char *json_string_field(const char *response, const char *field,
@@ -326,6 +370,29 @@ static bool json_u32_field(const char *response, const char *field,
         (*end != ',' && *end != '}'))
         return false;
     *value = (uint32_t)parsed;
+    return true;
+}
+
+static bool json_u64_field(const char *response, const char *field,
+                           uint64_t *value) {
+    char key[64];
+    const char *start;
+    char *end;
+    unsigned long long parsed;
+    int written;
+
+    written = snprintf(key, sizeof(key), "\"%s\":", field);
+    if (written <= 0 || (size_t)written >= sizeof(key))
+        return false;
+    start = strstr(response, key);
+    if (start == NULL)
+        return false;
+    start += (size_t)written;
+    errno = 0;
+    parsed = strtoull(start, &end, 10);
+    if (errno != 0 || end == start || (*end != ',' && *end != '}'))
+        return false;
+    *value = (uint64_t)parsed;
     return true;
 }
 
@@ -572,7 +639,8 @@ int32_t cp0_broker_open_document(int *descriptor, uint32_t *size_bytes) {
     *descriptor = -1;
     *size_bytes = 0;
     result = broker_exchange_with_fd(request, sizeof(request) - 1U, response,
-                                     sizeof(response), &received_descriptor);
+                                     sizeof(response), -1,
+                                     &received_descriptor);
     if (result != CP0_BROKER_OK)
         return result;
     return cp0_broker_decode_document_response(
@@ -704,7 +772,8 @@ int32_t cp0_broker_capture_camera(int *descriptor) {
         return CP0_BROKER_INVALID_ARGUMENT;
     *descriptor = -1;
     result = broker_exchange_with_fd(request, sizeof(request) - 1U, response,
-                                     sizeof(response), &received_descriptor);
+                                     sizeof(response), -1,
+                                     &received_descriptor);
     if (result != CP0_BROKER_OK)
         return result;
     return cp0_broker_decode_camera_response(response, received_descriptor,
@@ -1132,6 +1201,108 @@ int32_t cp0_broker_photo_delete(const uint8_t *key, size_t key_length) {
     if (!json_bool_field(response, "existed", &existed))
         return CP0_BROKER_INTERNAL;
     return existed ? 1 : 0;
+}
+
+int64_t cp0_broker_decode_photo_import_response(const char *response) {
+    uint64_t photo_id;
+
+    if (response == NULL)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    if (strstr(response, "\"status\":\"photo-imported\"") == NULL)
+        return decode_result(response);
+    if (!json_u64_field(response, "photo_id", &photo_id) || photo_id == 0U ||
+        photo_id > INT64_MAX)
+        return CP0_BROKER_INTERNAL;
+    return (int64_t)photo_id;
+}
+
+static int sealed_photo_descriptor(const uint8_t *pixels,
+                                   size_t pixel_bytes) {
+#ifdef __linux__
+    int descriptor = (int)syscall(SYS_memfd_create, "cp0-app-photo",
+                                  MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    if (descriptor < 0)
+        return -1;
+    if (write_all(descriptor, (const char *)pixels, pixel_bytes) != 0 ||
+        fcntl(descriptor, F_ADD_SEALS,
+              F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE) != 0 ||
+        lseek(descriptor, 0, SEEK_SET) != 0) {
+        close(descriptor);
+        return -1;
+    }
+    return descriptor;
+#else
+    (void)pixels;
+    (void)pixel_bytes;
+    errno = ENOTSUP;
+    return -1;
+#endif
+}
+
+int64_t cp0_broker_photo_import_rgb565(const uint8_t *pixels,
+                                       size_t pixel_bytes,
+                                       uint64_t suggested_id) {
+    char request[256];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int descriptor;
+    int written;
+    int32_t result;
+
+    if (pixels == NULL || pixel_bytes != CP0_CAMERA_FRAME_BYTES ||
+        suggested_id > INT64_MAX)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    descriptor = sealed_photo_descriptor(pixels, pixel_bytes);
+    if (descriptor < 0)
+        return CP0_BROKER_UNAVAILABLE;
+    written = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":18,\"command\":{"
+        "\"name\":\"photo-import-rgb565\",\"suggested_id\":%llu}}\n",
+        (unsigned long long)suggested_id);
+    if (written <= 0 || (size_t)written >= sizeof(request)) {
+        close(descriptor);
+        return CP0_BROKER_INTERNAL;
+    }
+    result = broker_exchange_with_fd(request, (size_t)written, response,
+                                     sizeof(response), descriptor, NULL);
+    close(descriptor);
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_photo_import_response(response);
+}
+
+int32_t cp0_broker_decode_photo_remove_response(const char *response) {
+    bool existed;
+
+    if (response == NULL)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    if (strstr(response, "\"status\":\"storage-deleted\"") == NULL)
+        return decode_result(response);
+    if (!json_bool_field(response, "existed", &existed))
+        return CP0_BROKER_INTERNAL;
+    return existed ? 1 : 0;
+}
+
+int32_t cp0_broker_photo_remove(uint64_t photo_id) {
+    char request[256];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int written;
+    int32_t result;
+
+    if (photo_id == 0U || photo_id > INT64_MAX)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    written = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":19,\"command\":{"
+        "\"name\":\"photo-remove\",\"photo_id\":%llu}}\n",
+        (unsigned long long)photo_id);
+    if (written <= 0 || (size_t)written >= sizeof(request))
+        return CP0_BROKER_INTERNAL;
+    result = broker_exchange(request, (size_t)written, response,
+                             sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_photo_remove_response(response);
 }
 
 static bool valid_intent_action(const uint8_t *action, size_t action_length) {

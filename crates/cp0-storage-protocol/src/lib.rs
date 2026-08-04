@@ -6,10 +6,13 @@ use serde::{Deserialize, Serialize};
 pub const STORAGE_PROTOCOL_VERSION: u32 = 2;
 pub const MAX_STORAGE_KEY_BYTES: usize = 64;
 pub const MAX_STORAGE_VALUE_BYTES: usize = 8 * 1024;
+pub const MAX_STORAGE_BLOB_BYTES: usize = 128 * 1024;
 pub const MAX_STORAGE_FRAME_BYTES: usize = 16 * 1024;
 pub const MAX_STORAGE_ERROR_CHARS: usize = 160;
 pub const MIB: u64 = 1024 * 1024;
 pub const MAX_STORAGE_QUOTA_BYTES: u64 = cp0_manifest::MAX_APP_STORAGE_MB as u64 * MIB;
+pub const SYSTEM_PHOTO_LIBRARY_ID: &str = "dev.cardputerzero.photo-library";
+pub const SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES: u64 = 1_u64 << 50;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,9 +27,30 @@ pub struct StorageRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum StorageCommand {
-    Put { key: String, value_base64: String },
-    Get { key: String },
-    Delete { key: String },
+    Put {
+        key: String,
+        value_base64: String,
+    },
+    Get {
+        key: String,
+    },
+    Delete {
+        key: String,
+    },
+    PutBlobChunk {
+        key: String,
+        offset: u32,
+        total_bytes: u32,
+        value_base64: String,
+    },
+    GetBlobChunk {
+        key: String,
+        offset: u32,
+        length: u32,
+    },
+    DeleteBlob {
+        key: String,
+    },
     Usage,
 }
 
@@ -171,15 +195,74 @@ impl StorageRequest {
         }
     }
 
+    pub fn put_blob_chunk(
+        request_id: u64,
+        app_id: &str,
+        quota_bytes: u64,
+        key: &str,
+        offset: u32,
+        total_bytes: u32,
+        value: &[u8],
+    ) -> Self {
+        Self {
+            protocol_version: STORAGE_PROTOCOL_VERSION,
+            request_id,
+            app_id: app_id.into(),
+            quota_bytes,
+            command: StorageCommand::PutBlobChunk {
+                key: key.into(),
+                offset,
+                total_bytes,
+                value_base64: encode_base64(value),
+            },
+        }
+    }
+
+    pub fn get_blob_chunk(
+        request_id: u64,
+        app_id: &str,
+        quota_bytes: u64,
+        key: &str,
+        offset: u32,
+        length: u32,
+    ) -> Self {
+        Self {
+            protocol_version: STORAGE_PROTOCOL_VERSION,
+            request_id,
+            app_id: app_id.into(),
+            quota_bytes,
+            command: StorageCommand::GetBlobChunk {
+                key: key.into(),
+                offset,
+                length,
+            },
+        }
+    }
+
+    pub fn delete_blob(request_id: u64, app_id: &str, quota_bytes: u64, key: &str) -> Self {
+        Self {
+            protocol_version: STORAGE_PROTOCOL_VERSION,
+            request_id,
+            app_id: app_id.into(),
+            quota_bytes,
+            command: StorageCommand::DeleteBlob { key: key.into() },
+        }
+    }
+
     pub fn validate(&self) -> Result<(), StorageProtocolError> {
         validate_version(self.protocol_version)?;
         if !cp0_manifest::is_valid_app_id(&self.app_id) {
             return Err(StorageProtocolError::InvalidAppId);
         }
-        if self.quota_bytes < MIB
-            || self.quota_bytes > MAX_STORAGE_QUOTA_BYTES
-            || self.quota_bytes % MIB != 0
-        {
+        let system_photo_library = self.app_id == SYSTEM_PHOTO_LIBRARY_ID;
+        let valid_quota = if system_photo_library {
+            self.quota_bytes == SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES
+        } else {
+            self.quota_bytes >= MIB
+                && self.quota_bytes <= MAX_STORAGE_QUOTA_BYTES
+                && self.quota_bytes % MIB == 0
+        };
+        if !valid_quota {
             return Err(StorageProtocolError::InvalidQuota);
         }
         match &self.command {
@@ -188,6 +271,51 @@ impl StorageRequest {
                 decode_value(value_base64).map(|_| ())
             }
             StorageCommand::Get { key } | StorageCommand::Delete { key } => validate_key(key),
+            StorageCommand::PutBlobChunk {
+                key,
+                offset,
+                total_bytes,
+                value_base64,
+            } => {
+                if !system_photo_library
+                    || *total_bytes == 0
+                    || *total_bytes as usize > MAX_STORAGE_BLOB_BYTES
+                {
+                    return Err(StorageProtocolError::InvalidValue);
+                }
+                validate_key(key)?;
+                let value = decode_value(value_base64)?;
+                if value.is_empty()
+                    || *offset >= *total_bytes
+                    || u64::from(*offset) + value.len() as u64 > u64::from(*total_bytes)
+                {
+                    return Err(StorageProtocolError::InvalidValue);
+                }
+                Ok(())
+            }
+            StorageCommand::GetBlobChunk {
+                key,
+                offset,
+                length,
+            } => {
+                validate_key(key)?;
+                if !system_photo_library
+                    || *length == 0
+                    || *length as usize > MAX_STORAGE_VALUE_BYTES
+                    || u64::from(*offset) + u64::from(*length) > MAX_STORAGE_BLOB_BYTES as u64
+                {
+                    Err(StorageProtocolError::InvalidValue)
+                } else {
+                    Ok(())
+                }
+            }
+            StorageCommand::DeleteBlob { key } => {
+                if !system_photo_library {
+                    Err(StorageProtocolError::InvalidValue)
+                } else {
+                    validate_key(key)
+                }
+            }
             StorageCommand::Usage => Ok(()),
         }
     }
@@ -256,7 +384,7 @@ impl StorageResponse {
             StorageOutcome::Stored { used_bytes }
             | StorageOutcome::Deleted { used_bytes, .. }
             | StorageOutcome::Usage { used_bytes }
-                if *used_bytes > MAX_STORAGE_QUOTA_BYTES =>
+                if *used_bytes > SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES =>
             {
                 Err(StorageProtocolError::InvalidUsage)
             }
@@ -493,6 +621,63 @@ mod tests {
         assert_eq!(decode_value("AA==").unwrap(), [0]);
         assert!(
             StorageRequest::get(1, "dev.cardputerzero.test", 0, "key")
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn system_photo_blobs_are_bounded_and_identity_specific() {
+        let value = vec![0x5a; MAX_STORAGE_VALUE_BYTES];
+        let request = StorageRequest::put_blob_chunk(
+            3,
+            SYSTEM_PHOTO_LIBRARY_ID,
+            SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES,
+            "p000000000000002a.rgb565",
+            0,
+            (320 * 170 * 2) as u32,
+            &value,
+        );
+        let mut frame = Vec::new();
+        write_request(&mut frame, &request).unwrap();
+        assert_eq!(
+            read_request(&mut Cursor::new(frame)).unwrap(),
+            Some(request)
+        );
+
+        assert!(
+            StorageRequest::put_blob_chunk(
+                4,
+                "dev.cardputerzero.camera",
+                MIB,
+                "frame",
+                0,
+                10,
+                b"x",
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            StorageRequest::put_blob_chunk(
+                5,
+                SYSTEM_PHOTO_LIBRARY_ID,
+                SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES,
+                "frame",
+                0,
+                (MAX_STORAGE_BLOB_BYTES + 1) as u32,
+                b"x",
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            StorageResponse::stored(6, MAX_STORAGE_QUOTA_BYTES + 1)
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            StorageResponse::stored(7, SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES + 1)
                 .validate()
                 .is_err()
         );

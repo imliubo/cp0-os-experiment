@@ -349,9 +349,11 @@ fn validate_import_permissions(manifest: &AppManifest, imports: &[String]) -> Re
             "cp0_gpio_read" | "cp0_gpio_write" => Some(Permission::HardwareGpio),
             "cp0_lora_send" | "cp0_lora_receive" => Some(Permission::RadioLora),
             "cp0_photos_get" => Some(Permission::PhotosRead),
-            "cp0_photos_put" | "cp0_photos_index_get" | "cp0_photos_delete" => {
-                Some(Permission::PhotosWrite)
-            }
+            "cp0_photos_put"
+            | "cp0_photos_index_get"
+            | "cp0_photos_delete"
+            | "cp0_photos_import_rgb565"
+            | "cp0_photos_remove" => Some(Permission::PhotosWrite),
             _ => None,
         };
         if required.is_some_and(|permission| !declared.contains(&permission)) {

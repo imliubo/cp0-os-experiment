@@ -1,7 +1,7 @@
 use std::fmt;
 use std::io::{self, BufRead, Write};
-#[cfg(target_os = "linux")]
-use std::os::fd::AsRawFd;
+use std::mem;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 
 use serde::{Deserialize, Serialize};
@@ -97,6 +97,7 @@ pub enum AppdCommand {
     DispatchMediaAction {
         action: crate::MediaAction,
     },
+    ImportScreenshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +200,9 @@ pub enum ResponseData {
         app_id: String,
         action: crate::MediaAction,
     },
+    ScreenshotImported {
+        photo_id: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,6 +213,7 @@ pub struct AppSummary {
     pub version: String,
     pub display: cp0_manifest::DisplayMode,
     pub running: bool,
+    pub removable: bool,
     pub installed_at_unix_seconds: u64,
     pub package_bytes: u64,
     pub data_bytes: u64,
@@ -270,6 +275,8 @@ pub enum ProtocolError {
     InvalidPackageName,
     InvalidStoreInstall,
     InvalidLogLimit,
+    InvalidDescriptor,
+    UnexpectedTrailingData,
 }
 
 impl fmt::Display for ProtocolError {
@@ -303,6 +310,12 @@ impl fmt::Display for ProtocolError {
             Self::InvalidStoreInstall => formatter.write_str("invalid store installation metadata"),
             Self::InvalidLogLimit => {
                 formatter.write_str("application log limit must be between 1 and 100")
+            }
+            Self::InvalidDescriptor => {
+                formatter.write_str("application protocol descriptor is invalid")
+            }
+            Self::UnexpectedTrailingData => {
+                formatter.write_str("application protocol frame has trailing data")
             }
         }
     }
@@ -438,6 +451,17 @@ pub fn read_request(reader: &mut impl BufRead) -> Result<Option<AppdRequest>, Pr
     Ok(Some(request))
 }
 
+pub fn recv_request_with_fd(
+    stream: &UnixStream,
+) -> Result<Option<(AppdRequest, Option<OwnedFd>)>, ProtocolError> {
+    let Some((frame, descriptor)) = recv_frame_with_fd(stream)? else {
+        return Ok(None);
+    };
+    let request: AppdRequest = serde_json::from_slice(&frame)?;
+    request.validate()?;
+    Ok(Some((request, descriptor)))
+}
+
 pub fn read_response(reader: &mut impl BufRead) -> Result<Option<AppdResponse>, ProtocolError> {
     let Some(frame) = read_frame(reader)? else {
         return Ok(None);
@@ -504,6 +528,100 @@ fn write_frame(writer: &mut impl Write, value: &impl Serialize) -> Result<(), Pr
     Ok(())
 }
 
+fn recv_frame_with_fd(
+    stream: &UnixStream,
+) -> Result<Option<(Vec<u8>, Option<OwnedFd>)>, ProtocolError> {
+    let mut frame = [0_u8; MAX_FRAME_BYTES];
+    let mut length = 0_usize;
+    let mut received_fd = None;
+
+    loop {
+        if length == frame.len() {
+            return Err(ProtocolError::FrameTooLarge);
+        }
+        let mut io_vector = libc::iovec {
+            iov_base: frame[length..].as_mut_ptr().cast(),
+            iov_len: frame.len() - length,
+        };
+        let control_length = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as u32) } as usize;
+        let control_words = control_length.div_ceil(mem::size_of::<usize>());
+        let mut control = vec![0_usize; control_words];
+        let mut message: libc::msghdr = unsafe { mem::zeroed() };
+        message.msg_iov = &raw mut io_vector;
+        message.msg_iovlen = 1;
+        message.msg_control = control.as_mut_ptr().cast();
+        message.msg_controllen = control_length
+            .try_into()
+            .map_err(|_| ProtocolError::InvalidDescriptor)?;
+
+        let count = loop {
+            let result = unsafe { libc::recvmsg(stream.as_raw_fd(), &raw mut message, 0) };
+            if result < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            if result < 0 {
+                return Err(ProtocolError::Io(io::Error::last_os_error()));
+            }
+            break result as usize;
+        };
+        if count == 0 {
+            if length == 0 {
+                return Ok(None);
+            }
+            return Err(ProtocolError::UnterminatedFrame);
+        }
+
+        unsafe {
+            let mut header = libc::CMSG_FIRSTHDR(&message);
+            while !header.is_null() {
+                if (*header).cmsg_level == libc::SOL_SOCKET
+                    && (*header).cmsg_type == libc::SCM_RIGHTS
+                {
+                    let header_bytes = libc::CMSG_LEN(0) as usize;
+                    if ((*header).cmsg_len as usize) < header_bytes {
+                        return Err(ProtocolError::InvalidDescriptor);
+                    }
+                    let data_bytes = (*header).cmsg_len as usize - header_bytes;
+                    if data_bytes != mem::size_of::<RawFd>() || received_fd.is_some() {
+                        close_control_descriptors(header);
+                        return Err(ProtocolError::InvalidDescriptor);
+                    }
+                    let raw_fd = libc::CMSG_DATA(header).cast::<RawFd>().read();
+                    if libc::fcntl(raw_fd, libc::F_SETFD, libc::FD_CLOEXEC) != 0 {
+                        libc::close(raw_fd);
+                        return Err(ProtocolError::Io(io::Error::last_os_error()));
+                    }
+                    received_fd = Some(OwnedFd::from_raw_fd(raw_fd));
+                }
+                header = libc::CMSG_NXTHDR(&message, header);
+            }
+        }
+        if message.msg_flags & (libc::MSG_CTRUNC | libc::MSG_TRUNC) != 0 {
+            return Err(ProtocolError::InvalidDescriptor);
+        }
+
+        length += count;
+        if let Some(newline) = frame[..length].iter().position(|byte| *byte == b'\n') {
+            if newline + 1 != length {
+                return Err(ProtocolError::UnexpectedTrailingData);
+            }
+            return Ok(Some((frame[..newline].to_vec(), received_fd)));
+        }
+    }
+}
+
+unsafe fn close_control_descriptors(header: *mut libc::cmsghdr) {
+    let header_bytes = unsafe { libc::CMSG_LEN(0) } as usize;
+    let data_bytes = unsafe { (*header).cmsg_len as usize }.saturating_sub(header_bytes);
+    let descriptor_count = data_bytes / mem::size_of::<RawFd>();
+    for index in 0..descriptor_count {
+        let descriptor = unsafe { libc::CMSG_DATA(header).cast::<RawFd>().add(index).read() };
+        if descriptor >= 0 {
+            unsafe { libc::close(descriptor) };
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub fn peer_credentials(stream: &UnixStream) -> io::Result<PeerCredentials> {
     let mut credentials = libc::ucred {
@@ -552,7 +670,10 @@ pub fn peer_credentials(_stream: &UnixStream) -> io::Result<PeerCredentials> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
     use std::io::{BufReader, Cursor};
+    use std::os::fd::AsFd;
+    use std::os::unix::net::UnixStream;
 
     use super::*;
 
@@ -709,6 +830,7 @@ mod tests {
                     version: "0.1.0".into(),
                     display: cp0_manifest::DisplayMode::Standard,
                     running: true,
+                    removable: true,
                     installed_at_unix_seconds: 1_722_470_400,
                     package_bytes: 65_536,
                     data_bytes: 4_096,
@@ -748,6 +870,48 @@ mod tests {
             ResponseData::MediaActionDispatched {
                 app_id: "dev.cardputerzero.player".into(),
                 action: crate::MediaAction::PlayPause,
+            },
+        );
+        let mut encoded = Vec::new();
+        write_response(&mut encoded, &response).unwrap();
+        assert_eq!(
+            read_response(&mut Cursor::new(encoded)).unwrap(),
+            Some(response)
+        );
+    }
+
+    #[test]
+    fn receives_control_requests_with_an_optional_cloexec_descriptor() {
+        let import = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 83,
+            command: AppdCommand::ImportScreenshot,
+        };
+        let mut frame = Vec::new();
+        write_request(&mut frame, &import).unwrap();
+        let (mut sender, receiver) = UnixStream::pair().unwrap();
+        let file = File::open("Cargo.toml").unwrap();
+        cp0_camera_protocol::send_frame_with_fd(&mut sender, &frame, file.as_fd()).unwrap();
+        let (received, descriptor) = recv_request_with_fd(&receiver).unwrap().unwrap();
+        assert_eq!(received, import);
+        let descriptor = descriptor.unwrap();
+        let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFD) };
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+
+        let request = start_request();
+        let (mut sender, receiver) = UnixStream::pair().unwrap();
+        write_request(&mut sender, &request).unwrap();
+        let (received, descriptor) = recv_request_with_fd(&receiver).unwrap().unwrap();
+        assert_eq!(received, request);
+        assert!(descriptor.is_none());
+    }
+
+    #[test]
+    fn round_trips_screenshot_import_response() {
+        let response = AppdResponse::success(
+            84,
+            ResponseData::ScreenshotImported {
+                photo_id: 1_722_470_400_123,
             },
         );
         let mut encoded = Vec::new();
@@ -893,6 +1057,7 @@ mod tests {
             version,
             display: cp0_manifest::DisplayMode::Immersive,
             running: true,
+            removable: true,
             installed_at_unix_seconds: u64::MAX,
             package_bytes: u64::MAX,
             data_bytes: u64::MAX,

@@ -129,6 +129,16 @@ int main(void) {
     assert(cp0_broker_decode_storage_get_response(storage_missing, stored,
                                                   sizeof(stored)) == 0);
 
+    static const char photo_imported[] =
+        "{\"protocol_version\":1,\"request_id\":18,\"outcome\":{"
+        "\"status\":\"photo-imported\",\"photo_id\":1722470400123}}\n";
+    static const char photo_removed[] =
+        "{\"protocol_version\":1,\"request_id\":19,\"outcome\":{"
+        "\"status\":\"storage-deleted\",\"existed\":true}}\n";
+    assert(cp0_broker_decode_photo_import_response(photo_imported) ==
+           INT64_C(1722470400123));
+    assert(cp0_broker_decode_photo_remove_response(photo_removed) == 1);
+
     static const char media_next[] =
         "{\"protocol_version\":1,\"request_id\":17,\"outcome\":{"
         "\"status\":\"media-action\",\"action\":\"next\"}}\n";

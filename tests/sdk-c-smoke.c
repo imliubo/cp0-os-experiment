@@ -32,6 +32,7 @@ int sdk_c_smoke(void) {
     uint8_t photo_value[32] = {1};
     uint32_t photo_value_length = 0;
     uint8_t photo_existed = 0;
+    uint64_t photo_id = 0;
     static const uint8_t intent_action[] = "dev.cardputerzero.documents.open";
     uint8_t intent_action_buffer[CP0_MAX_INTENT_ACTION_BYTES] = {0};
     uint8_t intent_payload[32] = {0};
@@ -69,6 +70,9 @@ int sdk_c_smoke(void) {
         photo_value, sizeof(photo_value), &photo_value_length);
     (void)cp0_photos_delete(photo_key, sizeof(photo_key) - 1U,
                             &photo_existed);
+    (void)cp0_photos_import_rgb565(camera_pixels, CP0_CAMERA_PIXEL_COUNT, 1,
+                                   &photo_id);
+    (void)cp0_photos_remove(photo_id, &photo_existed);
     (void)cp0_intent_send(intent_action, sizeof(intent_action) - 1U,
                           intent_payload, sizeof(intent_payload));
     (void)cp0_intent_take(intent_action_buffer, sizeof(intent_action_buffer),

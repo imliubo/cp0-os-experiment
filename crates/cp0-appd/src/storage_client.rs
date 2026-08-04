@@ -139,6 +139,74 @@ impl StorageClient {
         }
     }
 
+    pub fn put_blob_chunk(
+        &self,
+        request_id: u64,
+        app_id: &str,
+        quota_bytes: u64,
+        key: &str,
+        offset: u32,
+        total_bytes: u32,
+        value: &[u8],
+    ) -> Result<u64, StorageClientError> {
+        match self.exchange(&StorageRequest::put_blob_chunk(
+            request_id,
+            app_id,
+            quota_bytes,
+            key,
+            offset,
+            total_bytes,
+            value,
+        ))? {
+            StorageOutcome::Stored { used_bytes } => Ok(used_bytes),
+            StorageOutcome::Error { code, .. } => Err(StorageClientError::Service(code)),
+            _ => Err(StorageClientError::MismatchedOutcome),
+        }
+    }
+
+    pub fn get_blob_chunk(
+        &self,
+        request_id: u64,
+        app_id: &str,
+        quota_bytes: u64,
+        key: &str,
+        offset: u32,
+        length: u32,
+    ) -> Result<Option<Vec<u8>>, StorageClientError> {
+        match self.exchange(&StorageRequest::get_blob_chunk(
+            request_id,
+            app_id,
+            quota_bytes,
+            key,
+            offset,
+            length,
+        ))? {
+            StorageOutcome::Value { value_base64 } => Ok(Some(decode_value(&value_base64)?)),
+            StorageOutcome::NotFound => Ok(None),
+            StorageOutcome::Error { code, .. } => Err(StorageClientError::Service(code)),
+            _ => Err(StorageClientError::MismatchedOutcome),
+        }
+    }
+
+    pub fn delete_blob(
+        &self,
+        request_id: u64,
+        app_id: &str,
+        quota_bytes: u64,
+        key: &str,
+    ) -> Result<bool, StorageClientError> {
+        match self.exchange(&StorageRequest::delete_blob(
+            request_id,
+            app_id,
+            quota_bytes,
+            key,
+        ))? {
+            StorageOutcome::Deleted { existed, .. } => Ok(existed),
+            StorageOutcome::Error { code, .. } => Err(StorageClientError::Service(code)),
+            _ => Err(StorageClientError::MismatchedOutcome),
+        }
+    }
+
     fn exchange(&self, request: &StorageRequest) -> Result<StorageOutcome, StorageClientError> {
         let mut stream = UnixStream::connect(&self.socket_path)?;
         stream.set_read_timeout(Some(STORAGE_SERVICE_TIMEOUT))?;
