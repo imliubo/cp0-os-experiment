@@ -99,6 +99,7 @@ struct shell {
     uint32_t document_restore_mode;
     uint32_t notification_restore_mode;
     uint32_t system_action_restore_mode;
+    uint32_t power_restore_mode;
     uint32_t screenshot_restore_mode;
     uint32_t capture_factory_name;
     uint32_t capture_output_name;
@@ -484,6 +485,13 @@ static void cancel_system_action(struct shell *shell, bool restore_mode)
         cp0_system_shell_v1_set_overlay_mode(shell->system_control,
                                               shell->overlay_mode);
     }
+}
+
+static void restore_power_overlay(struct shell *shell)
+{
+    shell->overlay_mode = shell->power_restore_mode;
+    cp0_system_shell_v1_set_overlay_mode(shell->system_control,
+                                          shell->overlay_mode);
 }
 
 static void poll_permission_prompt(struct shell *shell)
@@ -1738,14 +1746,18 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                     (unsigned long long)prompt_id);
         }
     } else if (event == CP0_UI_EVENT_SLEEP) {
-        shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+        restore_power_overlay(shell);
         cp0_system_shell_v1_sleep_display(shell->system_control);
     } else if (event == CP0_UI_EVENT_RESTART) {
-        if (cp0_power_request(CP0_POWER_RESTART) != 0)
+        if (cp0_power_request(CP0_POWER_RESTART) != 0) {
             fprintf(stderr, "system-shell: restart request failed\n");
+            restore_power_overlay(shell);
+        }
     } else if (event == CP0_UI_EVENT_POWER_OFF) {
-        if (cp0_power_request(CP0_POWER_OFF) != 0)
+        if (cp0_power_request(CP0_POWER_OFF) != 0) {
             fprintf(stderr, "system-shell: power off request failed\n");
+            restore_power_overlay(shell);
+        }
     } else if (event == CP0_UI_EVENT_OPEN_APP) {
         char app_id[CP0_APP_ID_BYTES];
         const char *selected_id = cp0_ui_selected_app_id(&shell->ui);
@@ -2237,6 +2249,9 @@ static void handle_system_action(void *data,
         shell->overlay_mode = cp0_overlay_transient_target(base);
     } else {
         cancel_system_action(shell, false);
+        if (action == CP0_SYSTEM_SHELL_V1_ACTION_POWER &&
+            !shell->ui.power_dialog)
+            shell->power_restore_mode = shell->overlay_mode;
         shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     }
     cp0_system_shell_v1_set_overlay_mode(shell->system_control,
@@ -2756,6 +2771,7 @@ static bool shell_connect(struct shell *shell)
     load_shell_preferences(shell);
     initialize_provisioning(shell);
     shell->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+    shell->power_restore_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     shell->display = wl_display_connect(NULL);
     if (shell->display == NULL) {
         fprintf(stderr, "system-shell: cannot connect to Wayland display\n");
