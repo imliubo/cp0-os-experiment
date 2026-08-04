@@ -949,6 +949,8 @@ fn write_new(path: &Path, contents: &[u8], mode: u32) -> Result<(), String> {
         .mode(mode)
         .open(path)
         .map_err(|error| format!("cannot create {}: {error}", path.display()))?;
+    file.set_permissions(fs::Permissions::from_mode(mode))
+        .map_err(|error| format!("cannot set mode on {}: {error}", path.display()))?;
     file.write_all(contents)
         .and_then(|()| file.sync_all())
         .map_err(|error| format!("cannot finish {}: {error}", path.display()))
@@ -1067,6 +1069,62 @@ mod tests {
                 .mode()
                 & 0o777,
             0o644
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn paired_file_modes_ignore_restrictive_umask() {
+        const CHILD_MARKER: &str = "CP0_DEVD_RESTRICTIVE_UMASK_CHILD";
+
+        if env::var_os(CHILD_MARKER).is_none() {
+            let status = std::process::Command::new(env::current_exe().unwrap())
+                .arg("paired_file_modes_ignore_restrictive_umask")
+                .arg("--nocapture")
+                .env(CHILD_MARKER, "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "restrictive umask child test failed");
+            return;
+        }
+
+        // umask is process-global, so exercise the service value in an isolated child.
+        unsafe {
+            libc::umask(0o077);
+        }
+        let (root, paths) = test_paths("restrictive-umask");
+        let (key, fingerprint) = test_ssh_key(7);
+        let developer_key_id = "11".repeat(32);
+        let mut store = PairStore::default();
+        store.hosts.insert(
+            fingerprint.clone(),
+            PairedHost {
+                label: "workstation".into(),
+                ssh_public_key: key,
+                ssh_fingerprint: fingerprint,
+                developer_key_id: developer_key_id.clone(),
+                paired_at_unix_seconds: 1,
+            },
+        );
+
+        save_pair_state(&paths, "owner", &store, &[0x11_u8; 32], &developer_key_id).unwrap();
+
+        for path in [
+            paths
+                .developer_trust
+                .join(format!("{developer_key_id}.pub")),
+            paths.authorized_keys.join("owner"),
+        ] {
+            assert_eq!(
+                fs::symlink_metadata(&path).unwrap().mode() & 0o777,
+                0o644,
+                "wrong public file mode for {}",
+                path.display()
+            );
+        }
+        assert_eq!(
+            fs::symlink_metadata(&paths.pair_store).unwrap().mode() & 0o777,
+            0o600
         );
         fs::remove_dir_all(root).unwrap();
     }
