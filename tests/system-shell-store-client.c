@@ -40,6 +40,10 @@ int cp0_store_test_parse_install_batch_response(
 int cp0_store_test_parse_control_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *app_id, enum cp0_store_control_action action);
+int cp0_store_test_build_search_request(char *request, size_t capacity,
+                                        uint64_t request_id,
+                                        const char *query, uint16_t offset,
+                                        uint8_t limit);
 int cp0_store_test_parse_search_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *query, uint16_t offset, uint8_t limit,
@@ -591,9 +595,28 @@ int main(void)
     assert(cp0_store_test_parse_search_response(
                duplicate_search, strlen(duplicate_search), 27, "app", 0, 2,
                &search) == CP0_STORE_RESULT_ERROR);
+
+    static const char symbol_search[] =
+        SEARCH_START("28", "quote\\\"slash\\\\path+c++?", "0", "8", "0",
+                     "null", "false")
+        SEARCH_END;
+    static const char symbol_query[] = "quote\"slash\\path+c++?";
     assert(cp0_store_test_parse_search_response(
-               empty_search, strlen(empty_search), 25, "bad\"query", 0, 8,
+               symbol_search, strlen(symbol_search), 28, symbol_query, 0, 8,
+               &search) == CP0_STORE_RESULT_OK);
+    assert(cp0_store_test_parse_search_response(
+               empty_search, strlen(empty_search), 25, "bad\nquery", 0, 8,
                &search) == CP0_STORE_RESULT_ERROR);
+
+    char search_request[384];
+    int search_request_length = cp0_store_test_build_search_request(
+        search_request, sizeof(search_request), 29, symbol_query, 8, 4);
+    static const char expected_search_request[] =
+        "{\"protocol_version\":1,\"request_id\":29,\"command\":{"
+        "\"name\":\"search\",\"query\":\"quote\\\"slash\\\\path+c++?\","
+        "\"offset\":8,\"limit\":4}}\n";
+    assert(search_request_length == (int)strlen(expected_search_request));
+    assert(strcmp(search_request, expected_search_request) == 0);
 
     static const char maximum_search_offset[] =
         SEARCH_START("240", "app", "1024", "8", "1024", "null", "false")

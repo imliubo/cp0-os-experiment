@@ -943,6 +943,17 @@ int main(int argc, char **argv)
            CP0_UI_EVENT_STORE_SEARCH);
     assert(cp0_ui_store_input_ascii(&search_ui, 'p') ==
            CP0_UI_EVENT_STORE_SEARCH);
+    static const char search_symbols[] = "!@#$%^&*()[]{};:'\"`~\\|,<>/?+=";
+    for (size_t index = 0; index < strlen(search_symbols); index++) {
+        size_t query_length = strlen(search_ui.store_search_query);
+        assert(cp0_ui_store_input_ascii(&search_ui, search_symbols[index]) ==
+               CP0_UI_EVENT_STORE_SEARCH);
+        assert(search_ui.store_search_query[query_length] ==
+               search_symbols[index]);
+        assert(cp0_ui_store_backspace(&search_ui) ==
+               CP0_UI_EVENT_STORE_SEARCH);
+    }
+    assert(strcmp(search_ui.store_search_query, "app") == 0);
 
     struct cp0_ui_store_catalog_app search_page[8];
     char search_ids[8][48];

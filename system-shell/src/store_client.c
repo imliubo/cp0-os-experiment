@@ -874,13 +874,51 @@ static bool valid_search_query(const char *query)
         return false;
     for (size_t index = 0; index < length; index++) {
         unsigned char byte = (unsigned char)query[index];
-        if (!((byte >= 'a' && byte <= 'z') ||
-              (byte >= 'A' && byte <= 'Z') ||
-              (byte >= '0' && byte <= '9') || byte == ' ' || byte == '.' ||
-              byte == '-' || byte == '_'))
+        if (byte < 0x20U || byte > 0x7eU)
             return false;
     }
     return true;
+}
+
+static bool escape_json_string_contents(const char *input, char *output,
+                                        size_t capacity)
+{
+    size_t offset = 0;
+
+    if (input == NULL || output == NULL || capacity == 0)
+        return false;
+    for (const char *character = input; *character != '\0'; character++) {
+        if ((*character == '"' || *character == '\\') &&
+            offset + 1U >= capacity)
+            return false;
+        if (*character == '"' || *character == '\\')
+            output[offset++] = '\\';
+        if (offset + 1U >= capacity)
+            return false;
+        output[offset++] = *character;
+    }
+    output[offset] = '\0';
+    return true;
+}
+
+static int build_search_request(char *request, size_t capacity,
+                                uint64_t request_id, const char *query,
+                                uint16_t offset, uint8_t limit)
+{
+    char escaped_query[CP0_STORE_SEARCH_QUERY_BYTES * 2U];
+
+    if (request == NULL || !valid_search_query(query) ||
+        !escape_json_string_contents(query, escaped_query,
+                                     sizeof(escaped_query)))
+        return -1;
+    int length = snprintf(
+        request, capacity,
+        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"search\",\"query\":\"%s\",\"offset\":%u,"
+        "\"limit\":%u}}\n",
+        (unsigned long long)request_id, escaped_query, (unsigned int)offset,
+        (unsigned int)limit);
+    return length > 0 && (size_t)length < capacity ? length : -1;
 }
 
 static int parse_search_response(
@@ -1652,6 +1690,15 @@ cleanup:
 }
 
 #ifdef CP0_STORE_CLIENT_TEST
+int cp0_store_test_build_search_request(char *request, size_t capacity,
+                                        uint64_t request_id,
+                                        const char *query, uint16_t offset,
+                                        uint8_t limit)
+{
+    return build_search_request(request, capacity, request_id, query, offset,
+                                limit);
+}
+
 int cp0_store_test_parse_catalog_response(
     const char *response, size_t response_length, uint64_t request_id,
     struct cp0_store_catalog *catalog)
@@ -1872,14 +1919,9 @@ int cp0_store_search(const char *query, uint16_t offset, uint8_t limit,
         free(response);
         return CP0_STORE_RESULT_ERROR;
     }
-    int request_length = snprintf(
-        request, sizeof(request),
-        "{\"protocol_version\":1,\"request_id\":%llu,\"command\":{"
-        "\"name\":\"search\",\"query\":\"%s\",\"offset\":%u,"
-        "\"limit\":%u}}\n",
-        (unsigned long long)request_id, query, (unsigned int)offset,
-        (unsigned int)limit);
-    if (request_length > 0 && (size_t)request_length < sizeof(request) &&
+    int request_length = build_search_request(
+        request, sizeof(request), request_id, query, offset, limit);
+    if (request_length > 0 &&
         exchange(request, (size_t)request_length, response,
                  CP0_STORE_FRAME_BYTES, &response_length, 500, NULL) == 0)
         result = parse_search_response(response, response_length, request_id,

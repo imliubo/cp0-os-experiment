@@ -4350,10 +4350,7 @@ void cp0_ui_set_store_screenshot_unavailable(struct cp0_ui *ui,
 
 static bool store_ascii_character(char character)
 {
-    return (character >= 'a' && character <= 'z') ||
-           (character >= 'A' && character <= 'Z') ||
-           (character >= '0' && character <= '9') || character == ' ' ||
-           character == '.' || character == '-' || character == '_';
+    return character >= ' ' && character <= '~';
 }
 
 bool cp0_ui_store_accepts_text(const struct cp0_ui *ui)
