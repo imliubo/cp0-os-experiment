@@ -62,6 +62,18 @@ int32_t cp0_storage_get_raw(const uint8_t *key, uint32_t key_length, uint8_t *va
 CP0_IMPORT("cp0_storage_delete")
 int32_t cp0_storage_delete_raw(const uint8_t *key, uint32_t key_length);
 
+CP0_IMPORT("cp0_photos_put")
+cp0_result_t cp0_photos_put_raw(const uint8_t *key, uint32_t key_length, const uint8_t *value, uint32_t value_length);
+
+CP0_IMPORT("cp0_photos_get")
+int32_t cp0_photos_get_raw(const uint8_t *key, uint32_t key_length, uint8_t *value, uint32_t value_capacity);
+
+CP0_IMPORT("cp0_photos_index_get")
+int32_t cp0_photos_index_get_raw(uint8_t *value, uint32_t value_capacity);
+
+CP0_IMPORT("cp0_photos_delete")
+int32_t cp0_photos_delete_raw(const uint8_t *key, uint32_t key_length);
+
 CP0_IMPORT("cp0_intent_send")
 cp0_result_t cp0_intent_send_raw(const uint8_t *action, uint32_t action_length, const uint8_t *payload, uint32_t payload_length);
 

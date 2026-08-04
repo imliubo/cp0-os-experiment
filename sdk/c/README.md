@@ -60,3 +60,7 @@ state and supported Play/Pause, Previous and Next actions.
 `cp0_media_take_action` consumes one action routed by appd. The application
 cannot name another application or attach media metadata, and registration
 does not replace the `audio.playback` permission required for sound output.
+The `cp0_photos_*` calls expose the separately permissioned shared photo
+library transport. Use `photos.read` for reads and `photos.write` for index
+updates, writes, and deletes; the fixed v1 layout is described in
+`docs/PHOTO-LIBRARY-V1.md`.

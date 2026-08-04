@@ -31,6 +31,7 @@
 #define CP0_LORA_METADATA_BYTES 4U
 #define CP0_MAX_STORAGE_KEY_BYTES 64U
 #define CP0_MAX_STORAGE_VALUE_BYTES (8U * 1024U)
+#define CP0_MAX_PHOTOS 32U
 #define CP0_MAX_INTENT_ACTION_BYTES 96U
 #define CP0_MAX_INTENT_PAYLOAD_BYTES 1024U
 #define CP0_MAX_CHECKPOINT_BYTES (8U * 1024U)
@@ -369,6 +370,71 @@ static inline cp0_result_t cp0_storage_delete(const uint8_t *key,
     if (!cp0_storage_key_is_valid(key, key_length) || existed == NULL)
         return CP0_ERROR_INVALID_ARGUMENT;
     result = cp0_storage_delete_raw(key, key_length);
+    if (result < 0)
+        return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
+                                           : CP0_ERROR_INTERNAL;
+    if (result > 1)
+        return CP0_ERROR_INTERNAL;
+    *existed = (uint8_t)result;
+    return CP0_OK;
+}
+
+static inline cp0_result_t cp0_photos_put(const uint8_t *key,
+                                          uint32_t key_length,
+                                          const uint8_t *value,
+                                          uint32_t value_length) {
+    if (!cp0_storage_key_is_valid(key, key_length) || value == NULL ||
+        value_length == 0U || value_length > CP0_MAX_STORAGE_VALUE_BYTES)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    return cp0_photos_put_raw(key, key_length, value, value_length);
+}
+
+static inline cp0_result_t cp0_photos_get(const uint8_t *key,
+                                          uint32_t key_length,
+                                          uint8_t *value,
+                                          uint32_t value_capacity,
+                                          uint32_t *value_length) {
+    int32_t result;
+
+    if (!cp0_storage_key_is_valid(key, key_length) || value == NULL ||
+        value_capacity == 0U || value_capacity > CP0_MAX_STORAGE_VALUE_BYTES ||
+        value_length == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    result = cp0_photos_get_raw(key, key_length, value, value_capacity);
+    if (result < 0)
+        return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
+                                           : CP0_ERROR_INTERNAL;
+    if ((uint32_t)result > value_capacity)
+        return CP0_ERROR_INTERNAL;
+    *value_length = (uint32_t)result;
+    return CP0_OK;
+}
+
+static inline cp0_result_t cp0_photos_index_get_for_update(
+    uint8_t *value, uint32_t value_capacity, uint32_t *value_length) {
+    int32_t result;
+
+    if (value == NULL || value_capacity == 0U ||
+        value_capacity > CP0_MAX_STORAGE_VALUE_BYTES || value_length == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    result = cp0_photos_index_get_raw(value, value_capacity);
+    if (result < 0)
+        return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
+                                           : CP0_ERROR_INTERNAL;
+    if ((uint32_t)result > value_capacity)
+        return CP0_ERROR_INTERNAL;
+    *value_length = (uint32_t)result;
+    return CP0_OK;
+}
+
+static inline cp0_result_t cp0_photos_delete(const uint8_t *key,
+                                             uint32_t key_length,
+                                             uint8_t *existed) {
+    int32_t result;
+
+    if (!cp0_storage_key_is_valid(key, key_length) || existed == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    result = cp0_photos_delete_raw(key, key_length);
     if (result < 0)
         return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
                                            : CP0_ERROR_INTERNAL;

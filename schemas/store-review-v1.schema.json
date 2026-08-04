@@ -49,7 +49,9 @@
           "hardware.gpio",
           "network.client",
           "notifications.post",
-          "radio.lora"
+          "radio.lora",
+          "photos.read",
+          "photos.write"
         ]
       }
     },

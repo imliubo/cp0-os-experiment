@@ -159,6 +159,35 @@ static int32_t cp0_storage_delete(wasm_exec_env_t execution_environment,
     return cp0_broker_storage_delete(key, (size_t)key_length);
 }
 
+static int32_t cp0_photos_put(wasm_exec_env_t execution_environment,
+                              const uint8_t *key, uint32_t key_length,
+                              const uint8_t *value, uint32_t value_length) {
+    (void)execution_environment;
+    return cp0_broker_photo_put(key, (size_t)key_length, value,
+                                (size_t)value_length);
+}
+
+static int32_t cp0_photos_get(wasm_exec_env_t execution_environment,
+                              const uint8_t *key, uint32_t key_length,
+                              uint8_t *value, uint32_t value_capacity) {
+    (void)execution_environment;
+    return cp0_broker_photo_get(key, (size_t)key_length, value,
+                                (size_t)value_capacity);
+}
+
+static int32_t cp0_photos_index_get(wasm_exec_env_t execution_environment,
+                                    uint8_t *value,
+                                    uint32_t value_capacity) {
+    (void)execution_environment;
+    return cp0_broker_photo_index_get(value, (size_t)value_capacity);
+}
+
+static int32_t cp0_photos_delete(wasm_exec_env_t execution_environment,
+                                 const uint8_t *key, uint32_t key_length) {
+    (void)execution_environment;
+    return cp0_broker_photo_delete(key, (size_t)key_length);
+}
+
 static int32_t cp0_intent_send(wasm_exec_env_t execution_environment,
                                const uint8_t *action, uint32_t action_length,
                                const uint8_t *payload,

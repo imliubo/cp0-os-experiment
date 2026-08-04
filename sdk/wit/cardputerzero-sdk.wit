@@ -121,6 +121,15 @@ interface storage {
     delete: func(key: string) -> result<bool, error-code>;
 }
 
+interface photos {
+    use types.{error-code};
+
+    put: func(key: string, value: list<u8>) -> result<_, error-code>;
+    get: func(key: string, maximum: u32) -> result<option<list<u8>>, error-code>;
+    get-index-for-update: func(maximum: u32) -> result<option<list<u8>>, error-code>;
+    delete: func(key: string) -> result<bool, error-code>;
+}
+
 interface intents {
     use types.{error-code};
 
@@ -185,6 +194,7 @@ world cardputer-application {
     import gpio;
     import radio;
     import storage;
+    import photos;
     import intents;
     import media;
     export application;

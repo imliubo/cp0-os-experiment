@@ -1,16 +1,33 @@
 #![no_std]
 
+#[cfg(not(test))]
 use core::panic::PanicInfo;
 use cp0_sdk::{
     Error, camera,
     display::{self, Rect},
-    input,
+    input, photos, system,
     ui::{Canvas, color},
 };
 
-static mut CAMERA_FRAME: [u16; camera::PIXEL_COUNT] = [0; camera::PIXEL_COUNT];
+const KEY_ENTER: u16 = 28;
+const KEY_SPACE: u16 = 57;
+const FRAME_BYTES: usize = camera::FRAME_BYTES;
+const PREVIEW_INTERVAL_MS: u64 = 350;
 
-fn pixels() -> &'static mut [u16] {
+static mut CAMERA_FRAME: [u16; camera::PIXEL_COUNT] = [0; camera::PIXEL_COUNT];
+static mut DISPLAY_FRAME: [u8; FRAME_BYTES] = [0; FRAME_BYTES];
+
+#[derive(Clone, Copy)]
+enum Status {
+    Starting,
+    Live,
+    Saved,
+    Authorize,
+    Denied,
+    Unavailable,
+}
+
+fn camera_pixels() -> &'static mut [u16] {
     unsafe {
         core::slice::from_raw_parts_mut(
             core::ptr::addr_of_mut!(CAMERA_FRAME).cast(),
@@ -19,87 +36,147 @@ fn pixels() -> &'static mut [u16] {
     }
 }
 
-fn frame() -> &'static mut [u8] {
+fn display_frame() -> &'static mut [u8] {
     unsafe {
-        core::slice::from_raw_parts_mut(
-            core::ptr::addr_of_mut!(CAMERA_FRAME).cast(),
-            display::WIDTH as usize * display::STANDARD_HEIGHT as usize * 2,
-        )
+        core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(DISPLAY_FRAME).cast(), FRAME_BYTES)
     }
 }
 
-fn placeholder(frame: &mut [u8], denied: bool) {
-    let mut canvas = Canvas::new(frame, display::WIDTH, display::STANDARD_HEIGHT).unwrap();
+fn render_preview(source: &[u16], target: &mut [u8], status: Status) {
+    let source =
+        unsafe { core::slice::from_raw_parts(source.as_ptr().cast::<u8>(), camera::FRAME_BYTES) };
+    target.copy_from_slice(source);
+    let mut canvas = Canvas::new(target, display::WIDTH, display::IMMERSIVE_HEIGHT).unwrap();
+    canvas.fill_rect(
+        Rect {
+            x: 8,
+            y: 8,
+            width: 62,
+            height: 17,
+        },
+        color::DANGER,
+    );
+    canvas.draw_text(18, 13, "CAMERA", color::TEXT, 1);
+    canvas.fill_rect(
+        Rect {
+            x: 88,
+            y: 145,
+            width: 144,
+            height: 18,
+        },
+        color::SURFACE,
+    );
+    let (label, label_color, x) = match status {
+        Status::Saved => ("PHOTO SAVED", color::SUCCESS, 127),
+        Status::Authorize => ("AUTHORIZE PHOTOS", color::WARNING, 112),
+        Status::Denied => ("ACCESS DENIED", color::DANGER, 121),
+        Status::Unavailable => ("CAMERA OFFLINE", color::DANGER, 118),
+        _ => ("LIVE", color::TEXT, 148),
+    };
+    canvas.draw_text(x, 151, label, label_color, 1);
+}
+
+fn render_placeholder(target: &mut [u8], status: Status) {
+    let mut canvas = Canvas::new(target, display::WIDTH, display::IMMERSIVE_HEIGHT).unwrap();
     canvas.clear(color::BACKGROUND);
     canvas.fill_rect(
         Rect {
-            x: 20,
-            y: 18,
-            width: 280,
-            height: 84,
+            x: 32,
+            y: 31,
+            width: 256,
+            height: 104,
         },
         color::SURFACE,
     );
     canvas.stroke_rect(
         Rect {
-            x: 20,
-            y: 18,
-            width: 280,
-            height: 84,
+            x: 32,
+            y: 31,
+            width: 256,
+            height: 104,
         },
-        if denied { color::DANGER } else { color::ACCENT },
-    );
-    canvas.draw_text(61, 48, "CAMERA", color::TEXT, 3);
-    canvas.draw_text(
-        if denied { 88 } else { 46 },
-        118,
-        if denied {
-            "PERMISSION DENIED"
-        } else {
-            "ENTER TO CAPTURE"
+        match status {
+            Status::Denied | Status::Unavailable => color::DANGER,
+            _ => color::ACCENT,
         },
-        if denied { color::DANGER } else { color::MUTED },
-        1,
     );
+    canvas.draw_text(91, 55, "CAMERA", color::TEXT, 3);
+    let (label, x) = match status {
+        Status::Denied => ("ACCESS DENIED", 121),
+        Status::Unavailable => ("CAMERA OFFLINE", 118),
+        _ => ("STARTING", 136),
+    };
+    canvas.draw_text(x, 108, label, color::MUTED, 1);
 }
 
-fn live_badge(frame: &mut [u8]) {
-    let mut canvas = Canvas::new(frame, display::WIDTH, display::STANDARD_HEIGHT).unwrap();
-    canvas.fill_rect(
-        Rect {
-            x: 8,
-            y: 8,
-            width: 42,
-            height: 15,
-        },
-        color::DANGER,
-    );
-    canvas.draw_text(15, 12, "LIVE", color::TEXT, 1);
-}
-
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
-    placeholder(frame(), false);
+    let pixels = camera_pixels();
+    let frame = display_frame();
+    let mut status = Status::Starting;
+    let mut has_frame = false;
+    let mut next_preview = 0;
+    let mut status_until = 0;
     let mut dirty = true;
+
     loop {
-        if dirty && display::present_rgb565(frame(), &[]).is_ok() {
-            dirty = false;
-        }
-        match input::poll_key_event(250) {
-            Ok(Some(event)) if event.pressed && matches!(event.code, 28 | 46) => {
-                match camera::capture_rgb565(pixels()) {
-                    Ok(()) => live_badge(frame()),
-                    Err(Error::Denied) => placeholder(frame(), true),
-                    Err(_) => return 1,
+        let now = system::monotonic_milliseconds();
+        if now >= next_preview {
+            next_preview = now.saturating_add(PREVIEW_INTERVAL_MS);
+            match camera::capture_rgb565(pixels) {
+                Ok(()) => {
+                    has_frame = true;
+                    if now >= status_until {
+                        status = Status::Live;
+                    }
+                    dirty = true;
                 }
+                Err(Error::Denied) => {
+                    status = Status::Denied;
+                    dirty = true;
+                }
+                Err(Error::Unavailable) => {
+                    if !has_frame {
+                        status = Status::Unavailable;
+                        dirty = true;
+                    }
+                }
+                Err(_) => return 1,
+            }
+        }
+
+        match input::poll_key_event(50) {
+            Ok(Some(event))
+                if event.pressed && has_frame && matches!(event.code, KEY_ENTER | KEY_SPACE) =>
+            {
+                match photos::save_rgb565(pixels, now) {
+                    Ok(_) => status = Status::Saved,
+                    Err(Error::Unavailable) => status = Status::Authorize,
+                    Err(Error::Denied) => status = Status::Denied,
+                    Err(_) => status = Status::Unavailable,
+                }
+                status_until = now.saturating_add(1200);
                 dirty = true;
             }
             Ok(_) => {}
             Err(_) => return 1,
         }
+
+        if dirty {
+            if has_frame {
+                render_preview(pixels, frame, status);
+            } else {
+                render_placeholder(frame, status);
+            }
+            if display::present_rgb565(frame, &[]).is_ok() {
+                dirty = false;
+            }
+        }
     }
 }
 
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(_information: &PanicInfo<'_>) -> ! {
     loop {

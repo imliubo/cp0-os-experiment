@@ -262,6 +262,62 @@
       "wit": "storage.delete"
     },
     {
+      "name": "cp0_photos_put",
+      "runtime_function": "cp0_photos_put",
+      "c_name": "cp0_photos_put_raw",
+      "wamr_signature": "(*~*~)i",
+      "result": "result",
+      "parameters": [
+        { "name": "key", "type": "const-u8-ptr" },
+        { "name": "key_length", "type": "u32" },
+        { "name": "value", "type": "const-u8-ptr" },
+        { "name": "value_length", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "photos.put"
+    },
+    {
+      "name": "cp0_photos_get",
+      "runtime_function": "cp0_photos_get",
+      "c_name": "cp0_photos_get_raw",
+      "wamr_signature": "(*~*~)i",
+      "result": "i32",
+      "parameters": [
+        { "name": "key", "type": "const-u8-ptr" },
+        { "name": "key_length", "type": "u32" },
+        { "name": "value", "type": "mut-u8-ptr" },
+        { "name": "value_capacity", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "photos.get"
+    },
+    {
+      "name": "cp0_photos_index_get",
+      "runtime_function": "cp0_photos_index_get",
+      "c_name": "cp0_photos_index_get_raw",
+      "wamr_signature": "(*~)i",
+      "result": "i32",
+      "parameters": [
+        { "name": "value", "type": "mut-u8-ptr" },
+        { "name": "value_capacity", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "photos.get-index-for-update"
+    },
+    {
+      "name": "cp0_photos_delete",
+      "runtime_function": "cp0_photos_delete",
+      "c_name": "cp0_photos_delete_raw",
+      "wamr_signature": "(*~)i",
+      "result": "i32",
+      "parameters": [
+        { "name": "key", "type": "const-u8-ptr" },
+        { "name": "key_length", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "photos.delete"
+    },
+    {
       "name": "cp0_intent_send",
       "runtime_function": "cp0_intent_send",
       "c_name": "cp0_intent_send_raw",

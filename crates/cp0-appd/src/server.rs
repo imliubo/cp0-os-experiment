@@ -37,6 +37,9 @@ use crate::{
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
 const BROKER_CLIENT_TIMEOUT: Duration = Duration::from_millis(500);
 const RUNTIME_MONITOR_RETRY: Duration = Duration::from_secs(5);
+const PHOTO_LIBRARY_ID: &str = "dev.cardputerzero.photo-library";
+const PHOTO_LIBRARY_QUOTA_BYTES: u64 = 8 * cp0_storage_protocol::MIB;
+const PHOTO_LIBRARY_INDEX_KEY: &str = "index.v1";
 
 #[derive(Debug)]
 pub enum ServerError {
@@ -1569,6 +1572,95 @@ impl AppdServer {
                     Ok(existed) => BrokerResponse::storage_deleted(request_id, existed),
                     Err(error) => {
                         eprintln!("cp0-appd: private storage delete failed: {error}");
+                        storage_error_response(request_id, &error)
+                    }
+                }
+            }
+            BrokerCommand::PhotoPut { key, value_base64 } => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::PhotosWrite)
+                {
+                    return response;
+                }
+                let value = match cp0_storage_protocol::decode_value(&value_base64) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return BrokerResponse::error(
+                            request_id,
+                            BrokerErrorCode::InvalidRequest,
+                            "invalid bounded photo library value",
+                        );
+                    }
+                };
+                match self.capabilities.storage.put(
+                    request_id,
+                    PHOTO_LIBRARY_ID,
+                    PHOTO_LIBRARY_QUOTA_BYTES,
+                    &key,
+                    &value,
+                ) {
+                    Ok(used_bytes) => BrokerResponse::storage_stored(request_id, used_bytes),
+                    Err(error) => {
+                        eprintln!("cp0-appd: photo library put failed: {error}");
+                        storage_error_response(request_id, &error)
+                    }
+                }
+            }
+            BrokerCommand::PhotoGet { key } => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::PhotosRead)
+                {
+                    return response;
+                }
+                match self.capabilities.storage.get(
+                    request_id,
+                    PHOTO_LIBRARY_ID,
+                    PHOTO_LIBRARY_QUOTA_BYTES,
+                    &key,
+                ) {
+                    Ok(Some(value)) => BrokerResponse::storage_value(request_id, &value),
+                    Ok(None) => BrokerResponse::storage_not_found(request_id),
+                    Err(error) => {
+                        eprintln!("cp0-appd: photo library get failed: {error}");
+                        storage_error_response(request_id, &error)
+                    }
+                }
+            }
+            BrokerCommand::PhotoIndexGet => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::PhotosWrite)
+                {
+                    return response;
+                }
+                match self.capabilities.storage.get(
+                    request_id,
+                    PHOTO_LIBRARY_ID,
+                    PHOTO_LIBRARY_QUOTA_BYTES,
+                    PHOTO_LIBRARY_INDEX_KEY,
+                ) {
+                    Ok(Some(value)) => BrokerResponse::storage_value(request_id, &value),
+                    Ok(None) => BrokerResponse::storage_not_found(request_id),
+                    Err(error) => {
+                        eprintln!("cp0-appd: photo library index read failed: {error}");
+                        storage_error_response(request_id, &error)
+                    }
+                }
+            }
+            BrokerCommand::PhotoDelete { key } => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::PhotosWrite)
+                {
+                    return response;
+                }
+                match self.capabilities.storage.delete(
+                    request_id,
+                    PHOTO_LIBRARY_ID,
+                    PHOTO_LIBRARY_QUOTA_BYTES,
+                    &key,
+                ) {
+                    Ok(existed) => BrokerResponse::storage_deleted(request_id, existed),
+                    Err(error) => {
+                        eprintln!("cp0-appd: photo library delete failed: {error}");
                         storage_error_response(request_id, &error)
                     }
                 }

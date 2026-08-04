@@ -101,7 +101,9 @@ frame submission and every input event pass through App Runtime.
 Declare only capabilities the application uses, with a short reason visible in
 the trusted permission prompt. Examples include `network.client`,
 `audio.playback`, `audio.capture`, `camera.capture`, `hardware.gpio`,
-`radio.lora`, `documents.open`, `notifications.post` and intent declarations.
+`radio.lora`, `documents.open`, `notifications.post`, `photos.read`,
+`photos.write` and intent declarations. The bounded shared photo library is
+documented in `docs/PHOTO-LIBRARY-V1.md`.
 Private key/value storage is automatically available within the manifest's
 `resources.storage_mb` quota and has no separate permission name. A denied
 capability returns `Error::Denied`; a pending decision or temporarily

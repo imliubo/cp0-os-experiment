@@ -59,6 +59,17 @@ pub enum BrokerCommand {
     StorageDelete {
         key: String,
     },
+    PhotoPut {
+        key: String,
+        value_base64: String,
+    },
+    PhotoGet {
+        key: String,
+    },
+    PhotoIndexGet,
+    PhotoDelete {
+        key: String,
+    },
     SendIntent {
         action: String,
         payload_base64: String,
@@ -299,15 +310,17 @@ impl BrokerRequest {
             {
                 Err(BrokerProtocolError::InvalidRadio)
             }
-            BrokerCommand::StoragePut { key, value_base64 } => {
+            BrokerCommand::StoragePut { key, value_base64 }
+            | BrokerCommand::PhotoPut { key, value_base64 } => {
                 cp0_storage_protocol::validate_key(key)
                     .and_then(|()| cp0_storage_protocol::decode_value(value_base64).map(|_| ()))
                     .map_err(|_| BrokerProtocolError::InvalidStorage)
             }
-            BrokerCommand::StorageGet { key } | BrokerCommand::StorageDelete { key } => {
-                cp0_storage_protocol::validate_key(key)
-                    .map_err(|_| BrokerProtocolError::InvalidStorage)
-            }
+            BrokerCommand::StorageGet { key }
+            | BrokerCommand::StorageDelete { key }
+            | BrokerCommand::PhotoGet { key }
+            | BrokerCommand::PhotoDelete { key } => cp0_storage_protocol::validate_key(key)
+                .map_err(|_| BrokerProtocolError::InvalidStorage),
             BrokerCommand::SendIntent {
                 action,
                 payload_base64,
@@ -1063,6 +1076,16 @@ mod tests {
         );
         assert!(BrokerResponse::storage_not_found(12).validate().is_ok());
         assert!(BrokerResponse::storage_deleted(12, true).validate().is_ok());
+
+        let photo_request = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 13,
+            command: BrokerCommand::PhotoPut {
+                key: "p0000000000000001.c00".into(),
+                value_base64: cp0_storage_protocol::encode_base64(b"pixels"),
+            },
+        };
+        assert!(photo_request.validate().is_ok());
     }
 
     #[test]

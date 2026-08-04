@@ -85,6 +85,8 @@ Use exactly one permission entry per capability used by the app:
 | `camera.capture` | `camera` | one fixed 320x170 RGB565 frame |
 | `hardware.gpio` | `gpio` | four logical V0.6 connector lines only |
 | `radio.lora` | `radio` | fixed external SX1276 policy; disabled by default |
+| `photos.read` | `photos` | read the bounded shared photo library |
+| `photos.write` | `photos` | save or explicitly delete shared photos |
 
 Private `storage` is always identity-bound and limited by
 `resources.storage_mb`; it has no permission name. Intents must be explicitly

@@ -411,6 +411,10 @@ fn required_permission(import: &str) -> Option<Permission> {
         "cp0_camera_capture_rgb565" => Some(Permission::CameraCapture),
         "cp0_gpio_read" | "cp0_gpio_write" => Some(Permission::HardwareGpio),
         "cp0_lora_send" | "cp0_lora_receive" => Some(Permission::RadioLora),
+        "cp0_photos_get" => Some(Permission::PhotosRead),
+        "cp0_photos_put" | "cp0_photos_index_get" | "cp0_photos_delete" => {
+            Some(Permission::PhotosWrite)
+        }
         _ => None,
     }
 }

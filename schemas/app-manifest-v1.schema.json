@@ -59,7 +59,9 @@
               "camera.capture",
               "radio.lora",
               "hardware.gpio",
-              "notifications.post"
+              "notifications.post",
+              "photos.read",
+              "photos.write"
             ]
           },
           "reason": { "type": "string", "minLength": 5, "maxLength": 160 }

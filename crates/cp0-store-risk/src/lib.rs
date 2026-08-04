@@ -89,6 +89,7 @@ pub fn classify_permissions(permissions: &[Permission]) -> RiskAssessment {
                 high = true;
                 Some(RiskReason::HardwareControl)
             }
+            Permission::PhotosRead | Permission::PhotosWrite => Some(RiskReason::UserDocuments),
             Permission::AudioPlayback | Permission::NotificationsPost => None,
         };
         if let Some(reason) = reason {

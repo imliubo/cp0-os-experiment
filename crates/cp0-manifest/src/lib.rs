@@ -74,10 +74,14 @@ pub enum Permission {
     HardwareGpio,
     #[serde(rename = "notifications.post")]
     NotificationsPost,
+    #[serde(rename = "photos.read")]
+    PhotosRead,
+    #[serde(rename = "photos.write")]
+    PhotosWrite,
 }
 
 impl Permission {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::NetworkClient,
         Self::DocumentsOpen,
         Self::AudioPlayback,
@@ -86,6 +90,8 @@ impl Permission {
         Self::RadioLora,
         Self::HardwareGpio,
         Self::NotificationsPost,
+        Self::PhotosRead,
+        Self::PhotosWrite,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -98,6 +104,8 @@ impl Permission {
             Self::RadioLora => "radio.lora",
             Self::HardwareGpio => "hardware.gpio",
             Self::NotificationsPost => "notifications.post",
+            Self::PhotosRead => "photos.read",
+            Self::PhotosWrite => "photos.write",
         }
     }
 }

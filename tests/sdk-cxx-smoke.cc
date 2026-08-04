@@ -21,6 +21,10 @@ extern "C" int sdk_cxx_smoke() {
     uint8_t storage_value[16]{1};
     uint32_t storage_value_length{};
     uint8_t storage_existed{};
+    static const uint8_t photo_key[] = "photo-0001-meta";
+    uint8_t photo_value[32]{1};
+    uint32_t photo_value_length{};
+    uint8_t photo_existed{};
     static const uint8_t intent_action[] = "dev.cardputerzero.documents.open";
     uint8_t intent_action_buffer[CP0_MAX_INTENT_ACTION_BYTES]{};
     uint8_t intent_payload[32]{};
@@ -41,6 +45,14 @@ extern "C" int sdk_cxx_smoke() {
                           &storage_value_length);
     (void)cp0_storage_delete(storage_key, sizeof(storage_key) - 1U,
                              &storage_existed);
+    (void)cp0_photos_put(photo_key, sizeof(photo_key) - 1U, photo_value,
+                         sizeof(photo_value));
+    (void)cp0_photos_get(photo_key, sizeof(photo_key) - 1U, photo_value,
+                         sizeof(photo_value), &photo_value_length);
+    (void)cp0_photos_index_get_for_update(
+        photo_value, sizeof(photo_value), &photo_value_length);
+    (void)cp0_photos_delete(photo_key, sizeof(photo_key) - 1U,
+                            &photo_existed);
     (void)cp0_intent_send(intent_action, sizeof(intent_action) - 1U,
                           intent_payload, sizeof(intent_payload));
     (void)cp0_intent_take(intent_action_buffer, sizeof(intent_action_buffer),

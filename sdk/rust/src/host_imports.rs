@@ -45,6 +45,14 @@ mod target {
         fn raw_cp0_storage_get(key: *const u8, key_length: u32, value: *mut u8, value_capacity: u32) -> i32;
         #[link_name = "cp0_storage_delete"]
         fn raw_cp0_storage_delete(key: *const u8, key_length: u32) -> i32;
+        #[link_name = "cp0_photos_put"]
+        fn raw_cp0_photos_put(key: *const u8, key_length: u32, value: *const u8, value_length: u32) -> i32;
+        #[link_name = "cp0_photos_get"]
+        fn raw_cp0_photos_get(key: *const u8, key_length: u32, value: *mut u8, value_capacity: u32) -> i32;
+        #[link_name = "cp0_photos_index_get"]
+        fn raw_cp0_photos_index_get(value: *mut u8, value_capacity: u32) -> i32;
+        #[link_name = "cp0_photos_delete"]
+        fn raw_cp0_photos_delete(key: *const u8, key_length: u32) -> i32;
         #[link_name = "cp0_intent_send"]
         fn raw_cp0_intent_send(action: *const u8, action_length: u32, payload: *const u8, payload_length: u32) -> i32;
         #[link_name = "cp0_intent_take"]
@@ -133,6 +141,22 @@ mod target {
 
     pub(crate) fn cp0_storage_delete(key: *const u8, key_length: u32) -> i32 {
         unsafe { raw_cp0_storage_delete(key, key_length) }
+    }
+
+    pub(crate) fn cp0_photos_put(key: *const u8, key_length: u32, value: *const u8, value_length: u32) -> i32 {
+        unsafe { raw_cp0_photos_put(key, key_length, value, value_length) }
+    }
+
+    pub(crate) fn cp0_photos_get(key: *const u8, key_length: u32, value: *mut u8, value_capacity: u32) -> i32 {
+        unsafe { raw_cp0_photos_get(key, key_length, value, value_capacity) }
+    }
+
+    pub(crate) fn cp0_photos_index_get(value: *mut u8, value_capacity: u32) -> i32 {
+        unsafe { raw_cp0_photos_index_get(value, value_capacity) }
+    }
+
+    pub(crate) fn cp0_photos_delete(key: *const u8, key_length: u32) -> i32 {
+        unsafe { raw_cp0_photos_delete(key, key_length) }
     }
 
     pub(crate) fn cp0_intent_send(action: *const u8, action_length: u32, payload: *const u8, payload_length: u32) -> i32 {
@@ -233,6 +257,22 @@ mod target {
     }
 
     pub(crate) const fn cp0_storage_delete(_key: *const u8, _key_length: u32) -> i32 {
+        -2
+    }
+
+    pub(crate) const fn cp0_photos_put(_key: *const u8, _key_length: u32, _value: *const u8, _value_length: u32) -> i32 {
+        -2
+    }
+
+    pub(crate) const fn cp0_photos_get(_key: *const u8, _key_length: u32, _value: *mut u8, _value_capacity: u32) -> i32 {
+        -2
+    }
+
+    pub(crate) const fn cp0_photos_index_get(_value: *mut u8, _value_capacity: u32) -> i32 {
+        -2
+    }
+
+    pub(crate) const fn cp0_photos_delete(_key: *const u8, _key_length: u32) -> i32 {
         -2
     }
 

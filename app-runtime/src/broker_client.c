@@ -1024,6 +1024,116 @@ int32_t cp0_broker_storage_delete(const uint8_t *key, size_t key_length) {
     return existed ? 1 : 0;
 }
 
+int32_t cp0_broker_photo_put(const uint8_t *key, size_t key_length,
+                             const uint8_t *value, size_t value_length) {
+    static const char prefix[] =
+        "{\"protocol_version\":1,\"request_id\":14,\"command\":{"
+        "\"name\":\"photo-put\",\"key\":";
+    static const char between[] = ",\"value_base64\":\"";
+    static const char suffix[] = "\"}}\n";
+    char request[CP0_BROKER_REQUEST_BYTES];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    size_t offset = 0;
+    int32_t result;
+
+    if (!valid_storage_key(key, key_length) || value == NULL ||
+        value_length == 0U || value_length > CP0_STORAGE_MAX_VALUE_BYTES)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    if (!append_bytes(request, sizeof(request), &offset, prefix,
+                      sizeof(prefix) - 1U) ||
+        !append_json_string(request, sizeof(request), &offset, key,
+                            key_length) ||
+        !append_bytes(request, sizeof(request), &offset, between,
+                      sizeof(between) - 1U) ||
+        !append_base64(request, sizeof(request), &offset, value,
+                       value_length) ||
+        !append_bytes(request, sizeof(request), &offset, suffix,
+                      sizeof(suffix) - 1U))
+        return CP0_BROKER_INTERNAL;
+    result = broker_exchange(request, offset, response, sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    if (strstr(response, "\"status\":\"storage-stored\"") == NULL)
+        return decode_result(response);
+    return CP0_BROKER_OK;
+}
+
+int32_t cp0_broker_photo_get(const uint8_t *key, size_t key_length,
+                             uint8_t *value, size_t value_capacity) {
+    static const char prefix[] =
+        "{\"protocol_version\":1,\"request_id\":15,\"command\":{"
+        "\"name\":\"photo-get\",\"key\":";
+    static const char suffix[] = "}}\n";
+    char request[256];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    size_t offset = 0;
+    int32_t result;
+
+    if (!valid_storage_key(key, key_length) || value == NULL ||
+        value_capacity == 0U || value_capacity > CP0_STORAGE_MAX_VALUE_BYTES)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    if (!append_bytes(request, sizeof(request), &offset, prefix,
+                      sizeof(prefix) - 1U) ||
+        !append_json_string(request, sizeof(request), &offset, key,
+                            key_length) ||
+        !append_bytes(request, sizeof(request), &offset, suffix,
+                      sizeof(suffix) - 1U))
+        return CP0_BROKER_INTERNAL;
+    result = broker_exchange(request, offset, response, sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_storage_get_response(response, value,
+                                                  value_capacity);
+}
+
+int32_t cp0_broker_photo_index_get(uint8_t *value, size_t value_capacity) {
+    static const char request[] =
+        "{\"protocol_version\":1,\"request_id\":17,\"command\":{"
+        "\"name\":\"photo-index-get\"}}\n";
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int32_t result;
+
+    if (value == NULL || value_capacity == 0U ||
+        value_capacity > CP0_STORAGE_MAX_VALUE_BYTES)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    result = broker_exchange(request, sizeof(request) - 1U, response,
+                             sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_storage_get_response(response, value,
+                                                  value_capacity);
+}
+
+int32_t cp0_broker_photo_delete(const uint8_t *key, size_t key_length) {
+    static const char prefix[] =
+        "{\"protocol_version\":1,\"request_id\":16,\"command\":{"
+        "\"name\":\"photo-delete\",\"key\":";
+    static const char suffix[] = "}}\n";
+    char request[256];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    size_t offset = 0;
+    bool existed;
+    int32_t result;
+
+    if (!valid_storage_key(key, key_length))
+        return CP0_BROKER_INVALID_ARGUMENT;
+    if (!append_bytes(request, sizeof(request), &offset, prefix,
+                      sizeof(prefix) - 1U) ||
+        !append_json_string(request, sizeof(request), &offset, key,
+                            key_length) ||
+        !append_bytes(request, sizeof(request), &offset, suffix,
+                      sizeof(suffix) - 1U))
+        return CP0_BROKER_INTERNAL;
+    result = broker_exchange(request, offset, response, sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    if (strstr(response, "\"status\":\"storage-deleted\"") == NULL)
+        return decode_result(response);
+    if (!json_bool_field(response, "existed", &existed))
+        return CP0_BROKER_INTERNAL;
+    return existed ? 1 : 0;
+}
+
 static bool valid_intent_action(const uint8_t *action, size_t action_length) {
     size_t part_length = 0;
     size_t parts = 1;

@@ -101,8 +101,10 @@ async function runApplication() {
   let mediaState = 0;
   let mediaSupportedActions = 0;
   const storage = new Map();
+  const photoStorage = new Map();
   const storageQuota = Number(manifest.resources.storage_mb) * 1024 * 1024;
   let storageBytes = 0;
+  let photoStorageBytes = 0;
   const gpio = [false, false, false, false];
   const document = new TextEncoder().encode("CardputerZero simulator document\n");
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
@@ -141,6 +143,8 @@ async function runApplication() {
     metrics.memory_pages = memory().buffer.byteLength / 65536;
     metrics.storage_bytes = storageBytes;
     metrics.storage_keys = storage.size;
+    metrics.photo_library_bytes = photoStorageBytes;
+    metrics.photo_library_keys = photoStorage.size;
     if (frame) {
       parentPort.postMessage({ type: "frame", frame, metrics: structuredClone(metrics) }, [frame]);
     }
@@ -304,6 +308,48 @@ async function runApplication() {
       storageBytes -= value.length;
       return 1;
     },
+    cp0_photos_put(keyPointer, keyLength, valuePointer, valueLength) {
+      metrics.host_calls += 1;
+      if (!allowed("photos.write")) return ERROR_DENIED;
+      const key = text(keyPointer, keyLength);
+      const value = range(valuePointer, valueLength).slice();
+      const existing = photoStorage.get(key);
+      if (!existing && photoStorage.size >= 512) return ERROR_LIMIT;
+      const projected = photoStorageBytes - (existing?.length || 0) + value.length;
+      if (projected > 8 * 1024 * 1024) return ERROR_LIMIT;
+      photoStorage.set(key, value);
+      photoStorageBytes = projected;
+      return 0;
+    },
+    cp0_photos_get(keyPointer, keyLength, valuePointer, valueCapacity) {
+      metrics.host_calls += 1;
+      const key = text(keyPointer, keyLength);
+      if (!allowed("photos.read")) return ERROR_DENIED;
+      const value = photoStorage.get(key);
+      if (!value) return 0;
+      if (value.length > (valueCapacity >>> 0)) return ERROR_LIMIT;
+      range(valuePointer, valueCapacity).set(value);
+      return value.length;
+    },
+    cp0_photos_index_get(valuePointer, valueCapacity) {
+      metrics.host_calls += 1;
+      if (!allowed("photos.write")) return ERROR_DENIED;
+      const value = photoStorage.get("index.v1");
+      if (!value) return 0;
+      if (value.length > (valueCapacity >>> 0)) return ERROR_LIMIT;
+      range(valuePointer, valueCapacity).set(value);
+      return value.length;
+    },
+    cp0_photos_delete(keyPointer, keyLength) {
+      metrics.host_calls += 1;
+      if (!allowed("photos.write")) return ERROR_DENIED;
+      const key = text(keyPointer, keyLength);
+      const value = photoStorage.get(key);
+      if (!value) return 0;
+      photoStorage.delete(key);
+      photoStorageBytes -= value.length;
+      return 1;
+    },
     cp0_intent_send(actionPointer, actionLength, payloadPointer, payloadLength) {
       metrics.host_calls += 1;
       text(actionPointer, actionLength);
@@ -364,6 +410,8 @@ function emptyMetrics() {
     memory_pages: 0,
     storage_bytes: 0,
     storage_keys: 0,
+    photo_library_bytes: 0,
+    photo_library_keys: 0,
     media_session_updates: 0,
     media_actions_taken: 0,
     capability_calls: {},
