@@ -333,6 +333,7 @@ dependencies = [
  "cp0-package",
  "cp0-radio-protocol",
  "cp0-storage-protocol",
+ "cp0-storaged",
  "cp0-store-protocol",
  "libc",
  "semver",

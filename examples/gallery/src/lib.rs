@@ -5,7 +5,7 @@ use core::panic::PanicInfo;
 use cp0_sdk::{
     Error, camera,
     display::{self, Rect},
-    input, photos,
+    input, photos, system,
     ui::{ButtonStyle, Canvas, color},
 };
 
@@ -13,6 +13,7 @@ const KEY_ENTER: u16 = 28;
 const KEY_LEFT: u16 = 105;
 const KEY_RIGHT: u16 = 106;
 const FRAME_BYTES: usize = camera::FRAME_BYTES;
+const LIBRARY_REFRESH_INTERVAL_MS: u64 = 1_000;
 
 static mut FRAME: [u16; camera::PIXEL_COUNT] = [0; camera::PIXEL_COUNT];
 
@@ -52,27 +53,45 @@ impl Gallery {
 
     fn refresh(&mut self, latest: bool) {
         match photos::count() {
-            Ok(total) => {
-                self.total = total;
-                self.selected = if total == 0 {
-                    0
-                } else if latest {
-                    total - 1
-                } else {
-                    self.selected.min(total - 1)
-                };
-                self.status = if total == 0 {
+            Ok(total) => self.apply_count(total, latest),
+            Err(Error::Unavailable) => self.status = ViewStatus::Authorize,
+            Err(Error::Denied) => self.status = ViewStatus::Denied,
+            Err(_) => self.status = ViewStatus::Damaged,
+        }
+    }
+
+    fn refresh_if_changed(&mut self) -> bool {
+        let previous_total = self.total;
+        let previous_status = self.status;
+        match photos::count() {
+            Ok(total) if total == self.total => {
+                let expected = if total == 0 {
                     ViewStatus::Empty
                 } else {
                     ViewStatus::Photo
                 };
-                if total != 0 && self.load_selected_page().is_err() {
-                    self.status = ViewStatus::Damaged;
+                if !same_status(self.status, expected) {
+                    self.apply_count(total, false);
                 }
             }
+            Ok(total) => self.apply_count(total, total > self.total),
             Err(Error::Unavailable) => self.status = ViewStatus::Authorize,
             Err(Error::Denied) => self.status = ViewStatus::Denied,
             Err(_) => self.status = ViewStatus::Damaged,
+        }
+        previous_total != self.total || !same_status(previous_status, self.status)
+    }
+
+    fn apply_count(&mut self, total: u64, latest: bool) {
+        self.total = total;
+        self.selected = selection_after_refresh(self.selected, total, latest);
+        self.status = if total == 0 {
+            ViewStatus::Empty
+        } else {
+            ViewStatus::Photo
+        };
+        if total != 0 && self.load_selected_page().is_err() {
+            self.status = ViewStatus::Damaged;
         }
     }
 
@@ -120,6 +139,29 @@ impl Gallery {
         }
         Ok(self.photos[position as usize])
     }
+}
+
+const fn selection_after_refresh(selected: u64, total: u64, latest: bool) -> u64 {
+    if total == 0 {
+        0
+    } else if latest {
+        total - 1
+    } else if selected < total {
+        selected
+    } else {
+        total - 1
+    }
+}
+
+const fn same_status(left: ViewStatus, right: ViewStatus) -> bool {
+    matches!(
+        (left, right),
+        (ViewStatus::Photo, ViewStatus::Photo)
+            | (ViewStatus::Empty, ViewStatus::Empty)
+            | (ViewStatus::Authorize, ViewStatus::Authorize)
+            | (ViewStatus::Denied, ViewStatus::Denied)
+            | (ViewStatus::Damaged, ViewStatus::Damaged)
+    )
 }
 
 fn pixels() -> &'static mut [u16] {
@@ -277,6 +319,8 @@ pub extern "C" fn main() -> i32 {
     let pixels = pixels();
     let mut gallery = Gallery::new();
     gallery.refresh(true);
+    let mut next_library_refresh =
+        system::monotonic_milliseconds().saturating_add(LIBRARY_REFRESH_INTERVAL_MS);
     let mut dirty = true;
 
     loop {
@@ -326,6 +370,13 @@ pub extern "C" fn main() -> i32 {
             }
             Err(_) => return 1,
         }
+        let now = system::monotonic_milliseconds();
+        if now >= next_library_refresh {
+            next_library_refresh = now.saturating_add(LIBRARY_REFRESH_INTERVAL_MS);
+            if !gallery.confirm_delete && gallery.refresh_if_changed() {
+                dirty = true;
+            }
+        }
     }
 }
 
@@ -334,5 +385,32 @@ pub extern "C" fn main() -> i32 {
 fn panic(_information: &PanicInfo<'_>) -> ! {
     loop {
         core::hint::spin_loop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn library_refresh_selects_newest_and_clamps_after_removal() {
+        assert_eq!(selection_after_refresh(0, 0, false), 0);
+        assert_eq!(selection_after_refresh(2, 5, false), 2);
+        assert_eq!(selection_after_refresh(2, 5, true), 4);
+        assert_eq!(selection_after_refresh(4, 2, false), 1);
+    }
+
+    #[test]
+    fn refresh_status_comparison_is_exhaustive() {
+        for status in [
+            ViewStatus::Photo,
+            ViewStatus::Empty,
+            ViewStatus::Authorize,
+            ViewStatus::Denied,
+            ViewStatus::Damaged,
+        ] {
+            assert!(same_status(status, status));
+        }
+        assert!(!same_status(ViewStatus::Empty, ViewStatus::Photo));
     }
 }

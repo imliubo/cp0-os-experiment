@@ -3080,7 +3080,25 @@ mod tests {
     use std::fs;
     use std::os::fd::OwnedFd;
 
+    #[cfg(target_os = "linux")]
+    use std::io::BufReader;
+    #[cfg(target_os = "linux")]
+    use std::os::fd::AsFd;
+    #[cfg(target_os = "linux")]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(target_os = "linux")]
+    use std::sync::atomic::{AtomicU64, Ordering};
+    #[cfg(target_os = "linux")]
+    use std::thread;
+
     use super::*;
+    #[cfg(target_os = "linux")]
+    use crate::{
+        AppRegistry, ManagerPaths, PermissionEngine, PermissionStore, read_response, write_request,
+    };
+
+    #[cfg(target_os = "linux")]
+    static PHOTO_E2E_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
     #[cfg(target_os = "linux")]
     fn valid_screenshot_descriptor(frame: &[u8]) -> OwnedFd {
@@ -3139,6 +3157,115 @@ mod tests {
         fs::write(&path, vec![0_u8; PHOTO_FRAME_BYTES - 1]).unwrap();
         let wrong_size: OwnedFd = File::open(path).unwrap().into();
         assert!(read_photo_frame(wrong_size).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shell_screenshot_reaches_real_storage_as_gallery_v2_data() {
+        use cp0_storage_protocol::MAX_STORAGE_VALUE_BYTES;
+        use cp0_storaged::{StorageServer, StorageService};
+
+        let sequence = PHOTO_E2E_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let test_root = std::path::PathBuf::from(format!(
+            "target/test-tmp/photo-e2e-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&test_root).unwrap();
+        fs::set_permissions(&test_root, fs::Permissions::from_mode(0o700)).unwrap();
+        let socket_path = test_root.join("storage.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let uid = unsafe { libc::geteuid() };
+        let storage_service = StorageService::new(&test_root, uid);
+        storage_service.initialize().unwrap();
+        let storage_server = StorageServer::new(storage_service, [uid]);
+        thread::spawn(move || storage_server.serve(listener).unwrap());
+
+        let storage = StorageClient::new(&socket_path);
+        let manager =
+            AppManager::from_registry(ManagerPaths::default(), AppRegistry::default()).unwrap();
+        let permission_engine = PermissionEngine::new(
+            test_root.join("permissions.json"),
+            PermissionStore::default(),
+        )
+        .unwrap();
+        let appd = AppdServer::new_with_capability_services(
+            manager,
+            PermissionCoordinator::new(permission_engine),
+            [uid],
+            CapabilityServices {
+                storage: storage.clone(),
+                ..CapabilityServices::default()
+            },
+        )
+        .allow_shell(uid);
+
+        let frame: Vec<u8> = (0..PHOTO_FRAME_BYTES)
+            .map(|offset| ((offset * 31 + 17) & 0xff) as u8)
+            .collect();
+        let descriptor = valid_screenshot_descriptor(&frame);
+        let (mut shell, appd_stream) = UnixStream::pair().unwrap();
+        let worker = thread::spawn(move || appd.handle_connection(appd_stream).unwrap());
+        let request = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 91,
+            command: AppdCommand::ImportScreenshot,
+        };
+        let mut encoded = Vec::new();
+        write_request(&mut encoded, &request).unwrap();
+        cp0_camera_protocol::send_frame_with_fd(&mut shell, &encoded, descriptor.as_fd()).unwrap();
+        let response = read_response(&mut BufReader::new(shell.try_clone().unwrap()))
+            .unwrap()
+            .unwrap();
+        worker.join().unwrap();
+        assert!(matches!(
+            response.outcome,
+            crate::ResponseOutcome::Ok {
+                data: ResponseData::ScreenshotImported { photo_id: 1 }
+            }
+        ));
+
+        let head = storage
+            .get(
+                92,
+                PHOTO_LIBRARY_ID,
+                PHOTO_LIBRARY_QUOTA_BYTES,
+                PHOTO_LIBRARY_HEAD_KEY,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(u64::from_le_bytes(head[8..16].try_into().unwrap()), 1);
+        assert_eq!(u64::from_le_bytes(head[16..24].try_into().unwrap()), 1);
+        assert_eq!(u64::from_le_bytes(head[24..32].try_into().unwrap()), 1);
+
+        let page = storage
+            .get(
+                93,
+                PHOTO_LIBRARY_ID,
+                PHOTO_LIBRARY_QUOTA_BYTES,
+                "index.v2.00000000",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(u64::from_le_bytes(page[16..24].try_into().unwrap()), 1);
+
+        let mut loaded = Vec::with_capacity(PHOTO_FRAME_BYTES);
+        while loaded.len() < PHOTO_FRAME_BYTES {
+            let length = (PHOTO_FRAME_BYTES - loaded.len()).min(MAX_STORAGE_VALUE_BYTES);
+            let chunk = storage
+                .get_blob_chunk(
+                    94 + loaded.len() as u64,
+                    PHOTO_LIBRARY_ID,
+                    PHOTO_LIBRARY_QUOTA_BYTES,
+                    "p0000000000000001.rgb565",
+                    loaded.len() as u32,
+                    length as u32,
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(chunk.len(), length);
+            loaded.extend_from_slice(&chunk);
+        }
+        assert_eq!(loaded, frame);
     }
 
     #[test]

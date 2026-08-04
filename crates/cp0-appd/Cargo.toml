@@ -20,3 +20,6 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 semver.workspace = true
+
+[dev-dependencies]
+cp0-storaged = { path = "../cp0-storaged" }
