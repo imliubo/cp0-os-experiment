@@ -1944,8 +1944,7 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
     bool power_dialog_was_open = shell->ui.power_dialog;
     bool password_change_was_active = shell->ui.password_change_active;
     if (!password_change_was_active &&
-        (action == CP0_UI_GO_HOME || action == CP0_UI_SHOW_TASKS ||
-         action == CP0_UI_SHOW_POWER))
+        (action == CP0_UI_GO_HOME || action == CP0_UI_SHOW_TASKS))
         cp0_ui_set_foreground_app(&shell->ui, NULL);
     if (!password_change_was_active && action == CP0_UI_SHOW_TASKS)
         poll_task_catalog(shell);

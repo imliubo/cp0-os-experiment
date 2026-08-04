@@ -7,6 +7,7 @@
 #include <string.h>
 
 #define GUARD 0x5aa55aa5u
+#define BACKGROUND 0x000e1112u
 #define GREEN 0x0035d07fu
 
 struct guarded_frame {
@@ -28,6 +29,21 @@ static void render(const struct cp0_ui *ui, struct guarded_frame *frame)
                   CP0_UI_WIDTH);
     assert(frame->before == GUARD);
     assert(frame->after == GUARD);
+}
+
+static void assert_foreground_background_isolated(
+    const struct cp0_ui *ui, struct guarded_frame *frame,
+    struct guarded_frame *comparison)
+{
+    struct cp0_ui alternate = *ui;
+
+    assert(ui->foreground_app_active);
+    render(ui, frame);
+    alternate.screen = ui->screen == CP0_UI_TASKS ? CP0_UI_HOME
+                                                   : CP0_UI_TASKS;
+    render(&alternate, comparison);
+    assert(memcmp(frame->pixels, comparison->pixels,
+                  sizeof(frame->pixels)) == 0);
 }
 
 static void write_ppm(const char *path, const struct guarded_frame *frame)
@@ -601,7 +617,9 @@ int main(int argc, char **argv)
 {
     struct cp0_ui ui;
     struct guarded_frame *frame = calloc(1, sizeof(*frame));
+    struct guarded_frame *comparison = calloc(1, sizeof(*comparison));
     assert(frame != NULL);
+    assert(comparison != NULL);
     assert(sizeof(struct cp0_ui) <= 64U * 1024U);
     cp0_ui_init(&ui);
     assert(ui.tasks != NULL);
@@ -678,6 +696,7 @@ int main(int argc, char **argv)
     assert(navigation_ui.screen == CP0_UI_APPS &&
            navigation_ui.app_selected == 3 &&
            navigation_ui.navigation_depth == 1 &&
+           !navigation_ui.foreground_app_active &&
            navigation_ui.foreground_app_name[0] == '\0');
     cp0_ui_handle_action(&navigation_ui, CP0_UI_BACK);
     assert(navigation_ui.screen == CP0_UI_HOME &&
@@ -1636,9 +1655,69 @@ int main(int argc, char **argv)
     cp0_ui_sync_task_catalog(&ui, task_catalog, 3);
     cp0_ui_handle_action(&ui, CP0_UI_SHOW_TASKS);
     cp0_ui_set_foreground_app(&ui, "Second Card");
-    assert(strcmp(ui.foreground_app_name, "Second Card") == 0);
+    assert(ui.foreground_app_active &&
+           strcmp(ui.foreground_app_name, "Second Card") == 0);
+    assert_foreground_background_isolated(&ui, frame, comparison);
+    assert(pixel(frame, 20, 40) == BACKGROUND);
+
+    static const enum cp0_ui_action isolated_system_actions[] = {
+        CP0_UI_BRIGHTNESS_DOWN,   CP0_UI_BRIGHTNESS_UP,
+        CP0_UI_VOLUME_DOWN,       CP0_UI_VOLUME_UP,
+        CP0_UI_MUTE,              CP0_UI_MEDIA_PLAY_PAUSE,
+        CP0_UI_MEDIA_PREVIOUS,    CP0_UI_MEDIA_NEXT,
+        CP0_UI_SCREENSHOT,
+    };
+    for (size_t index = 0;
+         index < sizeof(isolated_system_actions) /
+                     sizeof(isolated_system_actions[0]);
+         index++) {
+        cp0_ui_handle_action(&ui, isolated_system_actions[index]);
+        assert(ui.system_action_overlay);
+        assert_foreground_background_isolated(&ui, frame, comparison);
+        assert(pixel(frame, 62, 25) == GREEN);
+    }
+    ui.system_action_overlay = false;
+    ui.system_action_ticks = 0;
+
+    assert(cp0_ui_show_notification(&ui, 201, "System", "Ready",
+                                    "Foreground isolation check"));
+    assert_foreground_background_isolated(&ui, frame, comparison);
+    assert(pixel(frame, 5, 24) == GREEN);
+    cp0_ui_clear_notification(&ui);
+
+    cp0_ui_handle_action(&ui, CP0_UI_HELP);
+    assert(ui.help_overlay);
+    assert_foreground_background_isolated(&ui, frame, comparison);
+    assert(pixel(frame, 12, 27) == GREEN);
+    cp0_ui_handle_action(&ui, CP0_UI_HELP);
+
+    cp0_ui_handle_action(&ui, CP0_UI_SHOW_POWER);
+    assert(ui.power_dialog && ui.foreground_app_active);
+    assert_foreground_background_isolated(&ui, frame, comparison);
+    assert(pixel(frame, 36, 35) == GREEN);
+    cp0_ui_handle_action(&ui, CP0_UI_BACK);
+    assert(!ui.power_dialog && ui.foreground_app_active);
+
+    assert(cp0_ui_show_permission(&ui, 202, "Second Card", "camera.capture",
+                                  "Capture a selected photograph"));
+    assert_foreground_background_isolated(&ui, frame, comparison);
+    assert(pixel(frame, 8, 27) == GREEN);
+    cp0_ui_clear_permission(&ui);
+
+    static const struct cp0_ui_document_option isolated_documents[] = {
+        {.size_bytes = 64,
+         .document_id = "00000000000000010000000000000002",
+         .name = "photo.jpg"},
+    };
+    assert(cp0_ui_show_documents(&ui, 203, "Second Card",
+                                 isolated_documents, 1));
+    assert_foreground_background_isolated(&ui, frame, comparison);
+    assert(pixel(frame, 8, 27) == GREEN);
+    cp0_ui_clear_documents(&ui);
+
+    assert(ui.screen == CP0_UI_TASKS && ui.task_selected == 1);
     cp0_ui_set_foreground_app(&ui, NULL);
-    assert(ui.foreground_app_name[0] == '\0');
+    assert(!ui.foreground_app_active && ui.foreground_app_name[0] == '\0');
     assert(cp0_ui_selected_task_id(&ui) == 9);
     assert(strcmp(cp0_ui_selected_task_app_id(&ui),
                   "dev.cardputerzero.second") == 0);
@@ -2062,6 +2141,7 @@ int main(int argc, char **argv)
     render(&ui, frame);
     if (argc == 2)
         write_snapshots(argv[1], &ui, frame);
+    free(comparison);
     free(frame);
     return 0;
 }

@@ -201,6 +201,8 @@ grep -q 'weston_compositor_add_key_binding' "$policy"
 grep -q 'cp0_system_shell_v1_send_action' "$policy"
 grep -q 'cp0_overlay_transient_target(policy->overlay_mode)' "$policy"
 grep -q 'cp0_overlay_transient_base(' "$shell_client"
+grep -q '(action == CP0_UI_GO_HOME || action == CP0_UI_SHOW_TASKS))' \
+    "$shell_client"
 grep -q 'wl_event_loop_add_timer' "$policy"
 grep -q 'keyboard_has_key(keyboard, KEY_ESC)' "$policy"
 grep -q '^#define CP0_ESC_LONG_PRESS_MSEC 800U$' "$esc_gesture_header"

@@ -687,6 +687,7 @@ struct cp0_ui {
     char network_interface[17];
     char network_ipv4[16];
     char clock_text[6];
+    bool foreground_app_active;
     char foreground_app_name[CP0_UI_APP_NAME_MAX + 1];
     uint64_t prompt_id;
     unsigned int prompt_selected;

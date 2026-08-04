@@ -339,8 +339,9 @@ static const char *screen_title(const struct cp0_ui *ui)
         return "PERMISSION";
     if (ui->document_prompt)
         return "DOCUMENT";
-    if (ui->foreground_app_name[0] != '\0')
-        return ui->foreground_app_name;
+    if (ui->foreground_app_active)
+        return ui->foreground_app_name[0] != '\0' ? ui->foreground_app_name
+                                                   : "APP";
     switch (ui->screen) {
     case CP0_UI_HOME:
         return "HOME";
@@ -3446,9 +3447,11 @@ void cp0_ui_set_foreground_app(struct cp0_ui *ui, const char *app_name)
     if (ui == NULL)
         return;
     if (app_name == NULL) {
+        ui->foreground_app_active = false;
         ui->foreground_app_name[0] = '\0';
         return;
     }
+    ui->foreground_app_active = true;
     snprintf(ui->foreground_app_name, sizeof(ui->foreground_app_name), "%.13s",
              app_name);
 }
@@ -5430,8 +5433,8 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     }
 
     if (action == CP0_UI_BACK) {
-        if (ui->foreground_app_name[0] != '\0') {
-            ui->foreground_app_name[0] = '\0';
+        if (ui->foreground_app_active) {
+            cp0_ui_set_foreground_app(ui, NULL);
             return CP0_UI_EVENT_NONE;
         }
         if (ui->screen == CP0_UI_APPS && ui->app_detail) {
@@ -6117,7 +6120,8 @@ void cp0_ui_render(const struct cp0_ui *ui, uint32_t *pixels, int width,
     draw_status_bar(&canvas, ui);
     if (ui->setup_active)
         draw_setup(&canvas, ui);
-    else
+    /* Retained Shell navigation state is never an App overlay backdrop. */
+    else if (!ui->foreground_app_active)
         draw_page(&canvas, ui);
     if (ui->setup_active)
         goto apply_theme;
