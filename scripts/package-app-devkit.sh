@@ -53,27 +53,27 @@ cp -R "$repo_root/sdk" "$bundle/sdk"
 cp -R "$repo_root/simulator" "$bundle/simulator"
 cp -R "$repo_root/devkit" "$bundle/devkit"
 cp -R "$repo_root/skills/cardputerzero-build-app" "$bundle/skills/"
-mkdir -p "$bundle/examples/neon-snake/src"
-install -m 0644 "$repo_root/examples/neon-snake/Cargo.toml" \
-    "$bundle/examples/neon-snake/"
-install -m 0644 "$repo_root/examples/neon-snake/Cargo.lock" \
-    "$bundle/examples/neon-snake/"
-install -m 0644 "$repo_root/examples/neon-snake/app.json" \
-    "$bundle/examples/neon-snake/"
-install -m 0644 "$repo_root/examples/neon-snake/README.md" \
-    "$bundle/examples/neon-snake/"
-install -m 0644 "$repo_root/examples/neon-snake/src/lib.rs" \
-    "$bundle/examples/neon-snake/src/"
-mkdir -p "$bundle/examples/media-controls/src"
-for file in Cargo.toml Cargo.lock app.json README.md; do
-    install -m 0644 "$repo_root/examples/media-controls/$file" \
-        "$bundle/examples/media-controls/"
+examples=(
+    hello-card calculator neon-snake camera gallery media-controls notes
+    stopwatch
+)
+for example in "${examples[@]}"; do
+    mkdir -p "$bundle/examples/$example/src" "$bundle/examples/$example/assets"
+    for file in Cargo.toml Cargo.lock app.json README.md; do
+        install -m 0644 "$repo_root/examples/$example/$file" \
+            "$bundle/examples/$example/"
+    done
+    install -m 0644 "$repo_root/examples/$example/src/lib.rs" \
+        "$bundle/examples/$example/src/"
+    install -m 0644 "$repo_root/examples/$example/assets/screenshot.png" \
+        "$bundle/examples/$example/assets/"
 done
-install -m 0644 "$repo_root/examples/media-controls/src/lib.rs" \
-    "$bundle/examples/media-controls/src/"
 install -m 0644 "$repo_root/docs/DEVELOPER-GUIDE.md" "$bundle/docs/"
 install -m 0644 "$repo_root/docs/APP-DEVKIT-DISTRIBUTION.md" "$bundle/docs/"
 install -m 0644 "$repo_root/docs/DEVELOPER-ACCESS.md" "$bundle/docs/"
+install -m 0644 "$repo_root/docs/PHOTO-LIBRARY-V2.md" "$bundle/docs/"
+install -m 0644 "$repo_root/docs/APP-ICON-SPEC-V1.md" "$bundle/docs/"
+install -m 0644 "$repo_root/schemas/app-manifest-v1.schema.json" "$bundle/schemas/"
 install -m 0644 "$repo_root/schemas/store-listing-v1.schema.json" "$bundle/schemas/"
 printf '%s\n' "$version" >"$bundle/VERSION"
 
@@ -96,7 +96,12 @@ jq -n \
         version: $version,
         host: $host,
         built_with: { rust: $rust, node: $node, emscripten: $emcc },
-        bundled: ["cp0ctl", "sdk", "simulator", "skill", "neon-snake", "media-controls", "store-listing-schema", "developer-access-doc"]
+        bundled: [
+          "cp0ctl", "sdk", "simulator", "skill", "app-manifest-schema",
+          "store-listing-schema", "developer-access-doc", "photo-library-doc",
+          "app-icon-doc", "hello-card", "calculator", "neon-snake", "camera",
+          "gallery", "media-controls", "notes", "stopwatch"
+        ]
     }' >"$bundle/devkit.json"
 
 (

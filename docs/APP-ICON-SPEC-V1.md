@@ -8,7 +8,7 @@ switches between List and Grid without changing the selected application.
 - The viewport is 320x170 pixels.
 - Grid mode contains four columns and two rows, for eight applications per
   page.
-- Each cell is 72x55 pixels with a four-pixel horizontal gutter.
+- Each cell is 72x57 pixels with a four-pixel horizontal gutter.
 - The icon slot is exactly 40x40 pixels.
 - Artwork must keep a two-pixel safe area, leaving a recommended 36x36 pixel
   visual footprint.

@@ -46,9 +46,17 @@ devkit=${roots[0]}
 jq -e '.version == "1.0.0" and (.built_with.rust | startswith("rustc 1.85.1 "))' \
     "$devkit/devkit.json" >/dev/null
 test -s "$devkit/schemas/store-listing-v1.schema.json"
+test -s "$devkit/schemas/app-manifest-v1.schema.json"
 test -s "$devkit/docs/DEVELOPER-ACCESS.md"
-jq -e '.bundled | index("developer-access-doc") != null' \
+jq -e '
+    (.bundled | index("developer-access-doc") != null) and
+    (.bundled | index("photo-library-doc") != null) and
+    (.bundled | index("app-manifest-schema") != null)
+' \
     "$devkit/devkit.json" >/dev/null
+test -s "$devkit/docs/PHOTO-LIBRARY-V2.md"
+test -s "$devkit/docs/APP-ICON-SPEC-V1.md"
+grep -Fq '72x57 pixels' "$devkit/docs/APP-ICON-SPEC-V1.md"
 
 "$devkit/skills/cardputerzero-build-app/scripts/doctor.sh" "$devkit" rust >/dev/null
 env RUSTUP_TOOLCHAIN=1.85.1 "$devkit/bin/cp0ctl" new \
@@ -57,6 +65,14 @@ env RUSTUP_TOOLCHAIN=1.85.1 "$devkit/bin/cp0ctl" new \
 grep -Fq "$devkit/sdk/rust" "$test_root/generated/Cargo.toml"
 env RUSTUP_TOOLCHAIN=1.85.1 "$devkit/bin/cp0ctl" \
     build "$test_root/generated" >/dev/null
+for example in \
+    hello-card calculator neon-snake camera gallery media-controls notes \
+    stopwatch; do
+    test -s "$devkit/examples/$example/README.md"
+    test -s "$devkit/examples/$example/assets/screenshot.png"
+    env RUSTUP_TOOLCHAIN=1.85.1 "$devkit/bin/cp0ctl" \
+        build "$devkit/examples/$example" >/dev/null
+done
 env RUSTUP_TOOLCHAIN=1.85.1 \
     "$devkit/skills/cardputerzero-build-app/scripts/verify-app.sh" \
     "$devkit/examples/neon-snake" up,left,down,right,space,space deny 2400 >/dev/null
@@ -64,6 +80,12 @@ env RUSTUP_TOOLCHAIN=1.85.1 \
     "$devkit/skills/cardputerzero-build-app/scripts/verify-app.sh" \
     "$devkit/examples/media-controls" "" deny 600 \
     play-pause,previous,next >/dev/null
+env RUSTUP_TOOLCHAIN=1.85.1 \
+    "$devkit/skills/cardputerzero-build-app/scripts/verify-app.sh" \
+    "$devkit/examples/camera" enter allow 700 >/dev/null
+env RUSTUP_TOOLCHAIN=1.85.1 \
+    "$devkit/skills/cardputerzero-build-app/scripts/verify-app.sh" \
+    "$devkit/examples/gallery" "" allow 250 >/dev/null
 
 test -s "$devkit/examples/neon-snake/target/cardputerzero/skill-verification/frame.ppm"
 test -s "$devkit/examples/neon-snake/target/cardputerzero/skill-verification/profile.json"
@@ -72,5 +94,17 @@ jq -e '
     .media_actions_taken == 3 and
     .media_session_updates == 4
 ' "$devkit/examples/media-controls/target/cardputerzero/skill-verification/profile.json" \
+    >/dev/null
+jq -e '
+    .capability_calls["camera.capture"] >= 1 and
+    .capability_calls["photos.write"] == 1 and
+    .photo_library_keys == 3 and
+    .photo_library_bytes == 110896
+' "$devkit/examples/camera/target/cardputerzero/skill-verification/profile.json" \
+    >/dev/null
+jq -e '
+    .capability_calls["photos.read"] >= 1 and
+    .photo_library_keys == 0
+' "$devkit/examples/gallery/target/cardputerzero/skill-verification/profile.json" \
     >/dev/null
 echo "PASS relocatable CardputerZero App DevKit"

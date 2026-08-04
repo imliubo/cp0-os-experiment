@@ -26,9 +26,10 @@ The archive contains:
 - a relocatable `bin/cp0ctl` for its named host target;
 - Rust, C/C++, WIT, ABI and LVGL SDK sources;
 - the deterministic PC simulator with focused-key and global-media fixtures;
-- the `cardputerzero-build-app` Skill, Store Listing schema, Neon Snake and
-  Media Controls examples;
-- Developer Mode and developer workflow documentation;
+- the `cardputerzero-build-app` Skill plus App and Store Listing schemas;
+- Hello Card, Calculator, Neon Snake, Camera, Gallery, Media Controls, Notes
+  and Stopwatch source with reference screenshots;
+- Developer Mode, photo-library, icon and developer workflow documentation;
 - a machine-readable `devkit.json`, per-file `SHA256SUMS` and archive checksum.
 
 Publish a separate native archive for each supported host. Native archives do
@@ -45,7 +46,8 @@ shasum -a 256 -c cardputerzero-app-devkit-1.0.0-HOST.tar.xz.sha256
 tar -xJf cardputerzero-app-devkit-1.0.0-HOST.tar.xz
 export CP0_DEVKIT_ROOT="$PWD/cardputerzero-app-devkit-1.0.0-HOST"
 export PATH="$CP0_DEVKIT_ROOT/bin:$PATH"
-export RUSTUP_TOOLCHAIN=1.85.1
+export RUSTUP_TOOLCHAIN=$(awk -F '"' '$1 ~ /^rust_version = / { print $2 }' \
+  "$CP0_DEVKIT_ROOT/devkit/toolchain.toml")
 (cd "$CP0_DEVKIT_ROOT" && shasum -a 256 -c SHA256SUMS)
 "$CP0_DEVKIT_ROOT/skills/cardputerzero-build-app/scripts/doctor.sh" \
   "$CP0_DEVKIT_ROOT" rust
@@ -57,6 +59,10 @@ native archive contains `cp0ctl`, SDK sources, simulator, Skill, schemas,
 examples and developer documentation, but intentionally contains no compiler.
 Use the full OCI image when installing matching host tools is undesirable or no
 native archive exists for the workstation.
+
+Keep `RUSTUP_TOOLCHAIN` exported for the complete session. `doctor.sh` checks
+that the pinned compiler exists but cannot select it for later `cp0ctl` child
+processes.
 
 Public macOS native archives require project-approved Developer ID signing and
 notarization in addition to the checksum. Do not instruct users to disable
@@ -104,8 +110,8 @@ Before publishing, verify all of the following on every host artifact:
 2. `bin/cp0ctl new` creates a project whose SDK path resolves inside the
    extracted DevKit.
 3. The generated project builds without the source repository.
-4. Neon Snake and Media Controls build; the simulator produces 320x150 frames,
-   profiles and consumes all scripted global media actions.
+4. All eight bundled examples build; camera/photo and media simulator fixtures
+   produce frames and profiles, and consume their scripted actions.
 5. The Skill passes its structural validator and its `doctor.sh` reports the
    expected toolchain.
 6. `make check` passes at the release commit.

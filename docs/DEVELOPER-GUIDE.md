@@ -22,10 +22,15 @@ release checksum before extraction, then set the root and run its doctor:
 ```sh
 export CP0_DEVKIT_ROOT=/path/to/cardputerzero-app-devkit-1.0.0-HOST
 export PATH="$CP0_DEVKIT_ROOT/bin:$PATH"
-export RUSTUP_TOOLCHAIN=1.85.1
+export RUSTUP_TOOLCHAIN=$(awk -F '"' '$1 ~ /^rust_version = / { print $2 }' \
+  "$CP0_DEVKIT_ROOT/devkit/toolchain.toml")
 "$CP0_DEVKIT_ROOT/skills/cardputerzero-build-app/scripts/doctor.sh" \
   "$CP0_DEVKIT_ROOT" rust
 ```
+
+Keep that variable exported for every `cp0ctl build`, `run` and `package`
+command. Doctor verifies the pinned compiler but cannot modify its parent
+shell; `cp0ctl` currently inherits the active Cargo toolchain.
 
 The bundled `$cardputerzero-build-app` Skill gives an AI agent the platform
 contract, project workflow, permission boundaries, deterministic verifier and
@@ -96,14 +101,20 @@ same public SDK ABI.
 Neither UI path grants direct framebuffer, DRM, Wayland or evdev access. A
 frame submission and every input event pass through App Runtime.
 
+When a physical key wakes a sleeping display, the compositor consumes that
+key's complete press/repeat/release sequence. The foreground App receives the
+next deliberate key. Confirmation, save, send and delete flows must remain
+correct when the wake-triggering key is absent.
+
 ## Permissions
 
 Declare only capabilities the application uses, with a short reason visible in
 the trusted permission prompt. Examples include `network.client`,
 `audio.playback`, `audio.capture`, `camera.capture`, `hardware.gpio`,
 `radio.lora`, `documents.open`, `notifications.post`, `photos.read`,
-`photos.write` and intent declarations. The bounded shared photo library is
-documented in `docs/PHOTO-LIBRARY-V2.md`.
+`photos.write` and intent declarations. The shared photo library is documented
+in `docs/PHOTO-LIBRARY-V2.md`: it has no fixed photo-count eviction policy,
+uses brokered pagination and exposes no filesystem path or mutable index.
 Private key/value storage is automatically available within the manifest's
 `resources.storage_mb` quota and has no separate permission name. A denied
 capability returns `Error::Denied`; a pending decision or temporarily
@@ -113,6 +124,12 @@ returning to the event loop.
 The PC simulator never grants ambient host access. `--permissions allow` uses
 deterministic capability fixtures, while `--permissions deny` verifies the
 application's denial path.
+
+Photo Apps use `photos::count`, `photos::list_page`, `photos::load_rgb565`,
+`photos::save_rgb565` and `photos::delete`. Every frame is a fixed 320x170
+RGB565 buffer. Keep an eight-ID page and one frame instead of allocating in
+proportion to the library, and handle `Denied`, `Unavailable` and
+`ResourceLimit` as normal UI states.
 
 ## Simulate and profile
 
@@ -131,12 +148,18 @@ storage fixture enforces the manifest byte quota, 256-key limit and missing-key
 semantics. It is a deterministic SDK test harness, not a security substitute
 for the device namespace, seccomp and cgroup tests.
 
-`examples/neon-snake` is a complete allocation-free game example using the
-display, focused keyboard input, monotonic clock and isolated private storage.
-It includes simulator commands and physical-key controls in its README.
-`examples/media-controls` demonstrates targetless media-session registration
-and deterministic Play/Pause, Previous and Next simulator actions without
-claiming the separate audio permission.
+The DevKit bundles the complete eight-App product example set: Hello Card,
+Calculator, Neon Snake, Camera, Gallery, Media Controls, Notes and Stopwatch.
+Their READMEs and 320-pixel screenshots document the expected interaction.
+Camera and Gallery demonstrate the photo broker but use protected product
+identities, so third-party development starts with `cp0ctl new` and an owned
+App ID. Media Controls demonstrates targetless global actions without claiming
+the separate audio permission.
+
+Manifest v1 does not package a Launcher icon. The current Apps grid renders a
+System Shell monogram for third-party Apps in its 40x40 slot. Store submission
+separately requires a 48x48 PNG icon and one to five 320x170 screenshots; those
+assets belong to `store/listing.json`, not `app.json`.
 
 ## Package, sign and install
 
