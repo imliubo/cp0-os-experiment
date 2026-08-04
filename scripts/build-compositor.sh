@@ -67,6 +67,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \
     "$repo_root/compositor-policy/cardputerzero-policy.c" \
     "$repo_root/compositor-policy/esc-gesture.c" \
     "$repo_root/compositor-policy/overlay-state.c" \
+    "$repo_root/compositor-policy/wake-key.c" \
     "$output/cardputerzero-system-shell-protocol.c" \
     -L"$weston_build/libweston" -lweston-14 \
     $(pkg-config --cflags --libs pixman-1 wayland-server) \

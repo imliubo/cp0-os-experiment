@@ -146,6 +146,8 @@ cp "$repo_root/compositor-policy/cardputerzero-policy.c" \
     "$repo_root/compositor-policy/esc-gesture.h" \
     "$repo_root/compositor-policy/overlay-state.c" \
     "$repo_root/compositor-policy/overlay-state.h" \
+    "$repo_root/compositor-policy/wake-key.c" \
+    "$repo_root/compositor-policy/wake-key.h" \
     "$repo_root/protocols/cardputerzero-system-shell-v1.xml" \
     "$pi_gen_dir/stage-cardputerzero-os/01-compositor/policy/"
 

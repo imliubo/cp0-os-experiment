@@ -3,6 +3,7 @@
 #include "cardputerzero-system-shell-server-protocol.h"
 #include "esc-gesture.h"
 #include "overlay-state.h"
+#include "wake-key.h"
 
 #include <libweston/desktop.h>
 #include <libweston/libweston.h>
@@ -65,6 +66,8 @@ struct cp0_policy {
     struct wl_event_source *reassert_idle;
     struct wl_event_source *esc_timer;
     struct cp0_esc_gesture esc_gesture;
+    struct weston_keyboard_grab wake_grab;
+    struct cp0_wake_key wake_key;
     uint32_t next_app_token;
     uint32_t overlay_mode;
 };
@@ -94,6 +97,82 @@ first_keyboard(struct weston_compositor *compositor)
         return NULL;
     seat = wl_container_of(compositor->seat_list.next, seat, link);
     return weston_seat_get_keyboard(seat);
+}
+
+static void
+finish_wake_key_grab(struct cp0_policy *policy)
+{
+    struct weston_keyboard *keyboard = first_keyboard(policy->compositor);
+
+    if (keyboard != NULL && keyboard->grab == &policy->wake_grab)
+        weston_keyboard_end_grab(keyboard);
+    cp0_wake_key_cancel(&policy->wake_key);
+}
+
+static void
+wake_key_grab_key(struct weston_keyboard_grab *grab,
+                  const struct timespec *time, uint32_t key, uint32_t state)
+{
+    struct cp0_policy *policy =
+        wl_container_of(grab, policy, wake_grab);
+    enum cp0_wake_key_result result = cp0_wake_key_handle(
+        &policy->wake_key, key, state == WL_KEYBOARD_KEY_STATE_PRESSED);
+    (void)time;
+
+    if (result == CP0_WAKE_KEY_CONSUME_AND_FINISH)
+        finish_wake_key_grab(policy);
+}
+
+static void
+wake_key_grab_modifiers(struct weston_keyboard_grab *grab, uint32_t serial,
+                        uint32_t mods_depressed, uint32_t mods_latched,
+                        uint32_t mods_locked, uint32_t group)
+{
+    (void)grab;
+    (void)serial;
+    (void)mods_depressed;
+    (void)mods_latched;
+    (void)mods_locked;
+    (void)group;
+}
+
+static void
+wake_key_grab_cancel(struct weston_keyboard_grab *grab)
+{
+    struct cp0_policy *policy =
+        wl_container_of(grab, policy, wake_grab);
+
+    finish_wake_key_grab(policy);
+}
+
+static const struct weston_keyboard_grab_interface wake_key_grab_interface = {
+    .key = wake_key_grab_key,
+    .modifiers = wake_key_grab_modifiers,
+    .cancel = wake_key_grab_cancel,
+};
+
+static bool
+arm_wake_key_grab(struct cp0_policy *policy)
+{
+    struct weston_keyboard *keyboard = first_keyboard(policy->compositor);
+
+    if (cp0_wake_key_is_armed(&policy->wake_key))
+        return keyboard != NULL && keyboard->grab == &policy->wake_grab;
+    if (keyboard == NULL || keyboard->grab != &keyboard->default_grab)
+        return false;
+    cp0_wake_key_arm(&policy->wake_key);
+    policy->wake_grab.interface = &wake_key_grab_interface;
+    weston_keyboard_start_grab(keyboard, &policy->wake_grab);
+    return true;
+}
+
+static bool
+put_display_to_sleep(struct cp0_policy *policy)
+{
+    if (!arm_wake_key_grab(policy))
+        return false;
+    weston_compositor_sleep(policy->compositor);
+    return true;
 }
 
 static struct cp0_surface_watch *
@@ -535,10 +614,10 @@ shell_sleep_display(struct wl_client *client, struct wl_resource *resource)
     struct cp0_policy *policy = wl_resource_get_user_data(resource);
     (void)client;
 
-    set_overlay_mode(policy, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL,
-                     first_keyboard(policy->compositor));
-    weston_compositor_sleep(policy->compositor);
-    weston_log("cardputerzero-policy: display sleeping\n");
+    if (put_display_to_sleep(policy))
+        weston_log("cardputerzero-policy: display sleeping\n");
+    else
+        weston_log("cardputerzero-policy: display sleep deferred while input is grabbed\n");
 }
 
 static void
@@ -819,16 +898,18 @@ compositor_woke(struct wl_listener *listener, void *data)
 {
     struct cp0_policy *policy =
         wl_container_of(listener, policy, compositor_wake_listener);
+    struct weston_keyboard *keyboard = first_keyboard(policy->compositor);
+    bool keyboard_wake = cp0_wake_key_is_armed(&policy->wake_key) &&
+                         keyboard != NULL &&
+                         keyboard->grab == &policy->wake_grab &&
+                         keyboard->keys.size > 0;
     (void)data;
 
     cp0_esc_gesture_cancel(&policy->esc_gesture);
-    set_overlay_mode(policy, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL,
-                     first_keyboard(policy->compositor));
-    if (policy->shell_resource != NULL) {
-        cp0_system_shell_v1_send_action(policy->shell_resource,
-                                        CP0_SYSTEM_SHELL_V1_ACTION_HOME);
-    }
-    weston_log("cardputerzero-policy: display awake\n");
+    if (!keyboard_wake && cp0_wake_key_is_armed(&policy->wake_key))
+        finish_wake_key_grab(policy);
+    weston_log("cardputerzero-policy: display awake%s\n",
+               keyboard_wake ? "; wake key consumed" : "");
 }
 
 static void
@@ -840,9 +921,11 @@ compositor_became_idle(struct wl_listener *listener, void *data)
 
     if (policy->compositor->idle_time <= 0)
         return;
-    set_overlay_mode(policy, CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL,
-                     first_keyboard(policy->compositor));
-    weston_compositor_sleep(policy->compositor);
+    if (!put_display_to_sleep(policy)) {
+        weston_log("cardputerzero-policy: idle sleep deferred while input is grabbed\n");
+        weston_compositor_wake(policy->compositor);
+        return;
+    }
     weston_log("cardputerzero-policy: idle timeout put display to sleep\n");
 }
 
@@ -854,6 +937,7 @@ policy_destroyed(struct wl_listener *listener, void *data)
     struct cp0_surface_watch *watch, *next;
     (void)data;
 
+    finish_wake_key_grab(policy);
     if (policy->reassert_idle != NULL)
         wl_event_source_remove(policy->reassert_idle);
     if (policy->esc_timer != NULL)

@@ -20,6 +20,9 @@ policy="$repo_root/compositor-policy/cardputerzero-policy.c"
 esc_gesture="$repo_root/compositor-policy/esc-gesture.c"
 esc_gesture_header="$repo_root/compositor-policy/esc-gesture.h"
 esc_gesture_test="$repo_root/tests/compositor-esc-gesture.c"
+wake_key="$repo_root/compositor-policy/wake-key.c"
+wake_key_header="$repo_root/compositor-policy/wake-key.h"
+wake_key_test="$repo_root/tests/compositor-wake-key.c"
 overlay_state="$repo_root/compositor-policy/overlay-state.c"
 overlay_state_test="$repo_root/tests/compositor-overlay-state.c"
 protocol="$repo_root/protocols/cardputerzero-system-shell-v1.xml"
@@ -164,6 +167,11 @@ trap 'rm -rf -- "$generator_tmp"' EXIT
 "$generator_tmp/compositor-esc-gesture-test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -I"$repo_root/compositor-policy" \
+    "$wake_key" "$wake_key_test" \
+    -o "$generator_tmp/compositor-wake-key-test"
+"$generator_tmp/compositor-wake-key-test"
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -I"$repo_root/compositor-policy" \
     "$overlay_state" "$overlay_state_test" \
     -o "$generator_tmp/compositor-overlay-state-test"
 "$generator_tmp/compositor-overlay-state-test"
@@ -197,6 +205,9 @@ grep -q 'wl_event_loop_add_timer' "$policy"
 grep -q 'keyboard_has_key(keyboard, KEY_ESC)' "$policy"
 grep -q '^#define CP0_ESC_LONG_PRESS_MSEC 800U$' "$esc_gesture_header"
 grep -q 'CP0_ESC_GESTURE_HOME' "$esc_gesture"
+grep -q 'CP0_WAKE_KEY_CONSUME_AND_FINISH' "$wake_key_header"
+grep -q 'weston_keyboard_start_grab' "$policy"
+grep -q 'wake key consumed' "$policy"
 grep -q 'weston_compositor_add_screenshot_authority' "$policy"
 grep -q 'attempt->authorized = true' "$policy"
 grep -q 'attempt->denied = true' "$policy"
@@ -206,6 +217,13 @@ grep -q 'cp0_system_shell_v1_register_surface' "$shell_client"
 grep -q 'cp0_system_shell_v1_activate_app' "$shell_client"
 grep -q '<interface name="cp0_system_shell_v1" version="7">' "$protocol"
 grep -q '<event name="app_identity" since="7">' "$protocol"
+grep -q '^#define CP0_SYSTEM_SHELL_PROTOCOL_VERSION 7U$' "$policy"
+grep -q 'version < CP0_SYSTEM_SHELL_PROTOCOL_VERSION' "$policy"
+grep -q 'CP0_SYSTEM_SHELL_PROTOCOL_VERSION, policy, bind_system_shell' "$policy"
+if grep -q 'version < 6 ? version : 6' "$policy"; then
+    echo 'compositor truncates the trusted Shell protocol below app identity' >&2
+    exit 1
+fi
 grep -q '<entry name="brightness_down" value="4" since="5"/>' "$protocol"
 grep -q '<entry name="screenshot" value="13" since="5"/>' "$protocol"
 for key in KEY_BRIGHTNESSDOWN KEY_BRIGHTNESSUP KEY_MUTE KEY_VOLUMEDOWN \
@@ -247,6 +265,9 @@ grep -q 'audio_settings_client.c' "$builder"
 grep -q 'compositor-policy/esc-gesture.c' "$builder"
 grep -q 'compositor-policy/esc-gesture.c' "$repo_root/image/build-image.sh"
 grep -q '/tmp/cardputerzero-policy/esc-gesture.c' "$stage"
+grep -q 'compositor-policy/wake-key.c' "$builder"
+grep -q 'compositor-policy/wake-key.c' "$repo_root/image/build-image.sh"
+grep -q '/tmp/cardputerzero-policy/wake-key.c' "$stage"
 grep -q 'CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS' "$policy"
 grep -q 'weston_compositor_sleep' "$policy"
 grep -q 'compositor->wake_signal' "$policy"
