@@ -38,6 +38,7 @@ pub enum BrokerCommand {
         frames: u16,
     },
     CaptureCamera,
+    CapturePhoto,
     ReadGpio {
         line: cp0_gpio_protocol::GpioLine,
     },
@@ -77,6 +78,12 @@ pub enum BrokerCommand {
     },
     PhotoLoadRgb565 {
         photo_id: u64,
+    },
+    PhotoLoadViewRgb565 {
+        photo_id: u64,
+        zoom_level: u8,
+        pan_x: i16,
+        pan_y: i16,
     },
     PhotoRemove {
         photo_id: u64,
@@ -342,6 +349,23 @@ impl BrokerRequest {
             BrokerCommand::PhotoLoadRgb565 { photo_id }
             | BrokerCommand::PhotoRemove { photo_id }
                 if *photo_id == 0 || *photo_id > i64::MAX as u64 =>
+            {
+                Err(BrokerProtocolError::InvalidStorage)
+            }
+            BrokerCommand::PhotoLoadViewRgb565 {
+                photo_id,
+                zoom_level,
+                pan_x,
+                pan_y,
+            } if *photo_id == 0
+                || *photo_id > i64::MAX as u64
+                || *zoom_level > crate::photo_view::MAX_PHOTO_VIEW_ZOOM_LEVEL
+                || !(crate::photo_view::MIN_PHOTO_VIEW_PAN
+                    ..=crate::photo_view::MAX_PHOTO_VIEW_PAN)
+                    .contains(pan_x)
+                || !(crate::photo_view::MIN_PHOTO_VIEW_PAN
+                    ..=crate::photo_view::MAX_PHOTO_VIEW_PAN)
+                    .contains(pan_y) =>
             {
                 Err(BrokerProtocolError::InvalidStorage)
             }
@@ -1194,6 +1218,36 @@ mod tests {
                 protocol_version: BROKER_PROTOCOL_VERSION,
                 request_id: 15,
                 command: BrokerCommand::PhotoRemove { photo_id: 0 },
+            }
+            .validate()
+            .is_err()
+        );
+        let view = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 16,
+            command: BrokerCommand::PhotoLoadViewRgb565 {
+                photo_id: 1,
+                zoom_level: 2,
+                pan_x: -1000,
+                pan_y: 1000,
+            },
+        };
+        let mut frame = Vec::new();
+        write_broker_request(&mut frame, &view).unwrap();
+        assert_eq!(
+            read_broker_request(&mut Cursor::new(frame)).unwrap(),
+            Some(view)
+        );
+        assert!(
+            BrokerRequest {
+                protocol_version: BROKER_PROTOCOL_VERSION,
+                request_id: 17,
+                command: BrokerCommand::PhotoLoadViewRgb565 {
+                    photo_id: 1,
+                    zoom_level: 3,
+                    pan_x: 0,
+                    pan_y: 0,
+                },
             }
             .validate()
             .is_err()

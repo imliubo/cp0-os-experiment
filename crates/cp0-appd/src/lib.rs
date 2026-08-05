@@ -19,6 +19,7 @@ mod network_client;
 mod permission_prompt;
 mod permissions;
 mod photo_library;
+mod photo_view;
 mod policy;
 mod protocol;
 mod radio_client;
@@ -40,7 +41,8 @@ pub use broker::{
     write_broker_response,
 };
 pub use camera_client::{
-    CameraClient, CameraClientError, CapturedCameraFrame, DEFAULT_CAMERA_SOCKET,
+    CameraClient, CameraClientError, CapturedCameraFrame, CapturedCameraPhoto,
+    DEFAULT_CAMERA_SOCKET,
 };
 pub use checkpoint::{
     CHECKPOINT_SCHEMA_VERSION, CHECKPOINT_TIMEOUT, CheckpointBlob, CheckpointError,
@@ -86,10 +88,11 @@ pub use policy::{
 };
 
 pub use protocol::{
-    APPD_PROTOCOL_VERSION, AppSummary, AppdCommand, AppdRequest, AppdResponse, ErrorCode,
-    MAX_APP_LIST_PAGE, MAX_LOG_LINES, MAX_TASK_LIST_PAGE, PeerCredentials, ProtocolError,
-    ResponseData, ResponseOutcome, StoreInstalledApp, TaskSummary, peer_credentials, read_request,
-    read_response, recv_request_with_fd, write_request, write_response,
+    APPD_PROTOCOL_VERSION, AppPermissionDecision, AppPermissionState, AppSummary, AppdCommand,
+    AppdRequest, AppdResponse, ErrorCode, MAX_APP_LIST_PAGE, MAX_LOG_LINES, MAX_TASK_LIST_PAGE,
+    PeerCredentials, ProtocolError, ResponseData, ResponseOutcome, StoreInstalledApp, TaskSummary,
+    peer_credentials, read_request, read_response, recv_request_with_fd, write_request,
+    write_response,
 };
 pub use radio_client::{DEFAULT_RADIO_SOCKET, RadioClient, RadioClientError, ReceivedRadioPacket};
 pub use registry::{

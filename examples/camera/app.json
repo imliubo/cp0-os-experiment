@@ -14,11 +14,11 @@
   "permissions": [
     {
       "name": "camera.capture",
-      "reason": "Capture a frame when the user presses Enter"
+      "reason": "Preview at 320x170 and capture a 1280x720 photo when the user presses Enter"
     },
     {
       "name": "photos.write",
-      "reason": "Save captured frames to the shared photo library"
+      "reason": "Save captured JPEG originals and thumbnails to the shared photo library"
     }
   ],
   "intents": []

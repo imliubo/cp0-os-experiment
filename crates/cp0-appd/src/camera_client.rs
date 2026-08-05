@@ -6,18 +6,24 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cp0_camera_protocol::{
-    CAMERA_FRAME_BYTES, CameraErrorCode, CameraOutcome, CameraProtocolError, CameraRequest,
-    decode_response, recv_frame_with_fd, write_request,
+    CAMERA_FRAME_BYTES, CAMERA_PHOTO_HEADER_BYTES, CameraErrorCode, CameraOutcome,
+    CameraProtocolError, CameraRequest, MAX_CAMERA_JPEG_BYTES, decode_response, recv_frame_with_fd,
+    write_request,
 };
 
 pub const DEFAULT_CAMERA_SOCKET: &str = "/run/cardputerzero-camerad/camera.sock";
-// cp0-camerad allows twelve seconds for the CM0's first libcamera pipeline
-// start. Leave time for response validation and descriptor transfer.
-const CAMERA_SERVICE_TIMEOUT: Duration = Duration::from_secs(13);
+// CM0 pipeline discovery and a 720p still transition can both be slow.
+const CAMERA_SERVICE_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug)]
 pub struct CapturedCameraFrame {
     pub descriptor: OwnedFd,
+}
+
+#[derive(Debug)]
+pub struct CapturedCameraPhoto {
+    pub descriptor: OwnedFd,
+    pub jpeg_size_bytes: u32,
 }
 
 #[derive(Debug)]
@@ -88,30 +94,57 @@ impl CameraClient {
 
     pub fn capture(&self, request_id: u64) -> Result<CapturedCameraFrame, CameraClientError> {
         let stream = UnixStream::connect(&self.socket_path)?;
-        Self::exchange(stream, request_id)
+        let (descriptor, outcome) = Self::exchange(stream, CameraRequest::capture(request_id))?;
+        if !matches!(outcome, CameraOutcome::Captured { .. }) {
+            return Err(CameraClientError::InvalidDescriptor);
+        }
+        Ok(CapturedCameraFrame { descriptor })
+    }
+
+    pub fn capture_photo(&self, request_id: u64) -> Result<CapturedCameraPhoto, CameraClientError> {
+        let stream = UnixStream::connect(&self.socket_path)?;
+        let (descriptor, outcome) =
+            Self::exchange(stream, CameraRequest::capture_photo(request_id))?;
+        let CameraOutcome::PhotoCaptured {
+            jpeg_size_bytes, ..
+        } = outcome
+        else {
+            return Err(CameraClientError::InvalidDescriptor);
+        };
+        Ok(CapturedCameraPhoto {
+            descriptor,
+            jpeg_size_bytes,
+        })
     }
 
     fn exchange(
         mut stream: UnixStream,
-        request_id: u64,
-    ) -> Result<CapturedCameraFrame, CameraClientError> {
+        request: CameraRequest,
+    ) -> Result<(OwnedFd, CameraOutcome), CameraClientError> {
         stream.set_read_timeout(Some(CAMERA_SERVICE_TIMEOUT))?;
         stream.set_write_timeout(Some(CAMERA_SERVICE_TIMEOUT))?;
-        write_request(&mut stream, &CameraRequest::capture(request_id))?;
+        write_request(&mut stream, &request)?;
         stream.shutdown(Shutdown::Write)?;
         let (frame, descriptor) = recv_frame_with_fd(&stream)?;
         if frame.is_empty() {
             return Err(CameraClientError::EmptyResponse);
         }
         let response = decode_response(&frame)?;
-        if response.request_id != request_id {
+        if response.request_id != request.request_id {
             return Err(CameraClientError::MismatchedRequestId);
         }
         match response.outcome {
-            CameraOutcome::Captured { .. } => {
+            outcome @ (CameraOutcome::Captured { .. } | CameraOutcome::PhotoCaptured { .. }) => {
                 let descriptor = descriptor.ok_or(CameraClientError::MissingDescriptor)?;
-                validate_descriptor(&descriptor)?;
-                Ok(CapturedCameraFrame { descriptor })
+                let expected_size = match &outcome {
+                    CameraOutcome::Captured { .. } => CAMERA_FRAME_BYTES,
+                    CameraOutcome::PhotoCaptured {
+                        jpeg_size_bytes, ..
+                    } => CAMERA_PHOTO_HEADER_BYTES + CAMERA_FRAME_BYTES + *jpeg_size_bytes as usize,
+                    CameraOutcome::Error { .. } => unreachable!(),
+                };
+                validate_descriptor(&descriptor, expected_size)?;
+                Ok((descriptor, outcome))
             }
             CameraOutcome::Error { code, .. } => {
                 if descriptor.is_some() {
@@ -123,7 +156,10 @@ impl CameraClient {
     }
 }
 
-fn validate_descriptor(descriptor: &OwnedFd) -> Result<(), CameraClientError> {
+fn validate_descriptor(
+    descriptor: &OwnedFd,
+    expected_size: usize,
+) -> Result<(), CameraClientError> {
     let mut status: libc::stat = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstat(descriptor.as_raw_fd(), &raw mut status) } != 0 {
         return Err(CameraClientError::Io(std::io::Error::last_os_error()));
@@ -133,7 +169,9 @@ fn validate_descriptor(descriptor: &OwnedFd) -> Result<(), CameraClientError> {
         return Err(CameraClientError::Io(std::io::Error::last_os_error()));
     }
     if status.st_mode & libc::S_IFMT != libc::S_IFREG
-        || status.st_size != CAMERA_FRAME_BYTES as libc::off_t
+        || expected_size == 0
+        || expected_size > CAMERA_PHOTO_HEADER_BYTES + CAMERA_FRAME_BYTES + MAX_CAMERA_JPEG_BYTES
+        || status.st_size != expected_size as libc::off_t
         || flags & libc::O_ACCMODE != libc::O_RDONLY
     {
         return Err(CameraClientError::InvalidDescriptor);
@@ -181,7 +219,7 @@ mod tests {
             let frame = encode_frame(&CameraResponse::captured(request.request_id)).unwrap();
             send_frame_with_fd(&mut service, &frame, file.as_fd()).unwrap();
         });
-        let result = CameraClient::exchange(client, 11);
+        let result = CameraClient::exchange(client, CameraRequest::capture(11));
         worker.join().unwrap();
         #[cfg(target_os = "linux")]
         assert!(matches!(result, Err(CameraClientError::InvalidDescriptor)));

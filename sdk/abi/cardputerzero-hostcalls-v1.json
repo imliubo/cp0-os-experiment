@@ -167,6 +167,16 @@
       "wit": "camera.capture-rgb565"
     },
     {
+      "name": "cp0_camera_capture_photo",
+      "runtime_function": "cp0_capture_camera_photo",
+      "c_name": "cp0_camera_capture_photo_raw",
+      "wamr_signature": "()I",
+      "result": "i64",
+      "parameters": [],
+      "native_fallback": -2,
+      "wit": "camera.capture-photo"
+    },
+    {
       "name": "cp0_gpio_read",
       "runtime_function": "cp0_gpio_read",
       "c_name": "cp0_gpio_read_raw",
@@ -354,6 +364,23 @@
       ],
       "native_fallback": -2,
       "wit": "photos.load-rgb565"
+    },
+    {
+      "name": "cp0_photos_load_view_rgb565",
+      "runtime_function": "cp0_photos_load_view_rgb565_host",
+      "c_name": "cp0_photos_load_view_rgb565_raw",
+      "wamr_signature": "(Iiii*~)i",
+      "result": "result",
+      "parameters": [
+        { "name": "photo_id", "type": "u64" },
+        { "name": "zoom_level", "type": "u32" },
+        { "name": "pan_x", "type": "i32" },
+        { "name": "pan_y", "type": "i32" },
+        { "name": "pixels", "type": "mut-u8-ptr" },
+        { "name": "pixel_bytes", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "photos.load-view-rgb565"
     },
     {
       "name": "cp0_intent_send",

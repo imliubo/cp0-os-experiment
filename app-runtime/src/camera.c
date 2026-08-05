@@ -50,3 +50,7 @@ int32_t cp0_camera_capture_rgb565(uint8_t *pixels, size_t pixel_bytes) {
         return CP0_BROKER_UNAVAILABLE;
     return CP0_BROKER_OK;
 }
+
+int64_t cp0_camera_capture_photo(void) {
+    return cp0_broker_capture_photo();
+}

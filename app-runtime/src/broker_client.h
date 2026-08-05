@@ -30,6 +30,7 @@ int32_t cp0_broker_decode_audio_capture_response(const char *response,
                                                  uint8_t *samples,
                                                  size_t sample_capacity);
 int32_t cp0_broker_capture_camera(int *descriptor);
+int64_t cp0_broker_capture_photo(void);
 int32_t cp0_broker_decode_camera_response(const char *response,
                                           int received_descriptor,
                                           int *descriptor);
@@ -65,6 +66,9 @@ int64_t cp0_broker_photo_import_rgb565(const uint8_t *pixels,
                                        uint64_t suggested_id);
 int64_t cp0_broker_decode_photo_import_response(const char *response);
 int32_t cp0_broker_photo_load_rgb565(uint64_t photo_id, int *descriptor);
+int32_t cp0_broker_photo_load_view_rgb565(uint64_t photo_id,
+                                          uint32_t zoom_level, int32_t pan_x,
+                                          int32_t pan_y, int *descriptor);
 int32_t cp0_broker_decode_photo_load_response(const char *response,
                                               int received_descriptor,
                                               uint64_t photo_id,

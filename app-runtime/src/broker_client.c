@@ -790,6 +790,21 @@ int32_t cp0_broker_capture_camera(int *descriptor) {
                                              descriptor);
 }
 
+int64_t cp0_broker_capture_photo(void) {
+    static const char request[] =
+        "{\"protocol_version\":1,\"request_id\":7,\"command\":{"
+        "\"name\":\"capture-photo\"}}\n";
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int32_t result;
+
+    result = broker_exchange_with_fd_timeout(
+        request, sizeof(request) - 1U, response, sizeof(response), -1, NULL,
+        25);
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_photo_import_response(response);
+}
+
 static const char *gpio_line_name(uint32_t line) {
     switch (line) {
     case 0:
@@ -1327,6 +1342,37 @@ int32_t cp0_broker_photo_load_rgb565(uint64_t photo_id, int *descriptor) {
         "{\"protocol_version\":1,\"request_id\":20,\"command\":{"
         "\"name\":\"photo-load-rgb565\",\"photo_id\":%llu}}\n",
         (unsigned long long)photo_id);
+    if (written <= 0 || (size_t)written >= sizeof(request))
+        return CP0_BROKER_INTERNAL;
+    result = broker_exchange_with_fd(request, (size_t)written, response,
+                                     sizeof(response), -1,
+                                     &received_descriptor);
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_photo_load_response(
+        response, received_descriptor, photo_id, descriptor);
+}
+
+int32_t cp0_broker_photo_load_view_rgb565(uint64_t photo_id,
+                                          uint32_t zoom_level, int32_t pan_x,
+                                          int32_t pan_y, int *descriptor) {
+    char request[320];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int received_descriptor = -1;
+    int written;
+    int32_t result;
+
+    if (photo_id == 0U || photo_id > INT64_MAX || zoom_level > 2U ||
+        pan_x < -1000 || pan_x > 1000 || pan_y < -1000 || pan_y > 1000 ||
+        descriptor == NULL)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    *descriptor = -1;
+    written = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":21,\"command\":{"
+        "\"name\":\"photo-load-view-rgb565\",\"photo_id\":%llu,"
+        "\"zoom_level\":%u,\"pan_x\":%d,\"pan_y\":%d}}\n",
+        (unsigned long long)photo_id, zoom_level, pan_x, pan_y);
     if (written <= 0 || (size_t)written >= sizeof(request))
         return CP0_BROKER_INTERNAL;
     result = broker_exchange_with_fd(request, (size_t)written, response,

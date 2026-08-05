@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 pub const STORAGE_PROTOCOL_VERSION: u32 = 2;
 pub const MAX_STORAGE_KEY_BYTES: usize = 64;
 pub const MAX_STORAGE_VALUE_BYTES: usize = 8 * 1024;
-pub const MAX_STORAGE_BLOB_BYTES: usize = 128 * 1024;
+// Blob operations are available only to the broker-owned system photo library.
+// The bound covers a 1280x720 JPEG while keeping descriptor and disk scans finite.
+pub const MAX_STORAGE_BLOB_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_STORAGE_FRAME_BYTES: usize = 16 * 1024;
 pub const MAX_STORAGE_ERROR_CHARS: usize = 160;
 pub const MIB: u64 = 1024 * 1024;

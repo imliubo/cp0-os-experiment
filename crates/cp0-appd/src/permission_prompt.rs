@@ -110,6 +110,10 @@ impl PermissionCoordinator {
         self.pending.as_ref()
     }
 
+    pub fn authorization(&self, manifest: &AppManifest, permission: Permission) -> Authorization {
+        self.engine.authorize(manifest, permission)
+    }
+
     pub fn resolve(
         &mut self,
         prompt_id: u64,

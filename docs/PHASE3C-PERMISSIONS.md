@@ -57,6 +57,23 @@ session grant and a stored decision through the same atomic persistence path,
 so the next capability use prompts again. It refuses to race a matching
 pending prompt.
 
+The production System Shell exposes the same operation without granting a
+generic control channel. Open **Apps**, select an application, open its detail
+view and switch to the **Permissions** page. Each declared capability is shown
+as one of:
+
+- `ASK`: no decision is stored; the next capability request opens the trusted
+  prompt;
+- `ALLOW`: a session or persistent grant currently applies;
+- `DENY`: a persistent denial currently applies;
+- `POLICY`: device policy denies the capability and the owner cannot override
+  it from the application page.
+
+Pressing Enter on `ALLOW` or `DENY` resets that capability to `ASK`. It never
+silently grants a denied capability. The application must request the
+capability again, after which the trusted prompt offers `ONCE`, `ALWAYS` and
+`DENY`. `ASK` and `POLICY` rows are read-only.
+
 This phase does not expose a generic application permission socket. Capability
 requests enter through typed brokers. The notification broker is the first
 integration target; hardware and document brokers will reuse the same state

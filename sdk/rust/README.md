@@ -22,7 +22,13 @@ service may be unavailable and can be retried later.
 signed 16-bit mono frames at 16 kHz. The application manifest must declare
 playback and capture separately.
 
-`camera::capture_rgb565` always fills one caller-owned 320x170 RGB565 frame.
+`camera::capture_rgb565` fills one caller-owned 320x170 RGB565 preview frame.
+`camera::capture_photo` pauses preview and returns the photo ID of a
+system-managed 1280x720 JPEG plus Gallery thumbnail; the JPEG is not copied
+into WASM memory.
+`photos::load_view_rgb565` renders a fixed 320x170 viewport from that original.
+Use `ViewZoom::{Fit, Half, Actual}` and bounded pan coordinates; the SDK never
+exposes the original JPEG or its storage path.
 The application manifest must declare `camera.capture`; the SDK exposes no
 sensor selection, camera device, capture process or file path.
 

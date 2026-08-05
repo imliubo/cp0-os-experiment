@@ -11,10 +11,11 @@ cannot replace these identities; signed Store upgrades remain allowed.
 - Camera photos and trusted system screenshots share one Gallery library.
 - There is no photo-count retention limit and no automatic eviction.
 - A photo remains visible until the Owner explicitly deletes it in Gallery.
-- When the SD card cannot accept another complete frame while preserving 64
+- When the SD card cannot accept another complete photo while preserving 64
   MiB for the system, the new save fails with `ResourceLimit`; existing photos
   and indexes are unchanged.
-- Gallery caches eight IDs and one RGB565 frame, independent of library size.
+- Gallery caches eight IDs and one RGB565 frame. appd caches only the currently
+  decoded Camera original, independent of library size.
 
 Physical media capacity is the only practical library bound. The system photo
 identity uses a deliberately unreachable 1 PiB logical quota so storaged's
@@ -24,7 +25,7 @@ normal per-App quota cannot become an artificial retention policy.
 
 | Permission | Access |
 | --- | --- |
-| `camera.capture` | Capture one fixed 320x170 RGB565 frame from camerad. |
+| `camera.capture` | Read a 320x170 preview or request one fixed 1280x720 photo. |
 | `photos.read` | Read versioned indexes and selected frame chunks. |
 | `photos.write` | Append a frame or delete one selected photo. |
 
@@ -37,13 +38,20 @@ symbols remain loadable, while appd rejects direct frame or metadata mutation.
 
 ## Format
 
-Every frame is 320x170 RGB565 little-endian, exactly 108,800 bytes. Camera gives
-Runtime one frame through `photos.import-rgb565`; Runtime copies it into a
-fully sealed memfd and passes that descriptor to appd. appd authenticates the
-calling App and owns the complete import transaction. Its private storaged
-client writes bounded 8 KiB chunks into one mode `0600` temporary blob. Every
-chunk is flushed; only the final chunk atomically publishes
-`p<16-hex-id>.rgb565`. An interrupted frame is never listed.
+Every Gallery display frame is a 320x170 RGB565 little-endian thumbnail,
+exactly 108,800 bytes. Screenshots and the compatibility
+`photos.import-rgb565` call store only this representation. A Camera
+`capture-photo` transaction additionally stores a fixed 1280x720 JPEG original
+as `p<16-hex-id>.jpg` and a 56-byte `p<16-hex-id>.meta` record containing kind,
+dimensions, JPEG size, capture time and SHA-256 digest. The Camera App receives
+only the broker-owned photo ID; the JPEG is never copied into WASM memory.
+
+appd authenticates the calling App and owns the complete import transaction.
+Its private storaged client writes bounded 8 KiB chunks into mode `0600`
+temporary blobs. Every chunk is flushed; only the final chunk atomically
+publishes each blob. The thumbnail, optional original and metadata are written
+before the index page and authoritative head. A failed transaction removes all
+uncommitted components and never lists a partial photo.
 
 Gallery loads a committed frame with one `photos.load-rgb565` hostcall. appd
 first verifies that the requested ID is still active in the committed index,
@@ -54,6 +62,13 @@ descriptor crosses both Unix-socket boundaries with `SCM_RIGHTS`; appd and
 Runtime independently revalidate its type, size, and access mode before
 mapping or copying any pixels. This replaces the legacy fourteen sequential
 base64 chunk reads while preserving the same App isolation boundary.
+
+Camera originals are viewed through `photos.load-view-rgb565`. The only inputs
+are an active photo ID, Fit/half/actual zoom, and bounded `-1000..1000` pan
+coordinates. appd validates the metadata, opens the exact read-only JPEG blob,
+decodes and caches the current 1280x720 image, then renders one fixed 320x170
+RGB565 viewport into a sealed descriptor. Gallery never receives JPEG bytes,
+a storage key, a filesystem path or a full-resolution RGB allocation.
 
 `head.v2` is a fixed 32-byte record containing:
 
@@ -67,9 +82,10 @@ one slot into a zero tombstone and decrements the page/head active counts; it
 does not compact or renumber later photos. Gallery's `list_page(offset, out)`
 uses logical active-photo offsets and skips tombstones.
 
-Saving publishes the frame blob, updates its index page, then commits
-`head.v2`. Page/head failure restores the old page and removes the uncommitted
-frame. Deletion commits the tombstone and head before reclaiming the blob.
+Saving publishes the thumbnail and optional JPEG/metadata, updates its index
+page, then commits `head.v2`. Page/head failure restores the old page and
+removes every uncommitted component. Deletion commits the tombstone and head
+before reclaiming the thumbnail, JPEG and metadata.
 Camera imports, Shell screenshot imports and Gallery removals share one appd
 transaction lock, so their page/head updates cannot overwrite one another.
 

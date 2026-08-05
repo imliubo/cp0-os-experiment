@@ -41,6 +41,9 @@ int32_t cp0_audio_capture_pcm_s16le_raw(uint8_t *samples, uint32_t sample_capaci
 CP0_IMPORT("cp0_camera_capture_rgb565")
 cp0_result_t cp0_camera_capture_rgb565_raw(uint8_t *pixels, uint32_t pixel_bytes);
 
+CP0_IMPORT("cp0_camera_capture_photo")
+int64_t cp0_camera_capture_photo_raw(void);
+
 CP0_IMPORT("cp0_gpio_read")
 int32_t cp0_gpio_read_raw(uint32_t line);
 
@@ -82,6 +85,9 @@ int32_t cp0_photos_remove_raw(uint64_t photo_id);
 
 CP0_IMPORT("cp0_photos_load_rgb565")
 cp0_result_t cp0_photos_load_rgb565_raw(uint64_t photo_id, uint8_t *pixels, uint32_t pixel_bytes);
+
+CP0_IMPORT("cp0_photos_load_view_rgb565")
+cp0_result_t cp0_photos_load_view_rgb565_raw(uint64_t photo_id, uint32_t zoom_level, int32_t pan_x, int32_t pan_y, uint8_t *pixels, uint32_t pixel_bytes);
 
 CP0_IMPORT("cp0_intent_send")
 cp0_result_t cp0_intent_send_raw(const uint8_t *action, uint32_t action_length, const uint8_t *payload, uint32_t payload_length);

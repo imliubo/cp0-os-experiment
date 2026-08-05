@@ -5,14 +5,15 @@ use core::panic::PanicInfo;
 use cp0_sdk::{
     Error, camera,
     display::{self, Rect},
-    input, photos, system,
+    input, system,
     ui::{Canvas, color},
 };
 
 const KEY_ENTER: u16 = 28;
 const KEY_SPACE: u16 = 57;
 const FRAME_BYTES: usize = camera::FRAME_BYTES;
-const PREVIEW_INTERVAL_MS: u64 = 350;
+const PREVIEW_INTERVAL_MS: u64 = 1_000 / camera::PREVIEW_FPS as u64;
+const RETRY_INTERVAL_MS: u64 = 2000;
 
 static mut CAMERA_FRAME: [u16; camera::PIXEL_COUNT] = [0; camera::PIXEL_COUNT];
 static mut DISPLAY_FRAME: [u8; FRAME_BYTES] = [0; FRAME_BYTES];
@@ -21,6 +22,7 @@ static mut DISPLAY_FRAME: [u8; FRAME_BYTES] = [0; FRAME_BYTES];
 enum Status {
     Starting,
     Live,
+    Capturing,
     Saved,
     Authorize,
     Denied,
@@ -67,6 +69,7 @@ fn render_preview(source: &[u16], target: &mut [u8], status: Status) {
         color::SURFACE,
     );
     let (label, label_color, x) = match status {
+        Status::Capturing => ("CAPTURING", color::WARNING, 133),
         Status::Saved => ("PHOTO SAVED", color::SUCCESS, 127),
         Status::Authorize => ("AUTHORIZE PHOTOS", color::WARNING, 112),
         Status::Denied => ("ACCESS DENIED", color::DANGER, 121),
@@ -123,7 +126,6 @@ pub extern "C" fn main() -> i32 {
     loop {
         let now = system::monotonic_milliseconds();
         if now >= next_preview {
-            next_preview = now.saturating_add(PREVIEW_INTERVAL_MS);
             match camera::capture_rgb565(pixels) {
                 Ok(()) => {
                     has_frame = true;
@@ -144,19 +146,29 @@ pub extern "C" fn main() -> i32 {
                 }
                 Err(_) => return 1,
             }
+            let interval = if matches!(status, Status::Unavailable | Status::Denied) {
+                RETRY_INTERVAL_MS
+            } else {
+                PREVIEW_INTERVAL_MS
+            };
+            next_preview = next_preview.max(now).saturating_add(interval);
         }
 
-        match input::poll_key_event(50) {
+        match input::poll_key_event(1) {
             Ok(Some(event))
                 if event.pressed && has_frame && matches!(event.code, KEY_ENTER | KEY_SPACE) =>
             {
-                match photos::save_rgb565(pixels, now) {
+                status = Status::Capturing;
+                render_preview(pixels, frame, status);
+                let _ = display::present_rgb565(frame, &[]);
+                match camera::capture_photo() {
                     Ok(_) => status = Status::Saved,
                     Err(Error::Unavailable) => status = Status::Authorize,
                     Err(Error::Denied) => status = Status::Denied,
                     Err(_) => status = Status::Unavailable,
                 }
-                status_until = now.saturating_add(1200);
+                status_until = system::monotonic_milliseconds().saturating_add(1200);
+                next_preview = 0;
                 dirty = true;
             }
             Ok(_) => {}

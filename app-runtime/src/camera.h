@@ -5,5 +5,6 @@
 #include <stdint.h>
 
 int32_t cp0_camera_capture_rgb565(uint8_t *pixels, size_t pixel_bytes);
+int64_t cp0_camera_capture_photo(void);
 
 #endif

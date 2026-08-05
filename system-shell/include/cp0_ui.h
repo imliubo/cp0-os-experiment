@@ -102,6 +102,8 @@ enum cp0_ui_event {
     CP0_UI_EVENT_POWER_OFF,
     CP0_UI_EVENT_OPEN_APP,
     CP0_UI_EVENT_STOP_APP,
+    CP0_UI_EVENT_LOAD_APP_PERMISSIONS,
+    CP0_UI_EVENT_RESET_APP_PERMISSION,
     CP0_UI_EVENT_ACTIVATE_TASK,
     CP0_UI_EVENT_CLOSE_TASK,
     CP0_UI_EVENT_PERMISSION_ONCE,
@@ -480,7 +482,9 @@ struct cp0_ui_navigation_entry {
     unsigned int settings_selected;
     unsigned int settings_item_selected;
     unsigned int app_detail_page;
-    unsigned int app_permission_offset;
+    uint8_t app_permission_offset;
+    uint8_t app_permission_selected;
+    uint32_t app_permission_decisions;
     unsigned int app_action_selected;
     unsigned int device_page;
     unsigned int network_page;
@@ -568,7 +572,9 @@ struct cp0_ui {
     unsigned int settings_selected;
     unsigned int settings_item_selected;
     unsigned int app_detail_page;
-    unsigned int app_permission_offset;
+    uint8_t app_permission_offset;
+    uint8_t app_permission_selected;
+    uint32_t app_permission_decisions;
     unsigned int app_action_selected;
     unsigned int device_page;
     unsigned int network_page;
@@ -817,6 +823,9 @@ void cp0_ui_set_app_display_mode(struct cp0_ui *ui, uint32_t token,
 void cp0_ui_remove_app(struct cp0_ui *ui, uint32_t token);
 void cp0_ui_set_app_state(struct cp0_ui *ui, const char *app_id,
                           enum cp0_ui_app_state state);
+void cp0_ui_set_app_permissions(struct cp0_ui *ui, const char *app_id,
+                                uint16_t known, uint16_t allowed,
+                                uint16_t denied, uint16_t policy_denied);
 void cp0_ui_set_store_status(struct cp0_ui *ui,
                              enum cp0_ui_store_status status);
 void cp0_ui_sync_store_catalog(
@@ -884,6 +893,7 @@ const char *cp0_ui_selected_app_id(const struct cp0_ui *ui);
 enum cp0_ui_app_state cp0_ui_selected_app_state(const struct cp0_ui *ui);
 uint32_t cp0_ui_selected_app_token(const struct cp0_ui *ui);
 bool cp0_ui_selected_app_is_immersive(const struct cp0_ui *ui);
+uint16_t cp0_ui_selected_app_permission(const struct cp0_ui *ui);
 uint64_t cp0_ui_selected_task_id(const struct cp0_ui *ui);
 uint64_t cp0_ui_selected_task_runtime_generation(const struct cp0_ui *ui);
 uint32_t cp0_ui_selected_task_account_uid(const struct cp0_ui *ui);

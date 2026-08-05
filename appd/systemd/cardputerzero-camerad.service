@@ -1,7 +1,8 @@
 [Unit]
 Description=CardputerZero restricted camera broker
 Requires=cardputerzero-camerad.socket
-After=cardputerzero-camerad.socket
+Wants=cardputerzero-camera-probe.service
+After=cardputerzero-camerad.socket cardputerzero-camera-probe.service
 
 [Service]
 Type=simple
@@ -13,6 +14,8 @@ UMask=0077
 Restart=on-failure
 RestartSec=500ms
 TimeoutStopSec=5
+Nice=10
+CPUWeight=10
 MemoryMax=64M
 MemorySwapMax=0
 TasksMax=32

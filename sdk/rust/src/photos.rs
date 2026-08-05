@@ -22,6 +22,17 @@ pub struct Photo {
     pub id: u64,
 }
 
+pub const MIN_VIEW_PAN: i16 = -1000;
+pub const MAX_VIEW_PAN: i16 = 1000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum ViewZoom {
+    Fit = 0,
+    Half = 1,
+    Actual = 2,
+}
+
 #[derive(Clone, Copy)]
 struct Head {
     active_count: u64,
@@ -131,6 +142,30 @@ pub fn load_rgb565(photo: Photo, pixels: &mut [u16]) -> Result<(), Error> {
     }
     Error::from_host(host_imports::cp0_photos_load_rgb565(
         photo.id,
+        pixels.as_mut_ptr().cast(),
+        camera::FRAME_BYTES as u32,
+    ))
+}
+
+pub fn load_view_rgb565(
+    photo: Photo,
+    zoom: ViewZoom,
+    pan_x: i16,
+    pan_y: i16,
+    pixels: &mut [u16],
+) -> Result<(), Error> {
+    if photo.id == 0
+        || !(MIN_VIEW_PAN..=MAX_VIEW_PAN).contains(&pan_x)
+        || !(MIN_VIEW_PAN..=MAX_VIEW_PAN).contains(&pan_y)
+        || pixels.len() != camera::PIXEL_COUNT
+    {
+        return Err(Error::InvalidArgument);
+    }
+    Error::from_host(host_imports::cp0_photos_load_view_rgb565(
+        photo.id,
+        zoom as u32,
+        i32::from(pan_x),
+        i32::from(pan_y),
         pixels.as_mut_ptr().cast(),
         camera::FRAME_BYTES as u32,
     ))
@@ -411,5 +446,14 @@ mod tests {
     fn native_host_is_unavailable() {
         let mut photos = [Photo { id: 0 }; LIST_PAGE_PHOTOS];
         assert_eq!(list(&mut photos), Err(Error::Unavailable));
+        let mut frame = [0_u16; camera::PIXEL_COUNT];
+        assert_eq!(
+            load_view_rgb565(Photo { id: 1 }, ViewZoom::Actual, 0, 0, &mut frame),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(
+            load_view_rgb565(Photo { id: 1 }, ViewZoom::Fit, 1001, 0, &mut frame),
+            Err(Error::InvalidArgument)
+        );
     }
 }

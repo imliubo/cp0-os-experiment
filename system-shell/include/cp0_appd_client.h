@@ -39,6 +39,20 @@ enum cp0_app_permission {
     CP0_APP_PERMISSION_PHOTOS_WRITE = 1U << 9,
 };
 
+enum cp0_app_permission_decision {
+    CP0_APP_PERMISSION_ASK,
+    CP0_APP_PERMISSION_ALLOWED,
+    CP0_APP_PERMISSION_DENIED,
+    CP0_APP_PERMISSION_POLICY_DENIED,
+};
+
+struct cp0_app_permissions {
+    uint16_t known;
+    uint16_t allowed;
+    uint16_t denied;
+    uint16_t policy_denied;
+};
+
 enum cp0_management_authority {
     CP0_AUTHORITY_PERSONAL,
     CP0_AUTHORITY_PARENT,
@@ -153,11 +167,16 @@ int cp0_appd_list_apps(struct cp0_app_list *list);
 int cp0_appd_list_tasks(struct cp0_task_list *list);
 int cp0_appd_activate_task(uint64_t task_id, uint64_t *runtime_generation);
 int cp0_appd_close_task(uint64_t task_id);
+int cp0_appd_set_foreground_app(const char *app_id);
 int cp0_appd_start_app(const char *app_id);
 int cp0_appd_stop_app(const char *app_id);
 int cp0_appd_uninstall_app(const char *app_id);
 int cp0_appd_take_notification(struct cp0_notification *notification);
 int cp0_appd_get_permission_prompt(struct cp0_permission_prompt *prompt);
+int cp0_appd_get_permissions(const char *app_id,
+                             struct cp0_app_permissions *permissions);
+int cp0_appd_reset_permission(const char *app_id,
+                              enum cp0_app_permission permission);
 int cp0_appd_resolve_permission(uint64_t prompt_id,
                                 enum cp0_permission_choice choice);
 int cp0_appd_get_document_prompt(struct cp0_document_prompt *prompt);

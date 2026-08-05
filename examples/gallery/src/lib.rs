@@ -10,6 +10,7 @@ use cp0_sdk::{
 };
 
 const KEY_ENTER: u16 = 28;
+const KEY_BACKSPACE: u16 = 14;
 const KEY_F: u16 = 33;
 const KEY_Z: u16 = 44;
 const KEY_X: u16 = 45;
@@ -20,6 +21,7 @@ const KEY_RIGHT: u16 = 106;
 const KEY_DOWN: u16 = 108;
 const FRAME_BYTES: usize = camera::FRAME_BYTES;
 const LIBRARY_REFRESH_INTERVAL_MS: u64 = 1_000;
+const PAN_STEP: i16 = 250;
 
 static mut FRAME: [u16; camera::PIXEL_COUNT] = [0; camera::PIXEL_COUNT];
 
@@ -41,6 +43,10 @@ struct Gallery {
     status: ViewStatus,
     confirm_delete: bool,
     delete_selected: bool,
+    detail: bool,
+    zoom: photos::ViewZoom,
+    pan_x: i16,
+    pan_y: i16,
 }
 
 impl Gallery {
@@ -54,6 +60,10 @@ impl Gallery {
             status: ViewStatus::Empty,
             confirm_delete: false,
             delete_selected: false,
+            detail: false,
+            zoom: photos::ViewZoom::Fit,
+            pan_x: 0,
+            pan_y: 0,
         }
     }
 
@@ -91,6 +101,10 @@ impl Gallery {
     fn apply_count(&mut self, total: u64, latest: bool) {
         self.total = total;
         self.selected = selection_after_refresh(self.selected, total, latest);
+        self.page_count = 0;
+        if total == 0 {
+            self.detail = false;
+        }
         self.status = if total == 0 {
             ViewStatus::Empty
         } else {
@@ -102,8 +116,9 @@ impl Gallery {
     }
 
     fn move_left(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
+        if self.total != 0 {
+            self.selected = previous_selection(self.selected, self.total);
+            self.reset_view();
             if self.load_selected_page().is_err() {
                 self.status = ViewStatus::Damaged;
             }
@@ -111,12 +126,45 @@ impl Gallery {
     }
 
     fn move_right(&mut self) {
-        if self.selected + 1 < self.total {
-            self.selected += 1;
+        if self.total != 0 {
+            self.selected = next_selection(self.selected, self.total);
+            self.reset_view();
             if self.load_selected_page().is_err() {
                 self.status = ViewStatus::Damaged;
             }
         }
+    }
+
+    fn enter_detail(&mut self) {
+        self.detail = true;
+        self.reset_view();
+    }
+
+    fn reset_view(&mut self) {
+        self.zoom = photos::ViewZoom::Fit;
+        self.pan_x = 0;
+        self.pan_y = 0;
+    }
+
+    fn cycle_zoom(&mut self) {
+        self.zoom = match self.zoom {
+            photos::ViewZoom::Fit => photos::ViewZoom::Half,
+            photos::ViewZoom::Half => photos::ViewZoom::Actual,
+            photos::ViewZoom::Actual => photos::ViewZoom::Fit,
+        };
+        self.pan_x = 0;
+        self.pan_y = 0;
+    }
+
+    fn pan(&mut self, horizontal: i16, vertical: i16) {
+        self.pan_x = self
+            .pan_x
+            .saturating_add(horizontal)
+            .clamp(photos::MIN_VIEW_PAN, photos::MAX_VIEW_PAN);
+        self.pan_y = self
+            .pan_y
+            .saturating_add(vertical)
+            .clamp(photos::MIN_VIEW_PAN, photos::MAX_VIEW_PAN);
     }
 
     fn load_selected_page(&mut self) -> Result<(), Error> {
@@ -159,6 +207,24 @@ const fn selection_after_refresh(selected: u64, total: u64, latest: bool) -> u64
     }
 }
 
+const fn previous_selection(selected: u64, total: u64) -> u64 {
+    if total == 0 {
+        0
+    } else if selected == 0 || selected >= total {
+        total - 1
+    } else {
+        selected - 1
+    }
+}
+
+const fn next_selection(selected: u64, total: u64) -> u64 {
+    if total == 0 || selected + 1 >= total {
+        0
+    } else {
+        selected + 1
+    }
+}
+
 const fn same_status(left: ViewStatus, right: ViewStatus) -> bool {
     matches!(
         (left, right),
@@ -171,11 +237,11 @@ const fn same_status(left: ViewStatus, right: ViewStatus) -> bool {
 }
 
 const fn is_previous_key(code: u16) -> bool {
-    matches!(code, KEY_F | KEY_Z | KEY_UP | KEY_LEFT)
+    matches!(code, KEY_F | KEY_Z)
 }
 
 const fn is_next_key(code: u16) -> bool {
-    matches!(code, KEY_X | KEY_C | KEY_DOWN | KEY_RIGHT)
+    matches!(code, KEY_X | KEY_C)
 }
 
 fn pixels() -> &'static mut [u16] {
@@ -192,7 +258,19 @@ fn render(gallery: &mut Gallery, pixels: &mut [u16]) {
     if matches!(gallery.status, ViewStatus::Photo)
         && gallery
             .selected_photo()
-            .and_then(|photo| photos::load_rgb565(photo, pixels))
+            .and_then(|photo| {
+                if gallery.detail {
+                    photos::load_view_rgb565(
+                        photo,
+                        gallery.zoom,
+                        gallery.pan_x,
+                        gallery.pan_y,
+                        pixels,
+                    )
+                } else {
+                    photos::load_rgb565(photo, pixels)
+                }
+            })
             .is_err()
     {
         gallery.status = ViewStatus::Damaged;
@@ -227,6 +305,10 @@ fn render(gallery: &mut Gallery, pixels: &mut [u16]) {
             _ => ("PHOTO DAMAGED", 121, color::DANGER),
         };
         canvas.draw_text(x, 111, label, label_color, 1);
+        return;
+    }
+
+    if gallery.detail {
         return;
     }
 
@@ -361,13 +443,33 @@ pub extern "C" fn main() -> i32 {
                             gallery.confirm_delete = false;
                         }
                         KEY_ENTER => gallery.confirm_delete = false,
+                        KEY_BACKSPACE => gallery.confirm_delete = false,
+                        _ => {}
+                    }
+                } else if gallery.detail {
+                    match event.code {
+                        code if is_previous_key(code) => gallery.move_left(),
+                        code if is_next_key(code) => gallery.move_right(),
+                        KEY_LEFT => gallery.pan(-PAN_STEP, 0),
+                        KEY_RIGHT => gallery.pan(PAN_STEP, 0),
+                        KEY_UP => gallery.pan(0, -PAN_STEP),
+                        KEY_DOWN => gallery.pan(0, PAN_STEP),
+                        KEY_ENTER => gallery.cycle_zoom(),
+                        KEY_BACKSPACE => gallery.detail = false,
                         _ => {}
                     }
                 } else {
                     match event.code {
-                        code if is_previous_key(code) => gallery.move_left(),
-                        code if is_next_key(code) => gallery.move_right(),
+                        code if is_previous_key(code) || matches!(code, KEY_UP | KEY_LEFT) => {
+                            gallery.move_left()
+                        }
+                        code if is_next_key(code) || matches!(code, KEY_DOWN | KEY_RIGHT) => {
+                            gallery.move_right()
+                        }
                         KEY_ENTER if gallery.total > 0 => {
+                            gallery.enter_detail();
+                        }
+                        KEY_BACKSPACE if gallery.total > 0 => {
                             gallery.confirm_delete = true;
                             gallery.delete_selected = false;
                         }
@@ -431,17 +533,35 @@ mod tests {
 
     #[test]
     fn photo_navigation_accepts_plain_and_direction_keys() {
-        for code in [KEY_F, KEY_Z, KEY_UP, KEY_LEFT] {
+        for code in [KEY_F, KEY_Z] {
             assert!(is_previous_key(code));
             assert!(!is_next_key(code));
         }
-        for code in [KEY_X, KEY_C, KEY_DOWN, KEY_RIGHT] {
+        for code in [KEY_X, KEY_C] {
             assert!(is_next_key(code));
             assert!(!is_previous_key(code));
         }
-        for code in [0, KEY_ENTER, 30, u16::MAX] {
+        for code in [
+            0,
+            KEY_ENTER,
+            KEY_UP,
+            KEY_DOWN,
+            KEY_LEFT,
+            KEY_RIGHT,
+            u16::MAX,
+        ] {
             assert!(!is_previous_key(code));
             assert!(!is_next_key(code));
         }
+    }
+
+    #[test]
+    fn photo_navigation_wraps_at_both_ends() {
+        assert_eq!(previous_selection(0, 4), 3);
+        assert_eq!(previous_selection(3, 4), 2);
+        assert_eq!(next_selection(3, 4), 0);
+        assert_eq!(next_selection(1, 4), 2);
+        assert_eq!(previous_selection(0, 0), 0);
+        assert_eq!(next_selection(0, 0), 0);
     }
 }

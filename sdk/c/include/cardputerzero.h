@@ -28,11 +28,16 @@
 #define CP0_CAMERA_HEIGHT 170U
 #define CP0_CAMERA_PIXEL_COUNT (CP0_CAMERA_WIDTH * CP0_CAMERA_HEIGHT)
 #define CP0_CAMERA_FRAME_BYTES (CP0_CAMERA_PIXEL_COUNT * 2U)
+#define CP0_CAMERA_PREVIEW_FPS 30U
+#define CP0_CAMERA_PHOTO_WIDTH 1280U
+#define CP0_CAMERA_PHOTO_HEIGHT 720U
 #define CP0_MAX_LORA_PAYLOAD_BYTES 64U
 #define CP0_LORA_METADATA_BYTES 4U
 #define CP0_MAX_STORAGE_KEY_BYTES 64U
 #define CP0_MAX_STORAGE_VALUE_BYTES (8U * 1024U)
 #define CP0_PHOTO_LIST_PAGE_SIZE 8U
+#define CP0_PHOTO_VIEW_PAN_MIN (-1000)
+#define CP0_PHOTO_VIEW_PAN_MAX 1000
 #define CP0_MAX_INTENT_ACTION_BYTES 96U
 #define CP0_MAX_INTENT_PAYLOAD_BYTES 1024U
 #define CP0_MAX_CHECKPOINT_BYTES (8U * 1024U)
@@ -116,6 +121,12 @@ typedef enum cp0_media_action {
     CP0_MEDIA_PREVIOUS = 2,
     CP0_MEDIA_NEXT = 3,
 } cp0_media_action_t;
+
+typedef enum cp0_photo_view_zoom {
+    CP0_PHOTO_VIEW_FIT = 0,
+    CP0_PHOTO_VIEW_HALF = 1,
+    CP0_PHOTO_VIEW_ACTUAL = 2,
+} cp0_photo_view_zoom_t;
 
 /* Optional multitasking lifecycle exports. */
 CP0_EXPORT("cp0_app_checkpoint")
@@ -257,6 +268,21 @@ static inline cp0_result_t cp0_camera_capture(uint16_t *pixels,
         return CP0_ERROR_INVALID_ARGUMENT;
     return cp0_camera_capture_rgb565_raw((uint8_t *)pixels,
                                          pixel_count * sizeof(uint16_t));
+}
+
+static inline cp0_result_t cp0_camera_capture_photo(uint64_t *photo_id) {
+    int64_t result;
+
+    if (photo_id == NULL)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    result = cp0_camera_capture_photo_raw();
+    if (result < 0)
+        return result >= CP0_ERROR_INTERNAL ? (cp0_result_t)result
+                                           : CP0_ERROR_INTERNAL;
+    if (result == 0)
+        return CP0_ERROR_INTERNAL;
+    *photo_id = (uint64_t)result;
+    return CP0_OK;
 }
 
 static inline cp0_result_t cp0_gpio_read(cp0_gpio_line_t line,
@@ -472,6 +498,20 @@ static inline cp0_result_t cp0_photos_load_rgb565(uint64_t photo_id,
         return CP0_ERROR_INVALID_ARGUMENT;
     return cp0_photos_load_rgb565_raw(
         photo_id, (uint8_t *)pixels, CP0_CAMERA_FRAME_BYTES);
+}
+
+static inline cp0_result_t cp0_photos_load_view_rgb565(
+    uint64_t photo_id, cp0_photo_view_zoom_t zoom, int32_t pan_x,
+    int32_t pan_y, uint16_t *pixels, uint32_t pixel_count) {
+    if (photo_id == 0U || photo_id > INT64_MAX ||
+        (uint32_t)zoom > (uint32_t)CP0_PHOTO_VIEW_ACTUAL ||
+        pan_x < CP0_PHOTO_VIEW_PAN_MIN || pan_x > CP0_PHOTO_VIEW_PAN_MAX ||
+        pan_y < CP0_PHOTO_VIEW_PAN_MIN || pan_y > CP0_PHOTO_VIEW_PAN_MAX ||
+        pixels == NULL || pixel_count != CP0_CAMERA_PIXEL_COUNT)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    return cp0_photos_load_view_rgb565_raw(
+        photo_id, (uint32_t)zoom, pan_x, pan_y, (uint8_t *)pixels,
+        CP0_CAMERA_FRAME_BYTES);
 }
 
 static inline cp0_result_t cp0_photos_remove(uint64_t photo_id,

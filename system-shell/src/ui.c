@@ -1001,6 +1001,45 @@ static void format_install_date(char output[20], uint64_t seconds)
     output[10] = '\0';
 }
 
+static unsigned int app_permission_count(uint16_t permissions)
+{
+    unsigned int count = 0;
+    for (unsigned int bit = 0; bit < 10; bit++)
+        count += (permissions & (1U << bit)) != 0;
+    return count;
+}
+
+static uint16_t app_permission_at(uint16_t permissions, unsigned int selected)
+{
+    for (unsigned int bit = 0; bit < 10; bit++) {
+        uint16_t permission = (uint16_t)(1U << bit);
+        if ((permissions & permission) == 0)
+            continue;
+        if (selected-- == 0)
+            return permission;
+    }
+    return 0;
+}
+
+enum app_permission_decision {
+    APP_PERMISSION_UNKNOWN,
+    APP_PERMISSION_ASK,
+    APP_PERMISSION_ALLOWED,
+    APP_PERMISSION_DENIED,
+    APP_PERMISSION_POLICY_DENIED,
+};
+
+static enum app_permission_decision app_permission_decision_at(
+    uint32_t decisions, uint16_t permission)
+{
+    for (unsigned int bit = 0; bit < 10; bit++) {
+        if (permission == (uint16_t)(1U << bit))
+            return (enum app_permission_decision)((decisions >> (bit * 3U)) &
+                                                  7U);
+    }
+    return APP_PERMISSION_UNKNOWN;
+}
+
 static void draw_app_detail(struct canvas *canvas, const struct cp0_ui *ui)
 {
     static const char *states[] = {"READY", "STARTING", "RUNNING", "FAILED"};
@@ -1047,27 +1086,54 @@ static void draw_app_detail(struct canvas *canvas, const struct cp0_ui *ui)
     } else if (ui->app_detail_page == 2) {
         unsigned int row = 0;
         unsigned int seen = 0;
-        unsigned int count = 0;
-        for (unsigned int bit = 0; bit < 10; bit++)
-            count += (app->permissions & (1U << bit)) != 0;
+        unsigned int count = app_permission_count(app->permissions);
         for (unsigned int bit = 0; bit < 10 && row < 4; bit++) {
-            if ((app->permissions & (1U << bit)) == 0)
+            uint16_t permission = (uint16_t)(1U << bit);
+            if ((app->permissions & permission) == 0)
                 continue;
-            if (seen++ < ui->app_permission_offset)
+            unsigned int permission_index = seen++;
+            if (permission_index < ui->app_permission_offset)
                 continue;
             int y = 37 + (int)row * 27;
-            fill_rect(canvas, 20, y, 280, 23, COLOR_BAR);
-            draw_text(canvas, 31, y + 8, permission_names[bit], 1, COLOR_TEXT);
-            draw_text(canvas, 245, y + 8, "DECLARED", 1, COLOR_GREEN);
+            bool selected = permission_index == ui->app_permission_selected;
+            const char *status = "LOADING";
+            uint32_t status_color = COLOR_MUTED;
+            switch (app_permission_decision_at(
+                ui->app_permission_decisions, permission)) {
+            case APP_PERMISSION_ASK:
+                status = "ASK";
+                status_color = COLOR_YELLOW;
+                break;
+            case APP_PERMISSION_ALLOWED:
+                status = "ALLOW";
+                status_color = COLOR_GREEN;
+                break;
+            case APP_PERMISSION_DENIED:
+                status = "DENY";
+                status_color = COLOR_RED;
+                break;
+            case APP_PERMISSION_POLICY_DENIED:
+                status = "POLICY";
+                status_color = COLOR_RED;
+                break;
+            case APP_PERMISSION_UNKNOWN:
+                break;
+            }
+            fill_rect(canvas, 20, y, 280, 23,
+                      selected ? COLOR_SELECTED : COLOR_BAR);
+            stroke_rect(canvas, 20, y, 280, 23, selected ? 2 : 1,
+                        selected ? COLOR_GREEN : COLOR_MUTED);
+            draw_text(canvas, 31, y + 8, permission_names[bit], 1,
+                      selected ? COLOR_TEXT : COLOR_MUTED);
+            draw_text(canvas, 245, y + 8, status, 1, status_color);
             row++;
         }
         if (row == 0)
             draw_text(canvas, 28, 58, "NO PERMISSIONS DECLARED", 1,
                       COLOR_GREEN);
         if (count > 4)
-            snprintf(value, sizeof(value), "%u-%u / %u",
-                     ui->app_permission_offset + 1U,
-                     ui->app_permission_offset + row, count);
+            snprintf(value, sizeof(value), "%u / %u",
+                     ui->app_permission_selected + 1U, count);
         else
             snprintf(value, sizeof(value), "%u TOTAL", count);
         draw_text(canvas, 20, 151, value, 1, COLOR_MUTED);
@@ -3695,6 +3761,7 @@ void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
 {
     struct cp0_ui_app previous[CP0_UI_MAX_APPS];
     char selected_id[CP0_UI_APP_ID_MAX + 1] = {0};
+    uint16_t selected_permissions = 0;
     unsigned int previous_count;
 
     if (ui == NULL || (apps == NULL && app_count != 0))
@@ -3703,9 +3770,11 @@ void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
         app_count = CP0_UI_MAX_APPS;
     previous_count = ui->app_count;
     memcpy(previous, ui->apps, sizeof(previous));
-    if (ui->app_selected < ui->app_count)
+    if (ui->app_selected < ui->app_count) {
         copy_text(selected_id, sizeof(selected_id),
                   ui->apps[ui->app_selected].app_id);
+        selected_permissions = ui->apps[ui->app_selected].permissions;
+    }
     memset(ui->apps, 0, sizeof(ui->apps));
     ui->app_count = 0;
     ui->app_list_truncated = truncated;
@@ -3753,6 +3822,10 @@ void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
     }
     if (ui->app_count == 0)
         ui->app_detail = false;
+    if (ui->app_count == 0 || selected_id[0] == '\0' ||
+        strcmp(ui->apps[ui->app_selected].app_id, selected_id) != 0 ||
+        ui->apps[ui->app_selected].permissions != selected_permissions)
+        ui->app_permission_decisions = 0;
 }
 
 void cp0_ui_sync_task_catalog(struct cp0_ui *ui,
@@ -3900,6 +3973,36 @@ void cp0_ui_set_app_state(struct cp0_ui *ui, const char *app_id,
     ui->apps[index].state = state;
     if (state == CP0_UI_APP_STOPPED || state == CP0_UI_APP_FAILED)
         ui->apps[index].token = 0;
+}
+
+void cp0_ui_set_app_permissions(struct cp0_ui *ui, const char *app_id,
+                                uint16_t known, uint16_t allowed,
+                                uint16_t denied, uint16_t policy_denied)
+{
+    int index = app_index_by_id(ui, app_id);
+    if (index < 0 || (known & ~ui->apps[index].permissions) != 0 ||
+        ((allowed | denied | policy_denied) & ~known) != 0 ||
+        (allowed & denied) != 0 || (allowed & policy_denied) != 0 ||
+        (denied & policy_denied) != 0)
+        return;
+    if ((unsigned int)index != ui->app_selected)
+        return;
+    ui->app_permission_decisions = 0;
+    for (unsigned int bit = 0; bit < 10; bit++) {
+        uint16_t permission = (uint16_t)(1U << bit);
+        unsigned int decision = APP_PERMISSION_UNKNOWN;
+        if ((known & permission) != 0) {
+            if ((policy_denied & permission) != 0)
+                decision = APP_PERMISSION_POLICY_DENIED;
+            else if ((denied & permission) != 0)
+                decision = APP_PERMISSION_DENIED;
+            else if ((allowed & permission) != 0)
+                decision = APP_PERMISSION_ALLOWED;
+            else
+                decision = APP_PERMISSION_ASK;
+        }
+        ui->app_permission_decisions |= decision << (bit * 3U);
+    }
 }
 
 static int store_app_index_by_id(const struct cp0_ui *ui, const char *app_id)
@@ -4853,6 +4956,15 @@ bool cp0_ui_selected_app_is_immersive(const struct cp0_ui *ui)
     return index >= 0 && ui->apps[index].immersive;
 }
 
+uint16_t cp0_ui_selected_app_permission(const struct cp0_ui *ui)
+{
+    int index = selected_app_index(ui);
+    if (index < 0)
+        return 0;
+    return app_permission_at(ui->apps[index].permissions,
+                             ui->app_permission_selected);
+}
+
 uint64_t cp0_ui_selected_task_id(const struct cp0_ui *ui)
 {
     return ui != NULL && ui->task_selected < ui->task_count
@@ -5096,6 +5208,8 @@ static void push_navigation(struct cp0_ui *ui)
         .settings_item_selected = ui->settings_item_selected,
         .app_detail_page = ui->app_detail_page,
         .app_permission_offset = ui->app_permission_offset,
+        .app_permission_selected = ui->app_permission_selected,
+        .app_permission_decisions = ui->app_permission_decisions,
         .app_action_selected = ui->app_action_selected,
         .device_page = ui->device_page,
         .network_page = ui->network_page,
@@ -5141,6 +5255,8 @@ static bool pop_navigation(struct cp0_ui *ui)
     ui->settings_item_selected = entry->settings_item_selected;
     ui->app_detail_page = entry->app_detail_page;
     ui->app_permission_offset = entry->app_permission_offset;
+    ui->app_permission_selected = entry->app_permission_selected;
+    ui->app_permission_decisions = entry->app_permission_decisions;
     ui->app_action_selected = entry->app_action_selected;
     ui->device_page = entry->device_page;
     ui->network_page = entry->network_page;
@@ -5566,6 +5682,7 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
     }
 
     if (ui->screen == CP0_UI_APPS) {
+        unsigned int previous_app_selected = ui->app_selected;
         enum cp0_ui_app_state state = cp0_ui_selected_app_state(ui);
         bool can_stop = state == CP0_UI_APP_RUNNING ||
                         state == CP0_UI_APP_STARTING;
@@ -5575,20 +5692,40 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
             if (action == CP0_UI_LEFT) {
                 ui->app_detail_page = (ui->app_detail_page + 3U) % 4U;
                 ui->app_permission_offset = 0;
+                ui->app_permission_selected = 0;
+                if (ui->app_detail_page == 2)
+                    return CP0_UI_EVENT_LOAD_APP_PERMISSIONS;
             } else if (action == CP0_UI_RIGHT) {
                 ui->app_detail_page = (ui->app_detail_page + 1U) % 4U;
                 ui->app_permission_offset = 0;
+                ui->app_permission_selected = 0;
+                if (ui->app_detail_page == 2)
+                    return CP0_UI_EVENT_LOAD_APP_PERMISSIONS;
             } else if (ui->app_detail_page == 2 && action == CP0_UI_UP &&
-                       ui->app_permission_offset > 0) {
-                ui->app_permission_offset--;
+                       ui->app_permission_selected > 0) {
+                ui->app_permission_selected--;
+                if (ui->app_permission_selected < ui->app_permission_offset)
+                    ui->app_permission_offset = ui->app_permission_selected;
             } else if (ui->app_detail_page == 2 && action == CP0_UI_DOWN) {
-                unsigned int permission_count = 0;
-                for (unsigned int bit = 0; bit < 10; bit++)
-                    permission_count +=
-                        (ui->apps[ui->app_selected].permissions & (1U << bit)) !=
-                        0;
-                if (ui->app_permission_offset + 4U < permission_count)
-                    ui->app_permission_offset++;
+                unsigned int count = app_permission_count(
+                    ui->apps[ui->app_selected].permissions);
+                if (ui->app_permission_selected + 1U < count) {
+                    ui->app_permission_selected++;
+                    if (ui->app_permission_selected >=
+                        ui->app_permission_offset + 4U)
+                        ui->app_permission_offset =
+                            ui->app_permission_selected - 3U;
+                }
+            } else if (ui->app_detail_page == 2 &&
+                       action == CP0_UI_ACCEPT) {
+                uint16_t permission = cp0_ui_selected_app_permission(ui);
+                enum app_permission_decision decision =
+                    app_permission_decision_at(
+                        ui->app_permission_decisions, permission);
+                if (permission != 0 &&
+                    (decision == APP_PERMISSION_ALLOWED ||
+                     decision == APP_PERMISSION_DENIED))
+                    return CP0_UI_EVENT_RESET_APP_PERMISSION;
             } else if (ui->app_detail_page == 3 && action == CP0_UI_UP) {
                 ui->app_action_selected = 0;
             } else if (ui->app_detail_page == 3 && action == CP0_UI_DOWN) {
@@ -5637,7 +5774,11 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         else if (!ui->app_grid_view && action == CP0_UI_RIGHT &&
                  ui->app_count > 0)
             ui->app_detail = true, ui->app_detail_page = 0,
-            ui->app_permission_offset = 0, ui->app_action_selected = 0;
+            ui->app_permission_offset = 0,
+            ui->app_permission_selected = 0,
+            ui->app_permission_decisions = 0, ui->app_action_selected = 0;
+        if (ui->app_selected != previous_app_selected)
+            ui->app_permission_decisions = 0;
         return CP0_UI_EVENT_NONE;
     }
 

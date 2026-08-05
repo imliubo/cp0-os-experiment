@@ -154,6 +154,14 @@ async function runApplication() {
     return `p${photoId.toString(16).padStart(16, "0")}.rgb565`;
   }
 
+  function photoOriginalKey(photoId) {
+    return `p${photoId.toString(16).padStart(16, "0")}.jpg`;
+  }
+
+  function photoMetadataKey(photoId) {
+    return `p${photoId.toString(16).padStart(16, "0")}.meta`;
+  }
+
   function encodePhotoHead(activeCount, slotCount, lastId) {
     const value = new Uint8Array(32);
     value.set([0x43, 0x50, 0x30, 0x48, 2]);
@@ -225,6 +233,42 @@ async function runApplication() {
       }
     }
     return false;
+  }
+
+  function importPhotoFrame(frame, originalJpeg = null) {
+    const head = ensurePhotoHead();
+    if (!head) return -5n;
+    const photoId = head.lastId + 1n > 1n ? head.lastId + 1n : 1n;
+    if (photoId > 0x7fffffffffffffffn) return BigInt(ERROR_LIMIT);
+    const pageNumberBig = head.slotCount / 256n;
+    if (pageNumberBig > 0xffffffffn) return BigInt(ERROR_LIMIT);
+    const pageNumber = Number(pageNumberBig);
+    const position = Number(head.slotCount % 256n);
+    const pageKey = photoPageKey(pageNumber);
+    const page = position === 0
+      ? emptyPhotoPage(pageNumber)
+      : photoStorage.get(pageKey)?.slice();
+    if (!page) return -5n;
+    const pageView = new DataView(page.buffer, page.byteOffset, page.byteLength);
+    pageView.setBigUint64(16 + position * 8, photoId, true);
+    pageView.setUint16(6, pageView.getUint16(6, true) + 1, true);
+    setPhotoValue(photoBlobKey(photoId), frame.slice());
+    if (originalJpeg) {
+      const metadata = new Uint8Array(56);
+      metadata.set([0x43, 0x50, 0x30, 0x4d, 1, 1]);
+      const metadataView = new DataView(metadata.buffer);
+      metadataView.setUint16(8, 1280, true);
+      metadataView.setUint16(10, 720, true);
+      metadataView.setUint32(12, originalJpeg.length, true);
+      setPhotoValue(photoOriginalKey(photoId), originalJpeg.slice());
+      setPhotoValue(photoMetadataKey(photoId), metadata);
+    }
+    setPhotoValue(pageKey, page);
+    setPhotoValue(
+      "head.v2",
+      encodePhotoHead(head.activeCount + 1n, head.slotCount + 1n, photoId),
+    );
+    return photoId;
   }
 
   function snapshot(frame = null) {
@@ -343,6 +387,21 @@ async function runApplication() {
       }
       return 0;
     },
+    cp0_camera_capture_photo() {
+      metrics.host_calls += 1;
+      if (!allowed("camera.capture")) return BigInt(ERROR_DENIED);
+      if (!allowed("photos.write")) return BigInt(ERROR_DENIED);
+      const frame = new Uint8Array(CAMERA_WIDTH * CAMERA_HEIGHT * 2);
+      for (let y = 0; y < CAMERA_HEIGHT; y += 1) {
+        for (let x = 0; x < CAMERA_WIDTH; x += 1) {
+          const pixel = (((x >>> 3) & 0x1f) << 11) | (((y >>> 2) & 0x3f) << 5) | 0x0f;
+          const offset = (y * CAMERA_WIDTH + x) * 2;
+          frame[offset] = pixel & 0xff;
+          frame[offset + 1] = pixel >>> 8;
+        }
+      }
+      return importPhotoFrame(frame, new Uint8Array([0xff, 0xd8, 1, 2, 3, 4, 0xff, 0xd9]));
+    },
     cp0_gpio_read(line) {
       metrics.host_calls += 1;
       if (!allowed("hardware.gpio")) return ERROR_DENIED;
@@ -441,30 +500,8 @@ async function runApplication() {
       if (!allowed("photos.write")) return BigInt(ERROR_DENIED);
       if ((pixelBytes >>> 0) !== CAMERA_WIDTH * CAMERA_HEIGHT * 2)
         return BigInt(ERROR_INVALID);
-      const head = ensurePhotoHead();
-      if (!head) return -5n;
       BigInt(suggestedId);
-      const photoId = head.lastId + 1n > 1n ? head.lastId + 1n : 1n;
-      if (photoId > 0x7fffffffffffffffn) return BigInt(ERROR_LIMIT);
-      const pageNumberBig = head.slotCount / 256n;
-      if (pageNumberBig > 0xffffffffn) return BigInt(ERROR_LIMIT);
-      const pageNumber = Number(pageNumberBig);
-      const position = Number(head.slotCount % 256n);
-      const pageKey = photoPageKey(pageNumber);
-      const page = position === 0
-        ? emptyPhotoPage(pageNumber)
-        : photoStorage.get(pageKey)?.slice();
-      if (!page) return -5n;
-      const pageView = new DataView(page.buffer, page.byteOffset, page.byteLength);
-      pageView.setBigUint64(16 + position * 8, photoId, true);
-      pageView.setUint16(6, pageView.getUint16(6, true) + 1, true);
-      setPhotoValue(photoBlobKey(photoId), range(pixelPointer, pixelBytes).slice());
-      setPhotoValue(pageKey, page);
-      setPhotoValue(
-        "head.v2",
-        encodePhotoHead(head.activeCount + 1n, head.slotCount + 1n, photoId),
-      );
-      return photoId;
+      return importPhotoFrame(range(pixelPointer, pixelBytes));
     },
     cp0_photos_load_rgb565(photoId, pixelPointer, pixelBytes) {
       metrics.host_calls += 1;
@@ -474,6 +511,33 @@ async function runApplication() {
       if (!photoIsActive(id)) return ERROR_INVALID;
       const blob = photoStorage.get(photoBlobKey(id));
       if (!blob || blob.length !== pixelBytes) return -5;
+      range(pixelPointer, pixelBytes).set(blob);
+      return 0;
+    },
+    cp0_photos_load_view_rgb565(
+      photoId,
+      zoomLevel,
+      panX,
+      panY,
+      pixelPointer,
+      pixelBytes,
+    ) {
+      metrics.host_calls += 1;
+      if (!allowed("photos.read")) return ERROR_DENIED;
+      if (
+        (pixelBytes >>> 0) !== CAMERA_WIDTH * CAMERA_HEIGHT * 2 ||
+        (zoomLevel >>> 0) > 2 ||
+        panX < -1000 ||
+        panX > 1000 ||
+        panY < -1000 ||
+        panY > 1000
+      )
+        return ERROR_INVALID;
+      const id = BigInt(photoId);
+      if (!photoIsActive(id)) return ERROR_INVALID;
+      const blob = photoStorage.get(photoBlobKey(id));
+      if (!blob || blob.length !== pixelBytes) return -5;
+      // Hardware Appd uses the original JPEG; the simulator stores thumbnails.
       range(pixelPointer, pixelBytes).set(blob);
       return 0;
     },
@@ -508,6 +572,13 @@ async function runApplication() {
           if (blob) {
             photoStorage.delete(photoBlobKey(id));
             photoStorageBytes -= blob.length;
+          }
+          for (const extraKey of [photoOriginalKey(id), photoMetadataKey(id)]) {
+            const extra = photoStorage.get(extraKey);
+            if (extra) {
+              photoStorage.delete(extraKey);
+              photoStorageBytes -= extra.length;
+            }
           }
           return 1;
         }

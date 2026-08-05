@@ -1,5 +1,8 @@
 use std::fmt;
 
+use cp0_camera_protocol::{CAMERA_PHOTO_HEIGHT, CAMERA_PHOTO_WIDTH, MAX_CAMERA_JPEG_BYTES};
+use sha2::{Digest, Sha256};
+
 use crate::{StorageClient, StorageClientError};
 
 pub(crate) const PHOTO_LIBRARY_ID: &str = cp0_storage_protocol::SYSTEM_PHOTO_LIBRARY_ID;
@@ -23,6 +26,17 @@ const LEGACY_MAGIC: [u8; 4] = *b"CP0P";
 const CHUNK_BYTES: usize = cp0_storage_protocol::MAX_STORAGE_VALUE_BYTES;
 const CHUNK_COUNT: usize = PHOTO_FRAME_BYTES.div_ceil(CHUNK_BYTES);
 const MAX_PHOTO_ID: u64 = i64::MAX as u64;
+const PHOTO_METADATA_BYTES: usize = 56;
+const PHOTO_METADATA_MAGIC: [u8; 4] = *b"CP0M";
+const PHOTO_METADATA_VERSION: u8 = 1;
+const PHOTO_KIND_CAMERA: u8 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CameraOriginal {
+    pub(crate) width: u16,
+    pub(crate) height: u16,
+    pub(crate) jpeg_size_bytes: u32,
+}
 
 #[derive(Debug)]
 pub(crate) enum PhotoImportError {
@@ -92,14 +106,15 @@ trait PhotoStorage {
     fn put(&self, request_id: u64, key: &str, value: &[u8]) -> Result<(), StorageClientError>;
     fn get(&self, request_id: u64, key: &str) -> Result<Option<Vec<u8>>, StorageClientError>;
     fn delete(&self, request_id: u64, key: &str) -> Result<bool, StorageClientError>;
-    fn put_frame_chunk(
+    fn put_blob_chunk(
         &self,
         request_id: u64,
-        id: u64,
-        chunk: usize,
+        key: &str,
+        offset: usize,
+        total_bytes: usize,
         value: &[u8],
     ) -> Result<(), StorageClientError>;
-    fn delete_frame(&self, request_id: u64, id: u64) -> Result<bool, StorageClientError>;
+    fn delete_blob(&self, request_id: u64, key: &str) -> Result<bool, StorageClientError>;
 }
 
 impl PhotoStorage for StorageClient {
@@ -135,11 +150,12 @@ impl PhotoStorage for StorageClient {
         )
     }
 
-    fn put_frame_chunk(
+    fn put_blob_chunk(
         &self,
         request_id: u64,
-        id: u64,
-        chunk: usize,
+        key: &str,
+        offset: usize,
+        total_bytes: usize,
         value: &[u8],
     ) -> Result<(), StorageClientError> {
         StorageClient::put_blob_chunk(
@@ -147,32 +163,22 @@ impl PhotoStorage for StorageClient {
             request_id,
             PHOTO_LIBRARY_ID,
             PHOTO_LIBRARY_QUOTA_BYTES,
-            &blob_key(id),
-            u32::try_from(chunk * CHUNK_BYTES).expect("photo chunk offset fits u32"),
-            PHOTO_FRAME_BYTES as u32,
+            key,
+            u32::try_from(offset).expect("photo blob offset fits u32"),
+            u32::try_from(total_bytes).expect("photo blob size fits u32"),
             value,
         )
         .map(|_| ())
     }
 
-    fn delete_frame(&self, request_id: u64, id: u64) -> Result<bool, StorageClientError> {
-        let mut existed = StorageClient::delete_blob(
+    fn delete_blob(&self, request_id: u64, key: &str) -> Result<bool, StorageClientError> {
+        StorageClient::delete_blob(
             self,
             request_id,
             PHOTO_LIBRARY_ID,
             PHOTO_LIBRARY_QUOTA_BYTES,
-            &blob_key(id),
-        )?;
-        for chunk in 0..CHUNK_COUNT {
-            existed |= StorageClient::delete(
-                self,
-                request_id,
-                PHOTO_LIBRARY_ID,
-                PHOTO_LIBRARY_QUOTA_BYTES,
-                &legacy_chunk_key(id, chunk),
-            )?;
-        }
-        Ok(existed)
+            key,
+        )
     }
 }
 
@@ -192,6 +198,21 @@ pub(crate) fn import_app_photo(
     suggested_id: u64,
 ) -> Result<u64, PhotoImportError> {
     import_frame(storage, request_id, frame, suggested_id)
+}
+
+pub(crate) fn import_camera_photo(
+    storage: &StorageClient,
+    request_id: u64,
+    thumbnail: &[u8],
+    jpeg: &[u8],
+    captured_milliseconds: u64,
+) -> Result<u64, PhotoImportError> {
+    import_frame_with_original(
+        storage,
+        request_id,
+        thumbnail,
+        Some((jpeg, captured_milliseconds)),
+    )
 }
 
 pub(crate) fn remove_photo(
@@ -243,6 +264,26 @@ pub(crate) fn photo_blob_key(id: u64) -> String {
     blob_key(id)
 }
 
+pub(crate) fn camera_original(
+    storage: &StorageClient,
+    request_id: u64,
+    id: u64,
+) -> Result<Option<CameraOriginal>, PhotoImportError> {
+    if id == 0 || id > MAX_PHOTO_ID {
+        return Err(PhotoImportError::InvalidFrame);
+    }
+    let Some(metadata) = storage.get(
+        request_id,
+        PHOTO_LIBRARY_ID,
+        PHOTO_LIBRARY_QUOTA_BYTES,
+        &metadata_key(id),
+    )?
+    else {
+        return Ok(None);
+    };
+    decode_camera_metadata(&metadata).map(Some)
+}
+
 fn photo_is_active_in(
     storage: &impl PhotoStorage,
     request_id: u64,
@@ -284,8 +325,26 @@ fn import_frame(
     frame: &[u8],
     _suggested_id: u64,
 ) -> Result<u64, PhotoImportError> {
+    import_frame_with_original(storage, request_id, frame, None)
+}
+
+fn import_frame_with_original(
+    storage: &impl PhotoStorage,
+    request_id: u64,
+    frame: &[u8],
+    original: Option<(&[u8], u64)>,
+) -> Result<u64, PhotoImportError> {
     if frame.len() != PHOTO_FRAME_BYTES {
         return Err(PhotoImportError::InvalidFrame);
+    }
+    if let Some((jpeg, _)) = original {
+        if jpeg.is_empty()
+            || jpeg.len() > MAX_CAMERA_JPEG_BYTES
+            || !jpeg.starts_with(&[0xff, 0xd8])
+            || !jpeg.ends_with(&[0xff, 0xd9])
+        {
+            return Err(PhotoImportError::InvalidFrame);
+        }
     }
     let mut head = load_head_for_update(storage, request_id)?;
     let next_id = head
@@ -311,11 +370,18 @@ fn import_frame(
     };
     let mut page = old_page.clone().unwrap_or_else(IndexPage::empty);
 
-    for chunk in 0..CHUNK_COUNT {
-        let start = chunk * CHUNK_BYTES;
-        let end = (start + CHUNK_BYTES).min(frame.len());
-        if let Err(error) = storage.put_frame_chunk(request_id, id, chunk, &frame[start..end]) {
-            cleanup_frame(storage, request_id, id);
+    if let Err(error) = put_blob(storage, request_id, &blob_key(id), frame) {
+        cleanup_photo(storage, request_id, id);
+        return Err(error);
+    }
+    if let Some((jpeg, captured_milliseconds)) = original {
+        if let Err(error) = put_blob(storage, request_id, &original_blob_key(id), jpeg) {
+            cleanup_photo(storage, request_id, id);
+            return Err(error);
+        }
+        let metadata = encode_camera_metadata(jpeg, captured_milliseconds);
+        if let Err(error) = storage.put(request_id, &metadata_key(id), &metadata) {
+            cleanup_photo(storage, request_id, id);
             return Err(error.into());
         }
     }
@@ -326,7 +392,7 @@ fn import_frame(
         .checked_add(1)
         .ok_or(PhotoImportError::InvalidIndex)?;
     if let Err(error) = store_page(storage, request_id, page_number, &page) {
-        cleanup_frame(storage, request_id, id);
+        cleanup_photo(storage, request_id, id);
         return Err(error);
     }
     head.active_count = head
@@ -340,7 +406,7 @@ fn import_frame(
     head.last_id = id;
     if let Err(error) = store_head(storage, request_id, &head) {
         rollback_page(storage, request_id, page_number, old_page.as_ref());
-        cleanup_frame(storage, request_id, id);
+        cleanup_photo(storage, request_id, id);
         return Err(error);
     }
     Ok(id)
@@ -381,7 +447,7 @@ fn remove_frame(
             let _ = store_page(storage, request_id, page_number, &old_page);
             return Err(error);
         }
-        storage.delete_frame(request_id, id)?;
+        delete_photo_storage(storage, request_id, id)?;
         return Ok(true);
     }
     Ok(false)
@@ -633,6 +699,14 @@ fn blob_key(id: u64) -> String {
     format!("p{id:016x}.rgb565")
 }
 
+pub(crate) fn original_blob_key(id: u64) -> String {
+    format!("p{id:016x}.jpg")
+}
+
+fn metadata_key(id: u64) -> String {
+    format!("p{id:016x}.meta")
+}
+
 fn legacy_chunk_key(id: u64, chunk: usize) -> String {
     format!("p{id:016x}.c{chunk:02}")
 }
@@ -643,8 +717,74 @@ fn page_slots(head: &Head, page_number: u64) -> usize {
         .min(INDEX_PAGE_PHOTOS as u64) as usize
 }
 
-fn cleanup_frame(storage: &impl PhotoStorage, request_id: u64, id: u64) {
-    let _ = storage.delete_frame(request_id, id);
+fn put_blob(
+    storage: &impl PhotoStorage,
+    request_id: u64,
+    key: &str,
+    value: &[u8],
+) -> Result<(), PhotoImportError> {
+    if value.is_empty() || value.len() > cp0_storage_protocol::MAX_STORAGE_BLOB_BYTES {
+        return Err(PhotoImportError::InvalidFrame);
+    }
+    for (chunk, bytes) in value.chunks(CHUNK_BYTES).enumerate() {
+        storage.put_blob_chunk(request_id, key, chunk * CHUNK_BYTES, value.len(), bytes)?;
+    }
+    Ok(())
+}
+
+fn encode_camera_metadata(jpeg: &[u8], captured_milliseconds: u64) -> [u8; PHOTO_METADATA_BYTES] {
+    let mut metadata = [0_u8; PHOTO_METADATA_BYTES];
+    metadata[..4].copy_from_slice(&PHOTO_METADATA_MAGIC);
+    metadata[4] = PHOTO_METADATA_VERSION;
+    metadata[5] = PHOTO_KIND_CAMERA;
+    metadata[8..10].copy_from_slice(&CAMERA_PHOTO_WIDTH.to_le_bytes());
+    metadata[10..12].copy_from_slice(&CAMERA_PHOTO_HEIGHT.to_le_bytes());
+    metadata[12..16].copy_from_slice(&(jpeg.len() as u32).to_le_bytes());
+    metadata[16..24].copy_from_slice(&captured_milliseconds.to_le_bytes());
+    metadata[24..].copy_from_slice(&Sha256::digest(jpeg));
+    metadata
+}
+
+fn decode_camera_metadata(metadata: &[u8]) -> Result<CameraOriginal, PhotoImportError> {
+    if metadata.len() != PHOTO_METADATA_BYTES
+        || metadata[..4] != PHOTO_METADATA_MAGIC
+        || metadata[4] != PHOTO_METADATA_VERSION
+        || metadata[5] != PHOTO_KIND_CAMERA
+        || metadata[6..8] != [0; 2]
+    {
+        return Err(PhotoImportError::InvalidFrame);
+    }
+    let original = CameraOriginal {
+        width: u16::from_le_bytes(metadata[8..10].try_into().unwrap()),
+        height: u16::from_le_bytes(metadata[10..12].try_into().unwrap()),
+        jpeg_size_bytes: u32::from_le_bytes(metadata[12..16].try_into().unwrap()),
+    };
+    if original.width != CAMERA_PHOTO_WIDTH
+        || original.height != CAMERA_PHOTO_HEIGHT
+        || original.jpeg_size_bytes == 0
+        || original.jpeg_size_bytes as usize > MAX_CAMERA_JPEG_BYTES
+    {
+        return Err(PhotoImportError::InvalidFrame);
+    }
+    Ok(original)
+}
+
+fn delete_photo_storage(
+    storage: &impl PhotoStorage,
+    request_id: u64,
+    id: u64,
+) -> Result<bool, StorageClientError> {
+    let mut existed = storage.delete_blob(request_id, &blob_key(id))?;
+    existed |= storage.delete_blob(request_id, &original_blob_key(id))?;
+    existed |= storage.delete(request_id, &metadata_key(id))?;
+    for chunk in 0..CHUNK_COUNT {
+        existed |= storage.delete(request_id, &legacy_chunk_key(id, chunk))?;
+    }
+    Ok(existed)
+}
+
+fn cleanup_photo(storage: &impl PhotoStorage, request_id: u64, id: u64) {
+    let _ = delete_photo_storage(storage, request_id, id);
 }
 
 #[cfg(test)]
@@ -682,29 +822,31 @@ mod tests {
             Ok(self.values.lock().unwrap().remove(key).is_some())
         }
 
-        fn put_frame_chunk(
+        fn put_blob_chunk(
             &self,
             _request_id: u64,
-            id: u64,
-            chunk: usize,
+            key: &str,
+            offset: usize,
+            total_bytes: usize,
             value: &[u8],
         ) -> Result<(), StorageClientError> {
-            let key = blob_key(id);
-            if self.fail_put_key.lock().unwrap().as_deref() == Some(key.as_str()) {
+            if self.fail_put_key.lock().unwrap().as_deref() == Some(key) {
                 return Err(StorageClientError::Service(StorageErrorCode::Internal));
             }
             let mut values = self.values.lock().unwrap();
-            let frame = values.entry(key).or_default();
-            let offset = chunk * CHUNK_BYTES;
+            let frame = values.entry(key.into()).or_default();
             if frame.len() != offset {
                 return Err(StorageClientError::Service(StorageErrorCode::Internal));
             }
             frame.extend_from_slice(value);
+            if frame.len() > total_bytes {
+                return Err(StorageClientError::Service(StorageErrorCode::Internal));
+            }
             Ok(())
         }
 
-        fn delete_frame(&self, _request_id: u64, id: u64) -> Result<bool, StorageClientError> {
-            Ok(self.values.lock().unwrap().remove(&blob_key(id)).is_some())
+        fn delete_blob(&self, _request_id: u64, key: &str) -> Result<bool, StorageClientError> {
+            Ok(self.values.lock().unwrap().remove(key).is_some())
         }
     }
 
@@ -723,6 +865,42 @@ mod tests {
         );
         let page = decode_page(0, &values[&page_key(0)]).unwrap();
         assert_eq!(page.ids[0], 1);
+    }
+
+    #[test]
+    fn stores_and_removes_720p_camera_original_with_thumbnail_metadata() {
+        let storage = MemoryStorage::default();
+        let thumbnail = vec![0x5a; PHOTO_FRAME_BYTES];
+        let jpeg = vec![0xff, 0xd8, 1, 2, 3, 4, 0xff, 0xd9];
+        assert_eq!(
+            import_frame_with_original(&storage, 9, &thumbnail, Some((&jpeg, 1234))).unwrap(),
+            1
+        );
+        {
+            let values = storage.values.lock().unwrap();
+            assert_eq!(values[&blob_key(1)], thumbnail);
+            assert_eq!(values[&original_blob_key(1)], jpeg);
+            let metadata = &values[&metadata_key(1)];
+            assert_eq!(metadata.len(), PHOTO_METADATA_BYTES);
+            assert_eq!(metadata[..4], PHOTO_METADATA_MAGIC);
+            assert_eq!(
+                u16::from_le_bytes(metadata[8..10].try_into().unwrap()),
+                CAMERA_PHOTO_WIDTH
+            );
+            assert_eq!(
+                u16::from_le_bytes(metadata[10..12].try_into().unwrap()),
+                CAMERA_PHOTO_HEIGHT
+            );
+            assert_eq!(
+                u64::from_le_bytes(metadata[16..24].try_into().unwrap()),
+                1234
+            );
+        }
+        assert!(remove_frame(&storage, 10, 1).unwrap());
+        let values = storage.values.lock().unwrap();
+        assert!(!values.contains_key(&blob_key(1)));
+        assert!(!values.contains_key(&original_blob_key(1)));
+        assert!(!values.contains_key(&metadata_key(1)));
     }
 
     #[test]

@@ -159,9 +159,11 @@ Speaker 静音，固定 10% 步进并回读实际值。socket DAC 允许 Shell �
 
 相机能力不暴露 V4L2、Media Controller、dma-heap、VideoCore 设备或捕获进程。
 `cp0-camerad` 以专用账户运行并通过 systemd 白名单独占这些设备类，固定调用系统
-`rpicam-still` 捕获 320x170 RGB888 后转换为 RGB565_LE。每次调用只返回一个
-108800 字节的密封 memfd；appd 验证只读访问、普通文件类型、精确长度和全部写入
-封印后才转发，Runtime 将内容复制进 WASM 线性内存，应用永远看不到原生 FD。
+`rpicam-vid` 维持 1280x720、内部 40 FPS 的 YUV420 流；仅当前前台 Runtime 可取帧，
+空闲两秒后释放相机管线。预览 SDK 调用将同一原始帧缩小为 320x170 RGB565_LE，返回
+一个 108800 字节的密封 memfd。正式拍照直接把下一帧编码为质量 90 的 1280x720 JPEG，
+不停止或重启传感器管线；appd 保存 JPEG 原件和 320x170 相册缩略图，WASM 只得到
+photo ID，不接触大图或原生 FD。
 
 GPIO 能力不暴露 `/dev/gpiochip*`、BCM 引脚编号、sysfs 路径或任意方向/复用设置。
 V0.6 首版只提供 overlay 明确定义的四个逻辑布尔输出：Grove 功能、外部 USB 功能、

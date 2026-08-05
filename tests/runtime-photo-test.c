@@ -21,6 +21,14 @@ int32_t cp0_broker_photo_load_rgb565(uint64_t photo_id, int *descriptor) {
     return *descriptor >= 0 ? CP0_BROKER_OK : CP0_BROKER_UNAVAILABLE;
 }
 
+int32_t cp0_broker_photo_load_view_rgb565(uint64_t photo_id,
+                                          uint32_t zoom_level, int32_t pan_x,
+                                          int32_t pan_y, int *descriptor) {
+    if (zoom_level != 2U || pan_x != 250 || pan_y != -250)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    return cp0_broker_photo_load_rgb565(photo_id, descriptor);
+}
+
 static void write_all(int descriptor, const uint8_t *bytes, size_t length) {
     size_t offset = 0;
     while (offset < length) {
@@ -46,6 +54,13 @@ int main(void) {
     assert(fixture_descriptor >= 0);
     assert(cp0_photos_load_rgb565(42, output, sizeof(output)) == CP0_BROKER_OK);
     assert(memcmp(source, output, sizeof(source)) == 0);
+    memset(output, 0, sizeof(output));
+    assert(cp0_photos_load_view_rgb565(42, 2, 250, -250, output,
+                                       sizeof(output)) == CP0_BROKER_OK);
+    assert(memcmp(source, output, sizeof(source)) == 0);
+    assert(cp0_photos_load_view_rgb565(42, 3, 0, 0, output,
+                                       sizeof(output)) ==
+           CP0_BROKER_INVALID_ARGUMENT);
     assert(cp0_photos_load_rgb565(0, output, sizeof(output)) ==
            CP0_BROKER_INVALID_ARGUMENT);
     assert(cp0_photos_load_rgb565(42, output, sizeof(output) - 1U) ==

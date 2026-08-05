@@ -32,6 +32,8 @@ mod target {
         fn raw_cp0_audio_capture_pcm_s16le(samples: *mut u8, sample_capacity: u32) -> i32;
         #[link_name = "cp0_camera_capture_rgb565"]
         fn raw_cp0_camera_capture_rgb565(pixels: *mut u8, pixel_bytes: u32) -> i32;
+        #[link_name = "cp0_camera_capture_photo"]
+        fn raw_cp0_camera_capture_photo() -> i64;
         #[link_name = "cp0_gpio_read"]
         fn raw_cp0_gpio_read(line: u32) -> i32;
         #[link_name = "cp0_gpio_write"]
@@ -60,6 +62,8 @@ mod target {
         fn raw_cp0_photos_remove(photo_id: u64) -> i32;
         #[link_name = "cp0_photos_load_rgb565"]
         fn raw_cp0_photos_load_rgb565(photo_id: u64, pixels: *mut u8, pixel_bytes: u32) -> i32;
+        #[link_name = "cp0_photos_load_view_rgb565"]
+        fn raw_cp0_photos_load_view_rgb565(photo_id: u64, zoom_level: u32, pan_x: i32, pan_y: i32, pixels: *mut u8, pixel_bytes: u32) -> i32;
         #[link_name = "cp0_intent_send"]
         fn raw_cp0_intent_send(action: *const u8, action_length: u32, payload: *const u8, payload_length: u32) -> i32;
         #[link_name = "cp0_intent_take"]
@@ -122,6 +126,10 @@ mod target {
         unsafe { raw_cp0_camera_capture_rgb565(pixels, pixel_bytes) }
     }
 
+    pub(crate) fn cp0_camera_capture_photo() -> i64 {
+        unsafe { raw_cp0_camera_capture_photo() }
+    }
+
     pub(crate) fn cp0_gpio_read(line: u32) -> i32 {
         unsafe { raw_cp0_gpio_read(line) }
     }
@@ -176,6 +184,10 @@ mod target {
 
     pub(crate) fn cp0_photos_load_rgb565(photo_id: u64, pixels: *mut u8, pixel_bytes: u32) -> i32 {
         unsafe { raw_cp0_photos_load_rgb565(photo_id, pixels, pixel_bytes) }
+    }
+
+    pub(crate) fn cp0_photos_load_view_rgb565(photo_id: u64, zoom_level: u32, pan_x: i32, pan_y: i32, pixels: *mut u8, pixel_bytes: u32) -> i32 {
+        unsafe { raw_cp0_photos_load_view_rgb565(photo_id, zoom_level, pan_x, pan_y, pixels, pixel_bytes) }
     }
 
     pub(crate) fn cp0_intent_send(action: *const u8, action_length: u32, payload: *const u8, payload_length: u32) -> i32 {
@@ -252,6 +264,10 @@ mod target {
         -2
     }
 
+    pub(crate) const fn cp0_camera_capture_photo() -> i64 {
+        -2
+    }
+
     pub(crate) const fn cp0_gpio_read(_line: u32) -> i32 {
         -2
     }
@@ -305,6 +321,10 @@ mod target {
     }
 
     pub(crate) const fn cp0_photos_load_rgb565(_photo_id: u64, _pixels: *mut u8, _pixel_bytes: u32) -> i32 {
+        -2
+    }
+
+    pub(crate) const fn cp0_photos_load_view_rgb565(_photo_id: u64, _zoom_level: u32, _pan_x: i32, _pan_y: i32, _pixels: *mut u8, _pixel_bytes: u32) -> i32 {
         -2
     }
 

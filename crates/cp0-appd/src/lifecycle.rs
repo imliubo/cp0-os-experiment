@@ -21,6 +21,7 @@ pub fn is_removable_app(app_id: &str) -> bool {
 }
 const SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
 const SYSTEMCTL_PATH: &str = "/usr/bin/systemctl";
+const SYSTEM_SLICE_CGROUP_ROOT: &str = "/sys/fs/cgroup/system.slice";
 const COMPOSITOR_USER: &str = "cp0-compositor";
 const MAX_USAGE_TREE_ENTRIES: usize = 16_384;
 const UNIT_STOP_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -76,6 +77,7 @@ pub enum AppManagerError {
     NotRunning(String),
     NoRollback(String),
     UnitFailed(&'static str),
+    UnitStateIo(std::io::Error),
     PackageIo(&'static str, std::io::Error),
     Plan(crate::PlanError),
 }
@@ -126,6 +128,9 @@ impl fmt::Display for AppManagerError {
             }
             Self::UnitFailed(action) => {
                 write!(formatter, "application systemd unit failed to {action}")
+            }
+            Self::UnitStateIo(error) => {
+                write!(formatter, "cannot inspect application unit state: {error}")
             }
             Self::PackageIo(action, error) => {
                 write!(formatter, "cannot {action} application package: {error}")
@@ -382,6 +387,11 @@ impl AppManager {
 
     pub fn is_running(&self, app_id: &str) -> Result<bool, AppManagerError> {
         unit_is_active(&self.unit_for_app(app_id)?)
+    }
+
+    pub fn has_resident_process(&self, app_id: &str) -> Result<bool, AppManagerError> {
+        let unit = self.unit_for_app(app_id)?;
+        cgroup_is_populated(&Path::new(SYSTEM_SLICE_CGROUP_ROOT).join(unit))
     }
 
     pub fn start(&self, app_id: &str) -> Result<String, AppManagerError> {
@@ -658,6 +668,32 @@ fn unit_is_active(unit: &str) -> Result<bool, AppManagerError> {
     Ok(status.success())
 }
 
+fn cgroup_is_populated(path: &Path) -> Result<bool, AppManagerError> {
+    let events = match fs::read_to_string(path.join("cgroup.events")) {
+        Ok(events) => events,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(AppManagerError::UnitStateIo(error)),
+    };
+    for line in events.lines() {
+        let mut fields = line.split_ascii_whitespace();
+        if fields.next() != Some("populated") {
+            continue;
+        }
+        return match (fields.next(), fields.next()) {
+            (Some("0"), None) => Ok(false),
+            (Some("1"), None) => Ok(true),
+            _ => Err(AppManagerError::UnitStateIo(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "cgroup populated state is invalid",
+            ))),
+        };
+    }
+    Err(AppManagerError::UnitStateIo(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "cgroup populated state is missing",
+    )))
+}
+
 pub(crate) fn wait_for_unit_stopped(unit: &str) -> Result<(), AppManagerError> {
     while unit_is_active(unit)? {
         thread::sleep(UNIT_STOP_POLL_INTERVAL);
@@ -803,6 +839,30 @@ mod tests {
             },
             manifest,
         )
+    }
+
+    #[test]
+    fn reads_resident_state_from_cgroup_events_without_systemd() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp")
+            .join(format!("cgroup-events-{}", std::process::id()));
+        if root.exists() {
+            fs::remove_dir_all(&root).unwrap();
+        }
+        assert!(!cgroup_is_populated(&root).unwrap());
+
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("cgroup.events"), b"populated 1\nfrozen 0\n").unwrap();
+        assert!(cgroup_is_populated(&root).unwrap());
+
+        fs::write(root.join("cgroup.events"), b"populated 0\nfrozen 0\n").unwrap();
+        assert!(!cgroup_is_populated(&root).unwrap());
+
+        fs::write(root.join("cgroup.events"), b"frozen 0\n").unwrap();
+        assert!(matches!(
+            cgroup_is_populated(&root),
+            Err(AppManagerError::UnitStateIo(_))
+        ));
     }
 
     #[test]

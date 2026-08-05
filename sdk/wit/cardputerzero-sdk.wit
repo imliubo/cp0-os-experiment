@@ -80,6 +80,7 @@ interface camera {
     use types.{error-code};
 
     capture-rgb565: func() -> result<list<u16>, error-code>;
+    capture-photo: func() -> result<u64, error-code>;
 }
 
 interface gpio {
@@ -130,6 +131,7 @@ interface photos {
     delete: func(key: string) -> result<bool, error-code>;
     import-rgb565: func(pixels: list<u8>, suggested-id: u64) -> result<u64, error-code>;
     load-rgb565: func(photo-id: u64) -> result<list<u16>, error-code>;
+    load-view-rgb565: func(photo-id: u64, zoom-level: u32, pan-x: s32, pan-y: s32) -> result<list<u16>, error-code>;
     remove: func(photo-id: u64) -> result<bool, error-code>;
 }
 

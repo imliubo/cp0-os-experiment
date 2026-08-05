@@ -16,7 +16,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cp0_audio_protocol::AudioErrorCode as ServiceAudioErrorCode;
-use cp0_camera_protocol::CameraErrorCode as ServiceCameraErrorCode;
+use cp0_camera_protocol::{CameraErrorCode as ServiceCameraErrorCode, decode_photo_payload};
 use cp0_document_protocol::{DocumentErrorCode as ServiceDocumentErrorCode, send_frame_with_fd};
 use cp0_gpio_protocol::GpioErrorCode as ServiceGpioErrorCode;
 use cp0_manifest::Permission;
@@ -27,18 +27,20 @@ use cp0_store_protocol::StoreRuntimeMetricEvent;
 
 use crate::photo_library::{
     PHOTO_FRAME_BYTES, PHOTO_LIBRARY_HEAD_KEY, PHOTO_LIBRARY_ID, PHOTO_LIBRARY_QUOTA_BYTES,
-    PhotoImportError, import_app_photo, import_screenshot, load_legacy_photo, photo_blob_key,
-    photo_is_active, remove_photo,
+    PhotoImportError, import_app_photo, import_camera_photo, import_screenshot, load_legacy_photo,
+    photo_blob_key, photo_is_active, remove_photo,
 };
+use crate::photo_view::{PhotoViewCache, PhotoViewError};
 use crate::protocol::APPD_PROTOCOL_VERSION;
 use crate::{
-    AppManager, AppManagerError, AppSummary, AppdCommand, AppdRequest, AppdResponse, AudioClient,
-    AudioClientError, BrokerCommand, BrokerErrorCode, BrokerProtocolError, BrokerRequest,
-    BrokerResponse, CameraClient, CameraClientError, CheckpointFailure, CheckpointStatus,
-    DevicePolicyEngine, DocumentClient, DocumentClientError, DocumentCoordinator,
-    DocumentPromptError, DocumentRequestResult, ErrorCode, EvictionCheckpoint, GpioClient,
-    GpioClientError, InstallError, IntentQueue, MediaAction, MediaSessionBroker, MediaSessionError,
-    NetworkClient, NetworkClientError, NotificationQueue, PackageInstaller, PermissionChoice,
+    AppManager, AppManagerError, AppPermissionDecision, AppPermissionState, AppSummary,
+    AppdCommand, AppdRequest, AppdResponse, AudioClient, AudioClientError, Authorization,
+    BrokerCommand, BrokerErrorCode, BrokerProtocolError, BrokerRequest, BrokerResponse,
+    CameraClient, CameraClientError, CheckpointFailure, CheckpointStatus, DevicePolicyEngine,
+    DocumentClient, DocumentClientError, DocumentCoordinator, DocumentPromptError,
+    DocumentRequestResult, ErrorCode, EvictionCheckpoint, GpioClient, GpioClientError,
+    InstallError, IntentQueue, MediaAction, MediaSessionBroker, MediaSessionError, NetworkClient,
+    NetworkClientError, NotificationQueue, PackageInstaller, PermissionChoice,
     PermissionCoordinator, PermissionPromptError, PermissionRequestResult, PolicyError,
     RadioClient, RadioClientError, ResponseData, RuntimeBinding, StorageClient, StorageClientError,
     StoreMetricsClient, TaskError, TaskId, TaskRegistry, TaskState, TaskSummary, TrustPaths,
@@ -87,6 +89,7 @@ pub struct AppdServer {
     lifecycle: Arc<Mutex<()>>,
     runtime: Arc<Mutex<RuntimeState>>,
     photo_library: Arc<Mutex<()>>,
+    photo_view: Arc<Mutex<PhotoViewCache>>,
     runtime_sequence: Arc<AtomicU64>,
 }
 
@@ -202,6 +205,7 @@ impl AppdServer {
             lifecycle: Arc::new(Mutex::new(())),
             runtime: Arc::new(Mutex::new(RuntimeState::default())),
             photo_library: Arc::new(Mutex::new(())),
+            photo_view: Arc::new(Mutex::new(PhotoViewCache::default())),
             runtime_sequence: Arc::new(AtomicU64::new(1)),
             installer: PackageInstaller::new(
                 crate::DEFAULT_APPS_ROOT,
@@ -401,6 +405,9 @@ impl AppdServer {
             AppdCommand::CloseTask { task_id } => {
                 return self.close_task_control(request_id, TaskId(task_id));
             }
+            AppdCommand::SetForegroundApp { app_id } => {
+                return self.set_foreground_app_control(request_id, app_id.as_deref());
+            }
             command => command,
         };
         let mut state = match self.state.lock() {
@@ -439,6 +446,9 @@ impl AppdServer {
             }
             AppdCommand::CloseTask { .. } => {
                 unreachable!("task close returned before state lock")
+            }
+            AppdCommand::SetForegroundApp { .. } => {
+                unreachable!("foreground synchronization returned before state lock")
             }
             AppdCommand::Uninstall { app_id } => {
                 let has_task = task_blocks_package_change(&state.tasks, &app_id);
@@ -510,6 +520,38 @@ impl AppdServer {
             AppdCommand::GetPermissionPrompt => Ok(ResponseData::PendingPermission {
                 prompt: state.permissions.pending().cloned(),
             }),
+            AppdCommand::GetPermissions { app_id } => state
+                .manager
+                .installed_manifest(&app_id)
+                .map_err(CommandError::Manager)
+                .map(|manifest| {
+                    let permissions = manifest
+                        .permissions
+                        .iter()
+                        .map(|request| {
+                            let decision = if state.policy.denies_permission(request.name) {
+                                AppPermissionDecision::PolicyDenied
+                            } else {
+                                match state.permissions.authorization(&manifest, request.name) {
+                                    Authorization::Allow => AppPermissionDecision::Allowed,
+                                    Authorization::Deny => AppPermissionDecision::Denied,
+                                    Authorization::Prompt => AppPermissionDecision::Ask,
+                                    Authorization::Undeclared => unreachable!(
+                                        "manifest permission is declared by construction"
+                                    ),
+                                }
+                            };
+                            AppPermissionState {
+                                permission: request.name,
+                                decision,
+                            }
+                        })
+                        .collect();
+                    ResponseData::ApplicationPermissions {
+                        app_id,
+                        permissions,
+                    }
+                }),
             AppdCommand::ResolvePermission { prompt_id, choice } => {
                 Self::resolve_permission(&mut state, prompt_id, choice)
             }
@@ -1208,6 +1250,82 @@ impl AppdServer {
         }
     }
 
+    fn set_foreground_app_control(&self, request_id: u64, app_id: Option<&str>) -> AppdResponse {
+        let _lifecycle = match self.lifecycle.lock() {
+            Ok(lifecycle) => lifecycle,
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application lifecycle coordinator is unavailable",
+                );
+            }
+        };
+        let mut runtime = match self.runtime.lock() {
+            Ok(runtime) => runtime,
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application runtime state is unavailable",
+                );
+            }
+        };
+        let Some(app_id) = app_id else {
+            runtime.foreground = None;
+            return AppdResponse::success(
+                request_id,
+                ResponseData::ForegroundAppChanged { app_id: None },
+            );
+        };
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                return AppdResponse::error(
+                    request_id,
+                    ErrorCode::Internal,
+                    "application service state is unavailable",
+                );
+            }
+        };
+        let Some(task) = state.tasks.task_for_app(app_id) else {
+            return AppdResponse::error(request_id, ErrorCode::NotFound, "task was not found");
+        };
+        let task_id = task.task_id;
+        let task_is_foreground = task.state == TaskState::Foreground;
+        let Some(binding) = task.runtime() else {
+            return AppdResponse::error(
+                request_id,
+                ErrorCode::Unavailable,
+                "task does not have a resident runtime",
+            );
+        };
+        let token = binding.token;
+        if !runtime
+            .sessions
+            .get(&token)
+            .is_some_and(|session| session.app_id == app_id)
+        {
+            return AppdResponse::error(
+                request_id,
+                ErrorCode::Unavailable,
+                "task runtime identity is unavailable",
+            );
+        }
+        if !task_is_foreground {
+            if let Err(error) = state.tasks.activate(task_id) {
+                return command_error_response(request_id, &CommandError::Task(error));
+            }
+        }
+        runtime.foreground = Some(token);
+        AppdResponse::success(
+            request_id,
+            ResponseData::ForegroundAppChanged {
+                app_id: Some(app_id.into()),
+            },
+        )
+    }
+
     fn mark_explicit_stop(&self, app_id: &str) -> Option<u64> {
         let mut runtime = self.runtime.lock().ok()?;
         let session = runtime
@@ -1270,7 +1388,7 @@ impl AppdServer {
                 .usage(storage_request_id, &installed.app_id, storage_quota_bytes)
                 .map_err(CommandError::Storage)?;
             apps.push(AppSummary {
-                running: state.manager.is_running(&installed.app_id)?,
+                running: state.manager.has_resident_process(&installed.app_id)?,
                 removable: crate::is_removable_app(&installed.app_id),
                 app_id: installed.app_id.clone(),
                 name: manifest.name,
@@ -1421,6 +1539,9 @@ impl AppdServer {
         let dispatch = match &request.command {
             BrokerCommand::OpenDocument => self.dispatch_document(credentials, request.request_id),
             BrokerCommand::CaptureCamera => self.dispatch_camera(credentials, request.request_id),
+            BrokerCommand::CapturePhoto => BrokerDispatch::response(
+                self.dispatch_camera_photo(credentials, request.request_id),
+            ),
             BrokerCommand::PhotoImportRgb565 { suggested_id } => {
                 BrokerDispatch::response(self.dispatch_photo_import(
                     credentials,
@@ -1432,6 +1553,19 @@ impl AppdServer {
             BrokerCommand::PhotoLoadRgb565 { photo_id } => {
                 self.dispatch_photo_load(credentials, request.request_id, *photo_id)
             }
+            BrokerCommand::PhotoLoadViewRgb565 {
+                photo_id,
+                zoom_level,
+                pan_x,
+                pan_y,
+            } => self.dispatch_photo_view(
+                credentials,
+                request.request_id,
+                *photo_id,
+                *zoom_level,
+                *pan_x,
+                *pan_y,
+            ),
             BrokerCommand::SendIntent {
                 action,
                 payload_base64,
@@ -1557,6 +1691,9 @@ impl AppdServer {
             }
             BrokerCommand::CaptureCamera => {
                 unreachable!("camera requests carry descriptors")
+            }
+            BrokerCommand::CapturePhoto => {
+                unreachable!("camera photo requests use a system-owned transaction")
             }
             BrokerCommand::ReadGpio { line } => {
                 if let Err(response) =
@@ -1820,6 +1957,9 @@ impl AppdServer {
             BrokerCommand::PhotoLoadRgb565 { .. } => {
                 unreachable!("photo loads carry descriptors")
             }
+            BrokerCommand::PhotoLoadViewRgb565 { .. } => {
+                unreachable!("photo view loads carry descriptors")
+            }
             BrokerCommand::SendIntent { .. } => {
                 unreachable!("intent send requires an acknowledgement-bound transition")
             }
@@ -2001,6 +2141,85 @@ impl AppdServer {
         }
     }
 
+    fn dispatch_photo_view(
+        &self,
+        peer: crate::PeerCredentials,
+        request_id: u64,
+        photo_id: u64,
+        zoom_level: u8,
+        pan_x: i16,
+        pan_y: i16,
+    ) -> BrokerDispatch {
+        if let Err(response) =
+            self.authorize_broker_caller(peer, request_id, Permission::PhotosRead)
+        {
+            return BrokerDispatch::response(response);
+        }
+        let transaction = match self.lock_photo_library(request_id) {
+            Ok(transaction) => transaction,
+            Err(response) => return BrokerDispatch::response(response),
+        };
+        match photo_is_active(&self.capabilities.storage, request_id, photo_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                return BrokerDispatch::response(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::NotFound,
+                    "photo is not present in the shared library",
+                ));
+            }
+            Err(error) => {
+                eprintln!("cp0-appd: photo view index lookup failed: {error}");
+                return BrokerDispatch::response(photo_broker_error_response(request_id, &error));
+            }
+        }
+        let mut cache = match self.photo_view.lock() {
+            Ok(cache) => cache,
+            Err(_) => {
+                return BrokerDispatch::response(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "photo view cache is unavailable",
+                ));
+            }
+        };
+        let frame = match cache.render(
+            &self.capabilities.storage,
+            request_id,
+            photo_id,
+            zoom_level,
+            pan_x,
+            pan_y,
+        ) {
+            Ok(Some(frame)) => frame,
+            Ok(None) => {
+                drop(cache);
+                drop(transaction);
+                return self.dispatch_photo_load(peer, request_id, photo_id);
+            }
+            Err(error) => {
+                eprintln!("cp0-appd: original photo view render failed: {error}");
+                return BrokerDispatch::response(photo_view_error_response(request_id, &error));
+            }
+        };
+        let descriptor = match sealed_photo_descriptor(&frame) {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                eprintln!("cp0-appd: cannot seal rendered photo view: {error}");
+                return BrokerDispatch::response(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "photo view descriptor could not be created",
+                ));
+            }
+        };
+        BrokerDispatch {
+            response: BrokerResponse::photo_loaded(request_id, photo_id),
+            descriptor: Some(descriptor),
+            transition: None,
+        }
+    }
+
     fn dispatch_send_intent(
         &self,
         peer: crate::PeerCredentials,
@@ -2106,10 +2325,26 @@ impl AppdServer {
     }
 
     fn dispatch_camera(&self, peer: crate::PeerCredentials, request_id: u64) -> BrokerDispatch {
-        if let Err(response) =
-            self.authorize_broker_caller(peer, request_id, Permission::CameraCapture)
-        {
-            return BrokerDispatch::response(response);
+        let app = match self.authorize_broker_caller(peer, request_id, Permission::CameraCapture) {
+            Ok(app) => app,
+            Err(response) => return BrokerDispatch::response(response),
+        };
+        let foreground = match self.runtime.lock() {
+            Ok(runtime) => runtime_app_is_foreground(&runtime, &app.app_id),
+            Err(_) => {
+                return BrokerDispatch::response(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "application runtime state is unavailable",
+                ));
+            }
+        };
+        if !foreground {
+            return BrokerDispatch::response(BrokerResponse::error(
+                request_id,
+                BrokerErrorCode::Unavailable,
+                "camera access requires the current foreground runtime",
+            ));
         }
         match self.capabilities.camera.capture(request_id) {
             Ok(frame) => BrokerDispatch {
@@ -2120,6 +2355,90 @@ impl AppdServer {
             Err(error) => {
                 eprintln!("cp0-appd: camera capture request failed: {error}");
                 BrokerDispatch::response(camera_error_response(request_id, &error))
+            }
+        }
+    }
+
+    fn dispatch_camera_photo(
+        &self,
+        peer: crate::PeerCredentials,
+        request_id: u64,
+    ) -> BrokerResponse {
+        let app = match self.authorize_broker_caller(peer, request_id, Permission::CameraCapture) {
+            Ok(app) => app,
+            Err(response) => return response,
+        };
+        if let Err(response) =
+            self.authorize_broker_caller(peer, request_id, Permission::PhotosWrite)
+        {
+            return response;
+        }
+        let foreground = match self.runtime.lock() {
+            Ok(runtime) => runtime_app_is_foreground(&runtime, &app.app_id),
+            Err(_) => {
+                return BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "application runtime state is unavailable",
+                );
+            }
+        };
+        if !foreground {
+            return BrokerResponse::error(
+                request_id,
+                BrokerErrorCode::Unavailable,
+                "camera access requires the current foreground runtime",
+            );
+        }
+        let captured = match self.capabilities.camera.capture_photo(request_id) {
+            Ok(captured) => captured,
+            Err(error) => {
+                eprintln!("cp0-appd: camera photo request failed: {error}");
+                return camera_error_response(request_id, &error);
+            }
+        };
+        let payload = match read_camera_photo(captured.descriptor, captured.jpeg_size_bytes) {
+            Ok(payload) => payload,
+            Err(error) => {
+                eprintln!("cp0-appd: rejected camera photo payload: {error}");
+                return BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "camera returned an invalid photo payload",
+                );
+            }
+        };
+        let (thumbnail, jpeg) = match decode_photo_payload(&payload) {
+            Ok(photo) => photo,
+            Err(error) => {
+                eprintln!("cp0-appd: camera photo payload validation failed: {error}");
+                return BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::Internal,
+                    "camera returned an invalid photo payload",
+                );
+            }
+        };
+        let captured_milliseconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .min(u64::MAX as u128) as u64;
+        let _transaction = match self.lock_photo_library(request_id) {
+            Ok(transaction) => transaction,
+            Err(response) => return response,
+        };
+        match import_camera_photo(
+            &self.capabilities.storage,
+            request_id,
+            thumbnail,
+            jpeg,
+            captured_milliseconds,
+        ) {
+            Ok(photo_id) => BrokerResponse::photo_imported(request_id, photo_id),
+            Err(error) => {
+                eprintln!("cp0-appd: camera photo library import failed: {error}");
+                photo_broker_error_response(request_id, &error)
             }
         }
     }
@@ -2285,24 +2604,6 @@ impl AppdServer {
             ));
         };
         let app_id = installed.app_id.clone();
-        match state.manager.is_running(&installed.app_id) {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(BrokerResponse::error(
-                    request_id,
-                    BrokerErrorCode::Unauthorized,
-                    "application is not running",
-                ));
-            }
-            Err(error) => {
-                eprintln!("cp0-appd: cannot verify broker caller state: {error}");
-                return Err(BrokerResponse::error(
-                    request_id,
-                    BrokerErrorCode::Internal,
-                    "application state could not be verified",
-                ));
-            }
-        }
         let unit = match state.manager.unit_for_app(&app_id) {
             Ok(unit) => unit,
             Err(error) => {
@@ -2477,7 +2778,10 @@ fn control_command_authorized(
     store_installer_uids: &BTreeSet<u32>,
     shell_uid: Option<u32>,
 ) -> bool {
-    if matches!(command, AppdCommand::ImportScreenshot) {
+    if matches!(
+        command,
+        AppdCommand::ImportScreenshot | AppdCommand::SetForegroundApp { .. }
+    ) {
         return shell_uid == Some(uid);
     }
     if store_installer_uids.contains(&uid) {
@@ -2523,6 +2827,36 @@ fn read_photo_frame(descriptor: OwnedFd) -> std::io::Result<Vec<u8>> {
     let mut frame = vec![0_u8; PHOTO_FRAME_BYTES];
     file.read_exact(&mut frame)?;
     Ok(frame)
+}
+
+fn read_camera_photo(descriptor: OwnedFd, jpeg_size_bytes: u32) -> std::io::Result<Vec<u8>> {
+    let jpeg_size = jpeg_size_bytes as usize;
+    if jpeg_size == 0 || jpeg_size > cp0_camera_protocol::MAX_CAMERA_JPEG_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "camera JPEG size is outside the fixed contract",
+        ));
+    }
+    let expected = cp0_camera_protocol::CAMERA_PHOTO_HEADER_BYTES
+        + cp0_camera_protocol::CAMERA_FRAME_BYTES
+        + jpeg_size;
+    let mut file = File::from(descriptor);
+    let metadata = file.metadata()?;
+    if metadata.len() != expected as u64 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "camera photo descriptor has an unexpected size",
+        ));
+    }
+    let mut payload = Vec::with_capacity(expected);
+    file.read_to_end(&mut payload)?;
+    if payload.len() != expected {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "camera photo descriptor was truncated",
+        ));
+    }
+    Ok(payload)
 }
 
 #[cfg(target_os = "linux")]
@@ -2678,6 +3012,23 @@ fn photo_broker_error_response(request_id: u64, error: &PhotoImportError) -> Bro
         | PhotoImportError::Storage(_) => BrokerErrorCode::Internal,
     };
     BrokerResponse::error(request_id, code, "photo library transaction failed")
+}
+
+fn photo_view_error_response(request_id: u64, error: &PhotoViewError) -> BrokerResponse {
+    match error {
+        PhotoViewError::Library(error) => photo_broker_error_response(request_id, error),
+        PhotoViewError::Storage(error) => storage_error_response(request_id, error),
+        PhotoViewError::MissingOriginal => BrokerResponse::error(
+            request_id,
+            BrokerErrorCode::NotFound,
+            "photo original is unavailable",
+        ),
+        PhotoViewError::InvalidJpeg => BrokerResponse::error(
+            request_id,
+            BrokerErrorCode::Internal,
+            "photo original could not be decoded",
+        ),
+    }
 }
 
 #[derive(Debug)]
@@ -3200,6 +3551,13 @@ fn take_runtime_end(runtime: &mut RuntimeState, token: u64) -> Option<bool> {
     Some(crashed)
 }
 
+fn runtime_app_is_foreground(runtime: &RuntimeState, app_id: &str) -> bool {
+    runtime
+        .foreground
+        .and_then(|token| runtime.sessions.get(&token))
+        .is_some_and(|session| session.app_id == app_id)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -3502,6 +3860,43 @@ mod tests {
     }
 
     #[test]
+    fn camera_access_tracks_only_the_current_foreground_runtime() {
+        let session = |token, app_id: &str| RuntimeSession {
+            token,
+            task_id: TaskId(token),
+            app_id: app_id.into(),
+            version: "1.0.0".into(),
+            explicit_stop: false,
+        };
+        let mut runtime = RuntimeState::default();
+        runtime
+            .sessions
+            .insert(7, session(7, "dev.cardputerzero.camera"));
+        runtime
+            .sessions
+            .insert(8, session(8, "dev.cardputerzero.background"));
+
+        assert!(!runtime_app_is_foreground(
+            &runtime,
+            "dev.cardputerzero.camera"
+        ));
+        runtime.foreground = Some(7);
+        assert!(runtime_app_is_foreground(
+            &runtime,
+            "dev.cardputerzero.camera"
+        ));
+        assert!(!runtime_app_is_foreground(
+            &runtime,
+            "dev.cardputerzero.background"
+        ));
+        runtime.foreground = Some(9);
+        assert!(!runtime_app_is_foreground(
+            &runtime,
+            "dev.cardputerzero.camera"
+        ));
+    }
+
+    #[test]
     fn checkpointed_task_still_blocks_package_changes() {
         let mut tasks = TaskRegistry::new(2).unwrap();
         let first = tasks
@@ -3615,6 +4010,14 @@ mod tests {
         assert!(!authorized(root, &import));
         assert!(!authorized(store, &import));
         assert!(!authorized(999, &import));
+
+        let foreground = AppdCommand::SetForegroundApp {
+            app_id: Some("dev.cardputerzero.example".into()),
+        };
+        assert!(authorized(shell, &foreground));
+        assert!(!authorized(root, &foreground));
+        assert!(!authorized(store, &foreground));
+        assert!(!authorized(999, &foreground));
     }
 
     #[test]

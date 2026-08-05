@@ -43,6 +43,9 @@ pub enum AppdCommand {
     CloseTask {
         task_id: u64,
     },
+    SetForegroundApp {
+        app_id: Option<String>,
+    },
     StoreListInstalled {
         offset: u16,
         limit: u8,
@@ -75,6 +78,9 @@ pub enum AppdCommand {
         limit: u16,
     },
     GetPermissionPrompt,
+    GetPermissions {
+        app_id: String,
+    },
     ResolvePermission {
         prompt_id: u64,
         choice: PermissionChoice,
@@ -136,6 +142,9 @@ pub enum ResponseData {
         task_id: u64,
         app_id: String,
     },
+    ForegroundAppChanged {
+        app_id: Option<String>,
+    },
     StoreApplications {
         apps: Vec<StoreInstalledApp>,
         next_offset: Option<u16>,
@@ -168,6 +177,10 @@ pub enum ResponseData {
     },
     PendingPermission {
         prompt: Option<PermissionPrompt>,
+    },
+    ApplicationPermissions {
+        app_id: String,
+        permissions: Vec<AppPermissionState>,
     },
     PermissionResolved {
         prompt_id: u64,
@@ -218,6 +231,22 @@ pub struct AppSummary {
     pub package_bytes: u64,
     pub data_bytes: u64,
     pub permissions: Vec<cp0_manifest::Permission>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppPermissionState {
+    pub permission: cp0_manifest::Permission,
+    pub decision: AppPermissionDecision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AppPermissionDecision {
+    Ask,
+    Allowed,
+    Denied,
+    PolicyDenied,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -368,7 +397,11 @@ impl AppdRequest {
             {
                 Err(ProtocolError::InvalidAppId)
             }
+            AppdCommand::SetForegroundApp {
+                app_id: Some(app_id),
+            } if !cp0_manifest::is_valid_app_id(app_id) => Err(ProtocolError::InvalidAppId),
             AppdCommand::ResetPermission { app_id, .. }
+            | AppdCommand::GetPermissions { app_id }
                 if !cp0_manifest::is_valid_app_id(app_id) =>
             {
                 Err(ProtocolError::InvalidAppId)
@@ -1084,6 +1117,10 @@ mod tests {
             },
             AppdCommand::ActivateTask { task_id: 7 },
             AppdCommand::CloseTask { task_id: 7 },
+            AppdCommand::SetForegroundApp {
+                app_id: Some("dev.cardputerzero.notes".into()),
+            },
+            AppdCommand::SetForegroundApp { app_id: None },
         ] {
             let request = AppdRequest {
                 protocol_version: APPD_PROTOCOL_VERSION,
@@ -1120,6 +1157,46 @@ mod tests {
             ResponseData::Tasks {
                 tasks: vec![task],
                 next_offset: None,
+            },
+        );
+        let mut encoded = Vec::new();
+        write_response(&mut encoded, &response).unwrap();
+        assert_eq!(
+            read_response(&mut Cursor::new(encoded)).unwrap(),
+            Some(response)
+        );
+    }
+
+    #[test]
+    fn round_trips_application_permission_state() {
+        let request = AppdRequest {
+            protocol_version: APPD_PROTOCOL_VERSION,
+            request_id: 94,
+            command: AppdCommand::GetPermissions {
+                app_id: "dev.cardputerzero.camera".into(),
+            },
+        };
+        let mut encoded = Vec::new();
+        write_request(&mut encoded, &request).unwrap();
+        assert_eq!(
+            read_request(&mut Cursor::new(encoded)).unwrap(),
+            Some(request)
+        );
+
+        let response = AppdResponse::success(
+            94,
+            ResponseData::ApplicationPermissions {
+                app_id: "dev.cardputerzero.camera".into(),
+                permissions: vec![
+                    AppPermissionState {
+                        permission: cp0_manifest::Permission::CameraCapture,
+                        decision: AppPermissionDecision::Denied,
+                    },
+                    AppPermissionState {
+                        permission: cp0_manifest::Permission::PhotosWrite,
+                        decision: AppPermissionDecision::Ask,
+                    },
+                ],
             },
         );
         let mut encoded = Vec::new();

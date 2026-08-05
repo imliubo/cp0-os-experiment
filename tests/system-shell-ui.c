@@ -343,7 +343,11 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     write_snapshot(directory, "app-overview", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     write_snapshot(directory, "app-storage", ui, frame);
-    cp0_ui_handle_action(ui, CP0_UI_RIGHT);
+    assert(cp0_ui_handle_action(ui, CP0_UI_RIGHT) ==
+           CP0_UI_EVENT_LOAD_APP_PERMISSIONS);
+    cp0_ui_set_app_permissions(ui, "dev.cardputerzero.second",
+                               (1U << 0) | (1U << 6), 1U << 0,
+                               1U << 6, 0);
     write_snapshot(directory, "app-permissions", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_RIGHT);
     write_snapshot(directory, "app-actions", ui, frame);
@@ -1620,16 +1624,29 @@ int main(int argc, char **argv)
     cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
     assert(ui.app_detail_page == 0);
     cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
-    cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_RIGHT) ==
+           CP0_UI_EVENT_LOAD_APP_PERMISSIONS);
     assert(ui.app_detail_page == 2);
     assert(ui.app_permission_offset == 0);
+    assert(ui.app_permission_selected == 0);
+    cp0_ui_set_app_permissions(&ui, "dev.cardputerzero.second", 0x03ff,
+                               1U << 0, 1U << 1, 1U << 2);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_RESET_APP_PERMISSION);
     cp0_ui_handle_action(&ui, CP0_UI_DOWN);
-    assert(ui.app_permission_offset == 1);
+    assert(ui.app_permission_selected == 1);
+    assert(ui.app_permission_offset == 0);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_RESET_APP_PERMISSION);
+    cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) == CP0_UI_EVENT_NONE);
     for (unsigned int index = 0; index < 8; index++)
         cp0_ui_handle_action(&ui, CP0_UI_DOWN);
+    assert(ui.app_permission_selected == 9);
     assert(ui.app_permission_offset == 6);
     cp0_ui_handle_action(&ui, CP0_UI_UP);
-    assert(ui.app_permission_offset == 5);
+    assert(ui.app_permission_selected == 8);
+    assert(ui.app_permission_offset == 6);
     cp0_ui_handle_action(&ui, CP0_UI_RIGHT);
     assert(ui.app_detail_page == 3);
     assert(cp0_ui_handle_action(&ui, CP0_UI_ACCEPT) ==

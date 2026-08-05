@@ -12,6 +12,12 @@ pub const CAMERA_HEIGHT: u16 = 170;
 pub const CAMERA_PIXEL_BYTES: usize = 2;
 pub const CAMERA_FRAME_BYTES: usize =
     CAMERA_WIDTH as usize * CAMERA_HEIGHT as usize * CAMERA_PIXEL_BYTES;
+pub const CAMERA_PREVIEW_FPS: u16 = 30;
+pub const CAMERA_PHOTO_WIDTH: u16 = 1280;
+pub const CAMERA_PHOTO_HEIGHT: u16 = 720;
+pub const MAX_CAMERA_JPEG_BYTES: usize = 4 * 1024 * 1024;
+pub const CAMERA_PHOTO_HEADER_BYTES: usize = 16;
+pub const CAMERA_PHOTO_MAGIC: [u8; 4] = *b"CP0J";
 pub const MAX_CAMERA_PROTOCOL_FRAME_BYTES: usize = 2 * 1024;
 pub const MAX_CAMERA_ERROR_CHARS: usize = 160;
 
@@ -27,6 +33,7 @@ pub struct CameraRequest {
 #[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CameraCommand {
     CaptureRgb565,
+    CapturePhoto,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +52,12 @@ pub enum CameraOutcome {
         height: u16,
         pixel_format: CameraPixelFormat,
         size_bytes: u32,
+    },
+    PhotoCaptured {
+        width: u16,
+        height: u16,
+        thumbnail_size_bytes: u32,
+        jpeg_size_bytes: u32,
     },
     Error {
         code: CameraErrorCode,
@@ -136,6 +149,14 @@ impl CameraRequest {
         }
     }
 
+    pub const fn capture_photo(request_id: u64) -> Self {
+        Self {
+            protocol_version: CAMERA_PROTOCOL_VERSION,
+            request_id,
+            command: CameraCommand::CapturePhoto,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), CameraProtocolError> {
         validate_version(self.protocol_version)
     }
@@ -151,6 +172,19 @@ impl CameraResponse {
                 height: CAMERA_HEIGHT,
                 pixel_format: CameraPixelFormat::Rgb565Le,
                 size_bytes: CAMERA_FRAME_BYTES as u32,
+            },
+        }
+    }
+
+    pub const fn photo_captured(request_id: u64, jpeg_size_bytes: u32) -> Self {
+        Self {
+            protocol_version: CAMERA_PROTOCOL_VERSION,
+            request_id,
+            outcome: CameraOutcome::PhotoCaptured {
+                width: CAMERA_PHOTO_WIDTH,
+                height: CAMERA_PHOTO_HEIGHT,
+                thumbnail_size_bytes: CAMERA_FRAME_BYTES as u32,
+                jpeg_size_bytes,
             },
         }
     }
@@ -181,6 +215,19 @@ impl CameraResponse {
             {
                 Err(CameraProtocolError::InvalidFrameMetadata)
             }
+            CameraOutcome::PhotoCaptured {
+                width,
+                height,
+                thumbnail_size_bytes,
+                jpeg_size_bytes,
+            } if *width != CAMERA_PHOTO_WIDTH
+                || *height != CAMERA_PHOTO_HEIGHT
+                || *thumbnail_size_bytes != CAMERA_FRAME_BYTES as u32
+                || *jpeg_size_bytes == 0
+                || *jpeg_size_bytes as usize > MAX_CAMERA_JPEG_BYTES =>
+            {
+                Err(CameraProtocolError::InvalidFrameMetadata)
+            }
             CameraOutcome::Error { message, .. }
                 if message.is_empty()
                     || message.chars().count() > MAX_CAMERA_ERROR_CHARS
@@ -191,6 +238,59 @@ impl CameraResponse {
             _ => Ok(()),
         }
     }
+}
+
+pub fn encode_photo_payload(thumbnail: &[u8], jpeg: &[u8]) -> Result<Vec<u8>, CameraProtocolError> {
+    if thumbnail.len() != CAMERA_FRAME_BYTES
+        || jpeg.is_empty()
+        || jpeg.len() > MAX_CAMERA_JPEG_BYTES
+        || !jpeg.starts_with(&[0xff, 0xd8])
+        || !jpeg.ends_with(&[0xff, 0xd9])
+    {
+        return Err(CameraProtocolError::InvalidFrameMetadata);
+    }
+    let jpeg_size =
+        u32::try_from(jpeg.len()).map_err(|_| CameraProtocolError::InvalidFrameMetadata)?;
+    let mut payload = Vec::with_capacity(CAMERA_PHOTO_HEADER_BYTES + thumbnail.len() + jpeg.len());
+    payload.extend_from_slice(&CAMERA_PHOTO_MAGIC);
+    payload.extend_from_slice(&1_u16.to_le_bytes());
+    payload.extend_from_slice(&(CAMERA_PHOTO_HEADER_BYTES as u16).to_le_bytes());
+    payload.extend_from_slice(&(CAMERA_FRAME_BYTES as u32).to_le_bytes());
+    payload.extend_from_slice(&jpeg_size.to_le_bytes());
+    payload.extend_from_slice(thumbnail);
+    payload.extend_from_slice(jpeg);
+    Ok(payload)
+}
+
+pub fn decode_photo_payload(payload: &[u8]) -> Result<(&[u8], &[u8]), CameraProtocolError> {
+    if payload.len() < CAMERA_PHOTO_HEADER_BYTES
+        || payload[..4] != CAMERA_PHOTO_MAGIC
+        || u16::from_le_bytes(payload[4..6].try_into().unwrap()) != 1
+        || usize::from(u16::from_le_bytes(payload[6..8].try_into().unwrap()))
+            != CAMERA_PHOTO_HEADER_BYTES
+    {
+        return Err(CameraProtocolError::InvalidFrameMetadata);
+    }
+    let thumbnail_size = u32::from_le_bytes(payload[8..12].try_into().unwrap()) as usize;
+    let jpeg_size = u32::from_le_bytes(payload[12..16].try_into().unwrap()) as usize;
+    let expected = CAMERA_PHOTO_HEADER_BYTES
+        .checked_add(thumbnail_size)
+        .and_then(|size| size.checked_add(jpeg_size))
+        .ok_or(CameraProtocolError::InvalidFrameMetadata)?;
+    if thumbnail_size != CAMERA_FRAME_BYTES
+        || jpeg_size == 0
+        || jpeg_size > MAX_CAMERA_JPEG_BYTES
+        || payload.len() != expected
+    {
+        return Err(CameraProtocolError::InvalidFrameMetadata);
+    }
+    let thumbnail_end = CAMERA_PHOTO_HEADER_BYTES + thumbnail_size;
+    let thumbnail = &payload[CAMERA_PHOTO_HEADER_BYTES..thumbnail_end];
+    let jpeg = &payload[thumbnail_end..];
+    if !jpeg.starts_with(&[0xff, 0xd8]) || !jpeg.ends_with(&[0xff, 0xd9]) {
+        return Err(CameraProtocolError::InvalidFrameMetadata);
+    }
+    Ok((thumbnail, jpeg))
 }
 
 pub fn write_request(
@@ -449,6 +549,29 @@ mod tests {
             decode_response(&encoded[..encoded.len() - 1]).unwrap(),
             response
         );
+
+        let photo_request = CameraRequest::capture_photo(8);
+        let mut photo_request_frame = Vec::new();
+        write_request(&mut photo_request_frame, &photo_request).unwrap();
+        assert_eq!(
+            read_request(&mut Cursor::new(photo_request_frame)).unwrap(),
+            Some(photo_request)
+        );
+        assert!(CameraResponse::photo_captured(8, 1024).validate().is_ok());
+    }
+
+    #[test]
+    fn round_trips_bounded_photo_payload() {
+        let thumbnail = vec![0x5a; CAMERA_FRAME_BYTES];
+        let jpeg = vec![0xff, 0xd8, 1, 2, 3, 0xff, 0xd9];
+        let payload = encode_photo_payload(&thumbnail, &jpeg).unwrap();
+        let (decoded_thumbnail, decoded_jpeg) = decode_photo_payload(&payload).unwrap();
+        assert_eq!(decoded_thumbnail, thumbnail);
+        assert_eq!(decoded_jpeg, jpeg);
+
+        let mut truncated = payload;
+        truncated.pop();
+        assert!(decode_photo_payload(&truncated).is_err());
     }
 
     #[test]

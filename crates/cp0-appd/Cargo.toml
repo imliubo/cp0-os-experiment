@@ -16,6 +16,7 @@ cp0-radio-protocol = { path = "../cp0-radio-protocol" }
 cp0-storage-protocol = { path = "../cp0-storage-protocol" }
 cp0-store-protocol = { path = "../cp0-store-protocol" }
 libc.workspace = true
+jpeg-decoder = { version = "0.3.2", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

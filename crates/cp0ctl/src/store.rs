@@ -337,6 +337,17 @@ fn validate_import_permissions(manifest: &AppManifest, imports: &[String]) -> Re
         .map(|request| request.name)
         .collect::<BTreeSet<_>>();
     for import in imports {
+        if import == "cp0_camera_capture_photo" {
+            if !declared.contains(&Permission::CameraCapture)
+                || !declared.contains(&Permission::PhotosWrite)
+            {
+                return Err(format!(
+                    "{} imports {import} without declaring camera.capture and photos.write",
+                    manifest.id
+                ));
+            }
+            continue;
+        }
         let required = match import.as_str() {
             "cp0_post_notification" => Some(Permission::NotificationsPost),
             "cp0_http_get" => Some(Permission::NetworkClient),
@@ -348,7 +359,9 @@ fn validate_import_permissions(manifest: &AppManifest, imports: &[String]) -> Re
             "cp0_camera_capture_rgb565" => Some(Permission::CameraCapture),
             "cp0_gpio_read" | "cp0_gpio_write" => Some(Permission::HardwareGpio),
             "cp0_lora_send" | "cp0_lora_receive" => Some(Permission::RadioLora),
-            "cp0_photos_get" | "cp0_photos_load_rgb565" => Some(Permission::PhotosRead),
+            "cp0_photos_get" | "cp0_photos_load_rgb565" | "cp0_photos_load_view_rgb565" => {
+                Some(Permission::PhotosRead)
+            }
             "cp0_photos_put"
             | "cp0_photos_index_get"
             | "cp0_photos_delete"
@@ -577,6 +590,9 @@ mod tests {
         assert!(validate_import_permissions(&manifest, &["cp0_http_get".into()]).is_err());
         assert!(
             validate_import_permissions(&manifest, &["cp0_photos_load_rgb565".into()]).is_err()
+        );
+        assert!(
+            validate_import_permissions(&manifest, &["cp0_camera_capture_photo".into()]).is_err()
         );
     }
 }

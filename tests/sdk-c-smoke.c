@@ -51,6 +51,7 @@ int sdk_c_smoke(void) {
     (void)cp0_audio_play(audio_samples, 8U);
     (void)cp0_audio_capture(audio_samples, 8U, &frames_captured);
     (void)cp0_camera_capture(camera_pixels, CP0_CAMERA_PIXEL_COUNT);
+    (void)cp0_camera_capture_photo(&photo_id);
     (void)cp0_gpio_read(CP0_GPIO_GROVE_FUNCTION, &gpio_value);
     (void)cp0_gpio_write(CP0_GPIO_GROVE_FUNCTION, gpio_value);
     (void)cp0_lora_receive(lora_payload, sizeof(lora_payload), &lora_metadata,
@@ -74,6 +75,9 @@ int sdk_c_smoke(void) {
                                    &photo_id);
     (void)cp0_photos_load_rgb565(photo_id, camera_pixels,
                                  CP0_CAMERA_PIXEL_COUNT);
+    (void)cp0_photos_load_view_rgb565(
+        photo_id, CP0_PHOTO_VIEW_ACTUAL, 0, 0, camera_pixels,
+        CP0_CAMERA_PIXEL_COUNT);
     (void)cp0_photos_remove(photo_id, &photo_existed);
     (void)cp0_intent_send(intent_action, sizeof(intent_action) - 1U,
                           intent_payload, sizeof(intent_payload));

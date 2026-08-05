@@ -30,6 +30,12 @@ int cp0_appd_test_parse_document_prompt_response(
 int cp0_appd_test_parse_device_settings_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *expected_kind, struct cp0_device_settings *settings);
+int cp0_appd_test_parse_app_permissions_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *app_id, struct cp0_app_permissions *permissions);
+int cp0_appd_test_parse_permission_reset_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *app_id, enum cp0_app_permission permission);
 int cp0_appd_test_parse_media_action_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *expected_action, char app_id[CP0_APP_ID_BYTES]);
@@ -93,6 +99,56 @@ int main(void)
     assert(cp0_appd_test_parse_app_page(
                bad_display, strlen(bad_display), 9, 0, apps, 2, &count,
                &has_next, &next_offset) < 0);
+
+    static const char permissions_response[] =
+        "{\"protocol_version\":2,\"request_id\":23,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"application-permissions\","
+        "\"app_id\":\"dev.cardputerzero.camera\",\"permissions\":["
+        "{\"permission\":\"camera.capture\",\"decision\":\"denied\"},"
+        "{\"permission\":\"photos.read\",\"decision\":\"allowed\"},"
+        "{\"permission\":\"photos.write\",\"decision\":\"ask\"},"
+        "{\"permission\":\"network.client\","
+        "\"decision\":\"policy-denied\"}]}}}";
+    struct cp0_app_permissions permission_state;
+    assert(cp0_appd_test_parse_app_permissions_response(
+               permissions_response, strlen(permissions_response), 23,
+               "dev.cardputerzero.camera", &permission_state) == 0);
+    assert(permission_state.known ==
+           (CP0_APP_PERMISSION_CAMERA_CAPTURE |
+            CP0_APP_PERMISSION_PHOTOS_READ |
+            CP0_APP_PERMISSION_PHOTOS_WRITE |
+            CP0_APP_PERMISSION_NETWORK_CLIENT));
+    assert(permission_state.allowed == CP0_APP_PERMISSION_PHOTOS_READ);
+    assert(permission_state.denied == CP0_APP_PERMISSION_CAMERA_CAPTURE);
+    assert(permission_state.policy_denied ==
+           CP0_APP_PERMISSION_NETWORK_CLIENT);
+    assert(cp0_appd_test_parse_app_permissions_response(
+               permissions_response, strlen(permissions_response), 23,
+               "dev.cardputerzero.other", &permission_state) < 0);
+
+    static const char duplicate_permission[] =
+        "{\"protocol_version\":2,\"request_id\":24,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"application-permissions\","
+        "\"app_id\":\"dev.cardputerzero.camera\",\"permissions\":["
+        "{\"permission\":\"camera.capture\",\"decision\":\"ask\"},"
+        "{\"permission\":\"camera.capture\",\"decision\":\"denied\"}]}}}";
+    assert(cp0_appd_test_parse_app_permissions_response(
+               duplicate_permission, strlen(duplicate_permission), 24,
+               "dev.cardputerzero.camera", &permission_state) < 0);
+
+    static const char reset_response[] =
+        "{\"protocol_version\":2,\"request_id\":25,\"outcome\":{"
+        "\"status\":\"ok\",\"data\":{\"kind\":\"permission-reset\","
+        "\"app_id\":\"dev.cardputerzero.camera\","
+        "\"permission\":\"camera.capture\"}}}";
+    assert(cp0_appd_test_parse_permission_reset_response(
+               reset_response, strlen(reset_response), 25,
+               "dev.cardputerzero.camera",
+               CP0_APP_PERMISSION_CAMERA_CAPTURE) == 0);
+    assert(cp0_appd_test_parse_permission_reset_response(
+               reset_response, strlen(reset_response), 25,
+               "dev.cardputerzero.camera", CP0_APP_PERMISSION_PHOTOS_WRITE) <
+           0);
 
     static const char task_page[] =
         "{\"protocol_version\":2,\"request_id\":10,\"outcome\":{"
@@ -250,7 +306,7 @@ int main(void)
         "\"recovery_mode\":false,\"recovery_mode_allowed\":true,"
         "\"store_install_allowed\":false,"
         "\"app_launch_restricted\":true,"
-        "\"denied_permission_count\":9}}}}";
+        "\"denied_permission_count\":11}}}}";
     assert(cp0_appd_test_parse_device_settings_response(
                invalid_settings, strlen(invalid_settings), 16,
                "device-settings", &settings) < 0);

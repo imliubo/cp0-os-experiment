@@ -2,19 +2,21 @@
 
 ## Scope
 
-The first camera API captures one fixed frame without exposing V4L2, Media
-Controller, dma-heap, VideoCore devices, native descriptors or capture process
-arguments to a WASM application. Its complete contract is:
+The camera APIs do not expose V4L2, Media Controller, dma-heap, VideoCore
+devices, native descriptors or capture process arguments to a WASM
+application. Their fixed contracts are:
 
 - permission: `camera.capture`;
-- dimensions: 320x170;
-- format: RGB565 little endian;
-- result: exactly 108800 bytes in caller-owned WASM memory;
-- operation: synchronous, one frame, four-second service deadline.
+- foreground preview: 320x170 RGB565 little endian at a 30 FPS target, rotated
+  180 degrees for the V0.6 sensor mounting;
+- photo capture: 1280x720 JPEG plus a 320x170 RGB565 Gallery thumbnail;
+- preview result: exactly 108800 bytes in caller-owned WASM memory;
+- photo result: one broker-owned `photo_id`; the JPEG never enters WASM memory.
 
-There is no sensor selection, preview stream, arbitrary resolution, codec,
-container or output path in SDK 1.0. A future streaming API must use a separate
-permission and bounded shared-buffer protocol rather than expanding this call.
+There is no sensor selection, arbitrary resolution, codec, container or output
+path in SDK 1.0. `camera::capture_photo()` also requires `photos.write`, encodes
+the next frame from the same live pipeline, and atomically stores the original
+and thumbnail without stopping or restarting the sensor.
 
 ## Trust Flow
 
@@ -23,9 +25,11 @@ WASM camera SDK call
   -> Runtime validates one exact 108800-byte linear-memory range
   -> appd derives identity from SO_PEERCRED and active systemd cgroup
   -> appd checks the root-owned manifest and camera.capture decision
+  -> appd requires the caller to be the System Shell's current foreground runtime
   -> root-only cp0-camerad socket accepts only appd
-  -> cp0-camerad invokes fixed /usr/bin/rpicam-still arguments
-  -> exact RGB888 output is converted to RGB565_LE
+  -> cp0-camerad keeps one fixed 1280x720 @ 40 FPS /usr/bin/rpicam-vid YUV420 stream
+  -> preview frames are downscaled to 320x170 RGB565_LE at a 30 FPS target
+  -> photo requests encode the next 1280x720 frame as JPEG without a mode switch
   -> sealed memfd is reopened read-only and sent with SCM_RIGHTS
   -> appd verifies type, length, access mode and all write seals
   -> Runtime repeats metadata/seal checks and copies pixels into WASM memory
@@ -35,34 +39,46 @@ WASM camera SDK call
 empty capability sets, no network address family and no writable system or
 home directory. `DevicePolicy=closed` grants only video4linux, media,
 dma-heap and `/dev/vchiq`, which are required by the Raspberry Pi camera
-pipeline. The application sandbox has none of those devices.
+pipeline. The application sandbox has none of those devices. The service and
+its camera children run with `Nice=10` and `CPUWeight=10` so camera work
+yields to the compositor and keyboard path when the constrained CM0 is busy.
 
 Both service protocols are strict newline-delimited JSON. The private camera
 protocol is capped at 2048 bytes and permits one CLOEXEC descriptor only.
-Captured data never enters JSON or appd heap memory: the broker passes a
-read-only, immutable descriptor, and the Runtime performs the final bounded
-copy. Missing, writable, unsealed, non-regular or incorrectly sized
-descriptors fail closed.
+Preview data never enters JSON: the broker passes a read-only, immutable
+descriptor, and the Runtime performs the final bounded copy. A still photo is
+returned to appd as one bounded descriptor containing a fixed thumbnail and at
+most 4 MiB of JPEG data. appd validates the envelope and commits it directly to
+the system photo library. Missing, writable, unsealed, non-regular or
+incorrectly sized descriptors fail closed.
 
 ## Image And Hardware Status
 
 The app-platform image installs `rpicam-apps-lite`; the previous minimal image
 removed it because no camera service existed. The fixed executable path and
 argument vector are owned by the broker, not by an application or manifest.
+The continuous YUV420 process uses a 40 FPS internal sensor target so protocol
+transfer and downscaling can sustain the public 30 FPS preview contract. Its
+process and camera pipeline are reused between preview and photo requests and
+released after two seconds without a request, so a frozen/background Camera
+task does not retain the sensor indefinitely. Both preview and JPEG quality-90
+photo capture use the same fixed 1280x720, 180-degree-rotated frame. Avoiding a
+second `rpicam-still` process removes sensor discovery and mode-switch latency;
+exposure quality remains part of physical acceptance.
 
-Read-only inspection of the current V0.6 device found the BCM2835 codec and ISP
-nodes but no connected Unicam sensor node. Therefore local protocol, sandbox,
-cross-build and image tests can complete now, while physical capture, frame
-orientation and permission-denial acceptance remain pending until a compatible
-sensor is attached. This does not require interrupting the active 24-hour core
-stability run.
+The current V0.6 image detects the IMX219 through the Unicam pipeline. Physical
+preview throughput, frame layout/orientation, foreground revocation and input
+latency still require coordinated device acceptance after each camera broker
+change.
 
 ## Verification
 
 Automated coverage includes:
 
 - strict request/response framing and exactly-one-FD transfer;
-- exact RGB888 input size and RGB565 little-endian conversion;
+- exact 1280x720 YUV420 input size, RGB565 downscaling and JPEG encoding;
+- bounded 1280x720 JPEG envelope and original-plus-thumbnail transaction;
+- foreground-runtime camera revocation and idle pipeline release;
 - fixed metadata, timeout and capture failure mapping;
 - read-only regular-file size and Linux seal verification in appd and Runtime;
 - `camera.capture` manifest permission routing and denial behavior;

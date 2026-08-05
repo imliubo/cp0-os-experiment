@@ -126,9 +126,11 @@ deterministic capability fixtures, while `--permissions deny` verifies the
 application's denial path.
 
 Photo Apps use `photos::count`, `photos::list_page`, `photos::load_rgb565`,
-`photos::save_rgb565` and `photos::delete`. Every frame is a fixed 320x170
-RGB565 buffer. Keep an eight-ID page and one frame instead of allocating in
-proportion to the library, and handle `Denied`, `Unavailable` and
+`photos::save_rgb565` and `photos::delete`. Camera Apps can use
+`camera::capture_rgb565` for a fixed 320x170 preview and
+`camera::capture_photo` for a system-managed 1280x720 JPEG capture that returns
+only a photo ID. Keep an eight-ID page and one thumbnail instead of allocating
+in proportion to the library, and handle `Denied`, `Unavailable` and
 `ResourceLimit` as normal UI states.
 
 ## Simulate and profile

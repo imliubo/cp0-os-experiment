@@ -258,14 +258,22 @@ static const char *app_name_for_id(const struct shell *shell,
     return app_id;
 }
 
-static void activate_surface(struct shell *shell, uint32_t token,
-                             bool immersive, const char *app_name)
+static bool activate_surface(struct shell *shell, uint32_t token,
+                             bool immersive, const char *app_id,
+                             const char *app_name)
 {
+    if (app_id == NULL || app_id[0] == '\0' ||
+        cp0_appd_set_foreground_app(app_id) != 0) {
+        fprintf(stderr,
+                "system-shell: application foreground synchronization failed\n");
+        return false;
+    }
     shell->overlay_mode = immersive
                               ? CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN
                               : CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS;
     cp0_ui_set_foreground_app(&shell->ui, app_name);
     cp0_system_shell_v1_activate_app(shell->system_control, token);
+    return true;
 }
 
 static const struct cp0_task_summary *task_summary(const struct shell *shell,
@@ -339,9 +347,11 @@ static void maybe_activate_pending_task(struct shell *shell)
     if (token == 0)
         return;
 
+    if (!activate_surface(shell, token, task->immersive, task->app_id,
+                          task->name))
+        return;
     shell->pending_activation[0] = '\0';
     shell->pending_activation_uid = 0;
-    activate_surface(shell, token, task->immersive, task->name);
     fprintf(stderr, "system-shell: pending task token=%u activated\n", token);
 }
 
@@ -728,6 +738,19 @@ static void poll_app_catalog(struct shell *shell)
         };
     }
     cp0_ui_sync_app_catalog(&shell->ui, catalog, list.count, list.truncated);
+}
+
+static bool poll_selected_app_permissions(struct shell *shell)
+{
+    struct cp0_app_permissions permissions;
+    const char *app_id = cp0_ui_selected_app_id(&shell->ui);
+
+    if (app_id == NULL || cp0_appd_get_permissions(app_id, &permissions) != 0)
+        return false;
+    cp0_ui_set_app_permissions(
+        &shell->ui, app_id, permissions.known, permissions.allowed,
+        permissions.denied, permissions.policy_denied);
+    return true;
 }
 
 static void poll_task_catalog(struct shell *shell)
@@ -2039,10 +2062,12 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         char app_id[CP0_APP_ID_BYTES];
         const char *selected_id = cp0_ui_selected_app_id(&shell->ui);
         uint32_t token = cp0_ui_selected_app_token(&shell->ui);
-        if (token != 0) {
-            activate_surface(
+        if (token != 0 && selected_id != NULL) {
+            (void)activate_surface(
                 shell, token, cp0_ui_selected_app_is_immersive(&shell->ui),
-                app_name_for_id(shell, selected_id));
+                selected_id, app_name_for_id(shell, selected_id));
+        } else if (token != 0) {
+            fprintf(stderr, "system-shell: selected application has no identity\n");
         } else if (selected_id != NULL &&
                    snprintf(app_id, sizeof(app_id), "%s", selected_id) > 0) {
             if (cp0_ui_selected_app_state(&shell->ui) == CP0_UI_APP_RUNNING ||
@@ -2075,6 +2100,26 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                 }
             }
         }
+    } else if (event == CP0_UI_EVENT_LOAD_APP_PERMISSIONS) {
+        if (!poll_selected_app_permissions(shell))
+            fprintf(stderr,
+                    "system-shell: application permission query failed\n");
+    } else if (event == CP0_UI_EVENT_RESET_APP_PERMISSION) {
+        const char *selected_id = cp0_ui_selected_app_id(&shell->ui);
+        uint16_t permission = cp0_ui_selected_app_permission(&shell->ui);
+        char app_id[CP0_APP_ID_BYTES];
+        if (selected_id != NULL && permission != 0 &&
+            snprintf(app_id, sizeof(app_id), "%s", selected_id) > 0 &&
+            cp0_appd_reset_permission(
+                app_id, (enum cp0_app_permission)permission) == 0) {
+            (void)poll_selected_app_permissions(shell);
+            fprintf(stderr,
+                    "system-shell: application %s permission reset to ask\n",
+                    app_id);
+        } else {
+            fprintf(stderr,
+                    "system-shell: application permission reset failed\n");
+        }
     } else if (event == CP0_UI_EVENT_ACTIVATE_TASK) {
         uint64_t task_id = cp0_ui_selected_task_id(&shell->ui);
         const char *selected_id = cp0_ui_selected_task_app_id(&shell->ui);
@@ -2103,8 +2148,9 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
                 if (token != 0) {
                     shell->pending_activation[0] = '\0';
                     shell->pending_activation_uid = 0;
-                    activate_surface(shell, token, activated->immersive,
-                                     activated->name);
+                    (void)activate_surface(
+                        shell, token, activated->immersive, activated->app_id,
+                        activated->name);
                 } else {
                     snprintf(shell->pending_activation,
                              sizeof(shell->pending_activation), "%s", app_id);
@@ -2470,6 +2516,9 @@ static void handle_system_action(void *data,
 {
     struct shell *shell = data;
     enum cp0_ui_action ui_action;
+    bool app_was_visible =
+        shell->overlay_mode == CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS ||
+        shell->overlay_mode == CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN;
     (void)system_control;
 
     switch (action) {
@@ -2527,6 +2576,13 @@ static void handle_system_action(void *data,
         begin_screenshot(shell);
         return;
     }
+    if (app_was_visible &&
+        (action == CP0_SYSTEM_SHELL_V1_ACTION_HOME ||
+         action == CP0_SYSTEM_SHELL_V1_ACTION_BACK ||
+         action == CP0_SYSTEM_SHELL_V1_ACTION_TASKS) &&
+        cp0_appd_set_foreground_app(NULL) != 0)
+        fprintf(stderr,
+                "system-shell: application foreground release failed\n");
     cancel_notification(shell, true);
     if (action > CP0_SYSTEM_SHELL_V1_ACTION_POWER &&
         action != CP0_SYSTEM_SHELL_V1_ACTION_HELP) {
@@ -2615,6 +2671,9 @@ static void handle_activation_failed(
     cp0_system_shell_v1_set_overlay_mode(shell->system_control,
                                           shell->overlay_mode);
     cp0_ui_set_foreground_app(&shell->ui, NULL);
+    if (cp0_appd_set_foreground_app(NULL) != 0)
+        fprintf(stderr,
+                "system-shell: failed activation kept foreground identity\n");
     fprintf(stderr, "system-shell: app token=%u activation failed\n", token);
     shell_redraw(shell);
 }

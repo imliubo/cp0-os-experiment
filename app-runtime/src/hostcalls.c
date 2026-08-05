@@ -110,6 +110,12 @@ static int32_t cp0_capture_camera_rgb565(
     return cp0_camera_capture_rgb565(pixels, (size_t)pixel_bytes);
 }
 
+static int64_t cp0_capture_camera_photo(
+    wasm_exec_env_t execution_environment) {
+    (void)execution_environment;
+    return cp0_camera_capture_photo();
+}
+
 static int32_t cp0_gpio_read(wasm_exec_env_t execution_environment,
                              uint32_t line) {
     (void)execution_environment;
@@ -202,6 +208,15 @@ static int32_t cp0_photos_load_rgb565_host(
     uint8_t *pixels, uint32_t pixel_bytes) {
     (void)execution_environment;
     return cp0_photos_load_rgb565(photo_id, pixels, (size_t)pixel_bytes);
+}
+
+static int32_t cp0_photos_load_view_rgb565_host(
+    wasm_exec_env_t execution_environment, uint64_t photo_id,
+    uint32_t zoom_level, int32_t pan_x, int32_t pan_y, uint8_t *pixels,
+    uint32_t pixel_bytes) {
+    (void)execution_environment;
+    return cp0_photos_load_view_rgb565(photo_id, zoom_level, pan_x, pan_y,
+                                       pixels, (size_t)pixel_bytes);
 }
 
 static int32_t cp0_photos_remove(wasm_exec_env_t execution_environment,

@@ -32,9 +32,11 @@ PCM buffers. The format is fixed to 16 kHz mono S16_LE and one call is limited
 to 1024 frames. Playback and capture require separate manifest permissions; the
 SDK exposes no ALSA device, mixer or format negotiation API.
 
-`cp0_camera_capture` fills exactly one caller-owned 320x170 RGB565 frame. It
-requires `camera.capture`; applications cannot select a sensor, access V4L2 or
-receive a native descriptor.
+`cp0_camera_capture` fills exactly one caller-owned 320x170 RGB565 preview
+frame. `cp0_camera_capture_photo` returns the photo ID of a system-managed
+1280x720 JPEG plus Gallery thumbnail. Preview requires `camera.capture`; still
+capture also requires `photos.write`. Applications cannot select a sensor,
+access V4L2 or receive a native descriptor.
 
 `cp0_gpio_read` and `cp0_gpio_write` accept only `cp0_gpio_line_t`. The enum
 contains four V0.6 logical connector outputs; it deliberately cannot represent
@@ -66,3 +68,7 @@ library. Use `cp0_photos_import_rgb565` to atomically add one fixed frame and
 Gallery indexes directly. `photos.read` and `photos.write` remain independent
 permissions. The paginated format and migration contract are described in
 `docs/PHOTO-LIBRARY-V2.md`.
+`cp0_photos_load_view_rgb565` returns a fixed 320x170 Fit, half-resolution or
+1:1 viewport of a Camera JPEG original. Pan coordinates are normalized from
+`CP0_PHOTO_VIEW_PAN_MIN` to `CP0_PHOTO_VIEW_PAN_MAX`; original bytes and paths
+remain broker-private.

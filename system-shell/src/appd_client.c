@@ -271,6 +271,34 @@ static bool app_permission_bit(const char *document,
     return false;
 }
 
+static const char *app_permission_name(uint16_t permission)
+{
+    switch (permission) {
+    case CP0_APP_PERMISSION_AUDIO_CAPTURE:
+        return "audio.capture";
+    case CP0_APP_PERMISSION_AUDIO_PLAYBACK:
+        return "audio.playback";
+    case CP0_APP_PERMISSION_CAMERA_CAPTURE:
+        return "camera.capture";
+    case CP0_APP_PERMISSION_DOCUMENTS_OPEN:
+        return "documents.open";
+    case CP0_APP_PERMISSION_HARDWARE_GPIO:
+        return "hardware.gpio";
+    case CP0_APP_PERMISSION_NETWORK_CLIENT:
+        return "network.client";
+    case CP0_APP_PERMISSION_NOTIFICATIONS_POST:
+        return "notifications.post";
+    case CP0_APP_PERMISSION_RADIO_LORA:
+        return "radio.lora";
+    case CP0_APP_PERMISSION_PHOTOS_READ:
+        return "photos.read";
+    case CP0_APP_PERMISSION_PHOTOS_WRITE:
+        return "photos.write";
+    default:
+        return NULL;
+    }
+}
+
 static int parse_app_page(const char *response, size_t response_length,
                           uint64_t request_id, uint16_t offset,
                           struct cp0_app_summary *apps, size_t capacity,
@@ -343,7 +371,7 @@ static int parse_app_page(const char *response, size_t response_length,
             !cp0_json_get_u64(response, &tokens[data_bytes],
                               &decoded.data_bytes) ||
             tokens[permissions].type != CP0_JSON_ARRAY ||
-            tokens[permissions].children > 8)
+            tokens[permissions].children > 10)
             return -1;
         if (cp0_json_string_equals(response, &tokens[display], "immersive")) {
             decoded.immersive = true;
@@ -708,6 +736,48 @@ int cp0_appd_close_task(uint64_t task_id)
     return task_lifecycle_command("close-task", "task-closed", task_id, NULL);
 }
 
+int cp0_appd_set_foreground_app(const char *app_id)
+{
+    char request[384];
+    char response[CP0_APPD_FRAME_BYTES];
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    size_t response_length;
+    size_t token_count;
+    uint64_t request_id = next_request_id++;
+    int data;
+    int request_length;
+
+    if (app_id != NULL && !valid_app_id(app_id))
+        return -1;
+    if (app_id != NULL) {
+        request_length = snprintf(
+            request, sizeof(request),
+            "{\"protocol_version\":2,\"request_id\":%llu,"
+            "\"command\":{\"name\":\"set-foreground-app\","
+            "\"app_id\":\"%s\"}}\n",
+            (unsigned long long)request_id, app_id);
+    } else {
+        request_length = snprintf(
+            request, sizeof(request),
+            "{\"protocol_version\":2,\"request_id\":%llu,"
+            "\"command\":{\"name\":\"set-foreground-app\","
+            "\"app_id\":null}}\n",
+            (unsigned long long)request_id);
+    }
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 3000) != 0 ||
+        parse_success(response, response_length, request_id, tokens,
+                      &token_count, &data) != 0)
+        return -1;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    return kind >= 0 && cp0_json_string_equals(
+                            response, &tokens[kind],
+                            "foreground-app-changed")
+               ? 0
+               : -1;
+}
+
 static int parse_lifecycle_response(const char *response,
                                     size_t response_length,
                                     uint64_t request_id,
@@ -846,7 +916,7 @@ static int parse_device_settings_response(
         !cp0_json_get_bool(response, &tokens[launch_restricted],
                            &decoded.app_launch_restricted) ||
         !cp0_json_get_u64(response, &tokens[denied], &denied_count) ||
-        denied_count > 8)
+        denied_count > 10)
         return -1;
     if (cp0_json_string_equals(response, &tokens[authority], "personal"))
         decoded.authority = CP0_AUTHORITY_PERSONAL;
@@ -859,6 +929,94 @@ static int parse_device_settings_response(
         return -1;
     decoded.denied_permission_count = (uint8_t)denied_count;
     *settings = decoded;
+    return 0;
+}
+
+static int parse_app_permissions_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *expected_app_id, struct cp0_app_permissions *permissions)
+{
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    struct cp0_app_permissions decoded = {0};
+    char app_id[CP0_APP_ID_BYTES];
+    size_t token_count;
+    int data;
+
+    if (permissions == NULL || !valid_app_id(expected_app_id) ||
+        parse_success(response, response_length, request_id, tokens,
+                      &token_count, &data) != 0)
+        return -1;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int returned_app_id = cp0_json_object_get(response, tokens, token_count,
+                                              data, "app_id");
+    int array = cp0_json_object_get(response, tokens, token_count, data,
+                                   "permissions");
+    if (tokens[data].children != 6 || kind < 0 || returned_app_id < 0 ||
+        array < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind],
+                                "application-permissions") ||
+        !cp0_json_copy_string(response, &tokens[returned_app_id], app_id,
+                              sizeof(app_id)) ||
+        strcmp(app_id, expected_app_id) != 0 ||
+        tokens[array].type != CP0_JSON_ARRAY || tokens[array].children > 10)
+        return -1;
+
+    for (unsigned int index = 0; index < tokens[array].children; index++) {
+        int item = cp0_json_array_get(tokens, token_count, array, index);
+        if (item < 0 || tokens[item].type != CP0_JSON_OBJECT ||
+            tokens[item].children != 4)
+            return -1;
+        int permission = cp0_json_object_get(response, tokens, token_count,
+                                             item, "permission");
+        int decision = cp0_json_object_get(response, tokens, token_count, item,
+                                           "decision");
+        uint16_t bit;
+        if (permission < 0 || decision < 0 ||
+            !app_permission_bit(response, &tokens[permission], &bit) ||
+            (decoded.known & bit) != 0)
+            return -1;
+        decoded.known |= bit;
+        if (cp0_json_string_equals(response, &tokens[decision], "allowed"))
+            decoded.allowed |= bit;
+        else if (cp0_json_string_equals(response, &tokens[decision], "denied"))
+            decoded.denied |= bit;
+        else if (cp0_json_string_equals(response, &tokens[decision],
+                                        "policy-denied"))
+            decoded.policy_denied |= bit;
+        else if (!cp0_json_string_equals(response, &tokens[decision], "ask"))
+            return -1;
+    }
+    *permissions = decoded;
+    return 0;
+}
+
+static int parse_permission_reset_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *expected_app_id, uint16_t expected_permission)
+{
+    struct cp0_json_token tokens[CP0_APPD_JSON_TOKENS];
+    const char *permission_name = app_permission_name(expected_permission);
+    char app_id[CP0_APP_ID_BYTES];
+    size_t token_count;
+    int data;
+
+    if (permission_name == NULL || !valid_app_id(expected_app_id) ||
+        parse_success(response, response_length, request_id, tokens,
+                      &token_count, &data) != 0)
+        return -1;
+    int kind = cp0_json_object_get(response, tokens, token_count, data, "kind");
+    int returned_app_id = cp0_json_object_get(response, tokens, token_count,
+                                              data, "app_id");
+    int permission = cp0_json_object_get(response, tokens, token_count, data,
+                                         "permission");
+    if (tokens[data].children != 6 || kind < 0 || returned_app_id < 0 ||
+        permission < 0 ||
+        !cp0_json_string_equals(response, &tokens[kind], "permission-reset") ||
+        !cp0_json_copy_string(response, &tokens[returned_app_id], app_id,
+                              sizeof(app_id)) ||
+        strcmp(app_id, expected_app_id) != 0 ||
+        !cp0_json_string_equals(response, &tokens[permission], permission_name))
+        return -1;
     return 0;
 }
 
@@ -1197,6 +1355,22 @@ int cp0_appd_test_parse_device_settings_response(
                                           expected_kind, settings);
 }
 
+int cp0_appd_test_parse_app_permissions_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *app_id, struct cp0_app_permissions *permissions)
+{
+    return parse_app_permissions_response(response, response_length, request_id,
+                                          app_id, permissions);
+}
+
+int cp0_appd_test_parse_permission_reset_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    const char *app_id, enum cp0_app_permission permission)
+{
+    return parse_permission_reset_response(response, response_length, request_id,
+                                           app_id, (uint16_t)permission);
+}
+
 int cp0_appd_test_parse_media_action_response(
     const char *response, size_t response_length, uint64_t request_id,
     const char *expected_action, char app_id[CP0_APP_ID_BYTES])
@@ -1365,6 +1539,54 @@ int cp0_appd_get_permission_prompt(struct cp0_permission_prompt *prompt)
         return -1;
     *prompt = decoded;
     return 1;
+}
+
+int cp0_appd_get_permissions(const char *app_id,
+                             struct cp0_app_permissions *permissions)
+{
+    char request[384];
+    char response[CP0_APPD_FRAME_BYTES];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+
+    if (!valid_app_id(app_id) || permissions == NULL)
+        return -1;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"get-permissions\",\"app_id\":\"%s\"}}\n",
+        (unsigned long long)request_id, app_id);
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 1000) != 0)
+        return -1;
+    return parse_app_permissions_response(response, response_length, request_id,
+                                          app_id, permissions);
+}
+
+int cp0_appd_reset_permission(const char *app_id,
+                              enum cp0_app_permission permission)
+{
+    char request[448];
+    char response[CP0_APPD_FRAME_BYTES];
+    const char *permission_name = app_permission_name((uint16_t)permission);
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+
+    if (!valid_app_id(app_id) || permission_name == NULL)
+        return -1;
+    int request_length = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":2,\"request_id\":%llu,\"command\":{"
+        "\"name\":\"reset-permission\",\"app_id\":\"%s\","
+        "\"permission\":\"%s\"}}\n",
+        (unsigned long long)request_id, app_id, permission_name);
+    if (request_length <= 0 || (size_t)request_length >= sizeof(request) ||
+        exchange(request, (size_t)request_length, response, sizeof(response),
+                 &response_length, 1000) != 0)
+        return -1;
+    return parse_permission_reset_response(
+        response, response_length, request_id, app_id, (uint16_t)permission);
 }
 
 int cp0_appd_resolve_permission(uint64_t prompt_id,
