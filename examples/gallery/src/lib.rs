@@ -147,11 +147,7 @@ impl Gallery {
     }
 
     fn cycle_zoom(&mut self) {
-        self.zoom = match self.zoom {
-            photos::ViewZoom::Fit => photos::ViewZoom::Half,
-            photos::ViewZoom::Half => photos::ViewZoom::Actual,
-            photos::ViewZoom::Actual => photos::ViewZoom::Fit,
-        };
+        self.zoom = next_zoom(self.zoom);
         self.pan_x = 0;
         self.pan_y = 0;
     }
@@ -234,6 +230,14 @@ const fn same_status(left: ViewStatus, right: ViewStatus) -> bool {
             | (ViewStatus::Denied, ViewStatus::Denied)
             | (ViewStatus::Damaged, ViewStatus::Damaged)
     )
+}
+
+const fn next_zoom(zoom: photos::ViewZoom) -> photos::ViewZoom {
+    match zoom {
+        photos::ViewZoom::Fit => photos::ViewZoom::Half,
+        photos::ViewZoom::Half => photos::ViewZoom::Actual,
+        photos::ViewZoom::Actual => photos::ViewZoom::Fit,
+    }
 }
 
 const fn is_previous_key(code: u16) -> bool {
@@ -563,5 +567,21 @@ mod tests {
         assert_eq!(next_selection(1, 4), 2);
         assert_eq!(previous_selection(0, 0), 0);
         assert_eq!(next_selection(0, 0), 0);
+    }
+
+    #[test]
+    fn original_view_cycles_zoom_and_bounds_pan() {
+        assert_eq!(next_zoom(photos::ViewZoom::Fit), photos::ViewZoom::Half);
+        assert_eq!(next_zoom(photos::ViewZoom::Half), photos::ViewZoom::Actual);
+        assert_eq!(next_zoom(photos::ViewZoom::Actual), photos::ViewZoom::Fit);
+
+        let mut gallery = Gallery::new();
+        gallery.zoom = photos::ViewZoom::Actual;
+        gallery.pan(i16::MAX, i16::MIN);
+        assert_eq!(gallery.pan_x, photos::MAX_VIEW_PAN);
+        assert_eq!(gallery.pan_y, photos::MIN_VIEW_PAN);
+        gallery.cycle_zoom();
+        assert_eq!(gallery.zoom, photos::ViewZoom::Fit);
+        assert_eq!((gallery.pan_x, gallery.pan_y), (0, 0));
     }
 }
