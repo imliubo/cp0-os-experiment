@@ -10,8 +10,14 @@ use cp0_sdk::{
 };
 
 const KEY_ENTER: u16 = 28;
+const KEY_F: u16 = 33;
+const KEY_Z: u16 = 44;
+const KEY_X: u16 = 45;
+const KEY_C: u16 = 46;
+const KEY_UP: u16 = 103;
 const KEY_LEFT: u16 = 105;
 const KEY_RIGHT: u16 = 106;
+const KEY_DOWN: u16 = 108;
 const FRAME_BYTES: usize = camera::FRAME_BYTES;
 const LIBRARY_REFRESH_INTERVAL_MS: u64 = 1_000;
 
@@ -162,6 +168,14 @@ const fn same_status(left: ViewStatus, right: ViewStatus) -> bool {
             | (ViewStatus::Denied, ViewStatus::Denied)
             | (ViewStatus::Damaged, ViewStatus::Damaged)
     )
+}
+
+const fn is_previous_key(code: u16) -> bool {
+    matches!(code, KEY_F | KEY_Z | KEY_UP | KEY_LEFT)
+}
+
+const fn is_next_key(code: u16) -> bool {
+    matches!(code, KEY_X | KEY_C | KEY_DOWN | KEY_RIGHT)
 }
 
 fn pixels() -> &'static mut [u16] {
@@ -335,8 +349,8 @@ pub extern "C" fn main() -> i32 {
             Ok(Some(event)) if event.pressed => {
                 if gallery.confirm_delete {
                     match event.code {
-                        KEY_LEFT => gallery.delete_selected = false,
-                        KEY_RIGHT => gallery.delete_selected = true,
+                        code if is_previous_key(code) => gallery.delete_selected = false,
+                        code if is_next_key(code) => gallery.delete_selected = true,
                         KEY_ENTER if gallery.delete_selected => {
                             match gallery.selected_photo().and_then(photos::delete) {
                                 Ok(_) => gallery.refresh(false),
@@ -351,8 +365,8 @@ pub extern "C" fn main() -> i32 {
                     }
                 } else {
                     match event.code {
-                        KEY_LEFT => gallery.move_left(),
-                        KEY_RIGHT => gallery.move_right(),
+                        code if is_previous_key(code) => gallery.move_left(),
+                        code if is_next_key(code) => gallery.move_right(),
                         KEY_ENTER if gallery.total > 0 => {
                             gallery.confirm_delete = true;
                             gallery.delete_selected = false;
@@ -413,5 +427,21 @@ mod tests {
             assert!(same_status(status, status));
         }
         assert!(!same_status(ViewStatus::Empty, ViewStatus::Photo));
+    }
+
+    #[test]
+    fn photo_navigation_accepts_plain_and_direction_keys() {
+        for code in [KEY_F, KEY_Z, KEY_UP, KEY_LEFT] {
+            assert!(is_previous_key(code));
+            assert!(!is_next_key(code));
+        }
+        for code in [KEY_X, KEY_C, KEY_DOWN, KEY_RIGHT] {
+            assert!(is_next_key(code));
+            assert!(!is_previous_key(code));
+        }
+        for code in [0, KEY_ENTER, 30, u16::MAX] {
+            assert!(!is_previous_key(code));
+            assert!(!is_next_key(code));
+        }
     }
 }

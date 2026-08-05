@@ -12,9 +12,11 @@ boundary, so memory use does not grow with the library.
 
 ## Controls
 
-- Left or Right: move between photos.
+- F, Z, Up or Left: move to the previous photo.
+- X, C, Down or Right: move to the next photo. The Fn direction combinations
+  remain supported because they produce the same direction keys.
 - Enter on a photo: open the delete confirmation.
-- Left or Right in the confirmation: choose Cancel or Delete.
+- The same previous/next keys in the confirmation choose Cancel or Delete.
 - Enter: confirm the selected action.
 - Enter when the library is empty: refresh the library.
 
