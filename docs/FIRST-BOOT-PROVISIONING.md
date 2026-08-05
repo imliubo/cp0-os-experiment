@@ -257,7 +257,10 @@ accept input.
 The Shell sends both passwords over the existing root-owned provisioning
 socket. `cp0-provisiond` accepts this command only in `COMPLETE`, reads the
 single owner shadow record, verifies the current password against its yescrypt
-hash, generates a new yescrypt hash, and atomically replaces the shadow file.
+hash through the system libxcrypt implementation, generates a fresh yescrypt
+hash with `mkpasswd`, and atomically replaces the shadow file. Verification
+does not pass a salt on an external command line; Debian 13's `mkpasswd`
+intentionally rejects explicit yescrypt salts.
 An incorrect current password returns the distinct `authentication` result;
 the UI clears all three password buffers before showing the error and requires
 the full flow again. Success, cancellation, service failure, and Shell teardown

@@ -1,4 +1,6 @@
 use std::collections::BTreeSet;
+#[cfg(target_os = "linux")]
+use std::ffi::CStr;
 use std::ffi::{CString, OsStr};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -32,6 +34,12 @@ pub const SSH_GROUP_GID: u32 = 1999;
 pub const STATE_SCHEMA_VERSION: u32 = 1;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 const OWNER_SHELL: &str = "/usr/libexec/cardputerzero/owner-shell";
+
+#[cfg(target_os = "linux")]
+#[link(name = "crypt")]
+unsafe extern "C" {
+    fn crypt(key: *const libc::c_char, salt: *const libc::c_char) -> *mut libc::c_char;
+}
 
 #[derive(Debug)]
 pub enum ProvisioningError {
@@ -410,6 +418,36 @@ fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
     difference == 0
 }
 
+#[cfg(target_os = "linux")]
+fn verify_yescrypt_password(
+    password: &str,
+    expected_hash: &str,
+) -> Result<bool, ProvisioningError> {
+    if !valid_yescrypt_hash(expected_hash) {
+        return Err(ProvisioningError::InvalidState(
+            "owner password hash is invalid",
+        ));
+    }
+    let expected = CString::new(expected_hash)
+        .map_err(|_| ProvisioningError::InvalidState("owner password hash is invalid"))?;
+    let mut secret = password.as_bytes().to_vec();
+    secret.push(0);
+    let candidate = unsafe { crypt(secret.as_ptr().cast(), expected.as_ptr()) };
+    secret.zeroize();
+    if candidate.is_null() {
+        return Err(ProvisioningError::Operation(
+            "yescrypt password verification failed",
+        ));
+    }
+    let candidate = unsafe { CStr::from_ptr(candidate) }.to_bytes();
+    if candidate.starts_with(b"*") {
+        return Err(ProvisioningError::Operation(
+            "yescrypt password verification failed",
+        ));
+    }
+    Ok(constant_time_equal(candidate, expected_hash.as_bytes()))
+}
+
 fn ensure_empty_or_owner_file(path: &Path, username: &str) -> Result<(), ProvisioningError> {
     if !path.exists() {
         return Ok(());
@@ -609,11 +647,18 @@ impl PlatformBackend for LinuxPlatformBackend {
         password: &str,
         expected_hash: &str,
     ) -> Result<bool, ProvisioningError> {
-        let salt = yescrypt_salt(expected_hash)?;
-        let mut candidate = self.run_password_hash(password, Some(salt))?;
-        let matches = constant_time_equal(candidate.as_bytes(), expected_hash.as_bytes());
-        candidate.zeroize();
-        Ok(matches)
+        #[cfg(target_os = "linux")]
+        {
+            verify_yescrypt_password(password, expected_hash)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let salt = yescrypt_salt(expected_hash)?;
+            let mut candidate = self.run_password_hash(password, Some(salt))?;
+            let matches = constant_time_equal(candidate.as_bytes(), expected_hash.as_bytes());
+            candidate.zeroize();
+            Ok(matches)
+        }
     }
 
     fn list_wifi(&mut self) -> Result<Vec<WifiNetwork>, ProvisioningError> {
@@ -1586,6 +1631,15 @@ mod tests {
     use std::os::fd::FromRawFd;
 
     static NEXT: AtomicUsize = AtomicUsize::new(1);
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn verifies_yescrypt_with_the_platform_crypt_implementation() {
+        const HASH: &str =
+            "$y$j9T$Q//gmkRTgBHbxV5G5G/6c0$inkw0P0CRxy0akIfXigVemtTdREGCwTP5dG.nrPX.Y7";
+        assert!(verify_yescrypt_password("probe-password", HASH).unwrap());
+        assert!(!verify_yescrypt_password("wrong-password", HASH).unwrap());
+    }
 
     #[derive(Default)]
     struct MockBackend {
