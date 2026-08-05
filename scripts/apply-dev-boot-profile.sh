@@ -23,6 +23,18 @@ backup_dir="$boot_dir/cardputerzero-os-backup/$timestamp"
 
 test -f "$config"
 test -f "$cmdline"
+for camera_firmware in start_x.elf fixup_x.dat; do
+    if [[ ! -s $boot_dir/$camera_firmware ]]; then
+        echo "error: standard camera firmware is missing: $camera_firmware" >&2
+        exit 1
+    fi
+done
+legacy_bootscreen_sha256=d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd
+if [[ $(sha256sum "$boot_dir/start_x.elf" | awk '{print $1}') == \
+      "$legacy_bootscreen_sha256" ]]; then
+    echo "error: refusing the M5Stack firmware that forces 256 MB GPU memory" >&2
+    exit 1
+fi
 if [[ ! -f "$dtb_source" ]]; then
     echo "error: missing $dtb_source; run patch-cm0-dtb.sh and upload the DTB next to this script" >&2
     exit 1
@@ -51,6 +63,7 @@ cat >>"$config" <<'CONFIG'
 [all]
 gpu_mem=64
 gpu_mem_512=64
+start_x=1
 # END CARDPUTERZERO OS DEV PROFILE
 CONFIG
 

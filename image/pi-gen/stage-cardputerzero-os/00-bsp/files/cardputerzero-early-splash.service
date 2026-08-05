@@ -1,0 +1,34 @@
+[Unit]
+Description=Show the CardputerZero product splash on the LCD framebuffer
+After=systemd-modules-load.service systemd-udev-trigger.service
+Before=cardputerzero-compositor.service cardputerzero-display-retry.service
+RequiresMountsFor=/var/lib/cardputerzero/registry
+ConditionPathExists=/usr/share/cardputerzero/boot/splash.rgb565
+ConditionPathExists=!/var/lib/cardputerzero/registry/recovery-mode
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/cardputerzero/show-early-splash.sh
+TimeoutStartSec=6
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

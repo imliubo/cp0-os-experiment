@@ -12,11 +12,10 @@ memory controller 与 AppArmor。BSP 固定到 M5Stack dtoverlays 提交
 `cardputerzero-v5-overlay`。V0.6 由该 overlay 中的 `powerfail_suo` 独占 P12，
 供电稳定后对 `imx219` 做有限重试；独立的 `camera-py12-high-overlay` 会与其争用，
 旧版 `camera-gpio16-high-overlay` 也不得用于 V0.6。
-镜像将 Camera-capable M5Stack VideoCore 固件安装为 `start.elf`，不设置
-`start_x=1`，并保留官方镜像使用的 `fixup.dat` 配对。最初决定只使用
-`raspi-firmware` 版本、不复制 M5Stack 标记为 tainted 的
-boot-screen 二进制；该固件来源决策已由 ADR 0008 部分取代，内存划分、overlay 和
-相机供电决策不变。
+镜像设置 `start_x=1`，使用 `raspi-firmware` 提供的 Camera-capable
+`start_x.elf`/`fixup_x.dat` 配对。M5Stack `m5stack_bootscreen` 二进制不能进入镜像；
+构建阶段和成品门禁都拒绝其固定 SHA256。splash 路径见 ADR 0008，overlay 和相机
+供电决策不变。
 
 ## 理由
 
@@ -25,6 +24,11 @@ boot-screen 二进制；该固件来源决策已由 ADR 0008 部分取代，内�
 VC4 同时请求
 256 MB CMA 并分配失败，造成持续的 DRM/相机错误。全 KMS 不需要 256 MB 固件堆，
 64 MB GPU 与 64 MB CMA 为当前相机、DRM 测试提供了保守余量。
+
+2026-08-06 的产品真机反证了供应商 `m5stack_bootscreen` 固件与该预算兼容的假设：
+即使 `config.txt` 同时设置 `gpu_mem=64` 和 `gpu_mem_512=64`，该固件仍报告
+`arm=256M`、`gpu=256M`，Linux `MemTotal` 只有约 227 MiB。恢复标准 `start_x`
+固件选择是满足本 ADR 的必要条件，不能为了内核前 splash 接受 256/256 分配。
 
 基础 `bcm2710-rpi-cm0.dtb` 直接携带 `cgroup_disable=memory`，追加 enable 参数无法
 撤销已经执行的 disable 操作。不能用 overlay 覆盖整个 `bootargs`，因为 firmware 在

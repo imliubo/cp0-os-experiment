@@ -11,29 +11,28 @@ ssh_prepare="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/prepare
 ssh_prepare_unit="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardputerzero-ssh-prepare.service"
 camera_probe="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/camera-probe.sh"
 camera_probe_unit="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardputerzero-camera-probe.service"
+early_splash="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/show-early-splash.sh"
+early_splash_unit="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardputerzero-early-splash.service"
 backlight_patch="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/0002-cardputerzero-v06-backlight-zero-duty.patch"
 rootfs_verifier="$repo_root/tests/test-built-rootfs-profile.sh"
+dev_boot_profile="$repo_root/scripts/apply-dev-boot-profile.sh"
 makefile="$repo_root/Makefile"
 boot_fragment="$repo_root/bsp/cm0-v0.6/boot/config.txt.fragment"
 cmdline_fragment="$repo_root/bsp/cm0-v0.6/boot/cmdline.extra"
-bootscreen_firmware="$repo_root/bsp/cm0-v0.6/firmware/start-m5stack-bootscreen.elf"
 splash_png="$repo_root/bsp/cm0-v0.6/boot/splash.png"
-splash_bmp="$repo_root/bsp/cm0-v0.6/boot/splash.bmp"
+splash_rgb565="$repo_root/bsp/cm0-v0.6/boot/splash.rgb565"
 
-expected_firmware_sha256=d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd
-expected_fixup_sha256=b2d19b8c300b5a4ddbd0fcff3a0f7de61a171046269d8724e74f616058417d4b
+legacy_firmware_sha256=d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd
 expected_splash_png_sha256=17b6b5571fd3be038992df24134d7ca88c75b22cb36e84cf2f007664096298e1
-expected_splash_bmp_sha256=dfaf289bae036e60014093cdf2705ab50d33507c38d6d197640fda99e32efc30
+expected_splash_rgb565_sha256=75a53d81f5ec087536a030919698c595630d48296e07d5f5f3d04ebebf2efd57
 
 grep -q '^PI_GEN_BRANCH=arm64$' "$repo_root/image/pi-gen/upstream.env"
 grep -Eq '^PI_GEN_COMMIT=[0-9a-f]{40}$' "$repo_root/image/pi-gen/upstream.env"
 grep -q '^dtoverlay=vc4-kms-v3d,cma-64$' "$stage"
 grep -q '^camera_auto_detect=0$' "$stage"
 grep -q "'/^start_x=/d'" "$stage"
-if grep -q '^start_x=' "$stage" || grep -q '^start_x=' "$boot_fragment"; then
-    echo "error: M5Stack boot-screen firmware must use the official start.elf path" >&2
-    exit 1
-fi
+grep -q '^start_x=1$' "$stage"
+grep -q '^start_x=1$' "$boot_fragment"
 grep -q '^dtoverlay=imx219$' "$stage"
 if grep -q '^dtoverlay=camera-py12-high-overlay$' "$stage"; then
     echo "error: V0.6 must leave P12 under the powerfail driver" >&2
@@ -62,9 +61,9 @@ for camera_config in "$stage" "$boot_fragment"; do
 done
 grep -q '^gpu_mem=64$' "$stage"
 grep -q '^gpu_mem_512=64$' "$stage"
-grep -Fq "BOOTSCREEN_FIRMWARE_SHA256=\"$expected_firmware_sha256\"" "$stage"
-grep -Fq "BOOTSCREEN_FIXUP_SHA256=\"$expected_fixup_sha256\"" "$stage"
-grep -Fq "BOOTSCREEN_SPLASH_SHA256=\"$expected_splash_bmp_sha256\"" "$stage"
+grep -Fq "LEGACY_BOOTSCREEN_FIRMWARE_SHA256=\"$legacy_firmware_sha256\"" "$stage"
+grep -Fq "EARLY_SPLASH_SHA256=\"$expected_splash_rgb565_sha256\"" "$stage"
+grep -Fq 'for camera_firmware in start_x.elf fixup_x.dat' "$stage"
 grep -Fq 'boot_tokens='"'"'quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0 fbcon=map:off systemd.show_status=false rd.systemd.show_status=false'"'" "$stage"
 grep -Fq 'boot_tokens='"'"'loglevel=6 consoleblank=0 fbcon=map:1'"'" "$stage"
 for token in quiet loglevel=3 logo.nologo vt.global_cursor_default=0 \
@@ -72,19 +71,43 @@ for token in quiet loglevel=3 logo.nologo vt.global_cursor_default=0 \
     rd.systemd.show_status=false; do
     grep -Fqw "$token" "$cmdline_fragment"
 done
-test "$(wc -c <"$bootscreen_firmware" | tr -d ' ')" = 3055976
-test "$(wc -c <"$splash_bmp" | tr -d ' ')" = 108866
-test "$(shasum -a 256 "$bootscreen_firmware" | awk '{print $1}')" = \
-    "$expected_firmware_sha256"
+test "$(wc -c <"$splash_rgb565" | tr -d ' ')" = 108800
 test "$(shasum -a 256 "$splash_png" | awk '{print $1}')" = \
     "$expected_splash_png_sha256"
-test "$(shasum -a 256 "$splash_bmp" | awk '{print $1}')" = \
-    "$expected_splash_bmp_sha256"
-grep -Fq 'start-m5stack-bootscreen.elf' "$build_script"
-grep -Fq 'bsp/cm0-v0.6/boot/splash.bmp' "$build_script"
-grep -Fq 'boot/firmware/start.elf' "$stage"
-grep -Fq 'boot/firmware/fixup.dat' "$stage"
-grep -Fq 'boot/firmware/splash.bmp' "$stage"
+test "$(shasum -a 256 "$splash_rgb565" | awk '{print $1}')" = \
+    "$expected_splash_rgb565_sha256"
+if grep -Fq 'start-m5stack-bootscreen.elf' "$build_script"; then
+    echo "error: image builder still packages the legacy M5Stack firmware" >&2
+    exit 1
+fi
+grep -Fq 'bsp/cm0-v0.6/boot/splash.rgb565' "$build_script"
+grep -Fq 'usr/share/cardputerzero/boot/splash.rgb565' "$stage"
+grep -q 'cardputerzero-early-splash.service' "$stage"
+grep -qx 'Before=cardputerzero-compositor.service cardputerzero-display-retry.service' \
+    "$early_splash_unit"
+grep -qx 'RequiresMountsFor=/var/lib/cardputerzero/registry' "$early_splash_unit"
+grep -qx 'WantedBy=multi-user.target' "$early_splash_unit"
+grep -q 'panel-mipi-dbid' "$early_splash"
+grep -q '320,170' "$early_splash"
+grep -q 'expected_bytes=108800' "$early_splash"
+sh -n "$early_splash"
+mkdir -p "$repo_root/target/test-tmp"
+early_splash_tmp=$(mktemp -d "$repo_root/target/test-tmp/early-splash.XXXXXX")
+trap 'rm -rf -- "$early_splash_tmp"' EXIT
+mkdir -p "$early_splash_tmp/sys/class/graphics/fb7" "$early_splash_tmp/dev"
+printf 'panel-mipi-dbid\n' >"$early_splash_tmp/sys/class/graphics/fb7/name"
+printf '320,170\n' >"$early_splash_tmp/sys/class/graphics/fb7/virtual_size"
+printf '16\n' >"$early_splash_tmp/sys/class/graphics/fb7/bits_per_pixel"
+printf '4\n' >"$early_splash_tmp/sys/class/graphics/fb7/blank"
+: >"$early_splash_tmp/dev/fb7"
+CP0_EARLY_SPLASH_UID=0 \
+CP0_EARLY_SPLASH_SYSFS_ROOT="$early_splash_tmp/sys" \
+CP0_EARLY_SPLASH_DEVICE_ROOT="$early_splash_tmp/dev" \
+CP0_EARLY_SPLASH_FILE="$splash_rgb565" \
+    sh "$early_splash" >/dev/null
+test "$(wc -c <"$early_splash_tmp/dev/fb7" | tr -d ' ')" = 108800
+cmp "$splash_rgb565" "$early_splash_tmp/dev/fb7"
+grep -qx '0' "$early_splash_tmp/sys/class/graphics/fb7/blank"
 grep -q 'fb_load.service' "$stage"
 grep -q 'rm -f /etc/systemd/system/fb_load.service' "$stage"
 grep -q 'cardputerzero-console-banner.service' "$stage"
@@ -96,12 +119,12 @@ grep -q 'drivers/imx219' "$camera_probe"
 grep -q '10-0010' "$camera_probe"
 grep -q 'kernel-camera.log' "$camera_probe"
 grep -q 'schema=cardputerzero-camera-probe-v2' "$camera_probe"
-grep -Fq 'CP0_CAMERA_PROBE_FIRMWARE_FILE:-/boot/firmware/start.elf' "$camera_probe"
+grep -Fq 'firmware_file=/boot/firmware/start_x.elf' "$camera_probe"
 grep -q '^firmware_mode=start$' "$camera_probe"
 grep -q "printf 'firmware_mode=%s" "$camera_probe"
 grep -q "printf 'firmware_variant=%s" "$camera_probe"
 grep -q "printf 'firmware_sha256=%s" "$camera_probe"
-grep -Fq "$expected_firmware_sha256" "$camera_probe"
+grep -Fq "$legacy_firmware_sha256" "$camera_probe"
 grep -q 'count >= 100' "$camera_probe"
 grep -q 'imx219|m5ioe1|powerfail|unicam' "$camera_probe"
 if grep -q 'cp0-developer-access' "$camera_probe"; then
@@ -114,6 +137,10 @@ if grep -Eq '(^|[[:space:]])(sudo|su)([[:space:]]|$)' "$camera_probe"; then
     exit 1
 fi
 sh -n "$camera_probe"
+grep -q '^start_x=1$' "$dev_boot_profile"
+grep -q 'for camera_firmware in start_x.elf fixup_x.dat' "$dev_boot_profile"
+grep -Fq "$legacy_firmware_sha256" "$dev_boot_profile"
+sh -n "$dev_boot_profile"
 if grep -q 'getty@tty1.service cardputerzero-console-banner.service' "$stage"; then
     echo "error: tty1 cannot be statically enabled with the compositor" >&2
     exit 1

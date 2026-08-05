@@ -53,6 +53,7 @@ required_executables=(
     usr/libexec/cardputerzero/device-recovery-data
     usr/libexec/cardputerzero/device-smoke.sh
     usr/libexec/cardputerzero/camera-probe
+    usr/libexec/cardputerzero/show-early-splash.sh
     usr/libexec/cardputerzero/device-stability-monitor
     usr/libexec/cardputerzero/device-store-acceptance
     usr/libexec/cardputerzero/device-support-bundle
@@ -75,6 +76,8 @@ required_files=(
     usr/lib/aarch64-linux-gnu/weston/cardputerzero-policy.so
     etc/cardputerzero/device-policy.json
     etc/avahi/avahi-daemon.conf
+    usr/lib/systemd/system/cardputerzero-early-splash.service
+    usr/share/cardputerzero/boot/splash.rgb565
     usr/share/cardputerzero/builtin-apps.tsv
     var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/app.json
     var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm
@@ -170,6 +173,7 @@ if [[ $access_profile == development ]]; then
 fi
 if [[ $image_profile == product ]]; then
     enabled_units+=(
+        multi-user.target.wants/cardputerzero-early-splash.service
         multi-user.target.wants/cardputerzero-overlay-root-status.service
         multi-user.target.wants/avahi-daemon.service
         multi-user.target.wants/seatd.service
@@ -199,6 +203,11 @@ done
 banner_link="$rootfs/etc/systemd/system/multi-user.target.wants/cardputerzero-console-banner.service"
 if [[ $image_profile == product && ( -e $banner_link || -L $banner_link ) ]]; then
     echo "error: product image enables the LCD console banner" >&2
+    exit 1
+fi
+early_splash_link="$rootfs/etc/systemd/system/multi-user.target.wants/cardputerzero-early-splash.service"
+if [[ $image_profile == recovery && ( -e $early_splash_link || -L $early_splash_link ) ]]; then
+    echo "error: recovery image enables the product early splash" >&2
     exit 1
 fi
 if [[ $access_profile == production ]]; then
@@ -384,39 +393,29 @@ if [[ $(grep -c '^dtoverlay=imx219$' "$bootfs/config.txt") -ne 1 ]]; then
     echo "error: image does not enable the IMX219 sensor exactly once" >&2
     exit 1
 fi
-if grep -q '^start_x=' "$bootfs/config.txt"; then
-    echo "error: image does not use the official M5Stack start.elf selection" >&2
+if [[ $(grep -c '^start_x=1$' "$bootfs/config.txt") -ne 1 ]]; then
+    echo "error: image does not select the standard camera firmware" >&2
     exit 1
 fi
-for camera_firmware in start.elf fixup.dat; do
+for camera_firmware in start_x.elf fixup_x.dat; do
     if [[ ! -s $bootfs/$camera_firmware ]]; then
         echo "error: image is missing camera firmware: $camera_firmware" >&2
         exit 1
     fi
 done
-bootscreen_firmware_sha256=d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd
-bootscreen_fixup_sha256=b2d19b8c300b5a4ddbd0fcff3a0f7de61a171046269d8724e74f616058417d4b
-if [[ $(sha256sum "$bootfs/start.elf" | awk '{print $1}') != \
-      "$bootscreen_firmware_sha256" ]]; then
-    echo "error: image does not contain the pinned M5Stack boot-screen start firmware" >&2
-    exit 1
-fi
-if [[ $(sha256sum "$bootfs/fixup.dat" | awk '{print $1}') != \
-      "$bootscreen_fixup_sha256" ]]; then
-    echo "error: image does not contain the official M5Stack fixup pairing" >&2
-    exit 1
-fi
-bootscreen_splash_sha256=dfaf289bae036e60014093cdf2705ab50d33507c38d6d197640fda99e32efc30
-if [[ ! -s $bootfs/splash.bmp ||
-      $(sha256sum "$bootfs/splash.bmp" | awk '{print $1}') != \
-      "$bootscreen_splash_sha256" ]]; then
-    echo "error: image does not contain the pinned 320x170 boot splash" >&2
-    exit 1
-fi
-if [[ $(od -An -tu4 -j18 -N4 "$bootfs/splash.bmp" | tr -d ' ') != 170 ||
-      $(od -An -tu4 -j22 -N4 "$bootfs/splash.bmp" | tr -d ' ') != 320 ||
-      $(od -An -tu2 -j28 -N2 "$bootfs/splash.bmp" | tr -d ' ') != 16 ]]; then
-    echo "error: boot splash is not a 170x320 RGB565 BMP" >&2
+legacy_bootscreen_sha256=d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd
+for camera_firmware in start.elf start_x.elf; do
+    if [[ $(sha256sum "$bootfs/$camera_firmware" | awk '{print $1}') == \
+          "$legacy_bootscreen_sha256" ]]; then
+        echo "error: image contains the M5Stack firmware that forces 256 MB GPU memory" >&2
+        exit 1
+    fi
+done
+early_splash="$rootfs/usr/share/cardputerzero/boot/splash.rgb565"
+early_splash_sha256=75a53d81f5ec087536a030919698c595630d48296e07d5f5f3d04ebebf2efd57
+if [[ $(wc -c <"$early_splash") -ne 108800 ||
+      $(sha256sum "$early_splash" | awk '{print $1}') != "$early_splash_sha256" ]]; then
+    echo "error: image does not contain the pinned 320x170 RGB565 splash" >&2
     exit 1
 fi
 if grep -qx 'dtoverlay=camera-py12-high-overlay' "$bootfs/config.txt"; then

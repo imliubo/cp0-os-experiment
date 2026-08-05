@@ -79,16 +79,17 @@ grep -q '^Before=cardputerzero-system-shell.service$' "$display_retry_service"
 grep -q '^Type=oneshot$' "$display_retry_service"
 grep -q '^RemainAfterExit=yes$' "$display_retry_service"
 grep -q '^WantedBy=multi-user.target$' "$display_retry_service"
-grep -q 'systemctl restart cardputerzero-compositor.service' "$display_retry"
+grep -q '"$systemctl_command" restart cardputerzero-compositor.service' "$display_retry"
 if grep -q 'systemctl is-active --quiet cardputerzero-system-shell.service' \
     "$display_retry"; then
     echo 'display retry cannot wait for a visible System Shell' >&2
     exit 1
 fi
-grep -q 'systemctl is-active --quiet cardputerzero-compositor.service' \
+grep -q '"$systemctl_command" is-active --quiet cardputerzero-compositor.service' \
     "$display_retry"
 grep -q 'cardputerzero-display-retry.service' "$stage"
-grep -q '^delay=${CP0_DISPLAY_RETRY_DELAY:-8}$' "$display_retry"
+grep -q '^not_before_ms=${CP0_DISPLAY_RETRY_NOT_BEFORE_MS:-8000}$' "$display_retry"
+grep -q '^uptime_file=${CP0_DISPLAY_RETRY_UPTIME_FILE:-/proc/uptime}$' "$display_retry"
 grep -q '/usr/bin/cardputerzero-system-shell' "$shell_service"
 grep -q '^Wants=cardputerzero-powerd.socket cardputerzero-provisiond.socket$' "$shell_service"
 grep -q '^After=cardputerzero-compositor.service cardputerzero-display-retry.service cardputerzero-powerd.socket cardputerzero-provisiond.socket$' "$shell_service"
@@ -188,6 +189,30 @@ sh -n "$display_generator"
 mkdir -p "$repo_root/target/test-tmp"
 generator_tmp=$(mktemp -d "$repo_root/target/test-tmp/display-generator.XXXXXX")
 trap 'rm -rf -- "$generator_tmp"' EXIT
+cat >"$generator_tmp/systemctl" <<'SCRIPT'
+#!/bin/sh
+exit 0
+SCRIPT
+cat >"$generator_tmp/sleep" <<'SCRIPT'
+#!/bin/sh
+printf '%s\n' "$1" >>"$CP0_DISPLAY_RETRY_SLEEP_LOG"
+SCRIPT
+chmod +x "$generator_tmp/systemctl" "$generator_tmp/sleep"
+printf '6.250 0.00\n' >"$generator_tmp/uptime"
+CP0_DISPLAY_RETRY_UPTIME_FILE="$generator_tmp/uptime" \
+CP0_DISPLAY_RETRY_SLEEP="$generator_tmp/sleep" \
+CP0_DISPLAY_RETRY_SLEEP_LOG="$generator_tmp/sleep.log" \
+CP0_DISPLAY_RETRY_SYSTEMCTL="$generator_tmp/systemctl" \
+    sh "$display_retry"
+grep -qx '1.750' "$generator_tmp/sleep.log"
+rm -f "$generator_tmp/sleep.log"
+printf '12.000 0.00\n' >"$generator_tmp/uptime"
+CP0_DISPLAY_RETRY_UPTIME_FILE="$generator_tmp/uptime" \
+CP0_DISPLAY_RETRY_SLEEP="$generator_tmp/sleep" \
+CP0_DISPLAY_RETRY_SLEEP_LOG="$generator_tmp/sleep.log" \
+CP0_DISPLAY_RETRY_SYSTEMCTL="$generator_tmp/systemctl" \
+    sh "$display_retry"
+test ! -e "$generator_tmp/sleep.log"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -I"$repo_root/compositor-policy" \
     "$esc_gesture" "$esc_gesture_test" \

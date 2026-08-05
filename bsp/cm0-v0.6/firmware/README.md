@@ -1,6 +1,6 @@
 # M5Stack boot-screen firmware
 
-`start-m5stack-bootscreen.elf` is the opaque VideoCore firmware distributed
+`start-m5stack-bootscreen.elf` is the retired opaque VideoCore firmware distributed
 by M5Stack's CardputerZero image builder. It retains the Raspberry Pi `start_x`
 camera feature set and adds early ST7789 splash rendering from
 `/boot/firmware/splash.bmp`. M5Stack installs this embedded `start_x` variant as
@@ -17,7 +17,9 @@ image.
 - Embedded variant: `start_x`
 - Embedded upstream version: `85bf5729aa4fa558b105936b0841241dc4b9ee64 (tainted)`
 
-The artifact is not reproducible from this repository. Image construction and
-the final rootfs gate reject any other firmware or fixup hash. Do not replace
-either file without a V0.6 cold-boot, LCD, Camera and power-loss acceptance
-cycle.
+The artifact is retained only as provenance and is not packaged. V0.6 testing
+showed that it ignores `gpu_mem_512=64` and forces a 256 MB GPU split, leaving
+Linux with only about 227 MiB. Image construction and the final rootfs gate now
+reject this hash. Product and recovery images use the `raspi-firmware`
+`start_x.elf`/`fixup_x.dat` pair selected by `start_x=1`; Linux renders the
+product splash after the LCD framebuffer appears.

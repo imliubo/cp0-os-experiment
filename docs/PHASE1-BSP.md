@@ -48,12 +48,12 @@ IMX219 的首次自动 probe 可能早于 M5IOE1 和 `powerfail_suo` 就绪。
 `/run/cardputerzero-camera-probe/`。日志只保留 Camera、M5IOE1、powerfail 和 Unicam
 相关的前 100 行，不包含应用数据、网络标识或通用内核日志；开启 SSH 后 Owner 可读取。
 
-M5Stack 官方可用镜像使用 Camera-capable `start_x` embedded variant，并在其
-`m5stack_bootscreen` 分支中增加了 SPI LCD early splash。官方将这个二进制安装为
-`start.elf`，不设置 `start_x=1`，并继续使用 `fixup.dat`；V0.6 profile 精确复现该
-布局并安装 `splash.bmp`。镜像门禁验证配置、固件精确哈希、BMP 精确哈希和
-170x320 RGB565 格式；probe 状态记录固件模式、变体和实际哈希。该固件是不透明且
-不可由本仓库复现的供应商二进制，来源和接受条件见 ADR 0008。
+V0.6 profile 设置 `start_x=1`，使用 `raspi-firmware` 的
+`start_x.elf`/`fixup_x.dat`。M5Stack 官方镜像曾使用不透明的
+`m5stack_bootscreen` 变体提供内核前 splash，但真机证明它会无视 64 MB 配置并强制
+256/256 MB 内存划分，因此不再打包。镜像门禁明确拒绝该旧固件哈希；probe 状态记录
+实际固件模式、变体和哈希。product splash 改由 Linux framebuffer 一次性绘制，详见
+ADR 0008。
 
 V0.6 冷启动真机还观察到早期 fbdev 初始化未被面板接受，而后续 compositor
 disable/enable 会可靠发送完整的 ST7789 soft-reset、sleep-out 和 display-on 序列。
@@ -61,7 +61,9 @@ disable/enable 会可靠发送完整的 ST7789 soft-reset、sleep-out 和 displa
 必须等该 oneshot 完成后才启动，因此不会在用户可见后被重置。服务不在 recovery
 镜像启用，也不会形成重启循环。2026-08-02 摄像头复验发现
 1 秒重试仍可能早于面板稳定窗口，而稍后的手动 disable/enable 可立即恢复 Home；
-默认重试延迟因此调整为 8 秒，最终冷启动门禁须在包含该改动的新镜像上完成。
+重试下限因此设为开机后 8 秒。服务按 `/proc/uptime` 只等待剩余时间，而不是从服务
+启动时再固定睡 8 秒；晚启动时可避免把整段等待叠加到启动关键路径。最终冷启动门禁
+须在包含该改动的新镜像上完成。
 
 ## 构建最小镜像
 
@@ -143,16 +145,17 @@ CP0_RESUME_BUILD=1 ./image/build-image.sh
 product 镜像使用固定的 early splash，并设置 `quiet loglevel=3 logo.nologo`、
 `vt.global_cursor_default=0`、`fbcon=map:off` 和 systemd status suppression。LCD 不再
 显示内核、initramfs、systemd 日志或启动摘要，`cardputerzero-console-banner.service`
-也不会启用。splash 由 VideoCore 在 Linux 内核执行前写入 ST7789，并保持到 compositor
-和 System Shell 接管显示。
+也不会启用。ST7789 framebuffer 出现后，root-only oneshot 将固定的 320x170 RGB565
+帧写入 LCD，并保持到 compositor 和 System Shell 接管显示；在此之前 LCD 不显示启动
+日志。
 
 recovery 镜像继续使用 `loglevel=6 consoleblank=0 fbcon=map:1`，启用启动摘要和
 `getty@tty1`。product development 镜像运行时进入 Recovery Mode 时，受限 helper 会
 用 `/usr/bin/con2fbmap` 将 tty1 映射到 `/dev/fb_lcd` 的实际编号，因此 HDMI 是否连接
 不会改变本地恢复终端目标。
 
-product 启动时，出现 splash 只证明 GPU firmware、SPI LCD 和 splash 资源可用；出现
-Home 才证明 Linux、根文件系统、systemd、compositor 和 System Shell 已完成启动。
+product 启动时，出现 splash 证明 Linux 已加载 SPI LCD framebuffer 且 splash 资源
+可用；出现 Home 才证明根文件系统、systemd、compositor 和 System Shell 已完成启动。
 若长期停留在 splash，需结合路由器 DHCP 租约、mDNS 或已授权 SSH 诊断。登录后可查看：
 
 ```sh

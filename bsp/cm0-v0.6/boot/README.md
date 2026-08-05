@@ -1,18 +1,19 @@
 # V0.6 boot splash assets
 
-`splash.png` is the 320x170 source image. M5Stack's VideoCore boot-screen
-firmware consumes the panel-native 170x320 RGB565 `splash.bmp` and rotates it
-clockwise on the physical display.
+`splash.png` is the 320x170 source image. The product early-splash service
+writes `splash.rgb565` directly to the Linux LCD framebuffer after the ST7789
+driver appears. This preserves the 64 MB VideoCore split and the standard
+camera-capable Raspberry Pi firmware.
 
-Regenerate the BMP with FFmpeg:
+Regenerate the raw frame with FFmpeg:
 
 ```sh
-ffmpeg -i splash.png -vf transpose=2 -c:v bmp -pix_fmt rgb565le splash.bmp
+ffmpeg -i splash.png -frames:v 1 -f rawvideo -pix_fmt rgb565le splash.rgb565
 ```
 
 Pinned hashes:
 
 ```text
 17b6b5571fd3be038992df24134d7ca88c75b22cb36e84cf2f007664096298e1  splash.png
-dfaf289bae036e60014093cdf2705ab50d33507c38d6d197640fda99e32efc30  splash.bmp
+75a53d81f5ec087536a030919698c595630d48296e07d5f5f3d04ebebf2efd57  splash.rgb565
 ```

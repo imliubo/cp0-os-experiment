@@ -23,9 +23,8 @@ fi
 
 BSP_REPOSITORY="https://github.com/m5stack/m5stack-linux-dtoverlays.git"
 BSP_COMMIT="c3b254819307c177a34100b66fe19e52059ce8c4"
-BOOTSCREEN_FIRMWARE_SHA256="d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd"
-BOOTSCREEN_FIXUP_SHA256="b2d19b8c300b5a4ddbd0fcff3a0f7de61a171046269d8724e74f616058417d4b"
-BOOTSCREEN_SPLASH_SHA256="dfaf289bae036e60014093cdf2705ab50d33507c38d6d197640fda99e32efc30"
+LEGACY_BOOTSCREEN_FIRMWARE_SHA256="d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd"
+EARLY_SPLASH_SHA256="75a53d81f5ec087536a030919698c595630d48296e07d5f5f3d04ebebf2efd57"
 
 install -m 0644 "${STAGE_DIR}/00-bsp/files/0001-tca8418-flush-synthetic-shift.patch" \
     "${ROOTFS_DIR}/tmp/0001-tca8418-flush-synthetic-shift.patch"
@@ -145,6 +144,7 @@ gpu_mem=64
 gpu_mem_512=64
 dtoverlay=vc4-kms-v3d,cma-64
 camera_auto_detect=0
+start_x=1
 enable_uart=1
 dtoverlay=dwc2
 dtoverlay=cardputerzero-v5-overlay
@@ -156,18 +156,25 @@ dtoverlay=gpio-ir-tx,gpio_pin=12
 # END CardputerZero OS BSP
 CONFIG
 
-bootscreen_firmware="${STAGE_DIR}/00-bsp/files/start-m5stack-bootscreen.elf"
-bootscreen_splash="${STAGE_DIR}/00-bsp/files/splash.bmp"
-printf '%s  %s\n' "$BOOTSCREEN_FIRMWARE_SHA256" "$bootscreen_firmware" |
-    sha256sum -c -
-printf '%s  %s\n' "$BOOTSCREEN_FIXUP_SHA256" \
-    "${ROOTFS_DIR}/boot/firmware/fixup.dat" | sha256sum -c -
-printf '%s  %s\n' "$BOOTSCREEN_SPLASH_SHA256" "$bootscreen_splash" |
-    sha256sum -c -
-install -m 0644 "$bootscreen_firmware" \
-    "${ROOTFS_DIR}/boot/firmware/start.elf"
-install -m 0644 "$bootscreen_splash" \
-    "${ROOTFS_DIR}/boot/firmware/splash.bmp"
+for camera_firmware in start_x.elf fixup_x.dat; do
+    if [[ ! -s ${ROOTFS_DIR}/boot/firmware/$camera_firmware ]]; then
+        echo "error: raspi-firmware is missing $camera_firmware" >&2
+        exit 1
+    fi
+done
+for firmware in start.elf start_x.elf; do
+    firmware_sha256=$(sha256sum "${ROOTFS_DIR}/boot/firmware/$firmware" |
+        awk '{print $1}')
+    if [[ $firmware_sha256 == "$LEGACY_BOOTSCREEN_FIRMWARE_SHA256" ]]; then
+        echo "error: legacy M5Stack firmware forces an invalid 256/256 memory split" >&2
+        exit 1
+    fi
+done
+
+early_splash="${STAGE_DIR}/00-bsp/files/splash.rgb565"
+printf '%s  %s\n' "$EARLY_SPLASH_SHA256" "$early_splash" | sha256sum -c -
+install -D -m 0644 "$early_splash" \
+    "${ROOTFS_DIR}/usr/share/cardputerzero/boot/splash.rgb565"
 
 for pattern in \
     quiet splash 'logo\.nologo' 'loglevel=[^[:space:]]+' \
@@ -215,6 +222,10 @@ install -D -m 0755 "${STAGE_DIR}/00-bsp/files/camera-probe.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/camera-probe"
 install -D -m 0644 "${STAGE_DIR}/00-bsp/files/cardputerzero-camera-probe.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-camera-probe.service"
+install -D -m 0755 "${STAGE_DIR}/00-bsp/files/show-early-splash.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/show-early-splash.sh"
+install -D -m 0644 "${STAGE_DIR}/00-bsp/files/cardputerzero-early-splash.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-early-splash.service"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/console-banner.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/console-banner.sh"
 install -D -m 0644 "${STAGE_DIR}/00-bsp/files/cardputerzero-console-banner.service" \
@@ -394,6 +405,7 @@ else
     on_chroot <<'CHROOT'
 set -e
 systemctl disable cardputerzero-console-banner.service 2>/dev/null || true
+systemctl enable cardputerzero-early-splash.service
 CHROOT
 fi
 

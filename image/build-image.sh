@@ -107,11 +107,8 @@ printf '%s\n' \
 rm -rf "$pi_gen_dir/stage-cardputerzero-os"
 cp -R "$repo_root/image/pi-gen/stage-cardputerzero-os" \
     "$pi_gen_dir/stage-cardputerzero-os"
-install -m 0644 \
-    "$repo_root/bsp/cm0-v0.6/firmware/start-m5stack-bootscreen.elf" \
-    "$pi_gen_dir/stage-cardputerzero-os/00-bsp/files/start-m5stack-bootscreen.elf"
-install -m 0644 "$repo_root/bsp/cm0-v0.6/boot/splash.bmp" \
-    "$pi_gen_dir/stage-cardputerzero-os/00-bsp/files/splash.bmp"
+install -m 0644 "$repo_root/bsp/cm0-v0.6/boot/splash.rgb565" \
+    "$pi_gen_dir/stage-cardputerzero-os/00-bsp/files/splash.rgb565"
 printf '%s\n' "$image_profile" \
     >"$pi_gen_dir/stage-cardputerzero-os/image-profile"
 printf '%s\n' "$access_profile" \

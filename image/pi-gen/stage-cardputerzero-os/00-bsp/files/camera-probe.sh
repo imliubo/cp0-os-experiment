@@ -12,7 +12,6 @@ modprobe_command=${CP0_CAMERA_PROBE_MODPROBE:-/usr/sbin/modprobe}
 journalctl_command=${CP0_CAMERA_PROBE_JOURNALCTL:-/usr/bin/journalctl}
 sleep_command=${CP0_CAMERA_PROBE_SLEEP:-/usr/bin/sleep}
 boot_config=${CP0_CAMERA_PROBE_BOOT_CONFIG:-/boot/firmware/config.txt}
-firmware_file=${CP0_CAMERA_PROBE_FIRMWARE_FILE:-/boot/firmware/start.elf}
 bootscreen_firmware_sha256=d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd
 
 powerfail_device="$sysfs_root/bus/platform/devices/powerfail"
@@ -73,12 +72,19 @@ firmware_mode=start
 if [[ -r $boot_config ]] && grep -Eq '^[[:space:]]*start_x=1([[:space:]]*(#.*)?)?$' "$boot_config"; then
     firmware_mode=start_x
 fi
+if [[ -n ${CP0_CAMERA_PROBE_FIRMWARE_FILE:-} ]]; then
+    firmware_file=$CP0_CAMERA_PROBE_FIRMWARE_FILE
+elif [[ $firmware_mode == start_x ]]; then
+    firmware_file=/boot/firmware/start_x.elf
+else
+    firmware_file=/boot/firmware/start.elf
+fi
 firmware_variant=raspi-firmware
 firmware_sha256=unavailable
 if [[ -r $firmware_file ]]; then
     firmware_sha256=$(sha256sum "$firmware_file" | awk '{print $1}')
     if [[ $firmware_sha256 == "$bootscreen_firmware_sha256" ]]; then
-        firmware_variant=m5stack_bootscreen
+        firmware_variant=legacy_m5stack_bootscreen
     fi
 fi
 
