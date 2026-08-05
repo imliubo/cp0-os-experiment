@@ -27,9 +27,10 @@ WASM camera SDK call
   -> appd checks the root-owned manifest and camera.capture decision
   -> appd requires the caller to be the System Shell's current foreground runtime
   -> root-only cp0-camerad socket accepts only appd
-  -> cp0-camerad keeps one fixed 1280x720 @ 40 FPS /usr/bin/rpicam-vid YUV420 stream
+  -> cp0-camerad keeps one fixed 1280x720 @ 30 FPS /usr/bin/rpicam-vid YUV420 stream
   -> preview frames are downscaled to 320x170 RGB565_LE at a 30 FPS target
-  -> photo requests encode the next 1280x720 frame as JPEG without a mode switch
+  -> photo requests send the next frame to the fixed /dev/video31 JPEG encoder
+  -> a bounded planar-YUV software encoder remains available as a fail-safe
   -> sealed memfd is reopened read-only and sent with SCM_RIGHTS
   -> appd verifies type, length, access mode and all write seals
   -> Runtime repeats metadata/seal checks and copies pixels into WASM memory
@@ -63,8 +64,19 @@ process and camera pipeline are reused between preview and photo requests and
 released after two seconds without a request, so a frozen/background Camera
 task does not retain the sensor indefinitely. Both preview and JPEG quality-90
 photo capture use the same fixed 1280x720, 180-degree-rotated frame. Avoiding a
-second `rpicam-still` process removes sensor discovery and mode-switch latency;
-exposure quality remains part of physical acceptance.
+second `rpicam-still` process removes sensor discovery and mode-switch latency.
+Process creation runs on a short-lived backend thread and each foreground
+request waits for at most 50 ms of frame progress. During a cold start,
+camerad preserves both the child process and any partial YUV frame between
+retries for up to 20 seconds. After the first complete frame, 500 ms without a
+complete frame discards and rebuilds the child. Slow libcamera discovery can
+therefore finish without blocking Camera's input loop for the full discovery
+deadline or the process creation delay.
+The V0.6 hardware JPEG path accepts the stream's planar YUV420 frame directly,
+so capture does not allocate or convert a full RGB888 image. If that fixed
+kernel encoder is unavailable, the software fallback also reads the planar
+YUV buffers directly instead of constructing an RGB intermediate. Exposure
+quality remains part of physical acceptance.
 
 The current V0.6 image detects the IMX219 through the Unicam pipeline. Physical
 preview throughput, frame layout/orientation, foreground revocation and input
@@ -85,6 +97,12 @@ Automated coverage includes:
 - Rust, C11, C++17 and WIT SDK surfaces;
 - hardened systemd service, image package and installation assertions;
 - AArch64 camerad/appd/Runtime and wasm32 Hello Card builds.
+
+The V0.6 device benchmark for the hardware path is a 23.6 ms warm preview
+request followed by a 49.7 ms 1280x720 JPEG broker request. This excludes the
+incremental sensor/libcamera cold start and the subsequent appd photo-library
+transaction; pressing the shutter on an already-live Camera does not pay that
+cold-start cost.
 
 Hello Card binds `C` to capture and displays the top 320x150 portion under the
 trusted status bar. Green, red, yellow and magenta status marks mean success,

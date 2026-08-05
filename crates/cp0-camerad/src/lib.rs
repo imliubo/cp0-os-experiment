@@ -13,7 +13,8 @@ use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use cp0_camera_protocol::{
@@ -21,18 +22,18 @@ use cp0_camera_protocol::{
     CameraErrorCode, CameraProtocolError, CameraResponse, MAX_CAMERA_JPEG_BYTES, encode_frame,
     encode_photo_payload, read_request, send_frame_with_fd, write_response,
 };
-use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
+use jpeg_encoder::{Encoder, ImageBuffer, JpegColorType, SamplingFactor};
 
 pub const DEFAULT_RPICAM_VID: &str = "/usr/bin/rpicam-vid";
 const CAMERA_STREAM_WIDTH: usize = 1280;
 const CAMERA_STREAM_HEIGHT: usize = 720;
 const YUV420_FRAME_BYTES: usize = CAMERA_STREAM_WIDTH * CAMERA_STREAM_HEIGHT * 3 / 2;
-// Keep sensor headroom so protocol transfer and downscaling still sustain the
-// public 30fps preview contract on CM0.
-const RPICAM_STREAM_FPS: u16 = 40;
+const RPICAM_STREAM_FPS: u16 = 30;
 const JPEG_QUALITY: u8 = 90;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
-const STREAM_FRAME_TIMEOUT: Duration = Duration::from_secs(12);
+const STREAM_START_DEADLINE: Duration = Duration::from_secs(20);
+const STREAM_REQUEST_TIMEOUT: Duration = Duration::from_millis(50);
+const STREAM_STALL_DEADLINE: Duration = Duration::from_millis(500);
 const BACKEND_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_PHOTO_PAYLOAD_BYTES: usize =
     CAMERA_PHOTO_HEADER_BYTES + CAMERA_FRAME_BYTES + MAX_CAMERA_JPEG_BYTES;
@@ -78,7 +79,17 @@ pub struct CapturedPhoto {
 #[derive(Debug)]
 pub struct RpicamBackend {
     preview_program: PathBuf,
-    stream: Mutex<Option<RpicamStream>>,
+    stream: Mutex<StreamState>,
+}
+
+#[derive(Debug)]
+enum StreamState {
+    Idle,
+    Starting {
+        started_at: Instant,
+        receiver: mpsc::Receiver<Result<RpicamStream, CameraCaptureError>>,
+    },
+    Running(RpicamStream),
 }
 
 impl Default for RpicamBackend {
@@ -91,45 +102,76 @@ impl RpicamBackend {
     pub fn new(program: impl AsRef<Path>) -> Self {
         Self {
             preview_program: program.as_ref().to_path_buf(),
-            stream: Mutex::new(None),
+            stream: Mutex::new(StreamState::Idle),
+        }
+    }
+
+    fn capture_yuv420(&self) -> Result<Vec<u8>, CameraCaptureError> {
+        let mut state = self
+            .stream
+            .lock()
+            .map_err(|_| CameraCaptureError::Internal)?;
+        loop {
+            match std::mem::replace(&mut *state, StreamState::Idle) {
+                StreamState::Idle => {
+                    let (sender, receiver) = mpsc::sync_channel(1);
+                    let program = self.preview_program.clone();
+                    thread::Builder::new()
+                        .name("cp0-camera-start".into())
+                        .spawn(move || {
+                            let _ = sender.send(RpicamStream::start(&program));
+                        })
+                        .map_err(|_| CameraCaptureError::Internal)?;
+                    *state = StreamState::Starting {
+                        started_at: Instant::now(),
+                        receiver,
+                    };
+                    return Err(CameraCaptureError::TimedOut);
+                }
+                StreamState::Starting {
+                    started_at,
+                    receiver,
+                } => match receiver.try_recv() {
+                    Ok(Ok(stream)) => {
+                        *state = StreamState::Running(stream);
+                    }
+                    Ok(Err(error)) => return Err(error),
+                    Err(mpsc::TryRecvError::Empty)
+                        if started_at.elapsed() < STREAM_START_DEADLINE =>
+                    {
+                        *state = StreamState::Starting {
+                            started_at,
+                            receiver,
+                        };
+                        return Err(CameraCaptureError::TimedOut);
+                    }
+                    Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => {
+                        return Err(CameraCaptureError::CaptureFailed);
+                    }
+                },
+                StreamState::Running(mut stream) => {
+                    let result = stream.capture_yuv420();
+                    if !result
+                        .as_ref()
+                        .is_err_and(|error| *error != CameraCaptureError::TimedOut)
+                    {
+                        *state = StreamState::Running(stream);
+                    }
+                    return result;
+                }
+            }
         }
     }
 }
 
 impl CameraBackend for RpicamBackend {
     fn capture_rgb565(&self) -> Result<Vec<u8>, CameraCaptureError> {
-        let mut stream = self
-            .stream
-            .lock()
-            .map_err(|_| CameraCaptureError::Internal)?;
-        if stream.is_none() {
-            *stream = Some(RpicamStream::start(&self.preview_program)?);
-        }
-        let result = stream
-            .as_mut()
-            .expect("camera stream was initialized")
-            .capture_yuv420()
-            .and_then(|frame| yuv420_to_rgb565(&frame));
-        if result.is_err() {
-            stream.take();
-        }
-        result
+        self.capture_yuv420()
+            .and_then(|frame| yuv420_to_rgb565(&frame))
     }
 
     fn capture_photo(&self) -> Result<CapturedPhoto, CameraCaptureError> {
-        let frame = {
-            let mut stream = self
-                .stream
-                .lock()
-                .map_err(|_| CameraCaptureError::Internal)?;
-            if stream.is_none() {
-                *stream = Some(RpicamStream::start(&self.preview_program)?);
-            }
-            stream
-                .as_mut()
-                .expect("camera stream was initialized")
-                .capture_yuv420()?
-        };
+        let frame = self.capture_yuv420()?;
         let thumbnail_rgb565 = yuv420_to_rgb565(&frame)?;
         let jpeg = encode_yuv420_jpeg(&frame)?;
         Ok(CapturedPhoto {
@@ -140,7 +182,7 @@ impl CameraBackend for RpicamBackend {
 
     fn release(&self) {
         if let Ok(mut stream) = self.stream.lock() {
-            stream.take();
+            *stream = StreamState::Idle;
         }
     }
 }
@@ -149,6 +191,11 @@ impl CameraBackend for RpicamBackend {
 struct RpicamStream {
     child: Child,
     stdout: ChildStdout,
+    started_at: Instant,
+    frame: Vec<u8>,
+    frame_offset: usize,
+    frames_captured: u64,
+    last_frame_at: Instant,
 }
 
 impl RpicamStream {
@@ -185,7 +232,16 @@ impl RpicamStream {
                 }
             })?;
         let stdout = child.stdout.take().ok_or(CameraCaptureError::Internal)?;
-        Ok(Self { child, stdout })
+        let started_at = Instant::now();
+        Ok(Self {
+            child,
+            stdout,
+            started_at,
+            frame: vec![0_u8; YUV420_FRAME_BYTES],
+            frame_offset: 0,
+            frames_captured: 0,
+            last_frame_at: started_at,
+        })
     }
 
     fn capture_yuv420(&mut self) -> Result<Vec<u8>, CameraCaptureError> {
@@ -197,8 +253,28 @@ impl RpicamStream {
         {
             return Err(CameraCaptureError::CaptureFailed);
         }
-        let mut frame = vec![0_u8; YUV420_FRAME_BYTES];
-        read_exact_frame(&mut self.stdout, &mut frame, STREAM_FRAME_TIMEOUT)?;
+        if self.frames_captured == 0 && self.started_at.elapsed() >= STREAM_START_DEADLINE {
+            return Err(CameraCaptureError::CaptureFailed);
+        }
+        match read_exact_frame(
+            &mut self.stdout,
+            &mut self.frame,
+            &mut self.frame_offset,
+            STREAM_REQUEST_TIMEOUT,
+        ) {
+            Err(CameraCaptureError::TimedOut)
+                if self.frames_captured != 0
+                    && self.last_frame_at.elapsed() >= STREAM_STALL_DEADLINE =>
+            {
+                return Err(CameraCaptureError::CaptureFailed);
+            }
+            Err(error) => return Err(error),
+            Ok(()) => {}
+        }
+        let frame = std::mem::replace(&mut self.frame, vec![0_u8; YUV420_FRAME_BYTES]);
+        self.frame_offset = 0;
+        self.frames_captured = self.frames_captured.saturating_add(1);
+        self.last_frame_at = Instant::now();
         Ok(frame)
     }
 }
@@ -213,11 +289,14 @@ impl Drop for RpicamStream {
 fn read_exact_frame(
     stdout: &mut ChildStdout,
     frame: &mut [u8],
+    offset: &mut usize,
     timeout: Duration,
 ) -> Result<(), CameraCaptureError> {
+    if *offset >= frame.len() {
+        return Err(CameraCaptureError::InvalidFrame);
+    }
     let deadline = Instant::now() + timeout;
-    let mut offset = 0;
-    while offset < frame.len() {
+    while *offset < frame.len() {
         let now = Instant::now();
         if now >= deadline {
             return Err(CameraCaptureError::TimedOut);
@@ -242,13 +321,13 @@ fn read_exact_frame(
         }
         if descriptor.revents & libc::POLLIN != 0 {
             let count = stdout
-                .read(&mut frame[offset..])
+                .read(&mut frame[*offset..])
                 .map_err(|_| CameraCaptureError::CaptureFailed)?;
             if count == 0 {
                 return Err(CameraCaptureError::CaptureFailed);
             }
-            offset += count;
-            if offset == frame.len() {
+            *offset += count;
+            if *offset == frame.len() {
                 break;
             }
         }
@@ -301,38 +380,22 @@ fn encode_yuv420_jpeg(input: &[u8]) -> Result<Vec<u8>, CameraCaptureError> {
     if input.len() != YUV420_FRAME_BYTES {
         return Err(CameraCaptureError::InvalidFrame);
     }
-    let y_size = CAMERA_STREAM_WIDTH * CAMERA_STREAM_HEIGHT;
-    let chroma_width = CAMERA_STREAM_WIDTH / 2;
-    let chroma_size = chroma_width * (CAMERA_STREAM_HEIGHT / 2);
-    let (luma, chroma) = input.split_at(y_size);
-    let (u_plane, v_plane) = chroma.split_at(chroma_size);
-    let mut rgb = Vec::with_capacity(CAMERA_STREAM_WIDTH * CAMERA_STREAM_HEIGHT * 3);
-    for row in 0..CAMERA_STREAM_HEIGHT {
-        for column in 0..CAMERA_STREAM_WIDTH {
-            let (red, green, blue) = yuv420_pixel(
-                luma,
-                u_plane,
-                v_plane,
-                CAMERA_STREAM_WIDTH,
-                chroma_width,
-                column,
-                row,
-            );
-            rgb.extend_from_slice(&[red, green, blue]);
-        }
+
+    #[cfg(target_os = "linux")]
+    if let Ok(jpeg) = encode_yuv420_jpeg_hardware(input) {
+        return Ok(jpeg);
     }
 
     let mut jpeg = Vec::with_capacity(256 * 1024);
     let mut encoder = Encoder::new(&mut jpeg, JPEG_QUALITY);
     encoder.set_sampling_factor(SamplingFactor::F_2_2);
     encoder
-        .encode(
-            &rgb,
-            CAMERA_STREAM_WIDTH as u16,
-            CAMERA_STREAM_HEIGHT as u16,
-            ColorType::Rgb,
-        )
+        .encode_image(Yuv420Image::new(input))
         .map_err(|_| CameraCaptureError::CaptureFailed)?;
+    validate_jpeg(jpeg)
+}
+
+fn validate_jpeg(jpeg: Vec<u8>) -> Result<Vec<u8>, CameraCaptureError> {
     if jpeg.is_empty()
         || jpeg.len() > MAX_CAMERA_JPEG_BYTES
         || !jpeg.starts_with(&[0xff, 0xd8])
@@ -341,6 +404,88 @@ fn encode_yuv420_jpeg(input: &[u8]) -> Result<Vec<u8>, CameraCaptureError> {
         return Err(CameraCaptureError::InvalidFrame);
     }
     Ok(jpeg)
+}
+
+struct Yuv420Image<'a> {
+    luma: &'a [u8],
+    u_plane: &'a [u8],
+    v_plane: &'a [u8],
+}
+
+impl<'a> Yuv420Image<'a> {
+    fn new(input: &'a [u8]) -> Self {
+        let y_size = CAMERA_STREAM_WIDTH * CAMERA_STREAM_HEIGHT;
+        let chroma_size = y_size / 4;
+        let (luma, chroma) = input.split_at(y_size);
+        let (u_plane, v_plane) = chroma.split_at(chroma_size);
+        Self {
+            luma,
+            u_plane,
+            v_plane,
+        }
+    }
+}
+
+impl ImageBuffer for Yuv420Image<'_> {
+    fn get_jpeg_color_type(&self) -> JpegColorType {
+        JpegColorType::Ycbcr
+    }
+
+    fn width(&self) -> u16 {
+        CAMERA_STREAM_WIDTH as u16
+    }
+
+    fn height(&self) -> u16 {
+        CAMERA_STREAM_HEIGHT as u16
+    }
+
+    fn fill_buffers(&self, row: u16, buffers: &mut [Vec<u8>; 4]) {
+        let row = usize::from(row);
+        let luma = &self.luma[row * CAMERA_STREAM_WIDTH..(row + 1) * CAMERA_STREAM_WIDTH];
+        let chroma_row = row / 2 * (CAMERA_STREAM_WIDTH / 2);
+        for (column, &value) in luma.iter().enumerate() {
+            let chroma = chroma_row + column / 2;
+            buffers[0].push(value);
+            buffers[1].push(self.u_plane[chroma]);
+            buffers[2].push(self.v_plane[chroma]);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn encode_yuv420_jpeg_hardware(input: &[u8]) -> Result<Vec<u8>, CameraCaptureError> {
+    unsafe extern "C" {
+        fn cp0_v4l2_encode_jpeg(
+            yuv420: *const u8,
+            yuv420_length: usize,
+            width: u32,
+            height: u32,
+            quality: u32,
+            jpeg: *mut u8,
+            jpeg_capacity: usize,
+            jpeg_length: *mut usize,
+        ) -> libc::c_int;
+    }
+
+    let mut jpeg = vec![0_u8; MAX_CAMERA_JPEG_BYTES];
+    let mut jpeg_length = 0_usize;
+    let result = unsafe {
+        cp0_v4l2_encode_jpeg(
+            input.as_ptr(),
+            input.len(),
+            CAMERA_STREAM_WIDTH as u32,
+            CAMERA_STREAM_HEIGHT as u32,
+            u32::from(JPEG_QUALITY),
+            jpeg.as_mut_ptr(),
+            jpeg.len(),
+            &raw mut jpeg_length,
+        )
+    };
+    if result != 0 || jpeg_length > jpeg.len() {
+        return Err(CameraCaptureError::Unavailable);
+    }
+    jpeg.truncate(jpeg_length);
+    validate_jpeg(jpeg)
 }
 
 fn yuv420_pixel(
@@ -634,6 +779,17 @@ mod tests {
         }
     }
 
+    fn wait_for_preview(backend: &RpicamBackend) -> Vec<u8> {
+        for _ in 0..100 {
+            match backend.capture_rgb565() {
+                Ok(frame) => return frame,
+                Err(CameraCaptureError::TimedOut) => thread::sleep(Duration::from_millis(10)),
+                Err(error) => panic!("camera preview failed while warming: {error}"),
+            }
+        }
+        panic!("camera preview did not become ready")
+    }
+
     #[test]
     fn converts_yuv420_to_little_endian_rgb565() {
         let y_size = CAMERA_WIDTH as usize * CAMERA_HEIGHT as usize;
@@ -678,7 +834,7 @@ mod tests {
         fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
 
         let backend = RpicamBackend::new(&program);
-        assert_eq!(backend.capture_rgb565().unwrap().len(), CAMERA_FRAME_BYTES);
+        assert_eq!(wait_for_preview(&backend).len(), CAMERA_FRAME_BYTES);
         assert_eq!(backend.capture_rgb565().unwrap().len(), CAMERA_FRAME_BYTES);
         assert_eq!(fs::read_to_string(&starts).unwrap().lines().count(), 1);
         let fixed_arguments = fs::read_to_string(&arguments).unwrap();
@@ -686,11 +842,11 @@ mod tests {
         assert!(fixed_arguments.contains("--height\n720\n"));
         assert!(fixed_arguments.contains("--mode\n1920:1080:10:P\n"));
         assert!(fixed_arguments.contains("--rotation\n180\n"));
-        assert!(fixed_arguments.contains("--framerate\n40\n"));
+        assert!(fixed_arguments.contains("--framerate\n30\n"));
         assert!(fixed_arguments.contains("--codec\nyuv420\n"));
 
         backend.release();
-        assert_eq!(backend.capture_rgb565().unwrap().len(), CAMERA_FRAME_BYTES);
+        assert_eq!(wait_for_preview(&backend).len(), CAMERA_FRAME_BYTES);
         assert_eq!(fs::read_to_string(&starts).unwrap().lines().count(), 2);
     }
 
@@ -717,17 +873,76 @@ mod tests {
         fs::set_permissions(&preview, fs::Permissions::from_mode(0o755)).unwrap();
 
         let backend = RpicamBackend::new(&preview);
+        assert_eq!(wait_for_preview(&backend).len(), CAMERA_FRAME_BYTES);
         let photo = backend.capture_photo().unwrap();
         assert_eq!(photo.thumbnail_rgb565.len(), CAMERA_FRAME_BYTES);
         assert!(photo.jpeg.starts_with(&[0xff, 0xd8]));
         assert!(photo.jpeg.ends_with(&[0xff, 0xd9]));
-        assert_eq!(backend.capture_rgb565().unwrap().len(), CAMERA_FRAME_BYTES);
         assert_eq!(fs::read_to_string(&starts).unwrap().lines().count(), 1);
         let arguments = fs::read_to_string(preview_arguments).unwrap();
         assert!(arguments.contains("--width\n1280\n"));
         assert!(arguments.contains("--height\n720\n"));
         assert!(arguments.contains("--timeout\n0\n"));
         assert!(arguments.contains("--rotation\n180\n"));
+    }
+
+    #[test]
+    fn a_stalled_warm_stream_does_not_block_for_the_cold_start_timeout() {
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp")
+            .join(format!("camerad-stall-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let program = directory.join("fake-rpicam-vid");
+        fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\nhead -c {} /dev/zero\nsleep 30\n",
+                YUV420_FRAME_BYTES
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let backend = RpicamBackend::new(&program);
+        assert_eq!(wait_for_preview(&backend).len(), CAMERA_FRAME_BYTES);
+        let started = Instant::now();
+        loop {
+            match backend.capture_rgb565() {
+                Err(CameraCaptureError::TimedOut) => {}
+                Err(CameraCaptureError::CaptureFailed) => break,
+                other => panic!("unexpected stalled stream result: {other:?}"),
+            }
+        }
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn cold_start_timeouts_keep_the_same_process_and_partial_frame() {
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp")
+            .join(format!("camerad-cold-start-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let program = directory.join("fake-rpicam-vid");
+        let starts = directory.join("starts");
+        fs::write(&starts, b"").unwrap();
+        fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\nprintf x >> '{}'\nhead -c {} /dev/zero\nsleep 0.7\nhead -c {} /dev/zero\nsleep 30\n",
+                starts.display(),
+                YUV420_FRAME_BYTES / 2,
+                YUV420_FRAME_BYTES - YUV420_FRAME_BYTES / 2
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let backend = RpicamBackend::new(&program);
+        let started = Instant::now();
+        assert_eq!(backend.capture_rgb565(), Err(CameraCaptureError::TimedOut));
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert_eq!(wait_for_preview(&backend).len(), CAMERA_FRAME_BYTES);
+        assert_eq!(fs::read(&starts).unwrap(), b"x");
     }
 
     #[test]

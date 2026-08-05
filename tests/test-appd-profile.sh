@@ -132,9 +132,22 @@ grep -q 'jpeg-encoder = "=0.6.1"' \
     "$repo_root/crates/cp0-camerad/Cargo.toml"
 grep -q 'DEFAULT_RPICAM_VID.*"/usr/bin/rpicam-vid"' \
     "$repo_root/crates/cp0-camerad/src/lib.rs"
+grep -q '"--rotation"' "$repo_root/crates/cp0-camerad/src/lib.rs"
 grep -q '"--framerate"' "$repo_root/crates/cp0-camerad/src/lib.rs"
 grep -q '"1280"' "$repo_root/crates/cp0-camerad/src/lib.rs"
 grep -q '"720"' "$repo_root/crates/cp0-camerad/src/lib.rs"
+grep -q 'CP0_JPEG_DEVICE "/dev/video31"' \
+    "$repo_root/crates/cp0-camerad/src/v4l2_jpeg.c"
+grep -q 'V4L2_PIX_FMT_YUV420' "$repo_root/crates/cp0-camerad/src/v4l2_jpeg.c"
+grep -q 'V4L2_PIX_FMT_JPEG' "$repo_root/crates/cp0-camerad/src/v4l2_jpeg.c"
+grep -q 'encode_yuv420_jpeg_hardware' \
+    "$repo_root/crates/cp0-camerad/src/lib.rs"
+grep -q 'STREAM_REQUEST_TIMEOUT.*from_millis(50)' \
+    "$repo_root/crates/cp0-camerad/src/lib.rs"
+grep -q 'STREAM_STALL_DEADLINE.*from_millis(500)' \
+    "$repo_root/crates/cp0-camerad/src/lib.rs"
+grep -q 'STREAM_START_DEADLINE.*from_secs(20)' \
+    "$repo_root/crates/cp0-camerad/src/lib.rs"
 grep -q 'camera access requires the current foreground runtime' \
     "$repo_root/crates/cp0-appd/src/server.rs"
 grep -q 'fn release(&self)' "$repo_root/crates/cp0-camerad/src/lib.rs"

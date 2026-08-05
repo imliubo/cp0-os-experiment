@@ -372,6 +372,7 @@ dependencies = [
 name = "cp0-camerad"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "cp0-camera-protocol",
  "jpeg-encoder",
  "libc",

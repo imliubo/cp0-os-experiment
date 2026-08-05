@@ -9,3 +9,6 @@ publish = false
 cp0-camera-protocol = { path = "../cp0-camera-protocol" }
 jpeg-encoder = "=0.6.1"
 libc.workspace = true
+
+[build-dependencies]
+cc = "=1.4.0"

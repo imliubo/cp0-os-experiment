@@ -14,6 +14,7 @@ const KEY_SPACE: u16 = 57;
 const FRAME_BYTES: usize = camera::FRAME_BYTES;
 const PREVIEW_INTERVAL_MS: u64 = 1_000 / camera::PREVIEW_FPS as u64;
 const RETRY_INTERVAL_MS: u64 = 2000;
+const START_RETRY_INTERVAL_MS: u64 = 100;
 
 static mut CAMERA_FRAME: [u16; camera::PIXEL_COUNT] = [0; camera::PIXEL_COUNT];
 static mut DISPLAY_FRAME: [u8; FRAME_BYTES] = [0; FRAME_BYTES];
@@ -27,6 +28,21 @@ enum Status {
     Authorize,
     Denied,
     Unavailable,
+}
+
+fn schedule_next_preview(
+    previous_deadline: u64,
+    request_started: u64,
+    request_finished: u64,
+    status: Status,
+) -> u64 {
+    match status {
+        Status::Starting => request_finished.saturating_add(START_RETRY_INTERVAL_MS),
+        Status::Unavailable | Status::Denied => request_finished.saturating_add(RETRY_INTERVAL_MS),
+        _ => previous_deadline
+            .max(request_started)
+            .saturating_add(PREVIEW_INTERVAL_MS),
+    }
 }
 
 fn camera_pixels() -> &'static mut [u16] {
@@ -140,18 +156,14 @@ pub extern "C" fn main() -> i32 {
                 }
                 Err(Error::Unavailable | Error::ResourceLimit) => {
                     if !has_frame {
-                        status = Status::Unavailable;
+                        status = Status::Starting;
                         dirty = true;
                     }
                 }
                 Err(_) => return 1,
             }
-            let interval = if matches!(status, Status::Unavailable | Status::Denied) {
-                RETRY_INTERVAL_MS
-            } else {
-                PREVIEW_INTERVAL_MS
-            };
-            next_preview = next_preview.max(now).saturating_add(interval);
+            next_preview =
+                schedule_next_preview(next_preview, now, system::monotonic_milliseconds(), status);
         }
 
         match input::poll_key_event(1) {
@@ -185,6 +197,35 @@ pub extern "C" fn main() -> i32 {
                 dirty = false;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cold_start_retries_are_scheduled_after_the_request_finishes() {
+        assert_eq!(
+            schedule_next_preview(100, 100, 180, Status::Starting),
+            180 + START_RETRY_INTERVAL_MS
+        );
+        assert_eq!(
+            schedule_next_preview(100, 100, 180, Status::Denied),
+            180 + RETRY_INTERVAL_MS
+        );
+    }
+
+    #[test]
+    fn live_preview_keeps_the_fixed_frame_clock() {
+        assert_eq!(
+            schedule_next_preview(100, 100, 123, Status::Live),
+            100 + PREVIEW_INTERVAL_MS
+        );
+        assert_eq!(
+            schedule_next_preview(100, 120, 143, Status::Saved),
+            120 + PREVIEW_INTERVAL_MS
+        );
     }
 }
 
