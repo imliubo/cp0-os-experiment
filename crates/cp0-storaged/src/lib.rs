@@ -371,9 +371,11 @@ impl StorageService {
         }
         file.seek(std::io::SeekFrom::Start(u64::from(offset)))?;
         file.write_all(value)?;
-        file.sync_all()?;
         let final_length = u64::from(offset) + value.len() as u64;
         if final_length == u64::from(total_bytes) {
+            // The staging name is never visible to readers. Sync once after
+            // the complete blob is present, then publish it atomically.
+            file.sync_all()?;
             fs::rename(&temporary, &destination)?;
             sync_directory(&directory)?;
             self.usage(app_id)

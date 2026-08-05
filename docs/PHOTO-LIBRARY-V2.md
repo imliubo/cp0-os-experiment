@@ -48,10 +48,12 @@ only the broker-owned photo ID; the JPEG is never copied into WASM memory.
 
 appd authenticates the calling App and owns the complete import transaction.
 Its private storaged client writes bounded 8 KiB chunks into mode `0600`
-temporary blobs. Every chunk is flushed; only the final chunk atomically
-publishes each blob. The thumbnail, optional original and metadata are written
-before the index page and authoritative head. A failed transaction removes all
-uncommitted components and never lists a partial photo.
+temporary blobs. Intermediate chunks remain under the unreachable staging
+name; after the final chunk, storaged flushes the complete file, atomically
+renames it and flushes the containing directory. The thumbnail, optional
+original and metadata are written before the index page and authoritative
+head. A failed transaction removes all uncommitted components and never lists
+a partial photo.
 
 Gallery loads a committed frame with one `photos.load-rgb565` hostcall. appd
 first verifies that the requested ID is still active in the committed index,
