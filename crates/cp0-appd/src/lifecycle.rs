@@ -695,8 +695,15 @@ fn cgroup_is_populated(path: &Path) -> Result<bool, AppManagerError> {
 }
 
 pub(crate) fn wait_for_unit_stopped(unit: &str) -> Result<(), AppManagerError> {
-    while unit_is_active(unit)? {
-        thread::sleep(UNIT_STOP_POLL_INTERVAL);
+    wait_for_cgroup_stopped(
+        &Path::new(SYSTEM_SLICE_CGROUP_ROOT).join(unit),
+        UNIT_STOP_POLL_INTERVAL,
+    )
+}
+
+fn wait_for_cgroup_stopped(path: &Path, poll_interval: Duration) -> Result<(), AppManagerError> {
+    while cgroup_is_populated(path)? {
+        thread::sleep(poll_interval);
     }
     Ok(())
 }
@@ -863,6 +870,27 @@ mod tests {
             cgroup_is_populated(&root),
             Err(AppManagerError::UnitStateIo(_))
         ));
+    }
+
+    #[test]
+    fn runtime_monitor_waits_for_the_cgroup_to_become_empty() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp")
+            .join(format!("cgroup-wait-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("cgroup.events"), b"populated 1\nfrozen 0\n").unwrap();
+
+        let writer_root = root.clone();
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            fs::write(
+                writer_root.join("cgroup.events"),
+                b"populated 0\nfrozen 0\n",
+            )
+            .unwrap();
+        });
+        wait_for_cgroup_stopped(&root, Duration::from_millis(5)).unwrap();
+        writer.join().unwrap();
     }
 
     #[test]
