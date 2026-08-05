@@ -189,6 +189,9 @@ Shell 和其他应用数据。
   后端，以及默认关闭、由持久 marker 控制的 owner-only SSH。
 - [x] Phase 6I-E：在 trusted System Shell 实现全图形化开机引导；未完成时阻止 Home、
   Tasks 和普通 App 激活，完成后临时断网不得重新进入引导。
+- [x] Phase 6I-E2：在完成 Setup 后的 trusted Settings 中加入 Wi-Fi 扫描/连接、
+  当前密码验证后的 Owner 密码修改，以及独立且默认关闭的 Owner SSH Shell 开关；
+  保持应用无 NetworkManager/凭据访问且 production 无 root/sudo。
 - [ ] Phase 6I-F：通过协议 fuzz、秘密泄漏检查、每个原子写入点的断电故障注入、全部
   页面像素回归、PAM/NSS 和 product/development/recovery 镜像分类门禁。
   当前 `make check`、代表性 Setup 像素、Linux/arm64 顺序包/peer credential、完整

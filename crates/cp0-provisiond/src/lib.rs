@@ -1058,7 +1058,7 @@ impl<B: PlatformBackend> ProvisioningService<B> {
             return Err(ProvisioningError::InvalidState("repair is required"));
         }
         if state.phase == ProvisioningPhase::Complete {
-            return Err(ProvisioningError::InvalidState("setup is already complete"));
+            return self.dispatch_owner_maintenance(state, command);
         }
         match command {
             ProvisioningCommand::GetStatus {} => unreachable!(),
@@ -1254,6 +1254,77 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                 Ok(ProvisioningOutcome::State { state })
             }
         }
+    }
+
+    fn dispatch_owner_maintenance(
+        &mut self,
+        mut state: ProvisioningStatus,
+        command: ProvisioningCommand,
+    ) -> Result<ProvisioningOutcome, ProvisioningError> {
+        match command {
+            ProvisioningCommand::ListWifi {} => Ok(ProvisioningOutcome::WifiList {
+                networks: self.backend.list_wifi()?,
+            }),
+            ProvisioningCommand::ConnectWifi {
+                ssid,
+                security,
+                mut password,
+                hidden,
+            } => {
+                let result = self
+                    .backend
+                    .connect_wifi(&ssid, security, &password, hidden);
+                password.zeroize();
+                let profile_id = result?;
+                state.network_choice = Some(NetworkChoice::Wifi { profile_id, ssid });
+                self.state_store.save(&state)?;
+                Ok(ProvisioningOutcome::State { state })
+            }
+            ProvisioningCommand::SetSshEnabled { enabled } => {
+                self.change_completed_ssh(&mut state, enabled)?;
+                Ok(ProvisioningOutcome::State { state })
+            }
+            _ => Err(ProvisioningError::InvalidState("setup is already complete")),
+        }
+    }
+
+    fn change_completed_ssh(
+        &mut self,
+        state: &mut ProvisioningStatus,
+        enabled: bool,
+    ) -> Result<(), ProvisioningError> {
+        let previous = state.ssh_enabled;
+        let username = state
+            .username
+            .as_deref()
+            .ok_or(ProvisioningError::InvalidState("owner username is missing"))?;
+        if previous == enabled {
+            self.backend.configure_ssh(enabled)?;
+            self.identity_store.set_ssh_membership(username, enabled)?;
+            return self.backend.activate_ssh(enabled);
+        }
+
+        self.backend.configure_ssh(enabled)?;
+        if let Err(error) = self.identity_store.set_ssh_membership(username, enabled) {
+            let _ = self.backend.configure_ssh(previous);
+            return Err(error);
+        }
+        if let Err(error) = self.backend.activate_ssh(enabled) {
+            let _ = self.identity_store.set_ssh_membership(username, previous);
+            let _ = self.backend.configure_ssh(previous);
+            let _ = self.backend.activate_ssh(previous);
+            return Err(error);
+        }
+
+        state.ssh_enabled = enabled;
+        if let Err(error) = self.state_store.save(state) {
+            state.ssh_enabled = previous;
+            let _ = self.identity_store.set_ssh_membership(username, previous);
+            let _ = self.backend.configure_ssh(previous);
+            let _ = self.backend.activate_ssh(previous);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn change_password(
@@ -1909,6 +1980,88 @@ mod tests {
         let persisted = fs::read_to_string(&paths.state_file).unwrap();
         assert!(!persisted.contains("correct horse"));
         assert!(!persisted.contains("replacement password"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn completed_owner_can_select_wifi_and_toggle_ssh() {
+        let (root, paths) = fixture();
+        let mut service = ProvisioningService::new(&paths, MockBackend::default());
+        advance_to_review(&mut service, false);
+        state(service.dispatch(request(6, ProvisioningCommand::Commit {})));
+
+        let listed = service.dispatch(request(7, ProvisioningCommand::ListWifi {}));
+        assert!(matches!(
+            listed.outcome,
+            ProvisioningOutcome::WifiList { ref networks }
+                if networks.len() == 1 && networks[0].ssid == "CP0-NET"
+        ));
+        let connected = state(service.dispatch(request(
+            8,
+            ProvisioningCommand::ConnectWifi {
+                ssid: "CP0-NET".into(),
+                security: WifiSecurity::Wpa2,
+                password: "wifi password".into(),
+                hidden: false,
+            },
+        )));
+        assert_eq!(connected.phase, ProvisioningPhase::Complete);
+        assert!(matches!(
+            connected.network_choice,
+            Some(NetworkChoice::Wifi { ref ssid, .. }) if ssid == "CP0-NET"
+        ));
+
+        let enabled = state(service.dispatch(request(
+            9,
+            ProvisioningCommand::SetSshEnabled { enabled: true },
+        )));
+        assert!(enabled.ssh_enabled && service.backend.ssh);
+        assert!(
+            fs::read_to_string(paths.extrausers_dir.join("group"))
+                .unwrap()
+                .contains("cp0-ssh:x:1999:owner")
+        );
+        atomic_write(&paths.ssh_marker, b"password\n", 0o600).unwrap();
+        assert_eq!(service.status().unwrap().phase, ProvisioningPhase::Complete);
+
+        let disabled = state(service.dispatch(request(
+            10,
+            ProvisioningCommand::SetSshEnabled { enabled: false },
+        )));
+        assert!(!disabled.ssh_enabled && !service.backend.ssh);
+        fs::remove_file(&paths.ssh_marker).unwrap();
+        assert_eq!(service.status().unwrap().phase, ProvisioningPhase::Complete);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_completed_ssh_activation_rolls_back_owner_access() {
+        let (root, paths) = fixture();
+        let mut service = ProvisioningService::new(&paths, MockBackend::default());
+        advance_to_review(&mut service, false);
+        state(service.dispatch(request(6, ProvisioningCommand::Commit {})));
+        service.backend.fail_activate_once = true;
+
+        let rejected = service.dispatch(request(
+            7,
+            ProvisioningCommand::SetSshEnabled { enabled: true },
+        ));
+        assert!(matches!(
+            rejected.outcome,
+            ProvisioningOutcome::Error {
+                code: ProvisioningErrorCode::Operation,
+                ..
+            }
+        ));
+        assert!(!service.backend.ssh);
+        assert!(
+            fs::read_to_string(paths.extrausers_dir.join("group"))
+                .unwrap()
+                .contains("cp0-ssh:x:1999:\n")
+        );
+        let current = service.status().unwrap();
+        assert_eq!(current.phase, ProvisioningPhase::Complete);
+        assert!(!current.ssh_enabled);
         fs::remove_dir_all(root).unwrap();
     }
 

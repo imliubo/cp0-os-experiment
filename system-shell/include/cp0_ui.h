@@ -153,6 +153,9 @@ enum cp0_ui_event {
     CP0_UI_EVENT_TIMEOUT_NEXT,
     CP0_UI_EVENT_KEY_SOUNDS_TOGGLE,
     CP0_UI_EVENT_CHANGE_PASSWORD,
+    CP0_UI_EVENT_SETTINGS_LIST_WIFI,
+    CP0_UI_EVENT_SETTINGS_CONNECT_WIFI,
+    CP0_UI_EVENT_SETTINGS_SET_SSH,
     CP0_UI_EVENT_SETUP_SET_REGION,
     CP0_UI_EVENT_SETUP_SET_OWNER,
     CP0_UI_EVENT_SETUP_SET_PASSWORD,
@@ -808,6 +811,17 @@ bool cp0_ui_password_backspace(struct cp0_ui *ui);
 void cp0_ui_password_change_result(struct cp0_ui *ui, bool success,
                                    bool authentication_failed,
                                    const char *error);
+void cp0_ui_settings_wifi_set_networks(
+    struct cp0_ui *ui, const struct cp0_ui_setup_wifi *networks,
+    size_t network_count);
+void cp0_ui_settings_wifi_result(struct cp0_ui *ui,
+                                 enum cp0_ui_event event, bool success,
+                                 const char *error);
+bool cp0_ui_settings_wifi_accepts_text(const struct cp0_ui *ui);
+bool cp0_ui_settings_wifi_input_ascii(struct cp0_ui *ui, char character);
+bool cp0_ui_settings_wifi_backspace(struct cp0_ui *ui);
+void cp0_ui_set_owner_ssh(struct cp0_ui *ui, bool enabled);
+void cp0_ui_owner_ssh_result(struct cp0_ui *ui, bool success, bool enabled);
 void cp0_ui_add_app(struct cp0_ui *ui, uint32_t token, const char *app_id);
 void cp0_ui_sync_app_catalog(struct cp0_ui *ui,
                              const struct cp0_ui_catalog_app *apps,

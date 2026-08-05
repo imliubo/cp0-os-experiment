@@ -80,6 +80,12 @@ static void input_password_text(struct cp0_ui *ui, const char *text)
         assert(cp0_ui_password_input_ascii(ui, *text));
 }
 
+static void input_settings_wifi_text(struct cp0_ui *ui, const char *text)
+{
+    for (; *text != '\0'; text++)
+        assert(cp0_ui_settings_wifi_input_ascii(ui, *text));
+}
+
 static bool memory_is_zero(const void *memory, size_t size)
 {
     const unsigned char *bytes = memory;
@@ -478,6 +484,27 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
         ui->settings_detail = true;
         write_snapshot(directory, setting_names[category], ui, frame);
     }
+    static const struct cp0_ui_setup_wifi snapshot_wifi[] = {
+        {.security = 1, .signal_percent = 92, .ssid = "Owner WLAN"},
+        {.security = 0,
+         .signal_percent = 74,
+         .connected = true,
+         .ssid = "Guest"},
+        {.security = 3, .signal_percent = 55, .ssid = "Enterprise"},
+    };
+    ui->settings_selected = 0;
+    ui->settings_item_selected = 1;
+    ui->settings_detail = true;
+    cp0_ui_set_connectivity_state(ui, true, true, true, false);
+    assert(cp0_ui_handle_action(ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_SETTINGS_LIST_WIFI);
+    cp0_ui_settings_wifi_set_networks(ui, snapshot_wifi, 3);
+    write_snapshot(directory, "settings-wifi-list", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_ACCEPT);
+    input_settings_wifi_text(ui, "owner wifi password");
+    write_snapshot(directory, "settings-wifi-password", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_BACK);
+    cp0_ui_handle_action(ui, CP0_UI_BACK);
     static const struct cp0_ui_developer_host snapshot_hosts[] = {
         {.label = "workstation",
          .ssh_fingerprint =
@@ -738,7 +765,7 @@ int main(int argc, char **argv)
     assert(navigation_ui.screen == CP0_UI_SETTINGS);
     navigation_ui.settings_selected = 0;
     cp0_ui_handle_action(&navigation_ui, CP0_UI_ACCEPT);
-    navigation_ui.settings_item_selected = 2;
+    navigation_ui.settings_item_selected = 3;
     cp0_ui_handle_action(&navigation_ui, CP0_UI_ACCEPT);
     assert(navigation_ui.screen == CP0_UI_NETWORK &&
            navigation_ui.network_page == 0 &&
@@ -747,7 +774,7 @@ int main(int argc, char **argv)
     assert(navigation_ui.screen == CP0_UI_SETTINGS &&
            navigation_ui.settings_detail &&
            navigation_ui.settings_selected == 0 &&
-           navigation_ui.settings_item_selected == 2);
+           navigation_ui.settings_item_selected == 3);
     cp0_ui_handle_action(&navigation_ui, CP0_UI_BACK);
     assert(navigation_ui.screen == CP0_UI_SETTINGS &&
            !navigation_ui.settings_detail &&
@@ -1966,12 +1993,69 @@ int main(int argc, char **argv)
     cp0_ui_set_connectivity_state(&production, true, true, false, false);
     assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_WIFI_ENABLE);
+    cp0_ui_set_connectivity_state(&production, true, true, true, false);
     production.settings_item_selected = 1;
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_SETTINGS_LIST_WIFI);
+    assert(production.setup_page == CP0_UI_SETUP_WIFI_LIST &&
+           production.setup_busy);
+    static const struct cp0_ui_setup_wifi settings_wifi[] = {
+        {.security = 1, .signal_percent = 91, .ssid = "Owner WLAN"},
+        {.security = 0, .signal_percent = 72, .ssid = "Guest"},
+        {.security = 3, .signal_percent = 64, .ssid = "Enterprise"},
+    };
+    cp0_ui_settings_wifi_set_networks(&production, settings_wifi, 3);
+    assert(!production.setup_busy && production.setup_wifi_count == 3);
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_NONE);
+    assert(production.setup_page == CP0_UI_SETUP_WIFI_PASSWORD &&
+           cp0_ui_settings_wifi_accepts_text(&production));
+    static const char wifi_password[] = "owner!23";
+    for (size_t index = 0; index < strlen(wifi_password); index++)
+        assert(cp0_ui_settings_wifi_input_ascii(&production,
+                                                wifi_password[index]));
+    assert(cp0_ui_settings_wifi_backspace(&production));
+    assert(cp0_ui_settings_wifi_input_ascii(&production, '3'));
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_SETTINGS_CONNECT_WIFI);
+    assert(production.setup_busy &&
+           !cp0_ui_settings_wifi_accepts_text(&production));
+    cp0_ui_settings_wifi_result(&production,
+                                CP0_UI_EVENT_SETTINGS_CONNECT_WIFI, false,
+                                "Authentication failed");
+    assert(production.setup_page == CP0_UI_SETUP_WIFI_PASSWORD &&
+           strstr(production.setup_error, "Authentication") != NULL);
+    cp0_ui_handle_action(&production, CP0_UI_BACK);
+    assert(production.setup_page == CP0_UI_SETUP_WIFI_LIST &&
+           production.setup_wifi_password[0] == '\0');
+    cp0_ui_handle_action(&production, CP0_UI_DOWN);
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_SETTINGS_CONNECT_WIFI);
+    cp0_ui_settings_wifi_result(&production,
+                                CP0_UI_EVENT_SETTINGS_CONNECT_WIFI, true,
+                                NULL);
+    assert(production.setup_page == CP0_UI_SETUP_COMPLETE &&
+           production.setup_wifi_password[0] == '\0');
+    production.settings_item_selected = 2;
     assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_AIRPLANE_ENABLE);
     cp0_ui_set_connectivity_state(&production, true, true, false, true);
     assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
            CP0_UI_EVENT_AIRPLANE_DISABLE);
+    production.settings_selected = 7;
+    production.settings_item_selected = 6;
+    cp0_ui_set_owner_ssh(&production, false);
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_SETTINGS_SET_SSH);
+    assert(production.setup_busy);
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_NONE);
+    cp0_ui_owner_ssh_result(&production, true, true);
+    assert(production.setup_ssh_enabled && !production.setup_busy);
+    assert(cp0_ui_handle_action(&production, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_SETTINGS_SET_SSH);
+    cp0_ui_owner_ssh_result(&production, false, true);
+    assert(production.setup_ssh_enabled && !production.setup_busy);
     cp0_ui_set_connectivity_state(&production, false, false, false, false);
     assert(!production.connectivity_available && !production.wifi_available);
     cp0_ui_set_audio_output_state(&production, false, 0, false);

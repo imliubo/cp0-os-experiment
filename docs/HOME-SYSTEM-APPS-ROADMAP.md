@@ -51,13 +51,19 @@ the future Wi-Fi broker can be accepted.
 - Status shows online/offline/link-only state, selected non-loopback interface
   and IPv4 address.
 - Details show interface, link state and address in a stable two-page layout.
-- Data is read-only. Connection setup and credential storage remain deferred
-  until a dedicated Network Manager broker and permission model exist.
+- The Network view remains read-only. Trusted Wi-Fi radio, Airplane Mode, scan
+  and connection controls live under Settings and use the dedicated
+  connectivity/provisioning brokers; applications receive neither
+  NetworkManager access nor credentials.
 
 ### Settings
 
 - Developer Mode and Recovery Boot remain bounded appd device-policy controls.
   Enabling either mode requires confirmation; disabling is immediate.
+- Connectivity exposes the Wi-Fi radio, Airplane Mode and a bounded network
+  picker with masked WPA credential input.
+- Security exposes current-password-authenticated owner password replacement
+  and an independent Owner SSH Shell toggle that never grants root or sudo.
 - A third Policy row opens a read-only detail page showing management authority,
   Store installation, application launch and capability restrictions.
 - Locked or unavailable settings are visibly non-actionable. Back closes a

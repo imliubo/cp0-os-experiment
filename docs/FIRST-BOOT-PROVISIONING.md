@@ -185,16 +185,17 @@ The implemented commands are:
 
 Responses never echo password or Wi-Fi secrets. Unknown fields, duplicate
 fields, oversized frames, invalid state transitions and calls from the wrong
-peer fail closed. After `COMPLETE`, setup mutations remain permanently
-unavailable; `ChangePassword` is the sole runtime credential mutation and
-requires the current owner password. Other post-setup changes use their
-existing Settings brokers; factory reset remains a separate physical/recovery
-ceremony.
+peer fail closed. After `COMPLETE`, region, identity, initial-password,
+Ethernet/offline choice and commit mutations remain permanently unavailable.
+The trusted Settings UI may still call `ListWifi`, `ConnectWifi`,
+`SetSshEnabled` and `ChangePassword`; every other provisioning command fails
+closed. `ChangePassword` requires the current owner password. Factory reset
+remains a separate physical/recovery ceremony.
 
-The daemon owns the setup-only NetworkManager keyfile/connection path;
-`cp0-connectivityd` continues to own post-setup radio and airplane toggles.
-Both remain separate least-authority services rather than exposing scan secrets
-through the ordinary Settings broker.
+The daemon owns the credential-bearing NetworkManager scan/connection path for
+Setup and trusted owner maintenance. `cp0-connectivityd` continues to own
+post-setup radio and airplane toggles. Both remain separate least-authority
+services rather than exposing NetworkManager or Wi-Fi secrets to applications.
 
 ### Resource bounds
 
@@ -338,8 +339,10 @@ before blocking on these bounded calls.
 
 `state.json` records only the network decision type and stable profile ID, not
 the SSID password. Network availability after setup is informational. Forgetting
-the last Wi-Fi profile later does not destroy the owner identity or reopen the
-wizard; Settings can offer a deliberate `Run network setup` action instead.
+or replacing the last Wi-Fi profile later does not destroy the owner identity
+or reopen the wizard; `Settings -> Connectivity -> Wi-Fi Networks` scans and
+connects through the same bounded provisioning broker while keeping the device
+in `COMPLETE`.
 
 When network time is unavailable, Setup may accept a manually entered clock and
 stores a last-known sane timestamp on `cp0-data`. Later NTP synchronization may
@@ -386,6 +389,24 @@ The daemon checks the root-only Developer Mode marker on every request. Paired
 public keys always carry a forced `cp0ctl dev-session` command, and sshd disables
 all forwarding. The Complete page shows hostname, IP and Owner SSH Shell status
 without displaying a password.
+
+### Runtime owner network and SSH maintenance
+
+`Settings -> Connectivity` separates the Wi-Fi radio from network selection.
+The radio and Airplane Mode remain `cp0-connectivityd` operations. Opening
+`Wi-Fi Networks` asks `cp0-provisiond` for a bounded scan, shows at most 64
+open/WPA networks, rejects unsupported enterprise security, and connects only
+the selected SSID. WPA input accepts printable ASCII, is masked by default and
+is cleared after success or cancellation. A failed connection remains on the
+credential page for correction without persisting the attempted secret.
+
+`Settings -> Security -> SSH Shell` independently enables or disables the
+Owner SSH Shell after Setup. The root provisioning daemon updates the consent
+marker, owner `cp0-ssh` group membership, live `ssh.service` state and durable
+provisioning status as one logical operation. A synchronous failure restores
+the previous marker, group membership and service state. The setting never
+enables root login or sudo and does not broaden the constrained Developer Mode
+deployment channel.
 
 ## Security and privacy requirements
 

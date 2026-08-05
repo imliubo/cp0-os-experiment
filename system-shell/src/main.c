@@ -363,6 +363,7 @@ static void apply_provision_status(struct shell *shell,
                         status->hostname, status->display_name,
                         status->username, status->ssh_enabled);
     apply_provision_network_status(shell, status);
+    cp0_ui_set_owner_ssh(&shell->ui, status->ssh_enabled);
     if (strcmp(status->locale, "zh_CN.UTF-8") == 0)
         shell->ui.setup_language = 1;
     static const char *countries[] = {"CN", "US", "GB", "DE", "JP"};
@@ -1984,6 +1985,74 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
     if (event >= CP0_UI_EVENT_SETUP_SET_REGION &&
         event <= CP0_UI_EVENT_SETUP_START) {
         handle_setup_event(shell, event);
+    } else if (event == CP0_UI_EVENT_SETTINGS_LIST_WIFI) {
+        struct cp0_provision_wifi_list wifi = {0};
+        char error[CP0_PROVISION_ERROR_MAX + 1] = {0};
+        int result;
+
+        shell_redraw(shell);
+        wl_display_flush(shell->display);
+        result = cp0_provision_list_wifi(&wifi, error);
+        if (result == CP0_PROVISION_OK) {
+            struct cp0_ui_setup_wifi options[CP0_UI_SETUP_WIFI_MAX];
+            size_t count = wifi.count;
+            if (count > CP0_UI_SETUP_WIFI_MAX)
+                count = CP0_UI_SETUP_WIFI_MAX;
+            for (size_t index = 0; index < count; index++) {
+                options[index] = (struct cp0_ui_setup_wifi){
+                    .security = (unsigned int)wifi.networks[index].security,
+                    .signal_percent = wifi.networks[index].signal_percent,
+                    .connected = wifi.networks[index].connected,
+                    .ssid = wifi.networks[index].ssid,
+                };
+            }
+            cp0_ui_settings_wifi_set_networks(&shell->ui, options, count);
+        } else {
+            cp0_ui_settings_wifi_result(&shell->ui, event, false, error);
+        }
+    } else if (event == CP0_UI_EVENT_SETTINGS_CONNECT_WIFI) {
+        struct cp0_provision_status status = {0};
+        char error[CP0_PROVISION_ERROR_MAX + 1] = {0};
+        unsigned int selected = shell->ui.setup_wifi_selected;
+        int result = CP0_PROVISION_INVALID_VALUE;
+
+        shell_redraw(shell);
+        wl_display_flush(shell->display);
+        if (selected < shell->ui.setup_wifi_count) {
+            result = cp0_provision_connect_wifi(
+                shell->ui.setup_wifi_ssids[selected],
+                (enum cp0_provision_wifi_security)
+                    shell->ui.setup_wifi_security[selected],
+                shell->ui.setup_wifi_password, false, &status, error);
+        } else {
+            snprintf(error, sizeof(error), "Select a Wi-Fi network");
+        }
+        if (result == CP0_PROVISION_OK) {
+            apply_provision_network_status(shell, &status);
+            cp0_ui_set_owner_ssh(&shell->ui, status.ssh_enabled);
+            cp0_ui_settings_wifi_result(&shell->ui, event, true, NULL);
+            poll_connectivity_state(shell);
+        } else {
+            cp0_ui_settings_wifi_result(&shell->ui, event, false, error);
+        }
+    } else if (event == CP0_UI_EVENT_SETTINGS_SET_SSH) {
+        struct cp0_provision_status status = {0};
+        char error[CP0_PROVISION_ERROR_MAX + 1] = {0};
+        bool enabled = !shell->ui.setup_ssh_enabled;
+        int result;
+
+        shell_redraw(shell);
+        wl_display_flush(shell->display);
+        result = cp0_provision_set_ssh_enabled(enabled, &status, error);
+        if (result == CP0_PROVISION_OK) {
+            apply_provision_network_status(shell, &status);
+            cp0_ui_owner_ssh_result(&shell->ui, true, status.ssh_enabled);
+        } else {
+            cp0_ui_owner_ssh_result(&shell->ui, false,
+                                    shell->ui.setup_ssh_enabled);
+            fprintf(stderr, "system-shell: Owner SSH update failed: %s\n",
+                    error[0] != '\0' ? error : "unavailable");
+        }
     } else if (event == CP0_UI_EVENT_CHANGE_PASSWORD) {
         struct cp0_provision_status status = {0};
         char error[CP0_PROVISION_ERROR_MAX + 1] = {0};
@@ -2923,6 +2992,22 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
                 cp0_ui_key_character(key, shell_shift_active(shell));
             if (character != '\0')
                 handled = cp0_ui_password_input_ascii(&shell->ui, character);
+        }
+        if (handled) {
+            shell_redraw(shell);
+            return;
+        }
+    }
+    if (pressed && cp0_ui_settings_wifi_accepts_text(&shell->ui)) {
+        bool handled = false;
+        if (key == KEY_BACKSPACE) {
+            handled = cp0_ui_settings_wifi_backspace(&shell->ui);
+        } else {
+            char character =
+                cp0_ui_key_character(key, shell_shift_active(shell));
+            if (character != '\0')
+                handled = cp0_ui_settings_wifi_input_ascii(&shell->ui,
+                                                            character);
         }
         if (handled) {
             shell_redraw(shell);
