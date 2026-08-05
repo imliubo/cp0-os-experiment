@@ -9,17 +9,34 @@ smoke_script="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/device
 firmware_hook="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardputerzero-firmware.initramfs-hook"
 ssh_prepare="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/prepare-ssh.sh"
 ssh_prepare_unit="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardputerzero-ssh-prepare.service"
+camera_probe="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/camera-probe.sh"
+camera_probe_unit="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardputerzero-camera-probe.service"
+backlight_patch="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/0002-cardputerzero-v06-backlight-zero-duty.patch"
 rootfs_verifier="$repo_root/tests/test-built-rootfs-profile.sh"
 makefile="$repo_root/Makefile"
 boot_fragment="$repo_root/bsp/cm0-v0.6/boot/config.txt.fragment"
+cmdline_fragment="$repo_root/bsp/cm0-v0.6/boot/cmdline.extra"
+bootscreen_firmware="$repo_root/bsp/cm0-v0.6/firmware/start-m5stack-bootscreen.elf"
+splash_png="$repo_root/bsp/cm0-v0.6/boot/splash.png"
+splash_bmp="$repo_root/bsp/cm0-v0.6/boot/splash.bmp"
+
+expected_firmware_sha256=d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd
+expected_fixup_sha256=b2d19b8c300b5a4ddbd0fcff3a0f7de61a171046269d8724e74f616058417d4b
+expected_splash_png_sha256=17b6b5571fd3be038992df24134d7ca88c75b22cb36e84cf2f007664096298e1
+expected_splash_bmp_sha256=dfaf289bae036e60014093cdf2705ab50d33507c38d6d197640fda99e32efc30
 
 grep -q '^PI_GEN_BRANCH=arm64$' "$repo_root/image/pi-gen/upstream.env"
 grep -Eq '^PI_GEN_COMMIT=[0-9a-f]{40}$' "$repo_root/image/pi-gen/upstream.env"
 grep -q '^dtoverlay=vc4-kms-v3d,cma-64$' "$stage"
 grep -q '^camera_auto_detect=0$' "$stage"
+grep -q "'/^start_x=/d'" "$stage"
+if grep -q '^start_x=' "$stage" || grep -q '^start_x=' "$boot_fragment"; then
+    echo "error: M5Stack boot-screen firmware must use the official start.elf path" >&2
+    exit 1
+fi
 grep -q '^dtoverlay=imx219$' "$stage"
-if [[ $(grep -c '^dtoverlay=camera-py12-high-overlay$' "$stage") -ne 1 ]]; then
-    echo "error: V0.6 must enable the P12 camera power overlay exactly once" >&2
+if grep -q '^dtoverlay=camera-py12-high-overlay$' "$stage"; then
+    echo "error: V0.6 must leave P12 under the powerfail driver" >&2
     exit 1
 fi
 grep -q "'/^camera_auto_detect=/d'" "$stage"
@@ -29,11 +46,13 @@ if grep -q '^dtoverlay=camera-gpio16-high-overlay$' "$stage"; then
 fi
 for camera_config in "$stage" "$boot_fragment"; do
     card_line=$(grep -n '^dtoverlay=cardputerzero-v5-overlay$' "$camera_config" | tail -1 | cut -d: -f1)
-    power_line=$(grep -n '^dtoverlay=camera-py12-high-overlay$' "$camera_config" | tail -1 | cut -d: -f1)
     sensor_line=$(grep -n '^dtoverlay=imx219$' "$camera_config" | tail -1 | cut -d: -f1)
-    if [[ -z $card_line || -z $power_line || -z $sensor_line ||
-          $card_line -ge $power_line || $power_line -ge $sensor_line ]]; then
-        echo "error: V0.6 camera overlays are not ordered board, P12 power, sensor: $camera_config" >&2
+    if [[ -z $card_line || -z $sensor_line || $card_line -ge $sensor_line ]]; then
+        echo "error: V0.6 camera overlays are not ordered board then sensor: $camera_config" >&2
+        exit 1
+    fi
+    if grep -q '^dtoverlay=camera-py12-high-overlay$' "$camera_config"; then
+        echo "error: V0.6 camera config conflicts with powerfail P12 ownership: $camera_config" >&2
         exit 1
     fi
     if grep -q '^dtoverlay=camera-gpio16-high-overlay$' "$camera_config"; then
@@ -43,12 +62,58 @@ for camera_config in "$stage" "$boot_fragment"; do
 done
 grep -q '^gpu_mem=64$' "$stage"
 grep -q '^gpu_mem_512=64$' "$stage"
-grep -q 'consoleblank=0' "$stage"
-grep -q 'fbcon=map:1' "$stage"
-grep -q 'for token in quiet splash fbcon=map:off fbcon=map:0' "$stage"
+grep -Fq "BOOTSCREEN_FIRMWARE_SHA256=\"$expected_firmware_sha256\"" "$stage"
+grep -Fq "BOOTSCREEN_FIXUP_SHA256=\"$expected_fixup_sha256\"" "$stage"
+grep -Fq "BOOTSCREEN_SPLASH_SHA256=\"$expected_splash_bmp_sha256\"" "$stage"
+grep -Fq 'boot_tokens='"'"'quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0 fbcon=map:off systemd.show_status=false rd.systemd.show_status=false'"'" "$stage"
+grep -Fq 'boot_tokens='"'"'loglevel=6 consoleblank=0 fbcon=map:1'"'" "$stage"
+for token in quiet loglevel=3 logo.nologo vt.global_cursor_default=0 \
+    consoleblank=0 fbcon=map:off systemd.show_status=false \
+    rd.systemd.show_status=false; do
+    grep -Fqw "$token" "$cmdline_fragment"
+done
+test "$(wc -c <"$bootscreen_firmware" | tr -d ' ')" = 3055976
+test "$(wc -c <"$splash_bmp" | tr -d ' ')" = 108866
+test "$(shasum -a 256 "$bootscreen_firmware" | awk '{print $1}')" = \
+    "$expected_firmware_sha256"
+test "$(shasum -a 256 "$splash_png" | awk '{print $1}')" = \
+    "$expected_splash_png_sha256"
+test "$(shasum -a 256 "$splash_bmp" | awk '{print $1}')" = \
+    "$expected_splash_bmp_sha256"
+grep -Fq 'start-m5stack-bootscreen.elf' "$build_script"
+grep -Fq 'bsp/cm0-v0.6/boot/splash.bmp' "$build_script"
+grep -Fq 'boot/firmware/start.elf' "$stage"
+grep -Fq 'boot/firmware/fixup.dat' "$stage"
+grep -Fq 'boot/firmware/splash.bmp' "$stage"
 grep -q 'fb_load.service' "$stage"
 grep -q 'rm -f /etc/systemd/system/fb_load.service' "$stage"
 grep -q 'cardputerzero-console-banner.service' "$stage"
+grep -q 'systemctl disable cardputerzero-console-banner.service' "$stage"
+grep -q 'cardputerzero-camera-probe.service' "$stage"
+grep -qx 'Before=cardputerzero-camerad.socket cardputerzero-camerad.service' "$camera_probe_unit"
+grep -q 'powerfail-suo' "$camera_probe"
+grep -q 'drivers/imx219' "$camera_probe"
+grep -q '10-0010' "$camera_probe"
+grep -q 'kernel-camera.log' "$camera_probe"
+grep -q 'schema=cardputerzero-camera-probe-v2' "$camera_probe"
+grep -Fq 'CP0_CAMERA_PROBE_FIRMWARE_FILE:-/boot/firmware/start.elf' "$camera_probe"
+grep -q '^firmware_mode=start$' "$camera_probe"
+grep -q "printf 'firmware_mode=%s" "$camera_probe"
+grep -q "printf 'firmware_variant=%s" "$camera_probe"
+grep -q "printf 'firmware_sha256=%s" "$camera_probe"
+grep -Fq "$expected_firmware_sha256" "$camera_probe"
+grep -q 'count >= 100' "$camera_probe"
+grep -q 'imx219|m5ioe1|powerfail|unicam' "$camera_probe"
+if grep -q 'cp0-developer-access' "$camera_probe"; then
+    echo "error: early camera probe cannot depend on the provisioned owner group" >&2
+    exit 1
+fi
+grep -q 'Camera absence must not prevent' "$camera_probe"
+if grep -Eq '(^|[[:space:]])(sudo|su)([[:space:]]|$)' "$camera_probe"; then
+    echo "error: camera probe must not delegate general privilege" >&2
+    exit 1
+fi
+sh -n "$camera_probe"
 if grep -q 'getty@tty1.service cardputerzero-console-banner.service' "$stage"; then
     echo "error: tty1 cannot be statically enabled with the compositor" >&2
     exit 1
@@ -67,6 +132,10 @@ grep -q 'rpi-resize.service 2>/dev/null' "$stage"
 grep -qx 'raspberrypi-sys-mods' "$packages"
 grep -qx 'firmware-brcm80211' "$packages"
 grep -q 'tca8418_keypad_m5stack' "$stage"
+grep -q '0002-cardputerzero-v06-backlight-zero-duty.patch' "$stage"
+grep -Fq "power-supply = <&backlight_power>;" "$backlight_patch"
+grep -Fq "V0.6 backlight must keep zero-duty PWM actively driven" "$stage"
+grep -Fq "grep -aFq 'power-supply'" "$rootfs_verifier"
 grep -q "grep -Fc 'spi-max-frequency = <60000000>;'" "$stage"
 grep -q "spi-max-frequency = <20000000>;" "$stage"
 grep -q 'panel-mipi-dbid' "$smoke_script"

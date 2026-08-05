@@ -52,9 +52,11 @@ required_executables=(
     usr/libexec/cardputerzero/device-performance-acceptance
     usr/libexec/cardputerzero/device-recovery-data
     usr/libexec/cardputerzero/device-smoke.sh
+    usr/libexec/cardputerzero/camera-probe
     usr/libexec/cardputerzero/device-stability-monitor
     usr/libexec/cardputerzero/device-store-acceptance
     usr/libexec/cardputerzero/device-support-bundle
+    usr/libexec/cardputerzero/map-recovery-console.sh
     usr/libexec/cardputerzero/data-grow-initramfs
     usr/libexec/cardputerzero/overlay-root-initramfs
     usr/libexec/cardputerzero/prepare-ssh.sh
@@ -152,8 +154,13 @@ for marker in developer-mode recovery-mode; do
 done
 
 enabled_units=(
-    multi-user.target.wants/cardputerzero-console-banner.service
+    multi-user.target.wants/cardputerzero-camera-probe.service
 )
+if [[ $image_profile == recovery ]]; then
+    enabled_units+=(
+        multi-user.target.wants/cardputerzero-console-banner.service
+    )
+fi
 if [[ $access_profile == development ]]; then
     enabled_units+=(
         multi-user.target.wants/ssh.service
@@ -189,7 +196,25 @@ for path in "${enabled_units[@]}"; do
         exit 1
     fi
 done
+banner_link="$rootfs/etc/systemd/system/multi-user.target.wants/cardputerzero-console-banner.service"
+if [[ $image_profile == product && ( -e $banner_link || -L $banner_link ) ]]; then
+    echo "error: product image enables the LCD console banner" >&2
+    exit 1
+fi
 if [[ $access_profile == production ]]; then
+    for path in \
+        etc/cardputerzero/hardware-debug-access \
+        etc/sudoers.d/020-cardputerzero-hardware-debug; do
+        if [[ -e $rootfs/$path || -L $rootfs/$path ]]; then
+            echo "error: production image contains hardware-debug access: /$path" >&2
+            exit 1
+        fi
+    done
+    if find "$rootfs/var/lib/cardputerzero-persist/home" -mindepth 1 \
+        -print -quit | grep -q .; then
+        echo "error: production image seeds a persistent human home" >&2
+        exit 1
+    fi
     for unit in regenerate_ssh_host_keys.service \
         getty@.service getty@tty1.service serial-getty@.service \
         serial-getty@serial0.service cardputerzero-recovery-console.service; do
@@ -284,6 +309,8 @@ elif [[ ! -L $rootfs/etc/systemd/system/multi-user.target.wants/ssh.service ]]; 
     echo "error: development access does not enable SSH" >&2
     exit 1
 fi
+grep -qx 'PermitRootLogin no' \
+    "$rootfs/etc/ssh/sshd_config.d/40-cardputerzero-owner.conf"
 machine_id_commit_mask="$rootfs/etc/systemd/system/systemd-machine-id-commit.service"
 if [[ $image_profile == product ]]; then
     if [[ ! -L $machine_id_commit_mask ||
@@ -357,8 +384,43 @@ if [[ $(grep -c '^dtoverlay=imx219$' "$bootfs/config.txt") -ne 1 ]]; then
     echo "error: image does not enable the IMX219 sensor exactly once" >&2
     exit 1
 fi
-if [[ $(grep -c '^dtoverlay=camera-py12-high-overlay$' "$bootfs/config.txt") -ne 1 ]]; then
-    echo "error: image does not enable V0.6 P12 camera power exactly once" >&2
+if grep -q '^start_x=' "$bootfs/config.txt"; then
+    echo "error: image does not use the official M5Stack start.elf selection" >&2
+    exit 1
+fi
+for camera_firmware in start.elf fixup.dat; do
+    if [[ ! -s $bootfs/$camera_firmware ]]; then
+        echo "error: image is missing camera firmware: $camera_firmware" >&2
+        exit 1
+    fi
+done
+bootscreen_firmware_sha256=d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd
+bootscreen_fixup_sha256=b2d19b8c300b5a4ddbd0fcff3a0f7de61a171046269d8724e74f616058417d4b
+if [[ $(sha256sum "$bootfs/start.elf" | awk '{print $1}') != \
+      "$bootscreen_firmware_sha256" ]]; then
+    echo "error: image does not contain the pinned M5Stack boot-screen start firmware" >&2
+    exit 1
+fi
+if [[ $(sha256sum "$bootfs/fixup.dat" | awk '{print $1}') != \
+      "$bootscreen_fixup_sha256" ]]; then
+    echo "error: image does not contain the official M5Stack fixup pairing" >&2
+    exit 1
+fi
+bootscreen_splash_sha256=dfaf289bae036e60014093cdf2705ab50d33507c38d6d197640fda99e32efc30
+if [[ ! -s $bootfs/splash.bmp ||
+      $(sha256sum "$bootfs/splash.bmp" | awk '{print $1}') != \
+      "$bootscreen_splash_sha256" ]]; then
+    echo "error: image does not contain the pinned 320x170 boot splash" >&2
+    exit 1
+fi
+if [[ $(od -An -tu4 -j18 -N4 "$bootfs/splash.bmp" | tr -d ' ') != 170 ||
+      $(od -An -tu4 -j22 -N4 "$bootfs/splash.bmp" | tr -d ' ') != 320 ||
+      $(od -An -tu2 -j28 -N2 "$bootfs/splash.bmp" | tr -d ' ') != 16 ]]; then
+    echo "error: boot splash is not a 170x320 RGB565 BMP" >&2
+    exit 1
+fi
+if grep -qx 'dtoverlay=camera-py12-high-overlay' "$bootfs/config.txt"; then
+    echo "error: image conflicts with V0.6 powerfail ownership of P12" >&2
     exit 1
 fi
 if grep -qx 'dtoverlay=camera-gpio16-high-overlay' "$bootfs/config.txt"; then
@@ -366,11 +428,18 @@ if grep -qx 'dtoverlay=camera-gpio16-high-overlay' "$bootfs/config.txt"; then
     exit 1
 fi
 card_line=$(grep -n '^dtoverlay=cardputerzero-v5-overlay$' "$bootfs/config.txt" | cut -d: -f1)
-power_line=$(grep -n '^dtoverlay=camera-py12-high-overlay$' "$bootfs/config.txt" | cut -d: -f1)
 sensor_line=$(grep -n '^dtoverlay=imx219$' "$bootfs/config.txt" | cut -d: -f1)
-if [[ -z $card_line || -z $power_line || -z $sensor_line ||
-      $card_line -ge $power_line || $power_line -ge $sensor_line ]]; then
-    echo "error: image camera overlays are not ordered board, P12 power, sensor" >&2
+if [[ -z $card_line || -z $sensor_line || $card_line -ge $sensor_line ]]; then
+    echo "error: image camera overlays are not ordered board then sensor" >&2
+    exit 1
+fi
+card_overlay="$bootfs/overlays/cardputerzero-v5-overlay.dtbo"
+if [[ ! -s $card_overlay ]]; then
+    echo "error: image is missing the CardputerZero V0.6 overlay" >&2
+    exit 1
+fi
+if grep -aFq 'power-supply' "$card_overlay"; then
+    echo "error: V0.6 overlay disables PWM instead of driving zero duty" >&2
     exit 1
 fi
 if [[ $image_profile == product ]]; then
@@ -385,9 +454,38 @@ if [[ $image_profile == product ]]; then
         echo "error: immutable root is not enabled in the product image" >&2
         exit 1
     fi
+    for token in quiet loglevel=3 logo.nologo vt.global_cursor_default=0 \
+        consoleblank=0 fbcon=map:off systemd.show_status=false \
+        rd.systemd.show_status=false; do
+        if ! grep -Fqw "$token" "$bootfs/cmdline.txt"; then
+            echo "error: product image is missing quiet-boot token: $token" >&2
+            exit 1
+        fi
+    done
+    for token in loglevel=6 fbcon=map:1 splash; do
+        if grep -Fqw "$token" "$bootfs/cmdline.txt"; then
+            echo "error: product image retains verbose console token: $token" >&2
+            exit 1
+        fi
+    done
 elif grep -qw 'cp0.overlay_root=volatile' "$bootfs/cmdline.txt"; then
     echo "error: recovery image unexpectedly enables immutable root" >&2
     exit 1
+fi
+if [[ $image_profile == recovery ]]; then
+    for token in loglevel=6 consoleblank=0 fbcon=map:1; do
+        if ! grep -Fqw "$token" "$bootfs/cmdline.txt"; then
+            echo "error: recovery image is missing visible-console token: $token" >&2
+            exit 1
+        fi
+    done
+    for token in quiet fbcon=map:off systemd.show_status=false \
+        rd.systemd.show_status=false; do
+        if grep -Fqw "$token" "$bootfs/cmdline.txt"; then
+            echo "error: recovery image incorrectly enables quiet boot: $token" >&2
+            exit 1
+        fi
+    done
 fi
 if [[ $image_profile == recovery &&
       -e $rootfs/usr/share/cardputerzero/factory-data-v1.cp0backup ]]; then

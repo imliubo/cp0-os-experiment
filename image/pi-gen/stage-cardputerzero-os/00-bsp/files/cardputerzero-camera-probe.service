@@ -1,0 +1,13 @@
+[Unit]
+Description=CardputerZero V0.6 camera power and sensor probe
+After=systemd-modules-load.service systemd-udev-trigger.service
+Before=cardputerzero-camerad.socket cardputerzero-camerad.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/cardputerzero/camera-probe
+RemainAfterExit=yes
+TimeoutStartSec=15
+
+[Install]
+WantedBy=multi-user.target

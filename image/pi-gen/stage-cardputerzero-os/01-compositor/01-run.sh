@@ -94,6 +94,10 @@ install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/main.c" \
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/policy/cardputerzero-policy.c" \
     "${policy_source}/cardputerzero-policy.c"
+install -D -m 0644 "${STAGE_DIR}/01-compositor/policy/backlight-state.c" \
+    "${policy_source}/backlight-state.c"
+install -D -m 0644 "${STAGE_DIR}/01-compositor/policy/backlight-state.h" \
+    "${policy_source}/backlight-state.h"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/policy/esc-gesture.c" \
     "${policy_source}/esc-gesture.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/policy/esc-gesture.h" \
@@ -247,6 +251,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \
     -I/tmp/cardputerzero-weston/include \
     -I/tmp/cardputerzero-weston-build \
     /tmp/cardputerzero-policy/cardputerzero-policy.c \
+    /tmp/cardputerzero-policy/backlight-state.c \
     /tmp/cardputerzero-policy/esc-gesture.c \
     /tmp/cardputerzero-policy/overlay-state.c \
     /tmp/cardputerzero-policy/wake-key.c \
@@ -336,6 +341,9 @@ install -D -m 0755 "${STAGE_DIR}/01-compositor/files/wait-wayland.sh" \
 install -D -m 0755 "${STAGE_DIR}/01-compositor/files/unblank-display.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/unblank-display.sh"
 install -D -m 0755 \
+    "${STAGE_DIR}/01-compositor/files/map-recovery-console.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/map-recovery-console.sh"
+install -D -m 0755 \
     "${STAGE_DIR}/01-compositor/files/retry-display-once.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/retry-display-once.sh"
 install -D -m 0644 \
@@ -347,11 +355,14 @@ set -e
 if ! getent group cp0-wayland >/dev/null 2>&1; then
     groupadd --system cp0-wayland
 fi
+if ! getent group cp0-display >/dev/null 2>&1; then
+    groupadd --system cp0-display
+fi
 if ! id cp0-compositor >/dev/null 2>&1; then
     useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin \
-        --groups video,render,input cp0-compositor
+        --groups video,render,input,cp0-display cp0-compositor
 else
-    usermod -G video,render,input cp0-compositor
+    usermod -G video,render,input,cp0-display cp0-compositor
 fi
 if ! id cp0-shell >/dev/null 2>&1; then
     useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin \

@@ -37,15 +37,29 @@ profile:    CONFIG_CARDPUTERO_V0_5=y
 同时保留主线更新的键盘修复。
 
 V0.6 的 IMX219 电源使能接在 M5IOE1 的 P12（GPIO offset 11），不是旧版硬件使用的
-SoC GPIO16。启动配置先加载 `cardputerzero-v5-overlay` 创建 I/O expander，再加载
-`camera-py12-high-overlay` 将 P12 固定为 output-high，最后加载 `imx219` 传感器节点。
-缺少这个供电 overlay 时设备树中虽会出现 `10-0010`，但 IMX219 驱动无法完成 probe，
-libcamera 因此不会枚举相机。镜像门禁要求 P12 overlay 恰好一次并拒绝 GPIO16 overlay。
+SoC GPIO16。`cardputerzero-v5-overlay` 中的 `powerfail_suo` 已以 active-low 语义持有
+P12，并在正常运行时将物理电平保持为高；额外加载 `camera-py12-high-overlay` 会用
+GPIO hog 抢占同一条线。启动配置因此只按顺序加载板级 overlay 和 `imx219`，并拒绝
+P12、GPIO16 两个独立 camera power overlay。
+
+IMX219 的首次自动 probe 可能早于 M5IOE1 和 `powerfail_suo` 就绪。
+`cardputerzero-camera-probe.service` 会先有限重试 `powerfail` 绑定，等待 P12 稳定，
+再对 `10-0010` 做五次有限重试。结果和过滤后的 Camera 内核信息保存在
+`/run/cardputerzero-camera-probe/`。日志只保留 Camera、M5IOE1、powerfail 和 Unicam
+相关的前 100 行，不包含应用数据、网络标识或通用内核日志；开启 SSH 后 Owner 可读取。
+
+M5Stack 官方可用镜像使用 Camera-capable `start_x` embedded variant，并在其
+`m5stack_bootscreen` 分支中增加了 SPI LCD early splash。官方将这个二进制安装为
+`start.elf`，不设置 `start_x=1`，并继续使用 `fixup.dat`；V0.6 profile 精确复现该
+布局并安装 `splash.bmp`。镜像门禁验证配置、固件精确哈希、BMP 精确哈希和
+170x320 RGB565 格式；probe 状态记录固件模式、变体和实际哈希。该固件是不透明且
+不可由本仓库复现的供应商二进制，来源和接受条件见 ADR 0008。
 
 V0.6 冷启动真机还观察到早期 fbdev 初始化未被面板接受，而后续 compositor
 disable/enable 会可靠发送完整的 ST7789 soft-reset、sleep-out 和 display-on 序列。
-产品镜像因此在 System Shell 首次就绪后执行一次有界的 compositor 重启；服务为
-oneshot，不在 recovery 镜像启用，也不会形成重启循环。2026-08-02 摄像头复验发现
+产品镜像因此在 System Shell 首次显示前执行一次有界的 compositor 重启；Setup/Home
+必须等该 oneshot 完成后才启动，因此不会在用户可见后被重置。服务不在 recovery
+镜像启用，也不会形成重启循环。2026-08-02 摄像头复验发现
 1 秒重试仍可能早于面板稳定窗口，而稍后的手动 disable/enable 可立即恢复 Home；
 默认重试延迟因此调整为 8 秒，最终冷启动门禁须在包含该改动的新镜像上完成。
 
@@ -83,7 +97,7 @@ CP0_RESUME_BUILD=1 ./image/build-image.sh
 清理容器，失败时保留。产物写入 `deploy/`，包括压缩镜像、包清单、构建日志和
 `SHA256SUMS`。
 
-## 当前精简镜像候选（2026-07-30）
+## 历史精简镜像候选（2026-07-30）
 
 当前可烧录候选已在 macOS + Docker Linux/arm64 环境完整构建并通过只读挂载验收：
 
@@ -124,32 +138,29 @@ CP0_RESUME_BUILD=1 ./image/build-image.sh
 - 32 GB 卡的根分区和 ext4 在首次启动自动从 976 MiB 扩展到 28.2 GiB；服务完成后
   自停用，第二次启动根分区保持 `rw,noatime`。
 
-## 无调试接口时的首次启动
+## 产品与恢复启动显示
 
-开发镜像不使用静默启动。LCD 驱动加载后会接管 `tty1` 并显示内核与 systemd 日志；
-系统进入 multi-user target 后，屏幕显示不超过 8 行的启动摘要：
+product 镜像使用固定的 early splash，并设置 `quiet loglevel=3 logo.nologo`、
+`vt.global_cursor_default=0`、`fbcon=map:off` 和 systemd status suppression。LCD 不再
+显示内核、initramfs、systemd 日志或启动摘要，`cardputerzero-console-banner.service`
+也不会启用。splash 由 VideoCore 在 Linux 内核执行前写入 ST7789，并保持到 compositor
+和 System Shell 接管显示。
 
-```text
-CardputerZero OS DEV
-Boot:     READY
-LCD:      OK 320x170
-Keyboard: OK
-IPv4:     192.168.x.x
-Login:    pi
-```
+recovery 镜像继续使用 `loglevel=6 consoleblank=0 fbcon=map:1`，启用启动摘要和
+`getty@tty1`。product development 镜像运行时进入 Recovery Mode 时，受限 helper 会
+用 `/usr/bin/con2fbmap` 将 tty1 映射到 `/dev/fb_lcd` 的实际编号，因此 HDMI 是否连接
+不会改变本地恢复终端目标。
 
-随后出现 `CardputerZero login:`。出现摘要和登录提示代表内核、根文件系统、systemd、
-LCD 及键盘输入路径已经工作。LCD 驱动本身加载前无法显示 Linux 日志，因此完全黑屏
-仍需结合路由器 DHCP 租约或网络扫描判断设备是否已启动。
-
-IPv4 会直接显示在摘要中。登录后也可查看所有接口：
+product 启动时，出现 splash 只证明 GPU firmware、SPI LCD 和 splash 资源可用；出现
+Home 才证明 Linux、根文件系统、systemd、compositor 和 System Shell 已完成启动。
+若长期停留在 splash，需结合路由器 DHCP 租约、mDNS 或已授权 SSH 诊断。登录后可查看：
 
 ```sh
 ip -br -4 address
 nmcli device status
 ```
 
-如果首次烧录时没有注入 Wi-Fi 配置，可使用设备键盘在本地控制台连接：
+若使用 recovery 镜像且首次烧录时没有注入 Wi-Fi 配置，可使用设备键盘在本地控制台连接：
 
 ```sh
 sudo nmcli device wifi list

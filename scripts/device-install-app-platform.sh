@@ -15,7 +15,7 @@ case "$staging" in
         ;;
 esac
 
-for file in cp0-appd cp0-audiod cp0-camerad cp0-connectivityd cp0-displayd cp0-documentd cp0-gpiod cp0-networkd cp0-radiod cp0-storaged cp0-stored cp0ctl cardputerzero-app-runtime app.json hello-card.wasm \
+for file in cp0-appd cp0-audiod cp0-camerad cp0-connectivityd cp0-displayd cp0-documentd cp0-gpiod cp0-networkd cp0-radiod cp0-storaged cp0-stored cp0ctl cardputerzero-app-runtime app.json hello-card.wasm camera-app.json camera.wasm \
     cardputerzero-appd.service cardputerzero-documentd.service \
     cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-appd.conf \
@@ -200,6 +200,10 @@ install -o root -g root -m 0644 "$staging/hello-card.wasm" \
     /var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm
 install -o root -g root -m 0644 "$staging/app.json" \
     /var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/app.json
+install -D -o root -g root -m 0644 "$staging/camera.wasm" \
+    /var/lib/cardputerzero/apps/dev.cardputerzero.camera/0.1.0/bin/camera.wasm
+install -D -o root -g root -m 0644 "$staging/camera-app.json" \
+    /var/lib/cardputerzero/apps/dev.cardputerzero.camera/0.1.0/app.json
 install -o root -g root -m 0644 "$staging/cardputerzero-appd.service" \
     /etc/systemd/system/cardputerzero-appd.service
 install -o root -g root -m 0644 "$staging/cardputerzero-appd.socket" \
@@ -335,4 +339,5 @@ sha256sum \
     /usr/libexec/cardputerzero/cp0-networkd \
     /usr/bin/cp0ctl \
     /usr/libexec/cardputerzero/app-runtime \
-    /var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm
+    /var/lib/cardputerzero/apps/dev.cardputerzero.hello/0.1.0/bin/hello-card.wasm \
+    /var/lib/cardputerzero/apps/dev.cardputerzero.camera/0.1.0/bin/camera.wasm

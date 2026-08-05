@@ -2,7 +2,7 @@
 Description=CardputerZero trusted System Shell
 BindsTo=cardputerzero-compositor.service
 Wants=cardputerzero-powerd.socket cardputerzero-provisiond.socket
-After=cardputerzero-compositor.service cardputerzero-powerd.socket cardputerzero-provisiond.socket
+After=cardputerzero-compositor.service cardputerzero-display-retry.service cardputerzero-powerd.socket cardputerzero-provisiond.socket
 PartOf=cardputerzero-compositor.service
 ConditionPathExists=/usr/bin/cardputerzero-system-shell
 

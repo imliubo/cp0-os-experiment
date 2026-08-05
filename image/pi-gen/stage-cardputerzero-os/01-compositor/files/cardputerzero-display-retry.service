@@ -1,7 +1,8 @@
 [Unit]
-Description=Retry the CardputerZero LCD initialization once after cold boot
+Description=Stabilize the CardputerZero LCD before showing the System Shell
 Wants=cardputerzero-compositor.service
-After=cardputerzero-system-shell.service
+After=cardputerzero-compositor.service
+Before=cardputerzero-system-shell.service
 ConditionPathExists=!/var/lib/cardputerzero/registry/recovery-mode
 
 [Service]

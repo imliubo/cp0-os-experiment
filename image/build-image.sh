@@ -13,7 +13,7 @@ apt_proxy=${CP0_APT_PROXY:-${http_proxy:-}}
 resume_build=${CP0_RESUME_BUILD:-0}
 image_name=${CP0_IMAGE_NAME:-}
 image_profile=${CP0_IMAGE_PROFILE:-product}
-access_profile=${CP0_ACCESS_PROFILE:-development}
+access_profile=${CP0_ACCESS_PROFILE:-production}
 keyboard_diagnostics=${CP0_KEYBOARD_DIAGNOSTICS:-0}
 
 case "$image_profile" in
@@ -107,6 +107,11 @@ printf '%s\n' \
 rm -rf "$pi_gen_dir/stage-cardputerzero-os"
 cp -R "$repo_root/image/pi-gen/stage-cardputerzero-os" \
     "$pi_gen_dir/stage-cardputerzero-os"
+install -m 0644 \
+    "$repo_root/bsp/cm0-v0.6/firmware/start-m5stack-bootscreen.elf" \
+    "$pi_gen_dir/stage-cardputerzero-os/00-bsp/files/start-m5stack-bootscreen.elf"
+install -m 0644 "$repo_root/bsp/cm0-v0.6/boot/splash.bmp" \
+    "$pi_gen_dir/stage-cardputerzero-os/00-bsp/files/splash.bmp"
 printf '%s\n' "$image_profile" \
     >"$pi_gen_dir/stage-cardputerzero-os/image-profile"
 printf '%s\n' "$access_profile" \
@@ -144,6 +149,8 @@ cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$pi_gen_dir/stage-cardputerzero-os/01-compositor/system-shell/"
 mkdir -p "$pi_gen_dir/stage-cardputerzero-os/01-compositor/policy"
 cp "$repo_root/compositor-policy/cardputerzero-policy.c" \
+    "$repo_root/compositor-policy/backlight-state.c" \
+    "$repo_root/compositor-policy/backlight-state.h" \
     "$repo_root/compositor-policy/esc-gesture.c" \
     "$repo_root/compositor-policy/esc-gesture.h" \
     "$repo_root/compositor-policy/overlay-state.c" \

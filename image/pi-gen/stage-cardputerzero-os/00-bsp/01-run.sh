@@ -23,9 +23,14 @@ fi
 
 BSP_REPOSITORY="https://github.com/m5stack/m5stack-linux-dtoverlays.git"
 BSP_COMMIT="c3b254819307c177a34100b66fe19e52059ce8c4"
+BOOTSCREEN_FIRMWARE_SHA256="d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd"
+BOOTSCREEN_FIXUP_SHA256="b2d19b8c300b5a4ddbd0fcff3a0f7de61a171046269d8724e74f616058417d4b"
+BOOTSCREEN_SPLASH_SHA256="dfaf289bae036e60014093cdf2705ab50d33507c38d6d197640fda99e32efc30"
 
 install -m 0644 "${STAGE_DIR}/00-bsp/files/0001-tca8418-flush-synthetic-shift.patch" \
     "${ROOTFS_DIR}/tmp/0001-tca8418-flush-synthetic-shift.patch"
+install -m 0644 "${STAGE_DIR}/00-bsp/files/0002-cardputerzero-v06-backlight-zero-duty.patch" \
+    "${ROOTFS_DIR}/tmp/0002-cardputerzero-v06-backlight-zero-duty.patch"
 
 on_chroot <<CHROOT
 set -e
@@ -50,12 +55,21 @@ git -C /tmp/cardputerzero-bsp checkout "${BSP_COMMIT}"
 test "\$(git -C /tmp/cardputerzero-bsp rev-parse HEAD)" = "${BSP_COMMIT}"
 git -C /tmp/cardputerzero-bsp apply --unidiff-zero \
     /tmp/0001-tca8418-flush-synthetic-shift.patch
-rm -f /tmp/0001-tca8418-flush-synthetic-shift.patch
+git -C /tmp/cardputerzero-bsp apply --check \
+    /tmp/0002-cardputerzero-v06-backlight-zero-duty.patch
+git -C /tmp/cardputerzero-bsp apply \
+    /tmp/0002-cardputerzero-v06-backlight-zero-duty.patch
+rm -f /tmp/0001-tca8418-flush-synthetic-shift.patch \
+    /tmp/0002-cardputerzero-v06-backlight-zero-duty.patch
 
 # M5Stack validated 20 MHz on its display-stability branch. Keep the newer
 # keyboard fixes from the pinned mainline BSP while applying that narrow LCD
 # electrical limit here.
 panel_overlay=/tmp/cardputerzero-bsp/modules/CardputerZero/cardputerzero-v5-overlay.dts
+if grep -Fq 'power-supply = <&backlight_power>;' "\$panel_overlay"; then
+    echo "error: V0.6 backlight must keep zero-duty PWM actively driven" >&2
+    exit 1
+fi
 test "\$(grep -Fc 'spi-max-frequency = <60000000>;' "\$panel_overlay")" = 1
 sed -i 's/spi-max-frequency = <60000000>;/spi-max-frequency = <20000000>;/' \
     "\$panel_overlay"
@@ -104,6 +118,7 @@ cmdline="${ROOTFS_DIR}/boot/firmware/cmdline.txt"
 
 sed -i -E '/^dtoverlay=vc4-kms-v3d(,cma-[0-9]+)?[[:space:]]*$/d' "$boot_config"
 sed -i -E '/^camera_auto_detect=/d' "$boot_config"
+sed -i -E '/^start_x=/d' "$boot_config"
 sed -i '/^gpu_mem=/d' "$boot_config"
 sed -i '/^gpu_mem_512=/d' "$boot_config"
 sed -i '/^# CardputerZero OS CM0 V0.6 BSP$/d' "$boot_config"
@@ -133,7 +148,6 @@ camera_auto_detect=0
 enable_uart=1
 dtoverlay=dwc2
 dtoverlay=cardputerzero-v5-overlay
-dtoverlay=camera-py12-high-overlay
 dtoverlay=imx219
 dtoverlay=bq27220_v5
 dtoverlay=bmi270_bmm150_overlay
@@ -142,8 +156,26 @@ dtoverlay=gpio-ir-tx,gpio_pin=12
 # END CardputerZero OS BSP
 CONFIG
 
-for token in quiet splash fbcon=map:off fbcon=map:0; do
-    sed -i -E "s/(^|[[:space:]])${token}([[:space:]]|$)/ /g" "$cmdline"
+bootscreen_firmware="${STAGE_DIR}/00-bsp/files/start-m5stack-bootscreen.elf"
+bootscreen_splash="${STAGE_DIR}/00-bsp/files/splash.bmp"
+printf '%s  %s\n' "$BOOTSCREEN_FIRMWARE_SHA256" "$bootscreen_firmware" |
+    sha256sum -c -
+printf '%s  %s\n' "$BOOTSCREEN_FIXUP_SHA256" \
+    "${ROOTFS_DIR}/boot/firmware/fixup.dat" | sha256sum -c -
+printf '%s  %s\n' "$BOOTSCREEN_SPLASH_SHA256" "$bootscreen_splash" |
+    sha256sum -c -
+install -m 0644 "$bootscreen_firmware" \
+    "${ROOTFS_DIR}/boot/firmware/start.elf"
+install -m 0644 "$bootscreen_splash" \
+    "${ROOTFS_DIR}/boot/firmware/splash.bmp"
+
+for pattern in \
+    quiet splash 'logo\.nologo' 'loglevel=[^[:space:]]+' \
+    'consoleblank=[^[:space:]]+' 'fbcon=map:[^[:space:]]+' \
+    'vt\.global_cursor_default=[^[:space:]]+' \
+    'systemd\.show_status=[^[:space:]]+' \
+    'rd\.systemd\.show_status=[^[:space:]]+'; do
+    sed -i -E "s/(^|[[:space:]])${pattern}([[:space:]]|$)/ /g" "$cmdline"
 done
 sed -i -E 's/(^|[[:space:]])resize([[:space:]]|$)/ /g' "$cmdline"
 sed -i -E \
@@ -151,14 +183,22 @@ sed -i -E \
     "$cmdline"
 sed -i -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' "$cmdline"
 
-for token in cgroup_memory=1 cgroup_enable=memory apparmor=1 security=apparmor loglevel=6 consoleblank=0 fbcon=map:1; do
+for token in cgroup_memory=1 cgroup_enable=memory apparmor=1 security=apparmor; do
     if ! grep -qw "$token" "$cmdline"; then
         sed -i "s|$| $token|" "$cmdline"
     fi
 done
 if [[ $image_profile == product ]]; then
+    boot_tokens='quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0 fbcon=map:off systemd.show_status=false rd.systemd.show_status=false'
     sed -i 's|$| cp0.overlay_root=volatile|' "$cmdline"
+else
+    boot_tokens='loglevel=6 consoleblank=0 fbcon=map:1'
 fi
+for token in $boot_tokens; do
+    if ! grep -qw "$token" "$cmdline"; then
+        sed -i "s|$| $token|" "$cmdline"
+    fi
+done
 
 install -d -o root -g root -m 0755 \
     "${ROOTFS_DIR}/etc/cardputerzero"
@@ -171,6 +211,10 @@ chmod 0644 "${ROOTFS_DIR}/etc/cardputerzero/access-profile"
 
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/device-smoke.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/device-smoke.sh"
+install -D -m 0755 "${STAGE_DIR}/00-bsp/files/camera-probe.sh" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/camera-probe"
+install -D -m 0644 "${STAGE_DIR}/00-bsp/files/cardputerzero-camera-probe.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-camera-probe.service"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/console-banner.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/console-banner.sh"
 install -D -m 0644 "${STAGE_DIR}/00-bsp/files/cardputerzero-console-banner.service" \
@@ -296,7 +340,7 @@ systemctl mask apt-daily.service apt-daily.timer \
     fb_load.service 2>/dev/null || true
 systemctl enable NetworkManager.service apparmor.service \
     avahi-daemon.service \
-    cardputerzero-console-banner.service \
+    cardputerzero-camera-probe.service \
     cardputerzero-overlay-root-status.service
 systemctl set-default multi-user.target
 for module in \
@@ -340,6 +384,18 @@ rm -f /var/lib/systemd/random-seed
 rm -f /etc/ssh/ssh_host_*_key*
 apt-get clean
 CHROOT
+
+if [[ $image_profile == recovery ]]; then
+    on_chroot <<'CHROOT'
+set -e
+systemctl enable cardputerzero-console-banner.service
+CHROOT
+else
+    on_chroot <<'CHROOT'
+set -e
+systemctl disable cardputerzero-console-banner.service 2>/dev/null || true
+CHROOT
+fi
 
 if [[ $access_profile == development ]]; then
     on_chroot <<'CHROOT'

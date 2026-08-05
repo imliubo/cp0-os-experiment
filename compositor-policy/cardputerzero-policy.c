@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "backlight-state.h"
 #include "cardputerzero-system-shell-server-protocol.h"
 #include "esc-gesture.h"
 #include "overlay-state.h"
@@ -23,6 +24,10 @@
 #define CP0_APP_ID_MAX 128
 #define CP0_ESC_POLL_MSEC 20
 #define CP0_SYSTEM_SHELL_PROTOCOL_VERSION 7U
+#define CP0_BACKLIGHT_BRIGHTNESS_PATH \
+    "/sys/class/backlight/backlight/brightness"
+#define CP0_BACKLIGHT_SAVED_STATE_PATH \
+    "/run/cardputerzero/backlight-before-sleep"
 
 _Static_assert((uint32_t)CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL ==
                        (uint32_t)CP0_OVERLAY_STATE_FULL &&
@@ -68,6 +73,7 @@ struct cp0_policy {
     struct cp0_esc_gesture esc_gesture;
     struct weston_keyboard_grab wake_grab;
     struct cp0_wake_key wake_key;
+    struct cp0_backlight_state backlight;
     uint32_t next_app_token;
     uint32_t overlay_mode;
 };
@@ -172,6 +178,10 @@ put_display_to_sleep(struct cp0_policy *policy)
     if (!arm_wake_key_grab(policy))
         return false;
     weston_compositor_sleep(policy->compositor);
+    if (!cp0_backlight_sleep(&policy->backlight,
+                             CP0_BACKLIGHT_BRIGHTNESS_PATH,
+                             CP0_BACKLIGHT_SAVED_STATE_PATH))
+        weston_log("cardputerzero-policy: could not turn off LCD backlight\n");
     return true;
 }
 
@@ -905,6 +915,9 @@ compositor_woke(struct wl_listener *listener, void *data)
                          keyboard->keys.size > 0;
     (void)data;
 
+    if (!cp0_backlight_wake(&policy->backlight,
+                            CP0_BACKLIGHT_BRIGHTNESS_PATH))
+        weston_log("cardputerzero-policy: could not restore LCD backlight\n");
     cp0_esc_gesture_cancel(&policy->esc_gesture);
     if (!keyboard_wake && cp0_wake_key_is_armed(&policy->wake_key))
         finish_wake_key_grab(policy);
@@ -937,6 +950,9 @@ policy_destroyed(struct wl_listener *listener, void *data)
     struct cp0_surface_watch *watch, *next;
     (void)data;
 
+    if (!cp0_backlight_wake(&policy->backlight,
+                            CP0_BACKLIGHT_BRIGHTNESS_PATH))
+        weston_log("cardputerzero-policy: could not restore LCD backlight during shutdown\n");
     finish_wake_key_grab(policy);
     if (policy->reassert_idle != NULL)
         wl_event_source_remove(policy->reassert_idle);
@@ -983,6 +999,7 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
     policy->compositor = compositor;
     policy->trusted_uid = shell_user->pw_uid;
     policy->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
+    cp0_backlight_state_init(&policy->backlight);
     wl_list_init(&policy->surface_watches);
 
     weston_layer_init(&policy->trusted_layer, compositor);

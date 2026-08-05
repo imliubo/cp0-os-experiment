@@ -19,6 +19,7 @@ for file in cardputerzero-system-shell cardputerzero-policy.so \
     cardputerzero-app-runtime cardputerzero-compositor.service \
     cardputerzero-display-generator \
     cardputerzero-display-retry.service retry-display-once.sh \
+    unblank-display.sh \
     cardputerzero-recovery-console.service \
     cardputerzero-system-shell.service; do
     if [ ! -f "$staging/$file" ] || [ -L "$staging/$file" ]; then
@@ -26,6 +27,12 @@ for file in cardputerzero-system-shell cardputerzero-policy.so \
         exit 1
     fi
 done
+
+if ! getent group cp0-display >/dev/null 2>&1; then
+    groupadd --system cp0-display
+fi
+usermod -a -G cp0-display cp0-compositor
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-display.conf
 
 if [ -e /var/lib/cardputerzero/registry/recovery-mode ]; then
     echo "error: disable recovery mode before compositor deployment" >&2
@@ -60,6 +67,9 @@ install -o root -g root -m 0644 \
 install -o root -g root -m 0755 \
     "$staging/retry-display-once.sh" \
     /usr/libexec/cardputerzero/retry-display-once.sh
+install -o root -g root -m 0755 \
+    "$staging/unblank-display.sh" \
+    /usr/libexec/cardputerzero/unblank-display.sh
 install -D -o root -g root -m 0755 \
     "$staging/cardputerzero-display-generator" \
     /usr/lib/systemd/system-generators/cardputerzero-display-generator
@@ -89,9 +99,6 @@ wait_active()
     return 1
 }
 
-wait_active cardputerzero-compositor.service
-wait_active cardputerzero-system-shell.service
-systemctl start cardputerzero-display-retry.service
 wait_active cardputerzero-compositor.service
 wait_active cardputerzero-system-shell.service
 sha256sum \

@@ -1,0 +1,11 @@
+diff --git a/modules/CardputerZero/cardputerzero-v5-overlay.dts b/modules/CardputerZero/cardputerzero-v5-overlay.dts
+--- a/modules/CardputerZero/cardputerzero-v5-overlay.dts
++++ b/modules/CardputerZero/cardputerzero-v5-overlay.dts
+@@ -327,7 +327,6 @@
+                     50000
+                 >;
+                 default-brightness-level = <75>;
+-                power-supply = <&backlight_power>;
+                 /* Force the backlight on during initialization */
+                 force-enable-on-init;
+             };

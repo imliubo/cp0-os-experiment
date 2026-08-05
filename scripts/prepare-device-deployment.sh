@@ -16,6 +16,7 @@ runtime="$repo_root/target/app-runtime-aarch64/cardputerzero-app-runtime"
 compositor="$repo_root/target/compositor-aarch64"
 release="$repo_root/target/aarch64-unknown-linux-gnu/release"
 hello="$repo_root/target/apps/dev.cardputerzero.hello/0.1.0"
+camera="$repo_root/target/apps/dev.cardputerzero.camera/0.1.0"
 
 required=(
     "$runtime"
@@ -24,12 +25,15 @@ required=(
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-compositor.service"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-retry.service"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/retry-display-once.sh"
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/unblank-display.sh"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-generator"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-recovery-console.service"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-system-shell.service"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/device-smoke.sh"
     "$hello/app.json"
     "$hello/bin/hello-card.wasm"
+    "$camera/app.json"
+    "$camera/bin/camera.wasm"
     "$release/cp0-appd"
     "$release/cp0-audiod"
     "$release/cp0-camerad"
@@ -78,9 +82,12 @@ install -m 0755 \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/device-smoke.sh" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-generator" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/retry-display-once.sh" \
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/unblank-display.sh" \
     "$output/"
 install -m 0644 "$hello/app.json" "$output/app.json"
 install -m 0644 "$hello/bin/hello-card.wasm" "$output/hello-card.wasm"
+install -m 0644 "$camera/app.json" "$output/camera-app.json"
+install -m 0644 "$camera/bin/camera.wasm" "$output/camera.wasm"
 install -m 0644 \
     "$repo_root/appd/systemd/"* \
     "$repo_root/appd/lora.conf" \

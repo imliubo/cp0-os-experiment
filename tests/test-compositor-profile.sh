@@ -13,10 +13,14 @@ display_generator="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/
 launcher="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/start-compositor.sh"
 waiter="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/wait-wayland.sh"
 unblanker="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/unblank-display.sh"
+recovery_mapper="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/map-recovery-console.sh"
 udev_rules="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/99-cardputerzero-systemd.rules"
 config="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/weston.ini"
 version="$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/weston.env"
 policy="$repo_root/compositor-policy/cardputerzero-policy.c"
+backlight_state="$repo_root/compositor-policy/backlight-state.c"
+backlight_state_header="$repo_root/compositor-policy/backlight-state.h"
+backlight_state_test="$repo_root/tests/compositor-backlight-state.c"
 esc_gesture="$repo_root/compositor-policy/esc-gesture.c"
 esc_gesture_header="$repo_root/compositor-policy/esc-gesture.h"
 esc_gesture_test="$repo_root/tests/compositor-esc-gesture.c"
@@ -69,16 +73,25 @@ grep -q '/usr/libexec/cardputerzero/start-compositor.sh' "$service"
 grep -q '^ExecStartPost=+/usr/libexec/cardputerzero/unblank-display.sh$' "$service"
 grep -q 'files/unblank-display.sh' "$stage"
 grep -q '^Wants=cardputerzero-system-shell.service$' "$service"
-grep -q '^After=cardputerzero-system-shell.service$' "$display_retry_service"
+grep -q '^Wants=cardputerzero-compositor.service$' "$display_retry_service"
+grep -q '^After=cardputerzero-compositor.service$' "$display_retry_service"
+grep -q '^Before=cardputerzero-system-shell.service$' "$display_retry_service"
 grep -q '^Type=oneshot$' "$display_retry_service"
 grep -q '^RemainAfterExit=yes$' "$display_retry_service"
 grep -q '^WantedBy=multi-user.target$' "$display_retry_service"
 grep -q 'systemctl restart cardputerzero-compositor.service' "$display_retry"
+if grep -q 'systemctl is-active --quiet cardputerzero-system-shell.service' \
+    "$display_retry"; then
+    echo 'display retry cannot wait for a visible System Shell' >&2
+    exit 1
+fi
+grep -q 'systemctl is-active --quiet cardputerzero-compositor.service' \
+    "$display_retry"
 grep -q 'cardputerzero-display-retry.service' "$stage"
 grep -q '^delay=${CP0_DISPLAY_RETRY_DELAY:-8}$' "$display_retry"
 grep -q '/usr/bin/cardputerzero-system-shell' "$shell_service"
 grep -q '^Wants=cardputerzero-powerd.socket cardputerzero-provisiond.socket$' "$shell_service"
-grep -q '^After=cardputerzero-compositor.service cardputerzero-powerd.socket cardputerzero-provisiond.socket$' "$shell_service"
+grep -q '^After=cardputerzero-compositor.service cardputerzero-display-retry.service cardputerzero-powerd.socket cardputerzero-provisiond.socket$' "$shell_service"
 grep -q '^SupplementaryGroups=.*cp0-power-control' "$shell_service"
 grep -q '^Restart=always$' "$shell_service"
 grep -q '^MemoryMax=32M$' "$shell_service"
@@ -89,6 +102,9 @@ grep -q '^MemorySwapMax=0$' "$service"
 grep -q '^TasksMax=32$' "$service"
 grep -q '^User=cp0-compositor$' "$service"
 grep -q '^Group=cp0-wayland$' "$service"
+grep -q '^SupplementaryGroups=video render input cp0-display$' "$service"
+grep -q '^ReadWritePaths=/run/cardputerzero -/sys/class/backlight/backlight/brightness$' \
+    "$service"
 grep -q '^RuntimeDirectoryMode=0770$' "$service"
 grep -q '^UMask=0007$' "$service"
 grep -q '^CapabilityBoundingSet=$' "$service"
@@ -110,6 +126,8 @@ if grep -q '^ProcSubset=pid$' "$shell_service"; then
     exit 1
 fi
 grep -q 'groupadd --system cp0-wayland' "$stage"
+grep -q 'groupadd --system cp0-display' "$stage"
+grep -q -- '--groups video,render,input,cp0-display cp0-compositor' "$stage"
 grep -q 'cp0-compositor' "$stage"
 grep -q 'usermod -G cp0-wayland cp0-shell' "$stage"
 if grep -q 'usermod -a -G cp0-wayland cp0-shell' "$stage"; then
@@ -128,7 +146,7 @@ grep -q '/dev/dri/cardputer-zero-internal' "$launcher"
 grep -q -- '--seat=seat-cardputer-zero' "$launcher"
 grep -q -- '--renderer=pixman' "$launcher"
 grep -q '^Conflicts=getty@tty1.service$' "$service"
-grep -q '^OnFailure=getty@tty1.service$' "$service"
+grep -q '^OnFailure=cardputerzero-recovery-console.service$' "$service"
 grep -Fq 'dev-dri-cardputer\x2dzero\x2dinternal.device' "$service"
 grep -Fq 'dev-input-cardputer\x2dzero\x2dinternal.device' "$service"
 grep -q '^JobTimeoutSec=30s$' "$service"
@@ -140,6 +158,12 @@ grep -q 'TAG+="systemd"' "$udev_rules"
 grep -q 'files/99-cardputerzero-systemd.rules' "$stage"
 grep -q '^Conflicts=cardputerzero-compositor.service$' "$recovery_service"
 grep -q '^Wants=getty@tty1.service$' "$recovery_service"
+grep -q '^ExecStart=/usr/libexec/cardputerzero/map-recovery-console.sh$' \
+    "$recovery_service"
+if grep -q '^PrivateDevices=yes$' "$recovery_service"; then
+    echo "error: recovery mapper cannot see the LCD framebuffer" >&2
+    exit 1
+fi
 if grep -q '^WantedBy=' "$recovery_service"; then
     echo "error: recovery console must only be selected by the display generator" >&2
     exit 1
@@ -153,10 +177,12 @@ grep -q '^RequiresMountsFor=/var/lib/cardputerzero/registry$' "$service"
 grep -q '^ConditionPathExists=!/var/lib/cardputerzero/registry/recovery-mode$' "$service"
 grep -q '^mode=320x170@30$' "$config"
 grep -qx 'seatd' "$packages"
+grep -qx 'fbset' "$packages"
 grep -qx 'libpng16-16t64' "$packages"
 sh -n "$launcher"
 sh -n "$waiter"
 sh -n "$unblanker"
+sh -n "$recovery_mapper"
 sh -n "$display_retry"
 sh -n "$display_generator"
 mkdir -p "$repo_root/target/test-tmp"
@@ -177,6 +203,13 @@ trap 'rm -rf -- "$generator_tmp"' EXIT
     "$overlay_state" "$overlay_state_test" \
     -o "$generator_tmp/compositor-overlay-state-test"
 "$generator_tmp/compositor-overlay-state-test"
+backlight_tmp="$generator_tmp/backlight"
+mkdir -p "$backlight_tmp"
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -I"$repo_root/compositor-policy" \
+    "$backlight_state" "$backlight_state_test" \
+    -o "$generator_tmp/compositor-backlight-state-test"
+"$generator_tmp/compositor-backlight-state-test" "$backlight_tmp"
 marker="$generator_tmp/recovery-mode"
 test "$("$display_generator" --select product "$marker")" = \
     cardputerzero-compositor.service
@@ -194,6 +227,23 @@ test "$("$display_generator" --select invalid "$marker")" = \
 grep -q '/dev/fb_lcd' "$unblanker"
 grep -q '/sys/class/graphics/\$fb_device/blank' "$unblanker"
 grep -q "printf '0" "$unblanker"
+grep -q '/sys/class/backlight/backlight/brightness' "$unblanker"
+grep -q 'backlight-before-sleep' "$unblanker"
+grep -q '/dev/fb_lcd' "$recovery_mapper"
+grep -q '/usr/bin/con2fbmap' "$recovery_mapper"
+mapper_root="$generator_tmp/recovery-mapper"
+mkdir -p "$mapper_root/bin" "$mapper_root/dev"
+ln -s fb7 "$mapper_root/dev/fb_lcd"
+cat >"$mapper_root/bin/con2fbmap" <<'SCRIPT'
+#!/bin/sh
+printf '%s\n' "$*" >"$CP0_RECOVERY_ARGS"
+SCRIPT
+chmod +x "$mapper_root/bin/con2fbmap"
+CP0_RECOVERY_FB_ALIAS="$mapper_root/dev/fb_lcd" \
+CP0_RECOVERY_CON2FBMAP="$mapper_root/bin/con2fbmap" \
+CP0_RECOVERY_ARGS="$mapper_root/args" \
+    "$recovery_mapper"
+grep -qx '1 7' "$mapper_root/args"
 grep -q 'wl_client_get_credentials' "$policy"
 grep -q 'uid != policy->trusted_uid' "$policy"
 grep -q 'WESTON_LAYER_POSITION_TOP_UI' "$policy"
@@ -224,6 +274,8 @@ grep -q 'attempt->who->client == shell_client' "$policy"
 grep -q 'attempt->who->output->width == 320' "$policy"
 grep -q 'cp0_system_shell_v1_register_surface' "$shell_client"
 grep -q 'cp0_system_shell_v1_activate_app' "$shell_client"
+grep -q 'cp0_appd_set_foreground_app(NULL)' "$shell_client"
+grep -q 'cp0_appd_set_foreground_app(app_id)' "$shell_client"
 grep -q '<interface name="cp0_system_shell_v1" version="7">' "$protocol"
 grep -q '<event name="app_identity" since="7">' "$protocol"
 grep -q '^#define CP0_SYSTEM_SHELL_PROTOCOL_VERSION 7U$' "$policy"
@@ -278,6 +330,9 @@ grep -q 'screenshot_store.c' "$builder"
 grep -q 'display_client.c' "$builder"
 grep -q 'audio_settings_client.c' "$builder"
 grep -q 'compositor-policy/esc-gesture.c' "$builder"
+grep -q 'compositor-policy/backlight-state.c' "$builder"
+grep -q 'compositor-policy/backlight-state.c' "$repo_root/image/build-image.sh"
+grep -q '/tmp/cardputerzero-policy/backlight-state.c' "$stage"
 grep -q 'compositor-policy/esc-gesture.c' "$repo_root/image/build-image.sh"
 grep -q '/tmp/cardputerzero-policy/esc-gesture.c' "$stage"
 grep -q 'compositor-policy/wake-key.c' "$builder"
@@ -285,11 +340,15 @@ grep -q 'compositor-policy/wake-key.c' "$repo_root/image/build-image.sh"
 grep -q '/tmp/cardputerzero-policy/wake-key.c' "$stage"
 grep -q 'CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_STATUS' "$policy"
 grep -q 'weston_compositor_sleep' "$policy"
+grep -q 'cp0_backlight_sleep' "$policy"
+grep -q 'cp0_backlight_wake' "$policy"
 grep -q 'compositor->wake_signal' "$policy"
 grep -q 'WESTON_COMMIT' "$builder"
 grep -q -- '-Wl,-z,defs' "$builder"
 grep -q 'systemctl stop cardputerzero-compositor.service' "$installer"
 grep -q 'cardputerzero-app-runtime' "$installer"
+grep -q 'unblank-display.sh' "$installer"
+grep -q 'usermod -a -G cp0-display cp0-compositor' "$installer"
 sh -n "$installer"
 
 if command -v xmllint >/dev/null 2>&1; then

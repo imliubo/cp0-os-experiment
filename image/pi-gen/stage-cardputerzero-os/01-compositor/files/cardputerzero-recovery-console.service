@@ -7,11 +7,10 @@ Conflicts=cardputerzero-compositor.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/true
+ExecStart=/usr/libexec/cardputerzero/map-recovery-console.sh
 RemainAfterExit=yes
 NoNewPrivileges=yes
 CapabilityBoundingSet=
-PrivateDevices=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes

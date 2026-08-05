@@ -45,7 +45,7 @@ jq -e \
      .store_install_allowed == true' \
     "$policy" >/dev/null
 
-grep -Fq 'access_profile=${CP0_ACCESS_PROFILE:-development}' "$build"
+grep -Fq 'access_profile=${CP0_ACCESS_PROFILE:-production}' "$build"
 grep -Fq 'stage-cardputerzero-os/access-profile' "$build"
 grep -Fq 'openssl rand -hex 32' "$build"
 grep -Fq 'FIRST_USER_NAME=cp0-build' "$build"

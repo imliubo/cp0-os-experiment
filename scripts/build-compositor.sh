@@ -66,6 +66,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \
     -I"$weston_source/include" \
     -I"$weston_build" \
     "$repo_root/compositor-policy/cardputerzero-policy.c" \
+    "$repo_root/compositor-policy/backlight-state.c" \
     "$repo_root/compositor-policy/esc-gesture.c" \
     "$repo_root/compositor-policy/overlay-state.c" \
     "$repo_root/compositor-policy/wake-key.c" \

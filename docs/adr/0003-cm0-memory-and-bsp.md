@@ -9,9 +9,14 @@ CM0 V0.6 使用 64 MB VideoCore、448 MB ARM 和 64 MB VC4 CMA。镜像构建阶
 删除基础 DTB 内置的 `cgroup_disable=memory` token，系统启用 unified cgroup v2 的
 memory controller 与 AppArmor。BSP 固定到 M5Stack dtoverlays 提交
 `c3b254819307c177a34100b66fe19e52059ce8c4`，使用上游 V0.5 编译开关及
-`cardputerzero-v5-overlay`。V0.6 相机供电固定使用该 BSP 提供的
-`camera-py12-high-overlay`，并在 `imx219` 前加载；旧版
-`camera-gpio16-high-overlay` 不得用于 V0.6。
+`cardputerzero-v5-overlay`。V0.6 由该 overlay 中的 `powerfail_suo` 独占 P12，
+供电稳定后对 `imx219` 做有限重试；独立的 `camera-py12-high-overlay` 会与其争用，
+旧版 `camera-gpio16-high-overlay` 也不得用于 V0.6。
+镜像将 Camera-capable M5Stack VideoCore 固件安装为 `start.elf`，不设置
+`start_x=1`，并保留官方镜像使用的 `fixup.dat` 配对。最初决定只使用
+`raspi-firmware` 版本、不复制 M5Stack 标记为 tainted 的
+boot-screen 二进制；该固件来源决策已由 ADR 0008 部分取代，内存划分、overlay 和
+相机供电决策不变。
 
 ## 理由
 

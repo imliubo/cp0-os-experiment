@@ -2,6 +2,7 @@ libcairo2
 libdisplay-info2
 libdrm2
 libevdev2
+fbset
 libinput10
 libpixman-1-0
 libpng16-16t64
