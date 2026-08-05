@@ -9,6 +9,9 @@ max_framebuffers=2
 enable_uart=1
 dtoverlay=dwc2
 dtoverlay=cardputerzero-v5-overlay
+camera_auto_detect=0
+dtoverlay=camera-py12-high-overlay
+dtoverlay=imx219
 dtoverlay=bq27220_v5
 dtoverlay=bmi270_bmm150_overlay
 dtoverlay=gpio-ir,gpio_pin=13,gpio_pull=up

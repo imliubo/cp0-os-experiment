@@ -357,8 +357,20 @@ if [[ $(grep -c '^dtoverlay=imx219$' "$bootfs/config.txt") -ne 1 ]]; then
     echo "error: image does not enable the IMX219 sensor exactly once" >&2
     exit 1
 fi
+if [[ $(grep -c '^dtoverlay=camera-py12-high-overlay$' "$bootfs/config.txt") -ne 1 ]]; then
+    echo "error: image does not enable V0.6 P12 camera power exactly once" >&2
+    exit 1
+fi
 if grep -qx 'dtoverlay=camera-gpio16-high-overlay' "$bootfs/config.txt"; then
     echo "error: image enables the legacy camera GPIO16 overlay on V0.6" >&2
+    exit 1
+fi
+card_line=$(grep -n '^dtoverlay=cardputerzero-v5-overlay$' "$bootfs/config.txt" | cut -d: -f1)
+power_line=$(grep -n '^dtoverlay=camera-py12-high-overlay$' "$bootfs/config.txt" | cut -d: -f1)
+sensor_line=$(grep -n '^dtoverlay=imx219$' "$bootfs/config.txt" | cut -d: -f1)
+if [[ -z $card_line || -z $power_line || -z $sensor_line ||
+      $card_line -ge $power_line || $power_line -ge $sensor_line ]]; then
+    echo "error: image camera overlays are not ordered board, P12 power, sensor" >&2
     exit 1
 fi
 if [[ $image_profile == product ]]; then

@@ -36,6 +36,12 @@ profile:    CONFIG_CARDPUTERO_V0_5=y
 上应用上游 `origin/test` 的显示稳定性参数，将 LCD SPI 从 60 MHz 限制为 20 MHz，
 同时保留主线更新的键盘修复。
 
+V0.6 的 IMX219 电源使能接在 M5IOE1 的 P12（GPIO offset 11），不是旧版硬件使用的
+SoC GPIO16。启动配置先加载 `cardputerzero-v5-overlay` 创建 I/O expander，再加载
+`camera-py12-high-overlay` 将 P12 固定为 output-high，最后加载 `imx219` 传感器节点。
+缺少这个供电 overlay 时设备树中虽会出现 `10-0010`，但 IMX219 驱动无法完成 probe，
+libcamera 因此不会枚举相机。镜像门禁要求 P12 overlay 恰好一次并拒绝 GPIO16 overlay。
+
 V0.6 冷启动真机还观察到早期 fbdev 初始化未被面板接受，而后续 compositor
 disable/enable 会可靠发送完整的 ST7789 soft-reset、sleep-out 和 display-on 序列。
 产品镜像因此在 System Shell 首次就绪后执行一次有界的 compositor 重启；服务为

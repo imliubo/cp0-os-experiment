@@ -11,17 +11,36 @@ ssh_prepare="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/prepare
 ssh_prepare_unit="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardputerzero-ssh-prepare.service"
 rootfs_verifier="$repo_root/tests/test-built-rootfs-profile.sh"
 makefile="$repo_root/Makefile"
+boot_fragment="$repo_root/bsp/cm0-v0.6/boot/config.txt.fragment"
 
 grep -q '^PI_GEN_BRANCH=arm64$' "$repo_root/image/pi-gen/upstream.env"
 grep -Eq '^PI_GEN_COMMIT=[0-9a-f]{40}$' "$repo_root/image/pi-gen/upstream.env"
 grep -q '^dtoverlay=vc4-kms-v3d,cma-64$' "$stage"
 grep -q '^camera_auto_detect=0$' "$stage"
 grep -q '^dtoverlay=imx219$' "$stage"
+if [[ $(grep -c '^dtoverlay=camera-py12-high-overlay$' "$stage") -ne 1 ]]; then
+    echo "error: V0.6 must enable the P12 camera power overlay exactly once" >&2
+    exit 1
+fi
 grep -q "'/^camera_auto_detect=/d'" "$stage"
 if grep -q '^dtoverlay=camera-gpio16-high-overlay$' "$stage"; then
     echo "error: V0.6 must not enable the legacy camera GPIO16 overlay" >&2
     exit 1
 fi
+for camera_config in "$stage" "$boot_fragment"; do
+    card_line=$(grep -n '^dtoverlay=cardputerzero-v5-overlay$' "$camera_config" | tail -1 | cut -d: -f1)
+    power_line=$(grep -n '^dtoverlay=camera-py12-high-overlay$' "$camera_config" | tail -1 | cut -d: -f1)
+    sensor_line=$(grep -n '^dtoverlay=imx219$' "$camera_config" | tail -1 | cut -d: -f1)
+    if [[ -z $card_line || -z $power_line || -z $sensor_line ||
+          $card_line -ge $power_line || $power_line -ge $sensor_line ]]; then
+        echo "error: V0.6 camera overlays are not ordered board, P12 power, sensor: $camera_config" >&2
+        exit 1
+    fi
+    if grep -q '^dtoverlay=camera-gpio16-high-overlay$' "$camera_config"; then
+        echo "error: V0.6 must not enable the legacy camera GPIO16 overlay: $camera_config" >&2
+        exit 1
+    fi
+done
 grep -q '^gpu_mem=64$' "$stage"
 grep -q '^gpu_mem_512=64$' "$stage"
 grep -q 'consoleblank=0' "$stage"

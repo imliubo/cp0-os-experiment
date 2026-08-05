@@ -9,7 +9,9 @@ CM0 V0.6 使用 64 MB VideoCore、448 MB ARM 和 64 MB VC4 CMA。镜像构建阶
 删除基础 DTB 内置的 `cgroup_disable=memory` token，系统启用 unified cgroup v2 的
 memory controller 与 AppArmor。BSP 固定到 M5Stack dtoverlays 提交
 `c3b254819307c177a34100b66fe19e52059ce8c4`，使用上游 V0.5 编译开关及
-`cardputerzero-v5-overlay`。
+`cardputerzero-v5-overlay`。V0.6 相机供电固定使用该 BSP 提供的
+`camera-py12-high-overlay`，并在 `imx219` 前加载；旧版
+`camera-gpio16-high-overlay` 不得用于 V0.6。
 
 ## 理由
 
