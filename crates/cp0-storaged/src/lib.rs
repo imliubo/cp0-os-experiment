@@ -4,6 +4,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read, Seek, Write};
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ use std::time::Duration;
 use cp0_storage_protocol::{
     MAX_STORAGE_BLOB_BYTES, MAX_STORAGE_VALUE_BYTES, SYSTEM_PHOTO_LIBRARY_ID, StorageCommand,
     StorageErrorCode, StorageProtocolError, StorageRequest, StorageResponse, decode_value,
-    read_request, validate_key, write_response,
+    encode_response_frame, read_request, validate_key, write_response,
 };
 
 pub const DEFAULT_STORAGE_ROOT: &str = "/var/lib/cardputerzero/data";
@@ -70,6 +71,21 @@ pub struct StorageService {
     lock: Mutex<()>,
 }
 
+#[derive(Debug)]
+struct StorageDispatch {
+    response: StorageResponse,
+    descriptor: Option<OwnedFd>,
+}
+
+impl StorageDispatch {
+    const fn response(response: StorageResponse) -> Self {
+        Self {
+            response,
+            descriptor: None,
+        }
+    }
+}
+
 impl StorageService {
     pub fn new(root: impl AsRef<Path>, owner_uid: u32) -> Self {
         Self {
@@ -92,11 +108,18 @@ impl StorageService {
     }
 
     pub fn dispatch(&self, request: StorageRequest) -> StorageResponse {
+        self.dispatch_with_descriptor(request).response
+    }
+
+    fn dispatch_with_descriptor(&self, request: StorageRequest) -> StorageDispatch {
         let request_id = request.request_id;
         let _guard = match self.lock.lock() {
             Ok(guard) => guard,
             Err(_) => {
-                return storage_error_response(request_id, StorageServiceError::StatePoisoned);
+                return StorageDispatch::response(storage_error_response(
+                    request_id,
+                    StorageServiceError::StatePoisoned,
+                ));
             }
         };
         let result = match request.command {
@@ -105,19 +128,21 @@ impl StorageService {
                 .and_then(|value| {
                     self.put(&request.app_id, request.quota_bytes, &key, &value)
                         .map(|used_bytes| StorageResponse::stored(request_id, used_bytes))
-                }),
-            StorageCommand::Get { key } => {
-                self.get(&request.app_id, &key).map(|value| match value {
+                })
+                .map(StorageDispatch::response),
+            StorageCommand::Get { key } => self
+                .get(&request.app_id, &key)
+                .map(|value| match value {
                     Some(value) => StorageResponse::value(request_id, &value),
                     None => StorageResponse::not_found(request_id),
                 })
-            }
-            StorageCommand::Delete { key } => {
-                self.delete(&request.app_id, &key)
-                    .map(|(existed, used_bytes)| {
-                        StorageResponse::deleted(request_id, existed, used_bytes)
-                    })
-            }
+                .map(StorageDispatch::response),
+            StorageCommand::Delete { key } => self
+                .delete(&request.app_id, &key)
+                .map(|(existed, used_bytes)| {
+                    StorageResponse::deleted(request_id, existed, used_bytes)
+                })
+                .map(StorageDispatch::response),
             StorageCommand::PutBlobChunk {
                 key,
                 offset,
@@ -135,7 +160,8 @@ impl StorageService {
                         &value,
                     )
                     .map(|used_bytes| StorageResponse::stored(request_id, used_bytes))
-                }),
+                })
+                .map(StorageDispatch::response),
             StorageCommand::GetBlobChunk {
                 key,
                 offset,
@@ -145,18 +171,34 @@ impl StorageService {
                 .map(|value| match value {
                     Some(value) => StorageResponse::value(request_id, &value),
                     None => StorageResponse::not_found(request_id),
+                })
+                .map(StorageDispatch::response),
+            StorageCommand::OpenBlob {
+                key,
+                expected_bytes,
+            } => self
+                .open_blob_descriptor(&request.app_id, &key, expected_bytes)
+                .map(|descriptor| match descriptor {
+                    Some(descriptor) => StorageDispatch {
+                        response: StorageResponse::blob_opened(request_id, expected_bytes),
+                        descriptor: Some(descriptor),
+                    },
+                    None => StorageDispatch::response(StorageResponse::not_found(request_id)),
                 }),
-            StorageCommand::DeleteBlob { key } => {
-                self.delete_blob(&request.app_id, &key)
-                    .map(|(existed, used_bytes)| {
-                        StorageResponse::deleted(request_id, existed, used_bytes)
-                    })
-            }
+            StorageCommand::DeleteBlob { key } => self
+                .delete_blob(&request.app_id, &key)
+                .map(|(existed, used_bytes)| {
+                    StorageResponse::deleted(request_id, existed, used_bytes)
+                })
+                .map(StorageDispatch::response),
             StorageCommand::Usage => self
                 .usage(&request.app_id)
-                .map(|used_bytes| StorageResponse::usage(request_id, used_bytes)),
+                .map(|used_bytes| StorageResponse::usage(request_id, used_bytes))
+                .map(StorageDispatch::response),
         };
-        result.unwrap_or_else(|error| storage_error_response(request_id, error))
+        result.unwrap_or_else(|error| {
+            StorageDispatch::response(storage_error_response(request_id, error))
+        })
     }
 
     fn put(
@@ -369,6 +411,31 @@ impl StorageService {
         Ok(Some(value))
     }
 
+    fn open_blob_descriptor(
+        &self,
+        app_id: &str,
+        key: &str,
+        expected_bytes: u32,
+    ) -> Result<Option<OwnedFd>, StorageServiceError> {
+        if app_id != SYSTEM_PHOTO_LIBRARY_ID
+            || expected_bytes == 0
+            || expected_bytes as usize > MAX_STORAGE_BLOB_BYTES
+        {
+            return Err(StorageServiceError::InvalidEntry);
+        }
+        validate_key(key).map_err(|_| StorageServiceError::InvalidEntry)?;
+        let Some(directory) = self.app_directory(app_id)? else {
+            return Ok(None);
+        };
+        let Some(file) = open_blob(&directory.join(key), self.owner_uid)? else {
+            return Ok(None);
+        };
+        if file.metadata()?.len() != u64::from(expected_bytes) {
+            return Err(StorageServiceError::InvalidEntry);
+        }
+        Ok(Some(file.into()))
+    }
+
     fn delete_blob(&self, app_id: &str, key: &str) -> Result<(bool, u64), StorageServiceError> {
         if app_id != SYSTEM_PHOTO_LIBRARY_ID {
             return Err(StorageServiceError::InvalidEntry);
@@ -497,7 +564,14 @@ impl StorageServer {
             .map_err(protocol_io)?;
             return Ok(());
         }
-        write_response(&mut stream, &self.service.dispatch(request)).map_err(protocol_io)
+        let dispatch = self.service.dispatch_with_descriptor(request);
+        if let Some(descriptor) = dispatch.descriptor.as_ref() {
+            let frame = encode_response_frame(&dispatch.response).map_err(protocol_io)?;
+            cp0_document_protocol::send_frame_with_fd(&mut stream, &frame, descriptor.as_fd())
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+        } else {
+            write_response(&mut stream, &dispatch.response).map_err(protocol_io)
+        }
     }
 }
 
@@ -898,10 +972,28 @@ mod tests {
             vec![0x5a; MAX_STORAGE_VALUE_BYTES]
         );
 
+        let opened = service.dispatch_with_descriptor(StorageRequest::open_blob(
+            31,
+            SYSTEM_PHOTO_LIBRARY_ID,
+            SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES,
+            key,
+            frame.len() as u32,
+        ));
+        assert_eq!(
+            opened.response.outcome,
+            cp0_storage_protocol::StorageOutcome::BlobOpened {
+                size_bytes: frame.len() as u32
+            }
+        );
+        let mut opened_file = File::from(opened.descriptor.unwrap());
+        let mut opened_frame = Vec::new();
+        opened_file.read_to_end(&mut opened_frame).unwrap();
+        assert_eq!(opened_frame, frame);
+
         assert!(matches!(
             service
                 .dispatch(StorageRequest::delete_blob(
-                    31,
+                    32,
                     SYSTEM_PHOTO_LIBRARY_ID,
                     SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES,
                     key,

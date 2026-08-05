@@ -6,5 +6,6 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+cp0-document-protocol = { path = "../cp0-document-protocol" }
 cp0-storage-protocol = { path = "../cp0-storage-protocol" }
 libc.workspace = true

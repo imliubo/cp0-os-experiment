@@ -226,18 +226,18 @@ fn render(gallery: &mut Gallery, pixels: &mut [u16]) {
         color::SURFACE,
     );
     canvas.draw_text(16, 13, "GALLERY", color::TEXT, 1);
-    let mut position = [0_u8; 41];
+    let mut position = [0_u8; 47];
     let text = format_position(gallery.selected + 1, gallery.total, &mut position);
     canvas.fill_rect(
         Rect {
-            x: 212,
+            x: 192,
             y: 145,
-            width: 100,
+            width: 120,
             height: 17,
         },
         color::SURFACE,
     );
-    canvas.draw_text(220, 151, text, color::TEXT, 1);
+    canvas.draw_text(200, 151, text, color::TEXT, 1);
 
     if gallery.confirm_delete {
         canvas.fill_rect(
@@ -290,8 +290,9 @@ fn render(gallery: &mut Gallery, pixels: &mut [u16]) {
     }
 }
 
-fn format_position<'a>(current: u64, total: u64, output: &'a mut [u8; 41]) -> &'a str {
-    let mut length = write_number(current, output, 0);
+fn format_position<'a>(current: u64, total: u64, output: &'a mut [u8; 47]) -> &'a str {
+    output[..6].copy_from_slice(b"PHOTO ");
+    let mut length = write_number(current, output, 6);
     output[length] = b'/';
     length += 1;
     length = write_number(total, output, length);

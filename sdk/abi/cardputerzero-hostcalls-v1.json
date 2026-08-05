@@ -342,6 +342,20 @@
       "wit": "photos.remove"
     },
     {
+      "name": "cp0_photos_load_rgb565",
+      "runtime_function": "cp0_photos_load_rgb565_host",
+      "c_name": "cp0_photos_load_rgb565_raw",
+      "wamr_signature": "(I*~)i",
+      "result": "result",
+      "parameters": [
+        { "name": "photo_id", "type": "u64" },
+        { "name": "pixels", "type": "mut-u8-ptr" },
+        { "name": "pixel_bytes", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "photos.load-rgb565"
+    },
+    {
       "name": "cp0_intent_send",
       "runtime_function": "cp0_intent_send",
       "c_name": "cp0_intent_send_raw",

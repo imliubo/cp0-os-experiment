@@ -80,6 +80,9 @@ int64_t cp0_photos_import_rgb565_raw(const uint8_t *pixels, uint32_t pixel_bytes
 CP0_IMPORT("cp0_photos_remove")
 int32_t cp0_photos_remove_raw(uint64_t photo_id);
 
+CP0_IMPORT("cp0_photos_load_rgb565")
+cp0_result_t cp0_photos_load_rgb565_raw(uint64_t photo_id, uint8_t *pixels, uint32_t pixel_bytes);
+
 CP0_IMPORT("cp0_intent_send")
 cp0_result_t cp0_intent_send_raw(const uint8_t *action, uint32_t action_length, const uint8_t *payload, uint32_t payload_length);
 

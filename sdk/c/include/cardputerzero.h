@@ -464,6 +464,16 @@ static inline cp0_result_t cp0_photos_import_rgb565(
     return CP0_OK;
 }
 
+static inline cp0_result_t cp0_photos_load_rgb565(uint64_t photo_id,
+                                                  uint16_t *pixels,
+                                                  uint32_t pixel_count) {
+    if (photo_id == 0U || photo_id > INT64_MAX || pixels == NULL ||
+        pixel_count != CP0_CAMERA_PIXEL_COUNT)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    return cp0_photos_load_rgb565_raw(
+        photo_id, (uint8_t *)pixels, CP0_CAMERA_FRAME_BYTES);
+}
+
 static inline cp0_result_t cp0_photos_remove(uint64_t photo_id,
                                              uint8_t *existed) {
     int32_t result;

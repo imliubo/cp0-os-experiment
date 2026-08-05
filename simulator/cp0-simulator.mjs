@@ -210,6 +210,23 @@ async function runApplication() {
     return head;
   }
 
+  function photoIsActive(photoId) {
+    const head = decodePhotoHead(photoStorage.get("head.v2"));
+    if (!head || photoId === 0n || photoId > 0x7fffffffffffffffn) return false;
+    const pageCount = Number((head.slotCount + 255n) / 256n);
+    for (let pageNumber = 0; pageNumber < pageCount; pageNumber += 1) {
+      const page = photoStorage.get(photoPageKey(pageNumber));
+      if (!page || page.length !== 16 + 256 * 8) return false;
+      const pageView = new DataView(page.buffer, page.byteOffset, page.byteLength);
+      const remaining = head.slotCount - BigInt(pageNumber) * 256n;
+      const slots = Number(remaining > 256n ? 256n : remaining);
+      for (let position = 0; position < slots; position += 1) {
+        if (pageView.getBigUint64(16 + position * 8, true) === photoId) return true;
+      }
+    }
+    return false;
+  }
+
   function snapshot(frame = null) {
     metrics.memory_pages = memory().buffer.byteLength / 65536;
     metrics.storage_bytes = storageBytes;
@@ -448,6 +465,17 @@ async function runApplication() {
         encodePhotoHead(head.activeCount + 1n, head.slotCount + 1n, photoId),
       );
       return photoId;
+    },
+    cp0_photos_load_rgb565(photoId, pixelPointer, pixelBytes) {
+      metrics.host_calls += 1;
+      if (!allowed("photos.read")) return ERROR_DENIED;
+      if ((pixelBytes >>> 0) !== CAMERA_WIDTH * CAMERA_HEIGHT * 2) return ERROR_INVALID;
+      const id = BigInt(photoId);
+      if (!photoIsActive(id)) return ERROR_INVALID;
+      const blob = photoStorage.get(photoBlobKey(id));
+      if (!blob || blob.length !== pixelBytes) return -5;
+      range(pixelPointer, pixelBytes).set(blob);
+      return 0;
     },
     cp0_photos_remove(photoId) {
       metrics.host_calls += 1;

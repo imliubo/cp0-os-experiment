@@ -75,6 +75,9 @@ pub enum BrokerCommand {
     PhotoImportRgb565 {
         suggested_id: u64,
     },
+    PhotoLoadRgb565 {
+        photo_id: u64,
+    },
     PhotoRemove {
         photo_id: u64,
     },
@@ -159,6 +162,10 @@ pub enum BrokerOutcome {
     },
     PhotoImported {
         photo_id: u64,
+    },
+    PhotoLoaded {
+        photo_id: u64,
+        size_bytes: u32,
     },
     IntentAccepted {
         intent_id: u64,
@@ -332,7 +339,10 @@ impl BrokerRequest {
             | BrokerCommand::PhotoGet { key }
             | BrokerCommand::PhotoDelete { key } => cp0_storage_protocol::validate_key(key)
                 .map_err(|_| BrokerProtocolError::InvalidStorage),
-            BrokerCommand::PhotoRemove { photo_id } if *photo_id == 0 => {
+            BrokerCommand::PhotoLoadRgb565 { photo_id }
+            | BrokerCommand::PhotoRemove { photo_id }
+                if *photo_id == 0 || *photo_id > i64::MAX as u64 =>
+            {
                 Err(BrokerProtocolError::InvalidStorage)
             }
             BrokerCommand::SendIntent {
@@ -522,6 +532,17 @@ impl BrokerResponse {
         }
     }
 
+    pub fn photo_loaded(request_id: u64, photo_id: u64) -> Self {
+        Self {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id,
+            outcome: BrokerOutcome::PhotoLoaded {
+                photo_id,
+                size_bytes: cp0_camera_protocol::CAMERA_FRAME_BYTES as u32,
+            },
+        }
+    }
+
     pub fn intent_accepted(request_id: u64, intent_id: u64) -> Self {
         Self {
             protocol_version: BROKER_PROTOCOL_VERSION,
@@ -657,6 +678,15 @@ impl BrokerResponse {
                 return Err(BrokerProtocolError::InvalidStorage);
             }
             BrokerOutcome::PhotoImported { photo_id } if *photo_id == 0 => {
+                return Err(BrokerProtocolError::InvalidStorage);
+            }
+            BrokerOutcome::PhotoLoaded {
+                photo_id,
+                size_bytes,
+            } if *photo_id == 0
+                || *photo_id > i64::MAX as u64
+                || *size_bytes != cp0_camera_protocol::CAMERA_FRAME_BYTES as u32 =>
+            {
                 return Err(BrokerProtocolError::InvalidStorage);
             }
             BrokerOutcome::IntentAccepted { intent_id } if *intent_id == 0 => {

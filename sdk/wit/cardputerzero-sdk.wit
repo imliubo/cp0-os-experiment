@@ -129,6 +129,7 @@ interface photos {
     get-index-for-update: func(maximum: u32) -> result<option<list<u8>>, error-code>;
     delete: func(key: string) -> result<bool, error-code>;
     import-rgb565: func(pixels: list<u8>, suggested-id: u64) -> result<u64, error-code>;
+    load-rgb565: func(photo-id: u64) -> result<list<u16>, error-code>;
     remove: func(photo-id: u64) -> result<bool, error-code>;
 }
 

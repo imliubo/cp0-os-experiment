@@ -72,6 +72,8 @@ int sdk_c_smoke(void) {
                             &photo_existed);
     (void)cp0_photos_import_rgb565(camera_pixels, CP0_CAMERA_PIXEL_COUNT, 1,
                                    &photo_id);
+    (void)cp0_photos_load_rgb565(photo_id, camera_pixels,
+                                 CP0_CAMERA_PIXEL_COUNT);
     (void)cp0_photos_remove(photo_id, &photo_existed);
     (void)cp0_intent_send(intent_action, sizeof(intent_action) - 1U,
                           intent_payload, sizeof(intent_payload));

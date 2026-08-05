@@ -137,6 +137,26 @@ int main(void) {
         "\"status\":\"storage-deleted\",\"existed\":true}}\n";
     assert(cp0_broker_decode_photo_import_response(photo_imported) ==
            INT64_C(1722470400123));
+    static const char photo_loaded[] =
+        "{\"protocol_version\":1,\"request_id\":20,\"outcome\":{"
+        "\"status\":\"photo-loaded\",\"photo_id\":42,"
+        "\"size_bytes\":108800}}\n";
+    source = open("Cargo.toml", O_RDONLY);
+    assert(source >= 0);
+    descriptor = -1;
+    assert(cp0_broker_decode_photo_load_response(photo_loaded, source, 42,
+                                                 &descriptor) ==
+           CP0_BROKER_OK);
+    assert(descriptor == source);
+    close(descriptor);
+    source = open("Cargo.toml", O_RDONLY);
+    assert(source >= 0);
+    descriptor = -1;
+    assert(cp0_broker_decode_photo_load_response(photo_loaded, source, 41,
+                                                 &descriptor) ==
+           CP0_BROKER_INTERNAL);
+    assert(descriptor == -1);
+    assert(fcntl(source, F_GETFD) < 0);
     assert(cp0_broker_decode_photo_remove_response(photo_removed) == 1);
 
     static const char media_next[] =

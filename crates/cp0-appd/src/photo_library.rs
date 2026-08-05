@@ -202,6 +202,82 @@ pub(crate) fn remove_photo(
     remove_frame(storage, request_id, id)
 }
 
+pub(crate) fn photo_is_active(
+    storage: &StorageClient,
+    request_id: u64,
+    id: u64,
+) -> Result<bool, PhotoImportError> {
+    photo_is_active_in(storage, request_id, id)
+}
+
+pub(crate) fn load_legacy_photo(
+    storage: &StorageClient,
+    request_id: u64,
+    id: u64,
+) -> Result<Option<Vec<u8>>, PhotoImportError> {
+    if id == 0 || id > MAX_PHOTO_ID {
+        return Err(PhotoImportError::InvalidFrame);
+    }
+    let mut frame = vec![0_u8; PHOTO_FRAME_BYTES];
+    for chunk in 0..CHUNK_COUNT {
+        let start = chunk * CHUNK_BYTES;
+        let end = (start + CHUNK_BYTES).min(frame.len());
+        let Some(value) = storage.get(
+            request_id,
+            PHOTO_LIBRARY_ID,
+            PHOTO_LIBRARY_QUOTA_BYTES,
+            &legacy_chunk_key(id, chunk),
+        )?
+        else {
+            return Ok(None);
+        };
+        if value.len() != end - start {
+            return Err(PhotoImportError::InvalidFrame);
+        }
+        frame[start..end].copy_from_slice(&value);
+    }
+    Ok(Some(frame))
+}
+
+pub(crate) fn photo_blob_key(id: u64) -> String {
+    blob_key(id)
+}
+
+fn photo_is_active_in(
+    storage: &impl PhotoStorage,
+    request_id: u64,
+    id: u64,
+) -> Result<bool, PhotoImportError> {
+    if id == 0 || id > MAX_PHOTO_ID {
+        return Err(PhotoImportError::InvalidFrame);
+    }
+    let Some(encoded_head) = storage.get(request_id, PHOTO_LIBRARY_HEAD_KEY)? else {
+        let legacy = match storage.get(request_id, PHOTO_LIBRARY_LEGACY_INDEX_KEY)? {
+            Some(encoded) => decode_legacy_index(&encoded)?,
+            None => return Ok(false),
+        };
+        return Ok(legacy.ids[..legacy.count].contains(&id));
+    };
+    let head = decode_head(&encoded_head)?;
+    let page_count = head.slot_count.div_ceil(INDEX_PAGE_PHOTOS as u64);
+    for page_number in 0..page_count {
+        let page_number_u32 =
+            u32::try_from(page_number).map_err(|_| PhotoImportError::ResourceExhausted)?;
+        let page = load_page(storage, request_id, page_number_u32)?
+            .ok_or(PhotoImportError::InvalidIndex)?;
+        let slots = page_slots(&head, page_number);
+        for entry in &page.ids[..slots] {
+            if *entry == id {
+                return Ok(true);
+            }
+            if *entry > id {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(false)
+}
+
 fn import_frame(
     storage: &impl PhotoStorage,
     request_id: u64,

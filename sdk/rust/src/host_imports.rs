@@ -58,6 +58,8 @@ mod target {
         fn raw_cp0_photos_import_rgb565(pixels: *const u8, pixel_bytes: u32, suggested_id: u64) -> i64;
         #[link_name = "cp0_photos_remove"]
         fn raw_cp0_photos_remove(photo_id: u64) -> i32;
+        #[link_name = "cp0_photos_load_rgb565"]
+        fn raw_cp0_photos_load_rgb565(photo_id: u64, pixels: *mut u8, pixel_bytes: u32) -> i32;
         #[link_name = "cp0_intent_send"]
         fn raw_cp0_intent_send(action: *const u8, action_length: u32, payload: *const u8, payload_length: u32) -> i32;
         #[link_name = "cp0_intent_take"]
@@ -170,6 +172,10 @@ mod target {
 
     pub(crate) fn cp0_photos_remove(photo_id: u64) -> i32 {
         unsafe { raw_cp0_photos_remove(photo_id) }
+    }
+
+    pub(crate) fn cp0_photos_load_rgb565(photo_id: u64, pixels: *mut u8, pixel_bytes: u32) -> i32 {
+        unsafe { raw_cp0_photos_load_rgb565(photo_id, pixels, pixel_bytes) }
     }
 
     pub(crate) fn cp0_intent_send(action: *const u8, action_length: u32, payload: *const u8, payload_length: u32) -> i32 {
@@ -295,6 +301,10 @@ mod target {
     }
 
     pub(crate) const fn cp0_photos_remove(_photo_id: u64) -> i32 {
+        -2
+    }
+
+    pub(crate) const fn cp0_photos_load_rgb565(_photo_id: u64, _pixels: *mut u8, _pixel_bytes: u32) -> i32 {
         -2
     }
 

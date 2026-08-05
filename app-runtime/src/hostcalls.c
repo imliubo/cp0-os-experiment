@@ -3,6 +3,7 @@
 #include "camera.h"
 #include "display.h"
 #include "document.h"
+#include "photos.h"
 
 #include <errno.h>
 #include <stdint.h>
@@ -194,6 +195,13 @@ static int64_t cp0_photos_import_rgb565(
     (void)execution_environment;
     return cp0_broker_photo_import_rgb565(pixels, (size_t)pixel_bytes,
                                           suggested_id);
+}
+
+static int32_t cp0_photos_load_rgb565_host(
+    wasm_exec_env_t execution_environment, uint64_t photo_id,
+    uint8_t *pixels, uint32_t pixel_bytes) {
+    (void)execution_environment;
+    return cp0_photos_load_rgb565(photo_id, pixels, (size_t)pixel_bytes);
 }
 
 static int32_t cp0_photos_remove(wasm_exec_env_t execution_environment,

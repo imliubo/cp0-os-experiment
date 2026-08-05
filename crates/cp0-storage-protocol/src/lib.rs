@@ -48,6 +48,10 @@ pub enum StorageCommand {
         offset: u32,
         length: u32,
     },
+    OpenBlob {
+        key: String,
+        expected_bytes: u32,
+    },
     DeleteBlob {
         key: String,
     },
@@ -78,6 +82,9 @@ pub enum StorageOutcome {
     },
     Usage {
         used_bytes: u64,
+    },
+    BlobOpened {
+        size_bytes: u32,
     },
     Error {
         code: StorageErrorCode,
@@ -249,6 +256,25 @@ impl StorageRequest {
         }
     }
 
+    pub fn open_blob(
+        request_id: u64,
+        app_id: &str,
+        quota_bytes: u64,
+        key: &str,
+        expected_bytes: u32,
+    ) -> Self {
+        Self {
+            protocol_version: STORAGE_PROTOCOL_VERSION,
+            request_id,
+            app_id: app_id.into(),
+            quota_bytes,
+            command: StorageCommand::OpenBlob {
+                key: key.into(),
+                expected_bytes,
+            },
+        }
+    }
+
     pub fn validate(&self) -> Result<(), StorageProtocolError> {
         validate_version(self.protocol_version)?;
         if !cp0_manifest::is_valid_app_id(&self.app_id) {
@@ -303,6 +329,20 @@ impl StorageRequest {
                     || *length == 0
                     || *length as usize > MAX_STORAGE_VALUE_BYTES
                     || u64::from(*offset) + u64::from(*length) > MAX_STORAGE_BLOB_BYTES as u64
+                {
+                    Err(StorageProtocolError::InvalidValue)
+                } else {
+                    Ok(())
+                }
+            }
+            StorageCommand::OpenBlob {
+                key,
+                expected_bytes,
+            } => {
+                validate_key(key)?;
+                if !system_photo_library
+                    || *expected_bytes == 0
+                    || *expected_bytes as usize > MAX_STORAGE_BLOB_BYTES
                 {
                     Err(StorageProtocolError::InvalidValue)
                 } else {
@@ -367,6 +407,14 @@ impl StorageResponse {
         }
     }
 
+    pub const fn blob_opened(request_id: u64, size_bytes: u32) -> Self {
+        Self {
+            protocol_version: STORAGE_PROTOCOL_VERSION,
+            request_id,
+            outcome: StorageOutcome::BlobOpened { size_bytes },
+        }
+    }
+
     pub fn error(request_id: u64, code: StorageErrorCode, message: impl Into<String>) -> Self {
         Self {
             protocol_version: STORAGE_PROTOCOL_VERSION,
@@ -389,6 +437,11 @@ impl StorageResponse {
                 Err(StorageProtocolError::InvalidUsage)
             }
             StorageOutcome::Value { value_base64 } => decode_value(value_base64).map(|_| ()),
+            StorageOutcome::BlobOpened { size_bytes }
+                if *size_bytes == 0 || *size_bytes as usize > MAX_STORAGE_BLOB_BYTES =>
+            {
+                Err(StorageProtocolError::InvalidValue)
+            }
             StorageOutcome::Error { message, .. }
                 if message.is_empty()
                     || message.chars().count() > MAX_STORAGE_ERROR_CHARS
@@ -520,6 +573,22 @@ pub fn write_response(
 ) -> Result<(), StorageProtocolError> {
     response.validate()?;
     write_frame(writer, response)
+}
+
+pub fn encode_response_frame(response: &StorageResponse) -> Result<Vec<u8>, StorageProtocolError> {
+    response.validate()?;
+    let mut encoded = serde_json::to_vec(response)?;
+    if encoded.len() + 1 > MAX_STORAGE_FRAME_BYTES {
+        return Err(StorageProtocolError::FrameTooLarge);
+    }
+    encoded.push(b'\n');
+    Ok(encoded)
+}
+
+pub fn decode_response_frame(frame: &[u8]) -> Result<StorageResponse, StorageProtocolError> {
+    let response: StorageResponse = serde_json::from_slice(frame)?;
+    response.validate()?;
+    Ok(response)
 }
 
 pub fn read_response(
@@ -681,5 +750,25 @@ mod tests {
                 .validate()
                 .is_err()
         );
+        let open = StorageRequest::open_blob(
+            8,
+            SYSTEM_PHOTO_LIBRARY_ID,
+            SYSTEM_PHOTO_LIBRARY_QUOTA_BYTES,
+            "p000000000000002a.rgb565",
+            (320 * 170 * 2) as u32,
+        );
+        assert!(open.validate().is_ok());
+        assert!(
+            StorageRequest::open_blob(9, "dev.cardputerzero.camera", MIB, "frame", 1,)
+                .validate()
+                .is_err()
+        );
+        let opened = StorageResponse::blob_opened(10, (320 * 170 * 2) as u32);
+        let frame = encode_response_frame(&opened).unwrap();
+        assert_eq!(
+            decode_response_frame(&frame[..frame.len() - 1]).unwrap(),
+            opened
+        );
+        assert!(StorageResponse::blob_opened(11, 0).validate().is_err());
     }
 }

@@ -7,6 +7,7 @@ frame_pacing_output="$repo_root/target/test-tmp/runtime-frame-pacing-test"
 input_output="$repo_root/target/test-tmp/runtime-input-test"
 broker_output="$repo_root/target/test-tmp/runtime-broker-test"
 document_output="$repo_root/target/test-tmp/runtime-document-test"
+photo_output="$repo_root/target/test-tmp/runtime-photo-test"
 mkdir -p "$(dirname "$output")"
 
 ${HOST_CC:-cc} -std=c11 -Wall -Wextra -Werror \
@@ -43,3 +44,10 @@ ${HOST_CC:-cc} -std=c11 -Wall -Wextra -Werror \
     "$repo_root/app-runtime/src/document.c" \
     -o "$document_output"
 "$document_output"
+
+${HOST_CC:-cc} -std=c11 -Wall -Wextra -Werror \
+    -I"$repo_root/app-runtime/src" \
+    "$repo_root/tests/runtime-photo-test.c" \
+    "$repo_root/app-runtime/src/photos.c" \
+    -o "$photo_output"
+"$photo_output"

@@ -1281,6 +1281,63 @@ int64_t cp0_broker_photo_import_rgb565(const uint8_t *pixels,
     return cp0_broker_decode_photo_import_response(response);
 }
 
+int32_t cp0_broker_decode_photo_load_response(const char *response,
+                                              int received_descriptor,
+                                              uint64_t photo_id,
+                                              int *descriptor) {
+    uint64_t returned_photo_id;
+    uint32_t size_bytes;
+
+    if (response == NULL || descriptor == NULL || photo_id == 0U ||
+        photo_id > INT64_MAX) {
+        if (received_descriptor >= 0)
+            close(received_descriptor);
+        return CP0_BROKER_INVALID_ARGUMENT;
+    }
+    *descriptor = -1;
+    if (strstr(response, "\"status\":\"photo-loaded\"") == NULL) {
+        if (received_descriptor >= 0)
+            close(received_descriptor);
+        return decode_result(response);
+    }
+    if (received_descriptor < 0 ||
+        !json_u64_field(response, "photo_id", &returned_photo_id) ||
+        !json_u32_field(response, "size_bytes", &size_bytes) ||
+        returned_photo_id != photo_id || size_bytes != CP0_CAMERA_FRAME_BYTES) {
+        if (received_descriptor >= 0)
+            close(received_descriptor);
+        return CP0_BROKER_INTERNAL;
+    }
+    *descriptor = received_descriptor;
+    return CP0_BROKER_OK;
+}
+
+int32_t cp0_broker_photo_load_rgb565(uint64_t photo_id, int *descriptor) {
+    char request[256];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    int received_descriptor = -1;
+    int written;
+    int32_t result;
+
+    if (photo_id == 0U || photo_id > INT64_MAX || descriptor == NULL)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    *descriptor = -1;
+    written = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":1,\"request_id\":20,\"command\":{"
+        "\"name\":\"photo-load-rgb565\",\"photo_id\":%llu}}\n",
+        (unsigned long long)photo_id);
+    if (written <= 0 || (size_t)written >= sizeof(request))
+        return CP0_BROKER_INTERNAL;
+    result = broker_exchange_with_fd(request, (size_t)written, response,
+                                     sizeof(response), -1,
+                                     &received_descriptor);
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_photo_load_response(
+        response, received_descriptor, photo_id, descriptor);
+}
+
 int32_t cp0_broker_decode_photo_remove_response(const char *response) {
     bool existed;
 

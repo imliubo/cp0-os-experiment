@@ -1,7 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(target_os = "linux")]
+use std::ffi::CString;
 use std::fmt;
 use std::fs::File;
+#[cfg(target_os = "linux")]
+use std::io::Write;
 use std::io::{Read, Seek};
+#[cfg(target_os = "linux")]
+use std::os::fd::FromRawFd;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,7 +27,8 @@ use cp0_store_protocol::StoreRuntimeMetricEvent;
 
 use crate::photo_library::{
     PHOTO_FRAME_BYTES, PHOTO_LIBRARY_HEAD_KEY, PHOTO_LIBRARY_ID, PHOTO_LIBRARY_QUOTA_BYTES,
-    PhotoImportError, import_app_photo, import_screenshot, remove_photo,
+    PhotoImportError, import_app_photo, import_screenshot, load_legacy_photo, photo_blob_key,
+    photo_is_active, remove_photo,
 };
 use crate::protocol::APPD_PROTOCOL_VERSION;
 use crate::{
@@ -1422,6 +1429,9 @@ impl AppdServer {
                     descriptor.expect("photo descriptor was checked"),
                 ))
             }
+            BrokerCommand::PhotoLoadRgb565 { photo_id } => {
+                self.dispatch_photo_load(credentials, request.request_id, *photo_id)
+            }
             BrokerCommand::SendIntent {
                 action,
                 payload_base64,
@@ -1807,6 +1817,9 @@ impl AppdServer {
             BrokerCommand::PhotoImportRgb565 { .. } => {
                 unreachable!("photo imports carry descriptors")
             }
+            BrokerCommand::PhotoLoadRgb565 { .. } => {
+                unreachable!("photo loads carry descriptors")
+            }
             BrokerCommand::SendIntent { .. } => {
                 unreachable!("intent send requires an acknowledgement-bound transition")
             }
@@ -1910,6 +1923,81 @@ impl AppdServer {
                 eprintln!("cp0-appd: application photo import failed: {error}");
                 photo_broker_error_response(request_id, &error)
             }
+        }
+    }
+
+    fn dispatch_photo_load(
+        &self,
+        peer: crate::PeerCredentials,
+        request_id: u64,
+        photo_id: u64,
+    ) -> BrokerDispatch {
+        if let Err(response) =
+            self.authorize_broker_caller(peer, request_id, Permission::PhotosRead)
+        {
+            return BrokerDispatch::response(response);
+        }
+        let _transaction = match self.lock_photo_library(request_id) {
+            Ok(transaction) => transaction,
+            Err(response) => return BrokerDispatch::response(response),
+        };
+        match photo_is_active(&self.capabilities.storage, request_id, photo_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                return BrokerDispatch::response(BrokerResponse::error(
+                    request_id,
+                    BrokerErrorCode::NotFound,
+                    "photo is not present in the shared library",
+                ));
+            }
+            Err(error) => {
+                eprintln!("cp0-appd: photo index lookup failed: {error}");
+                return BrokerDispatch::response(photo_broker_error_response(request_id, &error));
+            }
+        }
+        let descriptor = match self.capabilities.storage.open_blob(
+            request_id,
+            PHOTO_LIBRARY_ID,
+            PHOTO_LIBRARY_QUOTA_BYTES,
+            &photo_blob_key(photo_id),
+            PHOTO_FRAME_BYTES as u32,
+        ) {
+            Ok(Some(descriptor)) => descriptor,
+            Ok(None) => match load_legacy_photo(&self.capabilities.storage, request_id, photo_id) {
+                Ok(Some(frame)) => match sealed_photo_descriptor(&frame) {
+                    Ok(descriptor) => descriptor,
+                    Err(error) => {
+                        eprintln!("cp0-appd: cannot seal legacy photo frame: {error}");
+                        return BrokerDispatch::response(BrokerResponse::error(
+                            request_id,
+                            BrokerErrorCode::Internal,
+                            "photo descriptor could not be created",
+                        ));
+                    }
+                },
+                Ok(None) => {
+                    return BrokerDispatch::response(BrokerResponse::error(
+                        request_id,
+                        BrokerErrorCode::NotFound,
+                        "photo frame is unavailable",
+                    ));
+                }
+                Err(error) => {
+                    eprintln!("cp0-appd: legacy photo load failed: {error}");
+                    return BrokerDispatch::response(photo_broker_error_response(
+                        request_id, &error,
+                    ));
+                }
+            },
+            Err(error) => {
+                eprintln!("cp0-appd: photo blob open failed: {error}");
+                return BrokerDispatch::response(storage_error_response(request_id, &error));
+            }
+        };
+        BrokerDispatch {
+            response: BrokerResponse::photo_loaded(request_id, photo_id),
+            descriptor: Some(descriptor),
+            transition: None,
         }
     }
 
@@ -2438,6 +2526,44 @@ fn read_photo_frame(descriptor: OwnedFd) -> std::io::Result<Vec<u8>> {
 }
 
 #[cfg(target_os = "linux")]
+fn sealed_photo_descriptor(frame: &[u8]) -> std::io::Result<OwnedFd> {
+    if frame.len() != PHOTO_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "photo frame has an invalid size",
+        ));
+    }
+    let name = c"cp0-appd-photo";
+    let raw =
+        unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
+    if raw < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut file = unsafe { File::from_raw_fd(raw) };
+    file.write_all(frame)?;
+    file.flush()?;
+    let seals = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_ADD_SEALS, seals) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let path = CString::new(format!("/proc/self/fd/{}", file.as_raw_fd()))
+        .map_err(|_| std::io::Error::other("invalid photo descriptor path"))?;
+    let read_only = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+    if read_only < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(read_only) })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sealed_photo_descriptor(_frame: &[u8]) -> std::io::Result<OwnedFd> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "sealed photo descriptors require Linux",
+    ))
+}
+
+#[cfg(target_os = "linux")]
 fn valid_photo_descriptor_access(flags: libc::c_int) -> bool {
     matches!(flags & libc::O_ACCMODE, libc::O_RDONLY | libc::O_RDWR)
 }
@@ -2510,10 +2636,6 @@ fn photo_chunk_count() -> usize {
 fn photo_chunk_length(chunk: usize) -> usize {
     let offset = chunk * cp0_storage_protocol::MAX_STORAGE_VALUE_BYTES;
     (PHOTO_FRAME_BYTES - offset).min(cp0_storage_protocol::MAX_STORAGE_VALUE_BYTES)
-}
-
-fn photo_blob_key(photo_id: u64) -> String {
-    format!("p{photo_id:016x}.rgb565")
 }
 
 fn photo_import_error_response(request_id: u64, error: &PhotoImportError) -> AppdResponse {
@@ -3009,6 +3131,9 @@ fn storage_error_response(request_id: u64, error: &StorageClientError) -> Broker
         StorageClientError::Protocol(_)
         | StorageClientError::MismatchedRequestId
         | StorageClientError::MismatchedOutcome
+        | StorageClientError::MissingDescriptor
+        | StorageClientError::UnexpectedDescriptor
+        | StorageClientError::InvalidDescriptor
         | StorageClientError::Service(ServiceStorageErrorCode::Unauthorized)
         | StorageClientError::Service(ServiceStorageErrorCode::Internal) => (
             BrokerErrorCode::Internal,

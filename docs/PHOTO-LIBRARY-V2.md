@@ -45,6 +45,16 @@ client writes bounded 8 KiB chunks into one mode `0600` temporary blob. Every
 chunk is flushed; only the final chunk atomically publishes
 `p<16-hex-id>.rgb565`. An interrupted frame is never listed.
 
+Gallery loads a committed frame with one `photos.load-rgb565` hostcall. appd
+first verifies that the requested ID is still active in the committed index,
+then asks storaged to open the corresponding blob read-only. storaged accepts
+this descriptor operation only for the system photo-library identity and only
+when the blob is a regular file with the exact RGB565 frame size. The
+descriptor crosses both Unix-socket boundaries with `SCM_RIGHTS`; appd and
+Runtime independently revalidate its type, size, and access mode before
+mapping or copying any pixels. This replaces the legacy fourteen sequential
+base64 chunk reads while preserving the same App isolation boundary.
+
 `head.v2` is a fixed 32-byte record containing:
 
 - magic `CP0H`, version 2 and reserved zero bytes;

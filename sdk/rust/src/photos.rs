@@ -61,16 +61,7 @@ impl LegacyIndex {
 
 pub fn count() -> Result<u64, Error> {
     if let Some(head) = load_v2_head()? {
-        let mut count = 0_u64;
-        let page_count = head.slot_count.div_ceil(INDEX_PAGE_PHOTOS as u64);
-        for page_number in 0..page_count {
-            let page = load_page(page_number as u32)?.ok_or(Error::Internal)?;
-            let slots = page_slots(&head, page_number);
-            count = count
-                .checked_add(page.ids[..slots].iter().filter(|id| **id != 0).count() as u64)
-                .ok_or(Error::ResourceLimit)?;
-        }
-        return Ok(count);
+        return Ok(head.active_count);
     }
     Ok(load_legacy_index()?.map_or(0, |legacy| legacy.count as u64))
 }
@@ -138,19 +129,11 @@ pub fn load_rgb565(photo: Photo, pixels: &mut [u16]) -> Result<(), Error> {
     if photo.id == 0 || pixels.len() != camera::PIXEL_COUNT {
         return Err(Error::InvalidArgument);
     }
-    let bytes = unsafe {
-        core::slice::from_raw_parts_mut(pixels.as_mut_ptr().cast::<u8>(), camera::FRAME_BYTES)
-    };
-    for chunk in 0..CHUNK_COUNT {
-        let start = chunk * CHUNK_BYTES;
-        let end = (start + CHUNK_BYTES).min(bytes.len());
-        let key = chunk_key(photo.id, chunk);
-        match get(key.as_str(), &mut bytes[start..end])? {
-            Some(length) if length == end - start => {}
-            _ => return Err(Error::Internal),
-        }
-    }
-    Ok(())
+    Error::from_host(host_imports::cp0_photos_load_rgb565(
+        photo.id,
+        pixels.as_mut_ptr().cast(),
+        camera::FRAME_BYTES as u32,
+    ))
 }
 
 pub fn delete(photo: Photo) -> Result<bool, Error> {
@@ -334,16 +317,19 @@ fn page_key(page_number: u32) -> PageKey {
     PageKey { bytes }
 }
 
+#[cfg(test)]
 struct ChunkKey {
     bytes: [u8; 21],
 }
 
+#[cfg(test)]
 impl ChunkKey {
     fn as_str(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(&self.bytes) }
     }
 }
 
+#[cfg(test)]
 fn chunk_key(id: u64, chunk: usize) -> ChunkKey {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut bytes = [0_u8; 21];

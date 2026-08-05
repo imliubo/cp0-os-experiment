@@ -25,6 +25,7 @@
 {"cp0_photos_delete", (void *)cp0_photos_delete, "(*~)i", NULL},
 {"cp0_photos_import_rgb565", (void *)cp0_photos_import_rgb565, "(*~I)I", NULL},
 {"cp0_photos_remove", (void *)cp0_photos_remove, "(I)i", NULL},
+{"cp0_photos_load_rgb565", (void *)cp0_photos_load_rgb565_host, "(I*~)i", NULL},
 {"cp0_intent_send", (void *)cp0_intent_send, "(*~*~)i", NULL},
 {"cp0_intent_take", (void *)cp0_intent_take, "(*~*~)I", NULL},
 {"cp0_media_session_update", (void *)cp0_media_session_update, "(ii)i", NULL},

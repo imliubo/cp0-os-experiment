@@ -82,6 +82,7 @@ add_executable(cardputerzero-app-runtime
   src/input_queue.c
   src/main.c
   src/pixels.c
+  src/photos.c
   src/seccomp.c
 )
 target_compile_options(cardputerzero-app-runtime PRIVATE
