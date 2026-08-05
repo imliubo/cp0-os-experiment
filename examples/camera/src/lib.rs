@@ -136,7 +136,7 @@ pub extern "C" fn main() -> i32 {
                     status = Status::Denied;
                     dirty = true;
                 }
-                Err(Error::Unavailable) => {
+                Err(Error::Unavailable | Error::ResourceLimit) => {
                     if !has_frame {
                         status = Status::Unavailable;
                         dirty = true;
