@@ -245,7 +245,12 @@ grep -qx 'd /var/lib/cardputerzero/data 0700 cp0-storage cp0-storage -' "$storag
 grep -q 'StorageCommand::Usage' "$storage_protocol"
 grep -q 'StorageCommand::Usage => self' "$storage_service_source"
 grep -q '\.usage(storage_request_id, &installed.app_id, storage_quota_bytes)' "$appd_server"
-grep -q 'while unit_is_active(unit)?' "$appd_lifecycle"
+grep -q 'wait_for_cgroup_stopped(' "$appd_lifecycle"
+grep -q 'while cgroup_is_populated(path)?' "$appd_lifecycle"
+if grep -q 'while unit_is_active(unit)?' "$appd_lifecycle"; then
+    echo "error: runtime monitor must not poll systemctl while an App is active" >&2
+    exit 1
+fi
 if grep -Eq 'args\(\["--quiet", "wait", unit\]\)' "$appd_lifecycle"; then
     echo "error: appd runtime monitoring must support systemd without systemctl wait" >&2
     exit 1
