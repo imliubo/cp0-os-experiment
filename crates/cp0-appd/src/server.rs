@@ -1647,6 +1647,32 @@ impl AppdServer {
                     }
                 }
             }
+            BrokerCommand::HttpGetRange {
+                url,
+                offset,
+                length,
+            } => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::NetworkClient)
+                {
+                    return response;
+                }
+                match self
+                    .capabilities
+                    .network
+                    .http_get_range(request_id, &url, offset, length)
+                {
+                    Ok(response) => BrokerResponse::http_response(
+                        request_id,
+                        response.status_code,
+                        response.body_base64,
+                    ),
+                    Err(error) => {
+                        eprintln!("cp0-appd: network range request failed: {error}");
+                        network_error_response(request_id, &error)
+                    }
+                }
+            }
             BrokerCommand::OpenDocument => unreachable!("document requests carry descriptors"),
             BrokerCommand::PlayAudio { samples_base64 } => {
                 if let Err(response) =
@@ -1668,6 +1694,50 @@ impl AppdServer {
                     Ok(frames) => BrokerResponse::audio_played(request_id, frames),
                     Err(error) => {
                         eprintln!("cp0-appd: audio playback request failed: {error}");
+                        audio_error_response(request_id, &error)
+                    }
+                }
+            }
+            BrokerCommand::PlayAudioStereo48k { samples_base64 } => {
+                if let Err(response) =
+                    self.authorize_broker_caller(peer, request_id, Permission::AudioPlayback)
+                {
+                    return response;
+                }
+                let samples = match cp0_audio_protocol::decode_music_samples(&samples_base64) {
+                    Ok(samples) => samples,
+                    Err(_) => {
+                        return BrokerResponse::error(
+                            request_id,
+                            BrokerErrorCode::InvalidRequest,
+                            "invalid bounded stereo playback samples",
+                        );
+                    }
+                };
+                match self
+                    .capabilities
+                    .audio
+                    .play_stereo_48k(request_id, &samples)
+                {
+                    Ok(frames) => BrokerResponse::audio_played(request_id, frames),
+                    Err(error) => {
+                        eprintln!("cp0-appd: stereo audio playback request failed: {error}");
+                        audio_error_response(request_id, &error)
+                    }
+                }
+            }
+            BrokerCommand::PlayKeyClick => {
+                if let Err(response) = self.with_current_media_caller(
+                    peer,
+                    request_id,
+                    |_app_id, _runtime_token, _sessions| (),
+                ) {
+                    return response;
+                }
+                match self.capabilities.audio.play_key_click(request_id) {
+                    Ok(()) => BrokerResponse::audio_played(request_id, 240),
+                    Err(error) => {
+                        eprintln!("cp0-appd: key click request failed: {error}");
                         audio_error_response(request_id, &error)
                     }
                 }
