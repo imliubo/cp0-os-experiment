@@ -934,6 +934,9 @@ static void load_shell_preferences(struct shell *shell)
         fprintf(stderr, "system-shell: using default shell preferences\n");
     cp0_ui_set_preferences(&shell->ui, settings.theme,
                            settings.screen_timeout, settings.key_sounds);
+    if (cp0_audio_set_key_sounds_enabled(settings.key_sounds) !=
+        CP0_AUDIO_SETTINGS_OK)
+        fprintf(stderr, "system-shell: cannot synchronize key sounds\n");
 }
 
 static void save_shell_preferences(struct shell *shell)
@@ -2349,8 +2352,14 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         save_shell_preferences(shell);
         apply_screen_timeout(shell);
     } else if (event == CP0_UI_EVENT_KEY_SOUNDS_TOGGLE) {
-        shell->ui.key_sounds = !shell->ui.key_sounds;
-        save_shell_preferences(shell);
+        bool enabled = !shell->ui.key_sounds;
+        if (cp0_audio_set_key_sounds_enabled(enabled) ==
+            CP0_AUDIO_SETTINGS_OK) {
+            shell->ui.key_sounds = enabled;
+            save_shell_preferences(shell);
+        } else {
+            fprintf(stderr, "system-shell: cannot synchronize key sounds\n");
+        }
         fprintf(stderr, "system-shell: key sounds %s\n",
                 shell->ui.key_sounds ? "enabled" : "disabled");
     } else if (event == CP0_UI_EVENT_VOLUME_DOWN ||

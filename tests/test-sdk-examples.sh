@@ -22,6 +22,8 @@ cargo fmt --manifest-path "$repo_root/examples/gallery/Cargo.toml" -- --check
 cargo test --quiet --manifest-path "$repo_root/examples/gallery/Cargo.toml"
 cargo fmt --manifest-path "$repo_root/examples/media-controls/Cargo.toml" -- --check
 cargo test --quiet --manifest-path "$repo_root/examples/media-controls/Cargo.toml"
+cargo fmt --manifest-path "$repo_root/examples/music-player/Cargo.toml" -- --check
+cargo test --quiet --manifest-path "$repo_root/examples/music-player/Cargo.toml"
 cargo fmt --manifest-path "$repo_root/examples/notes/Cargo.toml" -- --check
 cargo test --quiet --manifest-path "$repo_root/examples/notes/Cargo.toml"
 cargo fmt --manifest-path "$repo_root/examples/stopwatch/Cargo.toml" -- --check
@@ -54,6 +56,10 @@ cargo run --quiet --manifest-path "$repo_root/Cargo.toml" -p cp0ctl -- \
     --media-actions play-pause,previous,next \
     --output "$output/media-controls.ppm" --profile "$output/media-controls.json"
 cargo run --quiet --manifest-path "$repo_root/Cargo.toml" -p cp0ctl -- \
+    run "$repo_root/examples/music-player" \
+    --duration 250 --permissions deny \
+    --output "$output/music-player.ppm" --profile "$output/music-player.json"
+cargo run --quiet --manifest-path "$repo_root/Cargo.toml" -p cp0ctl -- \
     run "$repo_root/examples/neon-snake" \
     --duration 2400 --permissions deny \
     --keys up,left,down,right,space,space \
@@ -64,6 +70,7 @@ for image in \
     "$output/camera.ppm" \
     "$output/gallery.ppm" \
     "$output/media-controls.ppm" \
+    "$output/music-player.ppm" \
     "$output/neon-snake.ppm" \
     "$output/notes.ppm" \
     "$output/stopwatch.ppm"; do

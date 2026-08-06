@@ -10,6 +10,9 @@ int cp0_audio_settings_test_parse_state_response(
     struct cp0_audio_output_state *state);
 int cp0_audio_settings_test_parse_key_click_response(
     const char *response, size_t response_length, uint64_t request_id);
+int cp0_audio_settings_test_parse_key_sounds_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    bool enabled);
 
 int main(void)
 {
@@ -32,6 +35,9 @@ int main(void)
     static const char key_click[] =
         "{\"protocol_version\":3,\"request_id\":11,\"outcome\":{"
         "\"status\":\"played\",\"frames\":240}}";
+    static const char key_sounds[] =
+        "{\"protocol_version\":3,\"request_id\":12,\"outcome\":{"
+        "\"status\":\"key-sounds-state\",\"enabled\":false}}";
     struct cp0_audio_output_state state;
 
     assert(cp0_audio_settings_test_parse_state_response(
@@ -53,5 +59,11 @@ int main(void)
            CP0_AUDIO_SETTINGS_FAILED);
     assert(cp0_audio_settings_test_parse_key_click_response(
                key_click, strlen(key_click), 11) == CP0_AUDIO_SETTINGS_OK);
+    assert(cp0_audio_settings_test_parse_key_sounds_response(
+               key_sounds, strlen(key_sounds), 12, false) ==
+           CP0_AUDIO_SETTINGS_OK);
+    assert(cp0_audio_settings_test_parse_key_sounds_response(
+               key_sounds, strlen(key_sounds), 12, true) ==
+           CP0_AUDIO_SETTINGS_FAILED);
     return 0;
 }

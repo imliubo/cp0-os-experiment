@@ -10,14 +10,14 @@ WebAssembly；应用不能直接访问 Linux 设备节点、系统总线或其�
 
 Phase 0 的基础契约已经建立，Phase 1 的精简镜像已完成 V0.6 真机验收，Phase 2
 已完成 compositor、System Shell、可信单前台策略、Launcher 与通知覆盖层，
-Phase 3 已贯通 WAMR 强隔离运行时和 capability brokers，Phase 4 已冻结 SDK 1.0，
+Phase 3 已贯通 WAMR 强隔离运行时和 capability brokers，Phase 4 已冻结 SDK 1.1，
 Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x170 Store UI。
 当前仓库包含：
 
 - 系统架构与资源预算；
 - 分阶段 Roadmap 和初始 ADR；
-- 已冻结的 CardputerZero SDK 1.0 WIT 公共契约、可生成 flat WAMR ABI 和精确
-  legacy 0.1 兼容快照；
+- 已冻结的 CardputerZero SDK 1.1 WIT 公共契约、可生成 flat WAMR ABI 和精确
+  1.0/legacy 0.1 兼容快照；
 - 应用 manifest v1 和 Rust 校验库；
 - `cp0ctl manifest validate` 开发工具。
 - 固定版本的 CM0 V0.6 BSP 和 `pi-gen` 外部构建阶段；
@@ -55,8 +55,8 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
   SSRF/DNS rebinding 防护、5 秒/2 次重定向/2 KiB 上限及三语言 SDK API。
 - Phase 3G `documents.open`：独立低权限 Document Portal、可信 Shell 文件选择器、
   无路径 API、`SCM_RIGHTS` 只读 FD、符号链接/替换防护及 4 KiB 有界读取。
-- Phase 3H 音频能力：独立 `cp0-audiod`、ES8389 专用 ALSA 端点、播放/录音分权、
-  16 kHz 单声道 S16_LE 格式、每次 1024 帧上限及三语言 SDK API。
+- Phase 3H 音频能力：独立 `cp0-audiod`、ES8389 48 kHz 双声道 ALSA 流、播放/录音
+  分权、兼容 16 kHz 单声道接口、SDK 1.1 音乐流、全局按键音及三语言 SDK API。
 - Phase 3I 相机能力：独立 `cp0-camerad`、固定 320x170 RGB565 捕获、密封只读
   memfd 传递、V4L2/Media/dma-heap 设备白名单及三语言 SDK API。
 - Phase 3J GPIO 能力：独立 `cp0-gpiod`、V0.6 四路固定逻辑输出、root/appd 身份认证、
@@ -74,11 +74,11 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
 - `cp0ctl new/build` SDK-only 项目脚手架、结构化 Cargo metadata 构建和规范应用
   产物目录。
 - 可重定位 App DevKit：固定 Rust/Emscripten 工具链、原生 `cp0ctl`、完整 SDK、
-  键盘/媒体动作模拟器、Neon Snake 与 Media Controls 示例、Store Listing schema 和
+  键盘/媒体动作模拟器、Neon Snake、Music 与 Media Controls 示例、Store Listing schema 和
   `cardputerzero-build-app` AI Skill，发布归档带逐文件及整包 SHA-256 校验。
 - `pi-gen` app platform stage：构建并安装 appd、broker sockets、静态 Runtime、
   稳定测试身份与 SDK 版 Hello，开发镜像默认进入 System Shell。
-- Freestanding C11/C++17 SDK 1.0 头文件与 wasm32 编译检查，不暴露 WASI/Linux ABI。
+- Freestanding C11/C++17 SDK 1.1 头文件与 wasm32 编译检查，不暴露 WASI/Linux ABI。
 - 三分区不可变根产品配置：只读 ext4 lower、64 MiB RAM upper、可自动扩容的
   `cp0-data`，以及应用/权限/信任、网络、SSH 和设备身份的持久路径白名单。
 - Phase 5 双签名商店：审核记录精确绑定提交/权限/WASM imports，`cp0ctl store

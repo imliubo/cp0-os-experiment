@@ -89,8 +89,8 @@ required_files=(
     var/lib/cardputerzero/apps/dev.cardputerzero.camera/0.1.0/bin/camera.wasm
     var/lib/cardputerzero/apps/dev.cardputerzero.gallery/0.1.0/app.json
     var/lib/cardputerzero/apps/dev.cardputerzero.gallery/0.1.0/bin/gallery.wasm
-    var/lib/cardputerzero/apps/dev.cardputerzero.media-controls/0.1.0/app.json
-    var/lib/cardputerzero/apps/dev.cardputerzero.media-controls/0.1.0/bin/media_controls.wasm
+    var/lib/cardputerzero/apps/dev.cardputerzero.music/0.1.0/app.json
+    var/lib/cardputerzero/apps/dev.cardputerzero.music/0.1.0/bin/music_player.wasm
     var/lib/cardputerzero/apps/dev.cardputerzero.notes/0.1.0/app.json
     var/lib/cardputerzero/apps/dev.cardputerzero.notes/0.1.0/bin/notes.wasm
     var/lib/cardputerzero/apps/dev.cardputerzero.stopwatch/0.1.0/app.json
@@ -108,7 +108,7 @@ expected_builtin_ids=(
     dev.cardputerzero.camera
     dev.cardputerzero.gallery
     dev.cardputerzero.hello
-    dev.cardputerzero.media-controls
+    dev.cardputerzero.music
     dev.cardputerzero.neon-snake
     dev.cardputerzero.notes
     dev.cardputerzero.stopwatch

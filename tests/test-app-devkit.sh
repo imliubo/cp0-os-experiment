@@ -43,7 +43,7 @@ devkit=${roots[0]}
     cd "$devkit"
     shasum -a 256 -c SHA256SUMS >/dev/null
 )
-jq -e '.version == "1.0.0" and (.built_with.rust | startswith("rustc 1.85.1 "))' \
+jq -e '.version == "1.1.0" and (.built_with.rust | startswith("rustc 1.85.1 "))' \
     "$devkit/devkit.json" >/dev/null
 test -s "$devkit/schemas/store-listing-v1.schema.json"
 test -s "$devkit/schemas/app-manifest-v1.schema.json"
@@ -66,7 +66,7 @@ grep -Fq "$devkit/sdk/rust" "$test_root/generated/Cargo.toml"
 env RUSTUP_TOOLCHAIN=1.85.1 "$devkit/bin/cp0ctl" \
     build "$test_root/generated" >/dev/null
 for example in \
-    hello-card calculator neon-snake camera gallery media-controls notes \
+    hello-card calculator neon-snake camera gallery media-controls music-player notes \
     stopwatch; do
     test -s "$devkit/examples/$example/README.md"
     test -s "$devkit/examples/$example/assets/screenshot.png"
@@ -80,6 +80,9 @@ env RUSTUP_TOOLCHAIN=1.85.1 \
     "$devkit/skills/cardputerzero-build-app/scripts/verify-app.sh" \
     "$devkit/examples/media-controls" "" deny 600 \
     play-pause,previous,next >/dev/null
+env RUSTUP_TOOLCHAIN=1.85.1 \
+    "$devkit/skills/cardputerzero-build-app/scripts/verify-app.sh" \
+    "$devkit/examples/music-player" "" deny 250 >/dev/null
 env RUSTUP_TOOLCHAIN=1.85.1 \
     "$devkit/skills/cardputerzero-build-app/scripts/verify-app.sh" \
     "$devkit/examples/camera" enter allow 700 >/dev/null

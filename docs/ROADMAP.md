@@ -88,6 +88,8 @@ Roadmap 以“每个阶段都有可在真机验证的交付物”为原则。日
 - [x] 实现无路径 Document Portal、可信文件选择器、`SCM_RIGHTS` 只读 FD 传递和
   Rust/C/C++ SDK 有界读取 API。
 - [x] 实现 ES8389 有界 PCM 音频 broker、播放/录音分权和 Rust/C/C++ SDK API。
+- [x] 扩展 audiod 为固定 48 kHz 双声道硬件流，兼容 16 kHz 单声道接口，增加 SDK 1.1
+  音乐流接口、全局按键音和独立持久化 Key Sounds 策略。
 - [ ] 稳定性监控结束后完成音频播放、录音与拒绝权限的真机验收。
 - [x] 实现固定 320x170 RGB565 帧的相机 broker、只读密封 FD 传递和三语言 SDK API。
 - [ ] 连接兼容传感器后完成相机捕获、拒绝权限和画面方向的真机验收。
@@ -121,7 +123,8 @@ Shell 和其他应用数据。
   forced-command 安装/日志路径，不依赖 scp、sudo 或完整 Shell。
 - [x] 建立 PC WASM 模拟器、权限模拟、evdev 输入映射和 JSON 性能分析工具。
 - [x] 迁移 Calculator、Camera 示例，不提供传统 Linux 应用兼容层。
-- [x] 冻结 SDK 1.0 ABI、精确 legacy 0.1 兼容策略、权限词表和开发者文档。
+- [x] 冻结 SDK 1.1 ABI，在不改变 1.0/legacy 0.1 导入的前提下增加 HTTPS Range 和
+  48 kHz 双声道 PCM，并同步 DevKit、模拟器、权限审核和开发者文档。
 
 完成条件：新开发者可只使用 SDK 在 PC 编写、调试、签名并安装一个应用到真机。
 

@@ -19,7 +19,7 @@ for app_id in \
     dev.cardputerzero.neon-snake \
     dev.cardputerzero.camera \
     dev.cardputerzero.gallery \
-    dev.cardputerzero.media-controls \
+    dev.cardputerzero.music \
     dev.cardputerzero.notes \
     dev.cardputerzero.stopwatch; do
     grep -q "$app_id" "$repo_root/config/builtin-apps.tsv"

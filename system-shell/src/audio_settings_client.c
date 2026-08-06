@@ -314,6 +314,68 @@ int cp0_audio_play_key_click(void)
     return parse_key_click_response(response, response_length, request_id);
 }
 
+static int parse_key_sounds_response(const char *document, size_t length,
+                                     uint64_t request_id, bool enabled)
+{
+    struct cp0_json_token tokens[CP0_AUDIO_SETTINGS_JSON_TOKENS];
+    int count = cp0_json_parse(document, length, tokens,
+                               CP0_AUDIO_SETTINGS_JSON_TOKENS);
+    uint64_t version;
+    uint64_t parsed_id;
+    bool parsed_enabled;
+    int version_token;
+    int id_token;
+    int outcome;
+    int status;
+    int enabled_token;
+
+    if (document == NULL || count <= 0 || tokens[0].type != CP0_JSON_OBJECT)
+        return CP0_AUDIO_SETTINGS_FAILED;
+    version_token = cp0_json_object_get(document, tokens, (size_t)count, 0,
+                                        "protocol_version");
+    id_token = cp0_json_object_get(document, tokens, (size_t)count, 0,
+                                   "request_id");
+    outcome = cp0_json_object_get(document, tokens, (size_t)count, 0,
+                                  "outcome");
+    if (version_token < 0 || id_token < 0 || outcome < 0 ||
+        !cp0_json_get_u64(document, &tokens[version_token], &version) ||
+        !cp0_json_get_u64(document, &tokens[id_token], &parsed_id) ||
+        version != 3U || parsed_id != request_id ||
+        tokens[outcome].type != CP0_JSON_OBJECT)
+        return CP0_AUDIO_SETTINGS_FAILED;
+    status = cp0_json_object_get(document, tokens, (size_t)count, outcome,
+                                 "status");
+    enabled_token = cp0_json_object_get(document, tokens, (size_t)count,
+                                        outcome, "enabled");
+    if (status < 0 || enabled_token < 0 ||
+        !cp0_json_string_equals(document, &tokens[status],
+                                "key-sounds-state") ||
+        !cp0_json_get_bool(document, &tokens[enabled_token], &parsed_enabled) ||
+        parsed_enabled != enabled)
+        return CP0_AUDIO_SETTINGS_FAILED;
+    return CP0_AUDIO_SETTINGS_OK;
+}
+
+int cp0_audio_set_key_sounds_enabled(bool enabled)
+{
+    char request[224];
+    char response[CP0_AUDIO_SETTINGS_FRAME_BYTES];
+    size_t response_length;
+    uint64_t request_id = next_request_id++;
+    int count = snprintf(
+        request, sizeof(request),
+        "{\"protocol_version\":3,\"request_id\":%llu,"
+        "\"command\":{\"name\":\"set-key-sounds-enabled\","
+        "\"enabled\":%s}}\n",
+        (unsigned long long)request_id, enabled ? "true" : "false");
+    if (count <= 0 || (size_t)count >= sizeof(request) ||
+        exchange(request, (size_t)count, response, sizeof(response),
+                 &response_length) != 0)
+        return CP0_AUDIO_SETTINGS_FAILED;
+    return parse_key_sounds_response(response, response_length, request_id,
+                                     enabled);
+}
+
 #ifdef CP0_AUDIO_SETTINGS_CLIENT_TEST
 int cp0_audio_settings_test_parse_state_response(
     const char *response, size_t response_length, uint64_t request_id,
@@ -326,5 +388,13 @@ int cp0_audio_settings_test_parse_key_click_response(
     const char *response, size_t response_length, uint64_t request_id)
 {
     return parse_key_click_response(response, response_length, request_id);
+}
+
+int cp0_audio_settings_test_parse_key_sounds_response(
+    const char *response, size_t response_length, uint64_t request_id,
+    bool enabled)
+{
+    return parse_key_sounds_response(response, response_length, request_id,
+                                     enabled);
 }
 #endif

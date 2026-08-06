@@ -54,7 +54,7 @@ cp -R "$repo_root/simulator" "$bundle/simulator"
 cp -R "$repo_root/devkit" "$bundle/devkit"
 cp -R "$repo_root/skills/cardputerzero-build-app" "$bundle/skills/"
 examples=(
-    hello-card calculator neon-snake camera gallery media-controls notes
+    hello-card calculator neon-snake camera gallery media-controls music-player notes
     stopwatch
 )
 for example in "${examples[@]}"; do
@@ -100,7 +100,7 @@ jq -n \
           "cp0ctl", "sdk", "simulator", "skill", "app-manifest-schema",
           "store-listing-schema", "developer-access-doc", "photo-library-doc",
           "app-icon-doc", "hello-card", "calculator", "neon-snake", "camera",
-          "gallery", "media-controls", "notes", "stopwatch"
+          "gallery", "media-controls", "music-player", "notes", "stopwatch"
         ]
     }' >"$bundle/devkit.json"
 

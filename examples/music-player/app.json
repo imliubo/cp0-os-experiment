@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "id": "dev.cardputerzero.music",
+  "name": "Music",
+  "version": "0.1.0",
+  "sdk_version": "1.1",
+  "runtime": "wamr",
+  "entrypoint": "bin/music_player.wasm",
+  "display": "standard",
+  "resources": {
+    "memory_mb": 16,
+    "storage_mb": 1
+  },
+  "permissions": [
+    {
+      "name": "audio.playback",
+      "reason": "Play the local or network track selected by the user"
+    },
+    {
+      "name": "documents.open",
+      "reason": "Open a local WAV selected through the trusted Document Portal"
+    },
+    {
+      "name": "network.client",
+      "reason": "Stream a WAV from the public HTTPS URL entered by the user"
+    }
+  ],
+  "intents": []
+}

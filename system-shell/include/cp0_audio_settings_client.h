@@ -27,6 +27,7 @@ int cp0_audio_adjust_output_volume(enum cp0_audio_settings_direction direction,
                                    struct cp0_audio_output_state *state);
 int cp0_audio_set_output_muted(bool muted,
                                struct cp0_audio_output_state *state);
+int cp0_audio_set_key_sounds_enabled(bool enabled);
 int cp0_audio_play_key_click(void);
 
 #endif

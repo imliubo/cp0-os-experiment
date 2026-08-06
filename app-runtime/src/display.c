@@ -1,4 +1,5 @@
 #include "display.h"
+#include "broker_client.h"
 #include "frame_pacing.h"
 #include "input_queue.h"
 #include "pixels.h"
@@ -199,6 +200,13 @@ static uint8_t modifier_mask(const struct cp0_display_state *display) {
     return modifiers;
 }
 
+static bool is_modifier_key(uint32_t key) {
+    return key == KEY_LEFTSHIFT || key == KEY_RIGHTSHIFT ||
+           key == KEY_LEFTCTRL || key == KEY_RIGHTCTRL ||
+           key == KEY_LEFTALT || key == KEY_RIGHTALT ||
+           key == KEY_LEFTMETA || key == KEY_RIGHTMETA;
+}
+
 static void handle_keyboard_keymap(void *data, struct wl_keyboard *keyboard,
                                    uint32_t format, int32_t descriptor,
                                    uint32_t size) {
@@ -252,8 +260,11 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
     if (!display->keyboard_focused || key > UINT16_MAX)
         return;
     set_modifier_key(display, key, pressed);
-    (void)cp0_input_queue_push(&display->input_queue, (uint16_t)key, pressed,
-                               false, modifier_mask(display));
+    bool delivered = cp0_input_queue_push(&display->input_queue, (uint16_t)key,
+                                          pressed, false,
+                                          modifier_mask(display));
+    if (delivered && pressed && !is_modifier_key(key))
+        (void)cp0_broker_play_key_click();
 }
 
 static void handle_keyboard_modifiers(void *data,

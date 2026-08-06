@@ -136,26 +136,32 @@ mask 此入口。详见 docs/POWER-CONTROL.md。
 权限提示优先于通知，Home、Tasks、Power 和应用退出会撤销当前横幅。
 
 网络能力不向应用暴露裸 socket。Runtime 和 appd 仅允许 `AF_UNIX`，独立的
-`cp0-networkd` 是唯一允许 `AF_INET/AF_INET6` 的组件。首版 SDK 只提供 1024 字节
-URL、5 秒总超时、2 次重定向和 2048 字节响应体的同步 HTTPS GET。networkd 禁用
-环境代理，并在每次连接和重定向解析时过滤环回、私网、链路本地、多播、保留地址、
-NAT64/Teredo 等非公网目标，TLS 证书校验不可关闭。appd 在网络 I/O 前完成调用者
-UID/cgroup、manifest 和权限验证并释放共享状态锁。
+`cp0-networkd` 是唯一允许 `AF_INET/AF_INET6` 的组件。SDK 提供 1024 字节 URL、
+5 秒总超时、2 次重定向和 2048 字节响应体的同步 HTTPS GET；SDK 1.1 另提供每次
+最多 8 KiB、资源偏移不超过 256 MiB 的固定 byte-range GET，供受限流式读取。
+networkd 禁用环境代理，并在每次连接和重定向解析时过滤环回、私网、链路本地、
+多播、保留地址、NAT64/Teredo 等非公网目标，TLS 证书校验不可关闭。appd 在网络 I/O
+前完成调用者 UID/cgroup、manifest 和权限验证并释放共享状态锁。
 
 文件共享不暴露路径。`cp0-documentd` 以专用账户只读枚举最多 16 个共享文档，可信
 Shell 显示单前台选择器；应用请求不包含路径或文档 ID。选择结果先绑定到 appd 的
 可信快照，再由 documentd 使用 `openat(O_NOFOLLOW)` 和 device/inode 二次校验打开。
 只读 FD 通过两段 `SCM_RIGHTS` 传入 Runtime，WASM 只得到单个代际句柄、文件长度和
-每次最多 4096 字节的偏移读取 API。首版文档上限为 16 MiB。
+每次最多 4096 字节的偏移读取 API。文档上限为 256 MiB，以支持本地流式音乐，
+但 App 内存中仍不会出现整个文件。
 
 音频能力不暴露 ALSA 设备或 mixer。`cp0-audiod` 是唯一可访问 `char-alsa` 的服务，
-固定打开 ES8389 的 `hw:ES8389Audio,0`，只接受 16 kHz、单声道、S16_LE PCM。
-`audio.playback` 和 `audio.capture` 分别授权，每次最多 1024 帧（64 ms、2048 字节）；
-协议、appd broker、Runtime 线性内存和 SDK 四层都重复验证长度与偶数字节边界。
+固定打开 ES8389 的 `hw:ES8389Audio,0` 和 48 kHz 双声道硬件流。兼容接口继续接受
+16 kHz 单声道 S16_LE、每次最多 1024 帧，并在服务内固定 3 倍上采样和复制声道；
+SDK 1.1 增加 48 kHz 双声道 S16_LE、每次最多 720 帧的音乐播放接口。
+`audio.playback` 和 `audio.capture` 分别授权；协议、appd broker、Runtime 线性内存和
+SDK 四层都重复验证长度与帧对齐。
 服务使用专用账户、空 capability 集和 systemd 设备白名单。同一服务还提供与应用 PCM
 能力分离的 Shell-only 输出设置角色：只允许 `cp0-shell` 读取/调整 DACL、DACR 音量和
-Speaker 静音，固定 10% 步进并回读实际值。socket DAC 允许 Shell 建连，但服务按
-`SO_PEERCRED` 和命令类别分权，因此 Shell 不能播放/录音，appd 也不能修改系统音量。
+Speaker 静音，固定 10% 步进并回读实际值。audiod 还统一持久化 Key Sounds 开关，
+只为 Shell 或当前前台 Runtime 生成固定短促按键音，密码和 Wi-Fi 密钥输入保持静音。
+socket DAC 允许 Shell 建连，但服务按 `SO_PEERCRED` 和命令类别分权，因此 Shell 不能
+提交任意 PCM/录音，appd 也不能修改系统音量或按键音策略。
 
 相机能力不暴露 V4L2、Media Controller、dma-heap、VideoCore 设备或捕获进程。
 `cp0-camerad` 以专用账户运行并通过 systemd 白名单独占这些设备类，固定调用系统

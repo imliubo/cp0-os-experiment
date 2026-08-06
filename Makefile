@@ -18,6 +18,7 @@ check: fmt
 		examples/camera/app.json \
 		examples/gallery/app.json \
 		examples/media-controls/app.json \
+		examples/music-player/app.json \
 		examples/neon-snake/app.json \
 		examples/notes/app.json \
 		examples/stopwatch/app.json \

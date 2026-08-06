@@ -835,7 +835,7 @@ static void draw_app_icon(struct canvas *canvas, const struct cp0_ui_app *app,
         fill_rect(canvas, x + 17, y + 18, 12, 6, color);
         fill_rect(canvas, x + 24, y + 23, 6, 9, color);
         fill_rect(canvas, x + 28, y + 27, 5, 5, color);
-    } else if (strstr(id, "media") != NULL) {
+    } else if (strstr(id, "media") != NULL || strstr(id, "music") != NULL) {
         for (int row = 0; row < 19; row++)
             fill_rect(canvas, x + 9 + row / 2, y + 10 + row, 2, 1, color);
         fill_rect(canvas, x + 28, y + 10, 3, 19, color);
@@ -2968,8 +2968,8 @@ static void draw_document_dialog(struct canvas *canvas,
         bool selected = index == ui->document_selected;
         char size[16];
         uint64_t bounded_size = ui->documents[index].size_bytes;
-        if (bounded_size > 16U * 1024U * 1024U)
-            bounded_size = 16U * 1024U * 1024U;
+        if (bounded_size > 256U * 1024U * 1024U)
+            bounded_size = 256U * 1024U * 1024U;
         unsigned int kib = (unsigned int)((bounded_size + 1023U) / 1024U);
 
         fill_rect(canvas, 16, y, 288, 20,
@@ -5275,7 +5275,7 @@ bool cp0_ui_show_documents(struct cp0_ui *ui, uint64_t prompt_id,
                 return false;
             }
         }
-        if (documents[index].size_bytes > 16U * 1024U * 1024U) {
+        if (documents[index].size_bytes > 256U * 1024U * 1024U) {
             cp0_ui_clear_documents(ui);
             return false;
         }
