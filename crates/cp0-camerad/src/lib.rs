@@ -28,7 +28,9 @@ pub const DEFAULT_RPICAM_VID: &str = "/usr/bin/rpicam-vid";
 const CAMERA_STREAM_WIDTH: usize = 1280;
 const CAMERA_STREAM_HEIGHT: usize = 720;
 const YUV420_FRAME_BYTES: usize = CAMERA_STREAM_WIDTH * CAMERA_STREAM_HEIGHT * 3 / 2;
-const RPICAM_STREAM_FPS: u16 = 30;
+// Keep enough sensor headroom for broker transfer and RGB565 conversion while
+// the public preview remains capped at 30 FPS by the Camera App.
+const RPICAM_STREAM_FPS: u16 = 40;
 const JPEG_QUALITY: u8 = 90;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_START_DEADLINE: Duration = Duration::from_secs(20);
@@ -842,7 +844,7 @@ mod tests {
         assert!(fixed_arguments.contains("--height\n720\n"));
         assert!(fixed_arguments.contains("--mode\n1920:1080:10:P\n"));
         assert!(fixed_arguments.contains("--rotation\n180\n"));
-        assert!(fixed_arguments.contains("--framerate\n30\n"));
+        assert!(fixed_arguments.contains("--framerate\n40\n"));
         assert!(fixed_arguments.contains("--codec\nyuv420\n"));
 
         backend.release();
