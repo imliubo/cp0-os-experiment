@@ -249,6 +249,11 @@ Shell 和其他应用数据。
 - [ ] Phase 6M-C2：取得合法 production USB VID/PID，并在 V0.6 上完成 macOS/Linux/
   Windows 枚举、弹出、异常拔线、掉电、满盘、FAT 恢复和照片/WAV hash 真机验收；统一
   契约见 `OWNER-MEDIA-TRANSFER-V1.md`。
+- [x] Phase 6N-A：实现全局按键音、Key Sounds 重启持久化、SDK 1.1 HTTPS Range/
+  48 kHz 双声道流以及 production 内置 Music App；首版有界支持本地和公网 HTTPS
+  的 48 kHz 双声道 16-bit PCM WAV。
+- [ ] Phase 6N-B：在 V0.6 production 候选验证按键音延迟/静音、连续音乐不被按键音
+  打断、本地/公网播放、暂停/前后台 media action、爆音/欠载、CPU/RSS/SPI 和输入延迟。
 - [x] 实现不接入当前启动链的 OS 发布元数据策略、rootfs/hash tree/FIT 摘要门禁、
   dm-verity 离线验证、三次启动回滚状态机、双副本撕裂写检测和 100 轮断电模型；
   RAUC CMS、签名 FIT 与硬件信任根仍是独立启用门禁。

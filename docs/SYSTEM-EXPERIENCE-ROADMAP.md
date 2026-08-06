@@ -116,7 +116,7 @@ write a bounded audit record. The planned providers are:
 | --- | --- | --- |
 | network broker | Wi-Fi scan/connect/forget, airplane transaction, DNS/proxy | credentials, raw NetworkManager or netlink control |
 | display broker | backlight level, timeout and compositor appearance state | raw sysfs/DRM handles |
-| audio broker | output volume, mute, route and focus policy | unrestricted ALSA devices |
+| audio broker | PCM, output volume/mute, key sounds and focus policy | unrestricted ALSA devices or format selection |
 | Owner USB Media broker | fixed exchange-image MSC, bounded music import and read-only photo copies | active partitions, block devices, shell, App deployment, caller paths or photo mutation |
 | camera broker | capture profile and orientation policy | raw V4L2 devices |
 | power broker | implemented restart/shutdown; future supported charge policy | arbitrary systemd or sysfs operations |
@@ -214,6 +214,8 @@ implemented as an unreliable userspace timer in each application.
 - [x] Add the targetless media-session broker with Runtime-bound identity,
   bounded per-session actions, lifecycle clearing, SDK APIs and explicit Shell
   completion states. Physical `Fn+Q/W/E` remains device acceptance.
+- [x] Add SDK 1.1 48 kHz stereo playback, HTTPS Range streaming, persistent
+  global key-sound policy, and the production Music App locally.
 - [x] Implement the independent Owner USB Media daemon, password-gated Shell
   flow, isolated FAT32 image, WAV import, JPEG/BMP photo export and hashes.
 - [ ] Physically validate enumeration/eject, interruption recovery and hash
