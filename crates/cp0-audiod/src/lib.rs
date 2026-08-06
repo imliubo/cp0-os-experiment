@@ -11,13 +11,16 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::{Mutex, MutexGuard};
+use std::thread;
 use std::time::Duration;
 
 use cp0_audio_protocol::{
     AUDIO_SAMPLE_BYTES, AUDIO_SAMPLE_RATE_HZ, AudioCommand, AudioDirection, AudioErrorCode,
-    AudioOutputState, AudioProtocolError, AudioRequest, AudioResponse, MAX_AUDIO_FRAMES,
-    MUSIC_FRAME_BYTES, MUSIC_SAMPLE_RATE_HZ, decode_music_samples, decode_samples, read_request,
-    write_response,
+    AudioOutputState, AudioProtocolError, AudioRequest, AudioResponse, KEY_CLICK_FRAMES,
+    MAX_AUDIO_FRAMES, MUSIC_FRAME_BYTES, MUSIC_SAMPLE_RATE_HZ, decode_music_samples,
+    decode_samples, read_request, write_response,
 };
 
 pub const DEFAULT_AUDIO_DEVICE: &str = "hw:ES8389Audio,0";
@@ -32,7 +35,10 @@ const PCM_LATENCY_MICROSECONDS: libc::c_uint = 20_000;
 const HARDWARE_CHANNELS: libc::c_uint = 2;
 const OUTPUT_VOLUME_STEP_PERCENT: u8 = 10;
 const SND_MIXER_SCHN_MONO: libc::c_int = 0;
-const KEY_CLICK_FRAMES: usize = 240;
+const KEY_CLICK_PCM_S16LE: &[u8] = include_bytes!("../assets/key-click-soft-typing-s16le.pcm");
+const KEY_CLICK_QUEUE_DEPTH: usize = 8;
+const KEY_CLICK_WORKER_STACK_BYTES: usize = 128 * 1024;
+const _: [(); KEY_CLICK_FRAMES as usize * AUDIO_SAMPLE_BYTES] = [(); KEY_CLICK_PCM_S16LE.len()];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioDeviceError {
@@ -206,6 +212,10 @@ pub struct AlsaDevice {
     mixer_card: CString,
     playback: RefCell<Option<*mut c_void>>,
 }
+
+// SAFETY: POSIX loader handles and ALSA PCM handles may move between threads.
+// AudioServer serializes every device operation with its mutex.
+unsafe impl Send for AlsaDevice {}
 
 impl AlsaDevice {
     pub fn open_default() -> Result<Self, AudioDeviceError> {
@@ -600,25 +610,39 @@ fn map_alsa_error(error: libc::c_int) -> AudioDeviceError {
 
 #[derive(Debug)]
 pub struct AudioServer<D> {
-    device: D,
+    device: Mutex<D>,
     trusted_pcm_uids: BTreeSet<u32>,
     trusted_output_uids: BTreeSet<u32>,
     key_sounds_enabled: std::sync::atomic::AtomicBool,
     key_sounds_state: Option<PathBuf>,
+    key_click_sender: Mutex<Option<SyncSender<()>>>,
 }
 
-impl<D: AudioDevice + AudioOutputDevice> AudioServer<D> {
+struct KeyClickSenderGuard<'a> {
+    slot: &'a Mutex<Option<SyncSender<()>>>,
+}
+
+impl Drop for KeyClickSenderGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.slot.lock() {
+            slot.take();
+        }
+    }
+}
+
+impl<D: AudioDevice + AudioOutputDevice + Send> AudioServer<D> {
     pub fn new(
         device: D,
         trusted_pcm_uids: impl IntoIterator<Item = u32>,
         trusted_output_uids: impl IntoIterator<Item = u32>,
     ) -> Self {
         Self {
-            device,
+            device: Mutex::new(device),
             trusted_pcm_uids: trusted_pcm_uids.into_iter().collect(),
             trusted_output_uids: trusted_output_uids.into_iter().collect(),
             key_sounds_enabled: std::sync::atomic::AtomicBool::new(true),
             key_sounds_state: None,
+            key_click_sender: Mutex::new(None),
         }
     }
 
@@ -631,19 +655,69 @@ impl<D: AudioDevice + AudioOutputDevice> AudioServer<D> {
         let state_path = state_path.into();
         let enabled = load_key_sounds_state(&state_path)?.unwrap_or(true);
         Ok(Self {
-            device,
+            device: Mutex::new(device),
             trusted_pcm_uids: trusted_pcm_uids.into_iter().collect(),
             trusted_output_uids: trusted_output_uids.into_iter().collect(),
             key_sounds_enabled: std::sync::atomic::AtomicBool::new(enabled),
             key_sounds_state: Some(state_path),
+            key_click_sender: Mutex::new(None),
         })
     }
 
     pub fn serve(&self, listener: UnixListener) -> io::Result<()> {
+        self.with_key_click_worker(|| self.serve_connections(listener))?
+    }
+
+    fn serve_connections(&self, listener: UnixListener) -> io::Result<()> {
         loop {
             let (stream, _) = listener.accept()?;
             if let Err(error) = self.handle_connection(stream) {
                 eprintln!("cp0-audiod: rejected connection: {error}");
+            }
+        }
+    }
+
+    fn with_key_click_worker<T>(&self, operation: impl FnOnce() -> T) -> io::Result<T> {
+        let (sender, receiver) = sync_channel(KEY_CLICK_QUEUE_DEPTH);
+        {
+            let mut slot = self.key_click_sender.lock().map_err(lock_io)?;
+            if slot.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "key click worker is already active",
+                ));
+            }
+            *slot = Some(sender);
+        }
+        let guard = KeyClickSenderGuard {
+            slot: &self.key_click_sender,
+        };
+        thread::scope(|scope| {
+            let worker = thread::Builder::new()
+                .name("cp0-key-click".into())
+                .stack_size(KEY_CLICK_WORKER_STACK_BYTES)
+                .spawn_scoped(scope, || self.play_key_clicks(receiver))?;
+            let result = operation();
+            drop(guard);
+            worker
+                .join()
+                .map_err(|_| io::Error::other("key click worker panicked"))?;
+            Ok(result)
+        })
+    }
+
+    fn play_key_clicks(&self, receiver: Receiver<()>) {
+        while receiver.recv().is_ok() {
+            if !self
+                .key_sounds_enabled
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                continue;
+            }
+            if let Err(error) =
+                self.with_device(|device| device.play_pcm_s16le(KEY_CLICK_PCM_S16LE))
+            {
+                eprintln!("cp0-audiod: queued key click failed: {error}");
             }
         }
     }
@@ -728,7 +802,7 @@ impl<D: AudioDevice + AudioOutputDevice> AudioServer<D> {
                 };
                 let frames = u16::try_from(samples.len() / AUDIO_SAMPLE_BYTES)
                     .expect("audio protocol frame count fits u16");
-                match self.device.play_pcm_s16le(&samples) {
+                match self.with_device(|device| device.play_pcm_s16le(&samples)) {
                     Ok(()) => AudioResponse::played(request_id, frames),
                     Err(error) => device_error_response(request_id, error),
                 }
@@ -746,13 +820,13 @@ impl<D: AudioDevice + AudioOutputDevice> AudioServer<D> {
                 };
                 let frames = u16::try_from(samples.len() / MUSIC_FRAME_BYTES)
                     .expect("music protocol frame count fits u16");
-                match self.device.play_pcm_s16le_stereo_48k(&samples) {
+                match self.with_device(|device| device.play_pcm_s16le_stereo_48k(&samples)) {
                     Ok(()) => AudioResponse::played(request_id, frames),
                     Err(error) => device_error_response(request_id, error),
                 }
             }
             AudioCommand::CapturePcmS16le { frames } => {
-                match self.device.capture_pcm_s16le(frames) {
+                match self.with_device(|device| device.capture_pcm_s16le(frames)) {
                     Ok(samples)
                         if samples.len() == usize::from(frames) * AUDIO_SAMPLE_BYTES
                             && samples.len() <= MAX_AUDIO_FRAMES * AUDIO_SAMPLE_BYTES =>
@@ -767,42 +841,43 @@ impl<D: AudioDevice + AudioOutputDevice> AudioServer<D> {
                     Err(error) => device_error_response(request_id, error),
                 }
             }
-            AudioCommand::GetOutputState {} => match self.device.output_state() {
-                Ok(state) => AudioResponse::output_state(request_id, state),
-                Err(AudioDeviceError::Unavailable) => {
-                    AudioResponse::output_state(request_id, AudioOutputState::unavailable())
-                }
-                Err(error) => device_error_response(request_id, error),
-            },
-            AudioCommand::SetOutputVolume { percent } => {
-                self.output_response(request_id, self.device.set_output_volume(percent))
-            }
-            AudioCommand::AdjustOutputVolume { direction } => {
-                let state = match self.device.output_state() {
-                    Ok(state) => state,
-                    Err(error) => return device_error_response(request_id, error),
-                };
-                let Some(current) = state.volume_percent else {
-                    return AudioResponse::output_state(
-                        request_id,
-                        AudioOutputState::unavailable(),
-                    );
-                };
-                let percent = match direction {
-                    AudioDirection::Decrease => current.saturating_sub(OUTPUT_VOLUME_STEP_PERCENT),
-                    AudioDirection::Increase => {
-                        current.saturating_add(OUTPUT_VOLUME_STEP_PERCENT).min(100)
+            AudioCommand::GetOutputState {} => {
+                match self.with_device(AudioOutputDevice::output_state) {
+                    Ok(state) => AudioResponse::output_state(request_id, state),
+                    Err(AudioDeviceError::Unavailable) => {
+                        AudioResponse::output_state(request_id, AudioOutputState::unavailable())
                     }
-                };
-                let result = self
-                    .device
-                    .set_output_volume(percent)
-                    .and_then(|_| self.device.set_output_muted(false));
+                    Err(error) => device_error_response(request_id, error),
+                }
+            }
+            AudioCommand::SetOutputVolume { percent } => self.output_response(
+                request_id,
+                self.with_device(|device| device.set_output_volume(percent)),
+            ),
+            AudioCommand::AdjustOutputVolume { direction } => {
+                let result = self.with_device(|device| {
+                    let state = device.output_state()?;
+                    let Some(current) = state.volume_percent else {
+                        return Ok(AudioOutputState::unavailable());
+                    };
+                    let percent = match direction {
+                        AudioDirection::Decrease => {
+                            current.saturating_sub(OUTPUT_VOLUME_STEP_PERCENT)
+                        }
+                        AudioDirection::Increase => {
+                            current.saturating_add(OUTPUT_VOLUME_STEP_PERCENT).min(100)
+                        }
+                    };
+                    device
+                        .set_output_volume(percent)
+                        .and_then(|_| device.set_output_muted(false))
+                });
                 self.output_response(request_id, result)
             }
-            AudioCommand::SetOutputMuted { muted } => {
-                self.output_response(request_id, self.device.set_output_muted(muted))
-            }
+            AudioCommand::SetOutputMuted { muted } => self.output_response(
+                request_id,
+                self.with_device(|device| device.set_output_muted(muted)),
+            ),
             AudioCommand::SetKeySoundsEnabled { enabled } => {
                 if let Some(path) = &self.key_sounds_state
                     && let Err(error) = save_key_sounds_state(path, enabled)
@@ -823,20 +898,33 @@ impl<D: AudioDevice + AudioOutputDevice> AudioServer<D> {
                     .key_sounds_enabled
                     .load(std::sync::atomic::Ordering::Relaxed)
                 {
-                    return AudioResponse::played(
-                        request_id,
-                        u16::try_from(KEY_CLICK_FRAMES).expect("key click fits u16"),
-                    );
+                    return AudioResponse::played(request_id, KEY_CLICK_FRAMES);
                 }
-                let samples = key_click_samples();
-                match self.device.play_pcm_s16le(&samples) {
-                    Ok(()) => AudioResponse::played(
-                        request_id,
-                        u16::try_from(KEY_CLICK_FRAMES).expect("key click fits u16"),
-                    ),
+                match self.queue_key_click() {
+                    Ok(()) => AudioResponse::played(request_id, KEY_CLICK_FRAMES),
                     Err(error) => device_error_response(request_id, error),
                 }
             }
+        }
+    }
+
+    fn with_device<T>(
+        &self,
+        operation: impl FnOnce(&D) -> Result<T, AudioDeviceError>,
+    ) -> Result<T, AudioDeviceError> {
+        let device = self.device.lock().map_err(|_| AudioDeviceError::Device)?;
+        operation(&device)
+    }
+
+    fn queue_key_click(&self) -> Result<(), AudioDeviceError> {
+        let sender = self
+            .key_click_sender
+            .lock()
+            .map_err(|_| AudioDeviceError::Device)?
+            .clone();
+        match sender {
+            Some(sender) => sender.send(()).map_err(|_| AudioDeviceError::Device),
+            None => self.with_device(|device| device.play_pcm_s16le(KEY_CLICK_PCM_S16LE)),
         }
     }
 
@@ -902,16 +990,8 @@ fn is_output_command(command: &AudioCommand) -> bool {
     )
 }
 
-fn key_click_samples() -> Vec<u8> {
-    let mut samples = Vec::with_capacity(KEY_CLICK_FRAMES * AUDIO_SAMPLE_BYTES);
-    for frame in 0..KEY_CLICK_FRAMES {
-        let envelope = i32::try_from(KEY_CLICK_FRAMES - frame).expect("bounded frame");
-        let polarity = if frame % 16 < 8 { 1 } else { -1 };
-        let value = (polarity * 1800 * envelope
-            / i32::try_from(KEY_CLICK_FRAMES).expect("bounded frames")) as i16;
-        samples.extend_from_slice(&value.to_le_bytes());
-    }
-    samples
+fn lock_io<T>(error: std::sync::PoisonError<MutexGuard<'_, T>>) -> io::Error {
+    io::Error::other(error.to_string())
 }
 
 fn device_error_response(request_id: u64, error: AudioDeviceError) -> AudioResponse {
@@ -1034,16 +1114,20 @@ mod tests {
         }
     }
 
+    fn played_samples(server: &AudioServer<MockDevice>) -> Vec<u8> {
+        server.device.lock().unwrap().played.borrow().clone()
+    }
+
     #[test]
     fn dispatches_bounded_playback() {
         let server = AudioServer::new(MockDevice::default(), [0], [1000]);
         let response = server.dispatch(AudioRequest::playback(4, &[1, 0, 2, 0]));
         assert_eq!(response.outcome, AudioOutcome::Played { frames: 2 });
-        assert_eq!(&*server.device.played.borrow(), &[1, 0, 2, 0]);
+        assert_eq!(played_samples(&server), [1, 0, 2, 0]);
 
         let response = server.dispatch(AudioRequest::playback_stereo_48k(5, &[1, 0, 2, 0]));
         assert_eq!(response.outcome, AudioOutcome::Played { frames: 1 });
-        assert_eq!(&*server.device.played.borrow(), &[1, 0, 2, 0, 1, 0, 2, 0]);
+        assert_eq!(played_samples(&server), [1, 0, 2, 0, 1, 0, 2, 0]);
     }
 
     #[test]
@@ -1123,12 +1207,41 @@ mod tests {
         assert_eq!(
             server.dispatch(AudioRequest::play_key_click(20)).outcome,
             AudioOutcome::Played {
-                frames: KEY_CLICK_FRAMES as u16
+                frames: KEY_CLICK_FRAMES
             }
         );
-        let samples = server.device.played.borrow();
-        assert_eq!(samples.len(), KEY_CLICK_FRAMES * AUDIO_SAMPLE_BYTES);
+        let samples = played_samples(&server);
+        assert_eq!(
+            samples.len(),
+            usize::from(KEY_CLICK_FRAMES) * AUDIO_SAMPLE_BYTES
+        );
         assert!(samples.iter().any(|sample| *sample != 0));
+    }
+
+    #[test]
+    fn queues_rapid_key_clicks_without_dropping_events() {
+        const CLICKS: usize = 24;
+        let server = AudioServer::new(MockDevice::default(), [0], [1000]);
+
+        server
+            .with_key_click_worker(|| {
+                for request_id in 0..CLICKS as u64 {
+                    assert_eq!(
+                        server
+                            .dispatch(AudioRequest::play_key_click(100 + request_id))
+                            .outcome,
+                        AudioOutcome::Played {
+                            frames: KEY_CLICK_FRAMES
+                        }
+                    );
+                }
+            })
+            .unwrap();
+
+        assert_eq!(
+            played_samples(&server).len(),
+            CLICKS * usize::from(KEY_CLICK_FRAMES) * AUDIO_SAMPLE_BYTES
+        );
     }
 
     #[test]
@@ -1143,10 +1256,10 @@ mod tests {
         assert_eq!(
             server.dispatch(AudioRequest::play_key_click(22)).outcome,
             AudioOutcome::Played {
-                frames: KEY_CLICK_FRAMES as u16
+                frames: KEY_CLICK_FRAMES
             }
         );
-        assert!(server.device.played.borrow().is_empty());
+        assert!(played_samples(&server).is_empty());
     }
 
     #[test]
@@ -1175,7 +1288,7 @@ mod tests {
             AudioServer::new_with_key_sounds_state(MockDevice::default(), [0], [1000], &state)
                 .unwrap();
         restarted.dispatch(AudioRequest::play_key_click(31));
-        assert!(restarted.device.played.borrow().is_empty());
+        assert!(played_samples(&restarted).is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 

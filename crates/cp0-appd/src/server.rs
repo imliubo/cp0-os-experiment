@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use cp0_audio_protocol::AudioErrorCode as ServiceAudioErrorCode;
+use cp0_audio_protocol::{AudioErrorCode as ServiceAudioErrorCode, KEY_CLICK_FRAMES};
 use cp0_camera_protocol::{CameraErrorCode as ServiceCameraErrorCode, decode_photo_payload};
 use cp0_document_protocol::{DocumentErrorCode as ServiceDocumentErrorCode, send_frame_with_fd};
 use cp0_gpio_protocol::GpioErrorCode as ServiceGpioErrorCode;
@@ -1735,7 +1735,7 @@ impl AppdServer {
                     return response;
                 }
                 match self.capabilities.audio.play_key_click(request_id) {
-                    Ok(()) => BrokerResponse::audio_played(request_id, 240),
+                    Ok(()) => BrokerResponse::audio_played(request_id, KEY_CLICK_FRAMES),
                     Err(error) => {
                         eprintln!("cp0-appd: key click request failed: {error}");
                         audio_error_response(request_id, &error)

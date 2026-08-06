@@ -30,6 +30,7 @@
 #define CP0_DOCUMENT_MAX_BYTES (256U * 1024U * 1024U)
 #define CP0_AUDIO_MAX_FRAMES 1024U
 #define CP0_AUDIO_MAX_BYTES (CP0_AUDIO_MAX_FRAMES * 2U)
+#define CP0_KEY_CLICK_FRAMES 512U
 #define CP0_MUSIC_MAX_FRAMES 720U
 #define CP0_MUSIC_FRAME_BYTES 4U
 #define CP0_MUSIC_MAX_BYTES (CP0_MUSIC_MAX_FRAMES * CP0_MUSIC_FRAME_BYTES)
@@ -745,7 +746,8 @@ int32_t cp0_broker_play_key_click(void) {
         return result;
     if (strstr(response, "\"status\":\"audio-played\"") == NULL)
         return decode_result(response);
-    if (!json_u16_field(response, "frames", &frames) || frames != 240U)
+    if (!json_u16_field(response, "frames", &frames) ||
+        frames != CP0_KEY_CLICK_FRAMES)
         return CP0_BROKER_INTERNAL;
     return CP0_BROKER_OK;
 }

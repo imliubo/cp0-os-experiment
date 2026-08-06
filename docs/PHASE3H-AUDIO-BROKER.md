@@ -37,6 +37,13 @@ every write returns observed volume and mute state. The persisted Key Sounds
 setting is owned by audiod so both Shell and foreground App key events follow
 one policy. Password and Wi-Fi secret entry stay silent.
 
+The key cue is a fixed 32 ms, 16 kHz mono PCM derivative of UI SFX Soft
+`typing` (CC0-1.0). In service mode, `play-key-click` places one token into a
+bounded eight-entry queue and returns before touching ALSA. A dedicated
+128 KiB-stack worker drains every accepted token in order. A full queue applies
+backpressure instead of dropping key feedback. Tokens reached while Key Sounds
+is disabled are discarded before hardware access.
+
 ## Trust Flow
 
 ```text
@@ -92,7 +99,8 @@ Automated coverage includes:
 - separate manifest permission routing in appd;
 - Runtime capture decoding and length mismatch rejection;
 - cached 48 kHz playback, 16-to-48 kHz conversion, key-click enable/disable,
-  persistence across audiod restart, and no hardware access while disabled;
+  persistence across audiod restart, rapid-click queue draining without loss,
+  and no hardware access while disabled;
 - Rust, C11, C++17 and WIT SDK surfaces;
 - hardened systemd service and image-stage assertions;
 - AArch64 audiod/appd and static Runtime plus wasm32 Hello Card builds.

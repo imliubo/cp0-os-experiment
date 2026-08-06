@@ -21,6 +21,7 @@
 #define CP0_AUDIO_SETTINGS_FRAME_BYTES 4096U
 #define CP0_AUDIO_SETTINGS_JSON_TOKENS 64U
 #define CP0_AUDIO_SETTINGS_TIMEOUT_MSEC 500U
+#define CP0_KEY_CLICK_FRAMES 512U
 
 static uint64_t next_request_id = 1;
 
@@ -291,7 +292,7 @@ static int parse_key_click_response(const char *document, size_t length,
     if (!cp0_json_string_equals(document, &tokens[status], "played") ||
         frames_token < 0 ||
         !cp0_json_get_u64(document, &tokens[frames_token], &frames) ||
-        frames != 240U)
+        frames != CP0_KEY_CLICK_FRAMES)
         return CP0_AUDIO_SETTINGS_FAILED;
     return CP0_AUDIO_SETTINGS_OK;
 }

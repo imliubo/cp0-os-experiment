@@ -7,6 +7,7 @@ pub const AUDIO_PROTOCOL_VERSION: u32 = 3;
 pub const AUDIO_SAMPLE_RATE_HZ: u32 = 16_000;
 pub const AUDIO_CHANNELS: u8 = 1;
 pub const AUDIO_SAMPLE_BYTES: usize = 2;
+pub const KEY_CLICK_FRAMES: u16 = 512;
 pub const MAX_AUDIO_FRAMES: usize = 1024;
 pub const MAX_AUDIO_BYTES: usize = MAX_AUDIO_FRAMES * AUDIO_SAMPLE_BYTES;
 pub const MUSIC_SAMPLE_RATE_HZ: u32 = 48_000;

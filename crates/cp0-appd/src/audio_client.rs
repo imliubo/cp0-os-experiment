@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cp0_audio_protocol::{
-    AudioErrorCode, AudioOutcome, AudioProtocolError, AudioRequest, decode_samples, read_response,
-    write_request,
+    AudioErrorCode, AudioOutcome, AudioProtocolError, AudioRequest, KEY_CLICK_FRAMES,
+    decode_samples, read_response, write_request,
 };
 
 pub const DEFAULT_AUDIO_SOCKET: &str = "/run/cardputerzero-audiod/audio.sock";
@@ -124,7 +124,7 @@ impl AudioClient {
 
     pub fn play_key_click(&self, request_id: u64) -> Result<(), AudioClientError> {
         match self.exchange(&AudioRequest::play_key_click(request_id))? {
-            AudioOutcome::Played { frames } if usize::from(frames) == 240 => Ok(()),
+            AudioOutcome::Played { frames } if frames == KEY_CLICK_FRAMES => Ok(()),
             AudioOutcome::Error { code, .. } => Err(AudioClientError::Service(code)),
             _ => Err(AudioClientError::MismatchedFrameCount),
         }
