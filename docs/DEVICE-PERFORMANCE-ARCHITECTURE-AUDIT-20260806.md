@@ -6,7 +6,7 @@
 - Device: CardputerZero V0.6, Raspberry Pi CM0, 512 MiB RAM
 - Display: 320x170 ST7789 LCD
 - Camera: Raspberry Pi IMX219
-- Source baseline: `4bb4547`
+- Source baseline: `5f4ea63` (Camera scheduling fix `d603bdc`)
 - Image profile: product layout with the isolated hardware-debug access profile
 - Root layout: read-only `mmcblk0p2` lower root plus a 64 MiB volatile overlay
 - Persistent layout: `mmcblk0p3`, independently mounted at
@@ -20,9 +20,10 @@ real CM0 but are not a clean-boot production release acceptance.
 ## Outcome
 
 The current camera, Gallery, application lifecycle and idle-resource design is
-viable on the single-core CM0. Camera sustains 33.30 public preview frames per
-second, performs a warm 1280x720 capture in 58 ms, and releases the camera
-pipeline after leaving the foreground. All eight built-in applications start,
+viable on the single-core CM0. The visible Camera UI sustains 30.14 public
+preview frames per second, performs a warm 1280x720 capture in 58 ms, and
+releases the camera pipeline after leaving the foreground. All eight built-in
+applications start,
 publish a surface and stop within the measured bounds. A 120-second idle
 monitor completed with no foreground application, no service restart, no SD
 write and bounded memory growth, and its complete evidence was independently
@@ -34,6 +35,15 @@ Camera remains the dominant workload. While foreground, the App Runtime used
 still met the 30 FPS public preview target. The architecture should retain the
 fixed-resolution, single-producer pipeline and must not add a concurrent
 high-resolution preview, a second camera process or background preview work.
+
+A follow-up audit found two ways a hidden Camera could retain work. The Camera
+App kept its previous `Live` state after appd rejected a background request, so
+it continued the 33 ms preview retry and 1 ms input-poll loops. Separately, a
+restarted System Shell displayed Home without clearing appd's previous
+foreground identity. The App now enters an explicit unavailable state, retries
+at 750 ms, waits up to 250 ms while inactive and keeps a two-millisecond
+foreground scheduling margin. Shell startup now fails closed unless it can
+clear any stale foreground identity before dispatching UI events.
 
 ## Camera pipeline
 
@@ -53,11 +63,16 @@ Measured device results:
 
 | Operation | Result |
 | --- | ---: |
-| Public preview throughput | 33.30 FPS |
+| Visible Camera UI preview throughput | 30.14 FPS |
 | Cold pipeline to first complete frame | 1.345 s |
 | Warm 1280x720 capture | 58 ms |
 | Camera capture through Gallery import | 312 ms |
 | Pipeline after returning Home | stopped within about 2 s |
+
+The visible preview result counts the exact 320x170 RGB565 payload bytes read
+by the Camera Runtime while its compositor surface was active: 453 complete
+frames over 15.029 seconds. The trusted screenshot from the same activation
+shows the immersive Camera surface in `LIVE` state.
 
 The camera and JPEG evidence from this run is almost black because the lens was
 pointed at a dark test environment. Protocol sizes, frame cadence, capture
@@ -119,12 +134,39 @@ An earlier 30-second Home sample measured appd at 0.059%, System Shell at
 0.676% and camerad at 0.004% CPU. Removing idle App-catalog polling reduced
 appd from the former 4.787% observation by about 80 times.
 
+The Camera follow-up reproduced a separate resident-background busy loop.
+Before the fix, the hidden Camera used about 3.4-4.1% CPU and drove appd to
+about 2.9-3.6%; stopping Camera reduced appd to about 0.4%. An intermediate
+bounded-retry build measured 1.03% Camera and 0.72% appd. The final 30.41-second
+Home sample, with Camera, Gallery and Calculator still resident, measured:
+
+| Resident service | CPU |
+| --- | ---: |
+| Camera App Runtime | 0.791% |
+| appd | 0.635% |
+| System Shell | 0.669% |
+| compositor | 0.648% |
+| Gallery App Runtime | 0.070% |
+| Calculator App Runtime | 0.029% |
+| camerad | 0.003% |
+
+Both the normal F1 Home transition and a deliberate System Shell restart
+revoked Camera foreground access. In each case the continuous `rpicam-vid`
+process exited within about two seconds while the Camera task remained
+resident. Reopening Camera through Apps restored a visible `LIVE` surface and
+the 30.14 FPS cadence.
+
 ## Isolation, access and persistent data
 
 The post-run read-only audit found no failed systemd unit and no running App.
 The compositor, System Shell, appd, camerad, storaged, stored and provisiond
 were active with zero restarts. App Runtime remains transient and devd remains
 socket activated when idle.
+
+Foreground camera authority is now coupled to visible Shell state across Shell
+process restarts. A Shell that cannot clear the previous appd foreground token
+exits instead of drawing Home while a hidden App retains foreground-only
+capabilities.
 
 The App package tree is root-owned. Private App data is `0700 cp0-storage`, the
 registry is `0700 root:root`, and `permissions.json` is `0600 root:root`.
@@ -147,8 +189,10 @@ may appear in the production image.
 Trusted screenshots and camera/Gallery evidence are retained below
 `target/device-evidence/ui/20260806T025529Z`,
 `target/device-evidence/camera-gallery-20260806`, and
-`target/device-evidence/ui/20260806T033051Z`. The final trusted capture shows a
-complete 320x170 Home screen with no leaked App or Tasks content.
+`target/device-evidence/ui/20260806T033051Z`. The follow-up visible Camera and
+post-Shell-restart Home captures are under
+`target/device-evidence/ui/20260806-camera-background-fix`. The trusted frames
+are exact 320x170 captures with no leaked App or Tasks content.
 
 ## Release gates still open
 
