@@ -1,9 +1,10 @@
 # V0.6 boot splash assets
 
-`splash.png` is the 320x170 source image. The product early-splash service
-writes `splash.rgb565` directly to the Linux LCD framebuffer after the ST7789
-driver appears. This preserves the 64 MB VideoCore split and the standard
-camera-capable Raspberry Pi firmware.
+`splash.png` is the 320x170 source image. A bounded static initramfs helper
+initializes SPI0 and ST7789 before the Linux display driver loads, then sends
+`splash.rgb565` directly to panel RAM. The same asset is repainted through the
+Linux framebuffer when DRM appears. This preserves the 64 MB VideoCore split
+and the standard camera-capable Raspberry Pi firmware.
 
 Regenerate the raw frame with FFmpeg:
 

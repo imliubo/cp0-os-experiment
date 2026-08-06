@@ -54,6 +54,7 @@ required_executables=(
     usr/libexec/cardputerzero/device-recovery-data
     usr/libexec/cardputerzero/device-smoke.sh
     usr/libexec/cardputerzero/camera-probe
+    usr/libexec/cardputerzero/early-splash-spi
     usr/libexec/cardputerzero/show-early-splash.sh
     usr/libexec/cardputerzero/device-stability-monitor
     usr/libexec/cardputerzero/device-store-acceptance
@@ -440,6 +441,8 @@ if [[ $(wc -c <"$early_splash") -ne 108800 ||
     echo "error: image does not contain the pinned 320x170 RGB565 splash" >&2
     exit 1
 fi
+chroot "$rootfs" /usr/libexec/cardputerzero/early-splash-spi \
+    --check-image /usr/share/cardputerzero/boot/splash.rgb565
 if grep -qx 'dtoverlay=camera-py12-high-overlay' "$bootfs/config.txt"; then
     echo "error: image conflicts with V0.6 powerfail ownership of P12" >&2
     exit 1
@@ -527,6 +530,25 @@ grep -qE 'usr/lib/modules/.*/kernel/fs/overlayfs/overlay\.ko' \
     <<<"$initramfs_contents"
 grep -qx 'usr/lib/firmware/cardputerzero,st7789v_lcd.bin' \
     <<<"$initramfs_contents"
+if [[ $image_profile == product ]]; then
+    for path in \
+        scripts/init-top/cardputerzero-early-splash \
+        usr/libexec/cardputerzero/early-splash-spi \
+        usr/libexec/cardputerzero/show-early-splash.sh \
+        usr/share/cardputerzero/boot/splash.rgb565; do
+        grep -qx "$path" <<<"$initramfs_contents"
+    done
+else
+    for path in \
+        scripts/init-top/cardputerzero-early-splash \
+        usr/libexec/cardputerzero/early-splash-spi \
+        usr/share/cardputerzero/boot/splash.rgb565; do
+        if grep -qx "$path" <<<"$initramfs_contents"; then
+            echo "error: recovery initramfs contains product splash path: $path" >&2
+            exit 1
+        fi
+    done
+fi
 
 verify_tmp_parent="$rootfs/run"
 initramfs_extract=$(mktemp -d \
@@ -553,6 +575,10 @@ grep -Fqx '/scripts/init-bottom/cardputerzero-overlay-root "$@"' \
     "$initramfs_extract/scripts/init-bottom/ORDER"
 grep -Fqx '/scripts/local-premount/cardputerzero-data-grow "$@"' \
     "$initramfs_extract/scripts/local-premount/ORDER"
+if [[ $image_profile == product ]]; then
+    grep -Fqx '/scripts/init-top/cardputerzero-early-splash "$@"' \
+        "$initramfs_extract/scripts/init-top/ORDER"
+fi
 
 generator_output="$initramfs_extract/display-generator"
 generator_chroot="$initramfs_chroot/display-generator"

@@ -12,6 +12,8 @@ ssh_prepare_unit="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/ca
 camera_probe="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/camera-probe.sh"
 camera_probe_unit="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardputerzero-camera-probe.service"
 early_splash="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/show-early-splash.sh"
+early_splash_spi="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/early-splash-spi.c"
+initramfs_splash="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/early-splash-initramfs"
 early_splash_unit="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardputerzero-early-splash.service"
 backlight_patch="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/0002-cardputerzero-v06-backlight-zero-duty.patch"
 rootfs_verifier="$repo_root/tests/test-built-rootfs-profile.sh"
@@ -87,6 +89,31 @@ grep -qx 'Before=cardputerzero-compositor.service cardputerzero-display-retry.se
     "$early_splash_unit"
 grep -qx 'RequiresMountsFor=/var/lib/cardputerzero/registry' "$early_splash_unit"
 grep -qx 'WantedBy=multi-user.target' "$early_splash_unit"
+test -x "$initramfs_splash"
+sh -n "$initramfs_splash"
+grep -Fq 'scripts/init-top/cardputerzero-early-splash' "$stage"
+grep -Fq '/usr/share/cardputerzero/boot/splash.rgb565' "$firmware_hook"
+grep -Fq 'copy_exec /usr/libexec/cardputerzero/early-splash-spi' "$firmware_hook"
+grep -Fq '/usr/libexec/cardputerzero/show-early-splash.sh' "$firmware_hook"
+grep -Fq 'image-profile 2>/dev/null || true)" = product' "$firmware_hook"
+grep -Fq 'mknod -m 0600 /dev/mem c 1 1' "$initramfs_splash"
+grep -Fq '"$spi_renderer" "$splash"' "$initramfs_splash"
+grep -Fq '"$framebuffer_renderer" >/dev/null 2>&1 &' "$initramfs_splash"
+spi_line=$(grep -n '"$spi_renderer" "$splash"' "$initramfs_splash" | cut -d: -f1)
+framebuffer_line=$(grep -n '"$framebuffer_renderer" >/dev/null 2>&1 &' \
+    "$initramfs_splash" | cut -d: -f1)
+if [[ -z $spi_line || -z $framebuffer_line || $spi_line -ge $framebuffer_line ]]; then
+    echo "error: direct SPI splash must run before the framebuffer fallback" >&2
+    exit 1
+fi
+grep -Fq 'early-splash-spi.c' "$stage"
+grep -Fq 'gcc -std=c11 -static -Os' "$stage"
+grep -Fq 'e05b81c80f1f5a8e589956937adba5b5d04f0ca9' "$early_splash_spi"
+grep -Fq '#define BCM2835_PERIPHERAL_BASE 0x20000000UL' "$early_splash_spi"
+grep -Fq '#define DISPLAY_Y_OFFSET 35U' "$early_splash_spi"
+grep -Fq '*reg(spi_registers, SPI_CLK) = 12U;' "$early_splash_spi"
+grep -Fq 'SPI_WAIT_LIMIT' "$early_splash_spi"
+cc -std=c11 -Wall -Wextra -Werror -fsyntax-only "$early_splash_spi"
 grep -q 'panel-mipi-dbid' "$early_splash"
 grep -q '320,170' "$early_splash"
 grep -q 'expected_bytes=108800' "$early_splash"
@@ -94,6 +121,13 @@ sh -n "$early_splash"
 mkdir -p "$repo_root/target/test-tmp"
 early_splash_tmp=$(mktemp -d "$repo_root/target/test-tmp/early-splash.XXXXXX")
 trap 'rm -rf -- "$early_splash_tmp"' EXIT
+cc -std=c11 -O2 -Wall -Wextra -Werror "$early_splash_spi" \
+    -o "$early_splash_tmp/early-splash-spi"
+"$early_splash_tmp/early-splash-spi" --check-image "$splash_rgb565"
+if "$early_splash_tmp/early-splash-spi" --check-image "$splash_png"; then
+    echo "error: direct SPI splash accepts a resource with the wrong size" >&2
+    exit 1
+fi
 mkdir -p "$early_splash_tmp/sys/class/graphics/fb7" "$early_splash_tmp/dev"
 printf 'panel-mipi-dbid\n' >"$early_splash_tmp/sys/class/graphics/fb7/name"
 printf '320,170\n' >"$early_splash_tmp/sys/class/graphics/fb7/virtual_size"

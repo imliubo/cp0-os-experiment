@@ -1,0 +1,41 @@
+#!/bin/sh
+set -eu
+
+prereqs() {
+    :
+}
+
+case "${1:-}" in
+    prereqs)
+        prereqs
+        exit 0
+        ;;
+esac
+
+spi_renderer=/usr/libexec/cardputerzero/early-splash-spi
+framebuffer_renderer=/usr/libexec/cardputerzero/show-early-splash.sh
+splash=/usr/share/cardputerzero/boot/splash.rgb565
+
+[ -f "$splash" ] || exit 0
+
+# A normal initramfs mounts devtmpfs before init-top, but keep the explicit
+# device-node fallback used by the official prototype for older initramfs-tools.
+if [ ! -c /dev/mem ] && command -v mknod >/dev/null 2>&1; then
+    mknod -m 0600 /dev/mem c 1 1 >/dev/null 2>&1 || true
+fi
+
+# Match the official early-splash approach: initialize ST7789 directly before
+# Linux claims SPI0. The bounded helper returns in under a second on failure and
+# does not replace the normal initramfs /init.
+if [ -x "$spi_renderer" ]; then
+    "$spi_renderer" "$splash" >/dev/null 2>&1 || true
+fi
+
+# The DRM probe can reset panel RAM after the direct write. Repaint as soon as
+# fbdev appears without holding up root discovery or first-boot data growth.
+if [ -x "$framebuffer_renderer" ]; then
+    CP0_EARLY_SPLASH_FILE="$splash" \
+        "$framebuffer_renderer" >/dev/null 2>&1 &
+fi
+
+exit 0

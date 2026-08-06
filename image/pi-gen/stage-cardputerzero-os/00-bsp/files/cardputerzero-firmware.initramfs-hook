@@ -15,3 +15,11 @@ esac
 . /usr/share/initramfs-tools/hook-functions
 
 copy_file firmware /lib/firmware/cardputerzero,st7789v_lcd.bin
+
+if [ "$(cat /etc/cardputerzero/image-profile 2>/dev/null || true)" = product ]; then
+    copy_file early-splash \
+        /usr/share/cardputerzero/boot/splash.rgb565
+    copy_exec /usr/libexec/cardputerzero/early-splash-spi
+    copy_file early-splash-renderer \
+        /usr/libexec/cardputerzero/show-early-splash.sh
+fi

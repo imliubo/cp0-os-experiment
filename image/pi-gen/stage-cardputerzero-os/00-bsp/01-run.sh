@@ -30,6 +30,8 @@ install -m 0644 "${STAGE_DIR}/00-bsp/files/0001-tca8418-flush-synthetic-shift.pa
     "${ROOTFS_DIR}/tmp/0001-tca8418-flush-synthetic-shift.patch"
 install -m 0644 "${STAGE_DIR}/00-bsp/files/0002-cardputerzero-v06-backlight-zero-duty.patch" \
     "${ROOTFS_DIR}/tmp/0002-cardputerzero-v06-backlight-zero-duty.patch"
+install -m 0644 "${STAGE_DIR}/00-bsp/files/early-splash-spi.c" \
+    "${ROOTFS_DIR}/tmp/cardputerzero-early-splash-spi.c"
 
 on_chroot <<CHROOT
 set -e
@@ -85,6 +87,13 @@ make -C /tmp/cardputerzero-bsp/modules/CardputerZero \
     install
 depmod -a "\$KVER"
 
+mkdir -p /usr/libexec/cardputerzero
+gcc -std=c11 -static -Os -Wall -Wextra -Werror \
+    -fno-ident -fno-unwind-tables -fno-asynchronous-unwind-tables \
+    /tmp/cardputerzero-early-splash-spi.c \
+    -o /usr/libexec/cardputerzero/early-splash-spi
+strip /usr/libexec/cardputerzero/early-splash-spi
+
 CM0_DTB=/boot/firmware/bcm2710-rpi-cm0.dtb
 BOOTARGS=\$(fdtget -t s "\$CM0_DTB" /chosen bootargs)
 FILTERED=
@@ -99,6 +108,7 @@ fi
 fdtget -t s "\$CM0_DTB" /chosen bootargs | grep -qv cgroup_disable=memory
 
 rm -rf /tmp/cardputerzero-bsp
+rm -f /tmp/cardputerzero-early-splash-spi.c
 apt-get purge -y build-essential device-tree-compiler git \
     linux-headers-rpi-v8 linux-headers-rpi-2712
 apt-get autoremove -y --purge
@@ -176,6 +186,11 @@ early_splash="${STAGE_DIR}/00-bsp/files/splash.rgb565"
 printf '%s  %s\n' "$EARLY_SPLASH_SHA256" "$early_splash" | sha256sum -c -
 install -D -m 0644 "$early_splash" \
     "${ROOTFS_DIR}/usr/share/cardputerzero/boot/splash.rgb565"
+on_chroot <<'CHROOT'
+set -e
+/usr/libexec/cardputerzero/early-splash-spi --check-image \
+    /usr/share/cardputerzero/boot/splash.rgb565
+CHROOT
 
 for pattern in \
     quiet splash 'logo\.nologo' 'loglevel=[^[:space:]]+' \
@@ -249,6 +264,10 @@ install -D -m 0755 "${STAGE_DIR}/00-bsp/files/data-grow-initramfs" \
     "${ROOTFS_DIR}/etc/initramfs-tools/scripts/local-premount/cardputerzero-data-grow"
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/cardputerzero-overlay-root.initramfs-hook" \
     "${ROOTFS_DIR}/etc/initramfs-tools/hooks/cardputerzero-overlay-root"
+if [[ $image_profile == product ]]; then
+    install -D -m 0755 "${STAGE_DIR}/00-bsp/files/early-splash-initramfs" \
+        "${ROOTFS_DIR}/etc/initramfs-tools/scripts/init-top/cardputerzero-early-splash"
+fi
 install -D -m 0755 "${STAGE_DIR}/00-bsp/files/overlay-root-status.sh" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/overlay-root-status"
 install -D -m 0644 "${STAGE_DIR}/00-bsp/files/cardputerzero-overlay-root-status.service" \
