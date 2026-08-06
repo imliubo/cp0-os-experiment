@@ -3495,6 +3495,12 @@ int main(void)
         shell_destroy(&shell);
         return EXIT_FAILURE;
     }
+    if (cp0_appd_set_foreground_app(NULL) != 0) {
+        fprintf(stderr,
+                "system-shell: cannot revoke stale foreground application\n");
+        shell_destroy(&shell);
+        return EXIT_FAILURE;
+    }
 
     int result = shell_dispatch(&shell);
     if (result < 0)
