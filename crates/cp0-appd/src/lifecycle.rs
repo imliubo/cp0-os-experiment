@@ -883,11 +883,9 @@ mod tests {
         let writer_root = root.clone();
         let writer = thread::spawn(move || {
             thread::sleep(Duration::from_millis(20));
-            fs::write(
-                writer_root.join("cgroup.events"),
-                b"populated 0\nfrozen 0\n",
-            )
-            .unwrap();
+            let replacement = writer_root.join("cgroup.events.next");
+            fs::write(&replacement, b"populated 0\nfrozen 0\n").unwrap();
+            fs::rename(replacement, writer_root.join("cgroup.events")).unwrap();
         });
         wait_for_cgroup_stopped(&root, Duration::from_millis(5)).unwrap();
         writer.join().unwrap();
