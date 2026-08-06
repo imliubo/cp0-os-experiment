@@ -22,8 +22,8 @@ ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
+# retry-display-once.sh reads /proc/uptime to avoid extending a late start.
 ProtectProc=invisible
-ProcSubset=pid
 RestrictAddressFamilies=AF_UNIX
 RestrictNamespaces=yes
 RestrictRealtime=yes

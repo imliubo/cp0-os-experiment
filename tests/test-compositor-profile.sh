@@ -99,6 +99,11 @@ grep -q '"$systemctl_command" is-active --quiet cardputerzero-compositor.service
 grep -q 'cardputerzero-display-retry.service' "$stage"
 grep -q '^not_before_ms=${CP0_DISPLAY_RETRY_NOT_BEFORE_MS:-8000}$' "$display_retry"
 grep -q '^uptime_file=${CP0_DISPLAY_RETRY_UPTIME_FILE:-/proc/uptime}$' "$display_retry"
+grep -q '^ProtectProc=invisible$' "$display_retry_service"
+if grep -q '^ProcSubset=pid$' "$display_retry_service"; then
+    echo 'error: display retry requires the system-wide proc subset for uptime' >&2
+    exit 1
+fi
 grep -q '/usr/bin/cardputerzero-system-shell' "$shell_service"
 grep -q '^Wants=cardputerzero-powerd.socket cardputerzero-provisiond.socket$' "$shell_service"
 grep -q '^After=cardputerzero-compositor.service cardputerzero-display-retry.service cardputerzero-powerd.socket cardputerzero-provisiond.socket$' "$shell_service"
