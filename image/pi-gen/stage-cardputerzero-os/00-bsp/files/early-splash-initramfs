@@ -25,10 +25,10 @@ if [ ! -c /dev/mem ] && command -v mknod >/dev/null 2>&1; then
 fi
 
 # Match the official early-splash approach: initialize ST7789 directly before
-# Linux claims SPI0. The bounded helper returns in under a second on failure and
-# does not replace the normal initramfs /init.
+# Linux claims SPI0. Keep an independent wall-clock limit around the helper so
+# a register-level fault can never block the normal initramfs /init.
 if [ -x "$spi_renderer" ]; then
-    "$spi_renderer" "$splash" >/dev/null 2>&1 || true
+    timeout -s KILL 2 "$spi_renderer" "$splash" >/dev/null 2>&1 || true
 fi
 
 # The DRM probe can reset panel RAM after the direct write. Repaint as soon as

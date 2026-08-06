@@ -146,7 +146,7 @@ product 镜像使用固定的 early splash，并设置 `quiet loglevel=3 logo.no
 `vt.global_cursor_default=0`、`fbcon=map:off` 和 systemd status suppression。LCD 不再
 显示内核、initramfs、systemd 日志或启动摘要，`cardputerzero-console-banner.service`
 也不会启用。initramfs `init-top` 中的静态 helper 参考官方 `ci/early-splash` 实现，在
-显示驱动加载前直接通过 BCM2835 SPI0 初始化 ST7789 并写入固定图片；ST7789 framebuffer
+显示驱动加载前直接通过 BCM2837 SPI0 初始化 ST7789 并写入固定图片；ST7789 framebuffer
 出现后，initramfs 中的非阻塞 root worker 再将固定的
 320x170 RGB565 帧写入 LCD，不等待数据分区扩容、OverlayFS 切根或 systemd；最终 root
 中的 oneshot 负责有界重试。该画面保持到 compositor 和 System Shell 接管显示；在此

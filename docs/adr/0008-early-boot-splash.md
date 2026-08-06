@@ -7,7 +7,8 @@
 
 CM0 V0.6 product 镜像设置 `start_x=1`，使用 `raspi-firmware` 提供的
 `start_x.elf`/`fixup_x.dat`。initramfs 的 `init-top` 阶段首先运行静态、有界的
-`early-splash-spi`：它直接映射 BCM2835 SPI0/GPIO 寄存器，以与 V0.6 驱动一致的约
+`early-splash-spi`：它直接映射 BCM2837 的 `0x3f000000` peripheral window 中的
+SPI0/GPIO 寄存器，以与 V0.6 驱动一致的约
 20 MHz 时钟初始化 ST7789，并将固定的 108800-byte `splash.rgb565` 写入 panel RAM。
 这条路径不等待 DRM、udev、根分区、OverlayFS 或 systemd。随后启动非阻塞 framebuffer
 worker，在 Linux 驱动接管并可能重置 panel RAM 后重绘相同图片。最终 root 中的
@@ -19,7 +20,9 @@ App 暴露 framebuffer，失败时也不阻止 Home；recovery initramfs 不包�
 来自 CardputerZero 官方 `pi-gen` 的 `ci/early-splash` 分支提交
 `e05b81c80f1f5a8e589956937adba5b5d04f0ca9`。官方原型将程序作为替代 `/init` 且只填充
 蓝色；本实现将其收敛为正常 initramfs 中的有界 helper，读取经过哈希固定的产品图片，
-保留标准 initramfs 的 root discovery、数据扩容和 OverlayFS 链路。
+保留标准 initramfs 的 root discovery、数据扩容和 OverlayFS 链路。helper 自身通过
+`alarm(2)` 终止异常寄存器访问，调用脚本另有 BusyBox `timeout -s KILL 2` 兜底；SPI
+RX FIFO 轮询同样有次数上限，因此任何 LCD 失败都只能跳过 splash，不能阻断启动。
 
 不再打包 M5Stack `m5stack_bootscreen` 固件。其历史 SHA256
 `d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd`

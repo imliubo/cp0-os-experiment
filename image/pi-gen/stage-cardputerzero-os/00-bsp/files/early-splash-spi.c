@@ -23,9 +23,9 @@
 #define O_NOFOLLOW 0
 #endif
 
-#define BCM2835_PERIPHERAL_BASE 0x20000000UL
-#define GPIO_BASE (BCM2835_PERIPHERAL_BASE + 0x00200000UL)
-#define SPI0_BASE (BCM2835_PERIPHERAL_BASE + 0x00204000UL)
+#define BCM2837_PERIPHERAL_BASE 0x3f000000UL
+#define GPIO_BASE (BCM2837_PERIPHERAL_BASE + 0x00200000UL)
+#define SPI0_BASE (BCM2837_PERIPHERAL_BASE + 0x00204000UL)
 #define REGISTER_MAP_BYTES 4096UL
 
 #define GPFSEL0 0x00U
@@ -49,6 +49,7 @@
 #define DISPLAY_Y_OFFSET 35U
 #define SPLASH_BYTES (DISPLAY_WIDTH * DISPLAY_HEIGHT * 2U)
 #define SPI_WAIT_LIMIT 20000000U
+#define RENDER_TIMEOUT_SECONDS 2U
 
 #define ST7789_SLPOUT 0x11U
 #define ST7789_DISPON 0x29U
@@ -99,10 +100,16 @@ static int wait_for_spi(uint32_t mask)
     return -1;
 }
 
-static void drain_receive_fifo(void)
+static int drain_receive_fifo(void)
 {
-    while ((*reg(spi_registers, SPI_CS) & SPI_CS_RXD) != 0U)
+    uint32_t attempts;
+
+    for (attempts = 0; attempts < SPI_WAIT_LIMIT; attempts++) {
+        if ((*reg(spi_registers, SPI_CS) & SPI_CS_RXD) == 0U)
+            return 0;
         (void)*reg(spi_registers, SPI_FIFO);
+    }
+    return -1;
 }
 
 static int spi_transfer(const uint8_t *bytes, size_t length, int swap_pairs)
@@ -117,11 +124,13 @@ static int spi_transfer(const uint8_t *bytes, size_t length, int swap_pairs)
         if (wait_for_spi(SPI_CS_TXD) != 0)
             goto fail;
         *reg(spi_registers, SPI_FIFO) = bytes[source];
-        drain_receive_fifo();
+        if (drain_receive_fifo() != 0)
+            goto fail;
     }
     if (wait_for_spi(SPI_CS_DONE) != 0)
         goto fail;
-    drain_receive_fifo();
+    if (drain_receive_fifo() != 0)
+        goto fail;
     *reg(spi_registers, SPI_CS) = 0U;
     return 0;
 
@@ -194,7 +203,7 @@ static int load_splash(const char *path)
 
 static void initialize_spi(void)
 {
-    /* BCM2835 GPIO ALT0 selects CE0, MISO, MOSI and SCLK on GPIO 8-11. */
+    /* BCM283x GPIO ALT0 selects CE0, MISO, MOSI and SCLK on GPIO 8-11. */
     gpio_function(8U, 4U);
     gpio_function(9U, 4U);
     gpio_function(10U, 4U);
@@ -288,5 +297,8 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     if (check_only)
         return EXIT_SUCCESS;
-    return render_splash() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    (void)alarm(RENDER_TIMEOUT_SECONDS);
+    int result = render_splash();
+    (void)alarm(0U);
+    return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

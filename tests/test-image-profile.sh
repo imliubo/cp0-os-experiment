@@ -97,9 +97,10 @@ grep -Fq 'copy_exec /usr/libexec/cardputerzero/early-splash-spi' "$firmware_hook
 grep -Fq '/usr/libexec/cardputerzero/show-early-splash.sh' "$firmware_hook"
 grep -Fq 'image-profile 2>/dev/null || true)" = product' "$firmware_hook"
 grep -Fq 'mknod -m 0600 /dev/mem c 1 1' "$initramfs_splash"
-grep -Fq '"$spi_renderer" "$splash"' "$initramfs_splash"
+grep -Fq 'timeout -s KILL 2 "$spi_renderer" "$splash"' "$initramfs_splash"
 grep -Fq '"$framebuffer_renderer" >/dev/null 2>&1 &' "$initramfs_splash"
-spi_line=$(grep -n '"$spi_renderer" "$splash"' "$initramfs_splash" | cut -d: -f1)
+spi_line=$(grep -n 'timeout -s KILL 2 "$spi_renderer" "$splash"' \
+    "$initramfs_splash" | cut -d: -f1)
 framebuffer_line=$(grep -n '"$framebuffer_renderer" >/dev/null 2>&1 &' \
     "$initramfs_splash" | cut -d: -f1)
 if [[ -z $spi_line || -z $framebuffer_line || $spi_line -ge $framebuffer_line ]]; then
@@ -109,10 +110,17 @@ fi
 grep -Fq 'early-splash-spi.c' "$stage"
 grep -Fq 'gcc -std=c11 -static -Os' "$stage"
 grep -Fq 'e05b81c80f1f5a8e589956937adba5b5d04f0ca9' "$early_splash_spi"
-grep -Fq '#define BCM2835_PERIPHERAL_BASE 0x20000000UL' "$early_splash_spi"
+grep -Fq '#define BCM2837_PERIPHERAL_BASE 0x3f000000UL' "$early_splash_spi"
+if grep -Fq 'PERIPHERAL_BASE 0x20000000UL' "$early_splash_spi"; then
+    echo "error: direct SPI splash uses the BCM2835 base on BCM2837 V0.6" >&2
+    exit 1
+fi
 grep -Fq '#define DISPLAY_Y_OFFSET 35U' "$early_splash_spi"
 grep -Fq '*reg(spi_registers, SPI_CLK) = 12U;' "$early_splash_spi"
 grep -Fq 'SPI_WAIT_LIMIT' "$early_splash_spi"
+grep -Fq '#define RENDER_TIMEOUT_SECONDS 2U' "$early_splash_spi"
+grep -Fq 'static int drain_receive_fifo(void)' "$early_splash_spi"
+grep -Fq '(void)alarm(RENDER_TIMEOUT_SECONDS);' "$early_splash_spi"
 cc -std=c11 -Wall -Wextra -Werror -fsyntax-only "$early_splash_spi"
 grep -q 'panel-mipi-dbid' "$early_splash"
 grep -q '320,170' "$early_splash"

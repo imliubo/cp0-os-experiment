@@ -578,6 +578,8 @@ grep -Fqx '/scripts/local-premount/cardputerzero-data-grow "$@"' \
 if [[ $image_profile == product ]]; then
     grep -Fqx '/scripts/init-top/cardputerzero-early-splash "$@"' \
         "$initramfs_extract/scripts/init-top/ORDER"
+    grep -Fq 'timeout -s KILL 2 "$spi_renderer" "$splash"' \
+        "$initramfs_extract/scripts/init-top/cardputerzero-early-splash"
 fi
 
 generator_output="$initramfs_extract/display-generator"
