@@ -165,6 +165,12 @@ if grep -q '^ConditionPathExists=/dev/' "$service"; then
     exit 1
 fi
 grep -q 'TAG+="systemd"' "$udev_rules"
+grep -q 'ATTRS{name}=="cp0-qa-seat-keyboard"' "$udev_rules"
+grep -q 'ATTRS{id/vendor}=="4350"' "$udev_rules"
+grep -q 'ATTRS{id/product}=="3051"' "$udev_rules"
+grep -q 'ENV{ID_SEAT}="seat-cardputer-zero"' "$udev_rules"
+grep -q 'KEYBOARD_CLASSIFIER_KEYS = range(1, 59)' \
+    "$repo_root/scripts/device-qa-keyboard.py"
 grep -q 'files/99-cardputerzero-systemd.rules' "$stage"
 grep -q '^Conflicts=cardputerzero-compositor.service$' "$recovery_service"
 grep -q '^Wants=getty@tty1.service$' "$recovery_service"

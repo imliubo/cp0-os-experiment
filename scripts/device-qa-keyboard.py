@@ -22,6 +22,11 @@ EV_REP = 20
 MSC_SCAN = 4
 BUS_USB = 3
 
+# udev classifies an input device as a keyboard only when the complete
+# alphanumeric block is advertised. Weston intentionally ignores a generic
+# ID_INPUT_KEY device, even when the individual QA keys are present.
+KEYBOARD_CLASSIFIER_KEYS = range(1, 59)
+
 KEYS = {
     "esc": 1,
     "1": 2,
@@ -114,7 +119,7 @@ def main() -> int:
     try:
         for event_type in (EV_KEY, EV_MSC, EV_REP):
             fcntl.ioctl(descriptor, UI_SET_EVBIT, event_type)
-        for key in sorted(set(KEYS.values())):
+        for key in sorted(set(KEYS.values()).union(KEYBOARD_CLASSIFIER_KEYS)):
             fcntl.ioctl(descriptor, UI_SET_KEYBIT, key)
         fcntl.ioctl(descriptor, UI_SET_MSCBIT, MSC_SCAN)
         setup = struct.pack(

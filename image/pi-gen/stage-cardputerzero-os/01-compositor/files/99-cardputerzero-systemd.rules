@@ -1,1 +1,2 @@
 ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_PATH}=="platform-3f804000.i2c", TAG+="systemd"
+ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="cp0-qa-seat-keyboard", ATTRS{id/vendor}=="4350", ATTRS{id/product}=="3051", ENV{ID_SEAT}="seat-cardputer-zero"
