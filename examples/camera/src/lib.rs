@@ -13,13 +13,17 @@ const KEY_ENTER: u16 = 28;
 const KEY_SPACE: u16 = 57;
 const FRAME_BYTES: usize = camera::FRAME_BYTES;
 const PREVIEW_INTERVAL_MS: u64 = 1_000 / camera::PREVIEW_FPS as u64;
-const RETRY_INTERVAL_MS: u64 = 2000;
+const DENIED_RETRY_INTERVAL_MS: u64 = 2000;
+const UNAVAILABLE_RETRY_INTERVAL_MS: u64 = 750;
 const START_RETRY_INTERVAL_MS: u64 = 100;
+const MAX_INPUT_WAIT_MS: u64 = 50;
+const MAX_INACTIVE_INPUT_WAIT_MS: u64 = 250;
+const INPUT_DEADLINE_HEADROOM_MS: u64 = 2;
 
 static mut CAMERA_FRAME: [u16; camera::PIXEL_COUNT] = [0; camera::PIXEL_COUNT];
 static mut DISPLAY_FRAME: [u8; FRAME_BYTES] = [0; FRAME_BYTES];
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Status {
     Starting,
     Live,
@@ -38,11 +42,31 @@ fn schedule_next_preview(
 ) -> u64 {
     match status {
         Status::Starting => request_finished.saturating_add(START_RETRY_INTERVAL_MS),
-        Status::Unavailable | Status::Denied => request_finished.saturating_add(RETRY_INTERVAL_MS),
+        Status::Unavailable => request_finished.saturating_add(UNAVAILABLE_RETRY_INTERVAL_MS),
+        Status::Denied => request_finished.saturating_add(DENIED_RETRY_INTERVAL_MS),
         _ => previous_deadline
             .max(request_started)
             .saturating_add(PREVIEW_INTERVAL_MS),
     }
+}
+
+fn unavailable_status(has_frame: bool) -> Status {
+    if has_frame {
+        Status::Unavailable
+    } else {
+        Status::Starting
+    }
+}
+
+fn input_wait_milliseconds(next_preview: u64, now: u64, status: Status) -> u32 {
+    let maximum = match status {
+        Status::Unavailable | Status::Denied => MAX_INACTIVE_INPUT_WAIT_MS,
+        _ => MAX_INPUT_WAIT_MS,
+    };
+    next_preview
+        .saturating_sub(now)
+        .saturating_sub(INPUT_DEADLINE_HEADROOM_MS)
+        .min(maximum) as u32
 }
 
 fn camera_pixels() -> &'static mut [u16] {
@@ -155,10 +179,8 @@ pub extern "C" fn main() -> i32 {
                     dirty = true;
                 }
                 Err(Error::Unavailable | Error::ResourceLimit) => {
-                    if !has_frame {
-                        status = Status::Starting;
-                        dirty = true;
-                    }
+                    status = unavailable_status(has_frame);
+                    dirty = true;
                 }
                 Err(_) => return 1,
             }
@@ -166,7 +188,9 @@ pub extern "C" fn main() -> i32 {
                 schedule_next_preview(next_preview, now, system::monotonic_milliseconds(), status);
         }
 
-        match input::poll_key_event(1) {
+        let input_wait =
+            input_wait_milliseconds(next_preview, system::monotonic_milliseconds(), status);
+        match input::poll_key_event(input_wait) {
             Ok(Some(event))
                 if event.pressed && has_frame && matches!(event.code, KEY_ENTER | KEY_SPACE) =>
             {
@@ -212,7 +236,31 @@ mod tests {
         );
         assert_eq!(
             schedule_next_preview(100, 100, 180, Status::Denied),
-            180 + RETRY_INTERVAL_MS
+            180 + DENIED_RETRY_INTERVAL_MS
+        );
+    }
+
+    #[test]
+    fn background_unavailability_uses_a_bounded_retry_rate() {
+        assert_eq!(unavailable_status(false), Status::Starting);
+        assert_eq!(unavailable_status(true), Status::Unavailable);
+        assert_eq!(
+            schedule_next_preview(100, 100, 180, unavailable_status(true)),
+            180 + UNAVAILABLE_RETRY_INTERVAL_MS
+        );
+    }
+
+    #[test]
+    fn input_wait_blocks_until_the_next_frame_without_hurting_responsiveness() {
+        assert_eq!(input_wait_milliseconds(200, 200, Status::Live), 0);
+        assert_eq!(input_wait_milliseconds(220, 200, Status::Live), 18);
+        assert_eq!(
+            input_wait_milliseconds(2_000, 200, Status::Starting),
+            MAX_INPUT_WAIT_MS as u32
+        );
+        assert_eq!(
+            input_wait_milliseconds(2_000, 200, Status::Unavailable),
+            MAX_INACTIVE_INPUT_WAIT_MS as u32
         );
     }
 
