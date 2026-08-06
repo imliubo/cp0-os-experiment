@@ -53,6 +53,15 @@ grep -q 'xkb_keymap_mod_get_index(keymap, XKB_MOD_NAME_SHIFT)' "$shell_client"
 grep -q 'mods_depressed & shell->shift_modifier_mask' "$shell_client"
 grep -q 'case KEY_SPACE:' "$shell_client"
 grep -q '\*action = CP0_UI_STOP_SELECTED;' "$shell_client"
+periodic_catalog=$(sed -n \
+    '/else if (shell->catalog_ticks >= 5)/,/shell->catalog_ticks = 0;/p' \
+    "$shell_client")
+grep -q 'shell->ui.screen == CP0_UI_APPS' <<<"$periodic_catalog"
+grep -q 'poll_app_catalog(shell);' <<<"$periodic_catalog"
+if grep -q 'poll_task_catalog(shell);' <<<"$periodic_catalog"; then
+    echo 'error: periodic catalog refresh polls Tasks outside the Tasks screen' >&2
+    exit 1
+fi
 if grep -q 'mods_depressed | mods_latched | mods_locked' "$shell_client"; then
     echo "error: text input treats latched or locked Shift as physically held" >&2
     exit 1

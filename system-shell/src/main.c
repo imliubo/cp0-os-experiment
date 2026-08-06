@@ -3447,8 +3447,8 @@ static int shell_dispatch(struct shell *shell)
                     poll_task_catalog(shell);
                     shell->catalog_ticks = 0;
                 } else if (shell->catalog_ticks >= 5) {
-                    poll_app_catalog(shell);
-                    poll_task_catalog(shell);
+                    if (shell->ui.screen == CP0_UI_APPS)
+                        poll_app_catalog(shell);
                     poll_store_catalog(shell);
                     show_store_completion_notification(shell);
                     if (shell->ui.screen == CP0_UI_SETTINGS) {
