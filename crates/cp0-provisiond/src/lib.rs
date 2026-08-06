@@ -1071,6 +1071,9 @@ impl<B: PlatformBackend> ProvisioningService<B> {
             Ok(ProvisioningOutcome::WifiList { networks }) => {
                 ProvisioningResponse::wifi_list(request_id, networks)
             }
+            Ok(ProvisioningOutcome::Authenticated {}) => {
+                ProvisioningResponse::authenticated(request_id)
+            }
             Ok(ProvisioningOutcome::Error { .. }) => unreachable!(),
             Err(error) => {
                 let phase = self.status().ok().map(|state| state.phase);
@@ -1096,6 +1099,9 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                 current_password,
                 new_password,
             } => return self.change_password(current_password, new_password),
+            ProvisioningCommand::VerifyOwnerPassword { current_password } => {
+                return self.verify_owner_password(current_password);
+            }
             command => command,
         };
         let mut state = self.status()?;
@@ -1210,6 +1216,14 @@ impl<B: PlatformBackend> ProvisioningService<B> {
                 new_password.zeroize();
                 Err(ProvisioningError::InvalidState(
                     "password changes require completed setup",
+                ))
+            }
+            ProvisioningCommand::VerifyOwnerPassword {
+                mut current_password,
+            } => {
+                current_password.zeroize();
+                Err(ProvisioningError::InvalidState(
+                    "password verification requires completed setup",
                 ))
             }
             ProvisioningCommand::ListWifi {} => Ok(ProvisioningOutcome::WifiList {
@@ -1404,6 +1418,34 @@ impl<B: PlatformBackend> ProvisioningService<B> {
         Ok(ProvisioningOutcome::State { state })
     }
 
+    fn verify_owner_password(
+        &mut self,
+        current_password: String,
+    ) -> Result<ProvisioningOutcome, ProvisioningError> {
+        let current_password = Zeroizing::new(current_password);
+        let state = self.status()?;
+        if state.phase == ProvisioningPhase::RepairRequired {
+            return Err(ProvisioningError::InvalidState("repair is required"));
+        }
+        if state.phase != ProvisioningPhase::Complete {
+            return Err(ProvisioningError::InvalidState(
+                "password verification requires completed setup",
+            ));
+        }
+        let username = state
+            .username
+            .as_deref()
+            .ok_or(ProvisioningError::InvalidState("owner username is missing"))?;
+        let expected_hash = Zeroizing::new(self.identity_store.password_hash(username)?);
+        if !self
+            .backend
+            .verify_password(&current_password, &expected_hash)?
+        {
+            return Err(ProvisioningError::Authentication);
+        }
+        Ok(ProvisioningOutcome::Authenticated {})
+    }
+
     pub fn apply_boot_configuration(&mut self) -> Result<(), ProvisioningError> {
         let state = self.status()?;
         if state.phase != ProvisioningPhase::Complete {
@@ -1421,6 +1463,7 @@ fn command_name(command: &ProvisioningCommand) -> &'static str {
         ProvisioningCommand::SetOwner { .. } => "set-owner",
         ProvisioningCommand::SetPassword { .. } => "set-password",
         ProvisioningCommand::ChangePassword { .. } => "change-password",
+        ProvisioningCommand::VerifyOwnerPassword { .. } => "verify-owner-password",
         ProvisioningCommand::ListWifi {} => "list-wifi",
         ProvisioningCommand::ConnectWifi { .. } => "connect-wifi",
         ProvisioningCommand::UseEthernet {} => "use-ethernet",
@@ -2034,6 +2077,48 @@ mod tests {
         let persisted = fs::read_to_string(&paths.state_file).unwrap();
         assert!(!persisted.contains("correct horse"));
         assert!(!persisted.contains("replacement password"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn verifies_completed_owner_without_changing_identity_state() {
+        let (root, paths) = fixture();
+        let mut service = ProvisioningService::new(&paths, MockBackend::default());
+        advance_to_review(&mut service, false);
+        state(service.dispatch(request(6, ProvisioningCommand::Commit {})));
+        let state_before = fs::read(&paths.state_file).unwrap();
+        let shadow_before = fs::read(paths.extrausers_dir.join("shadow")).unwrap();
+
+        let rejected = service.dispatch(request(
+            7,
+            ProvisioningCommand::VerifyOwnerPassword {
+                current_password: "wrong password".into(),
+            },
+        ));
+        assert!(matches!(
+            rejected.outcome,
+            ProvisioningOutcome::Error {
+                code: ProvisioningErrorCode::Authentication,
+                ..
+            }
+        ));
+        let accepted = service.dispatch(request(
+            8,
+            ProvisioningCommand::VerifyOwnerPassword {
+                current_password: "correct horse".into(),
+            },
+        ));
+        assert!(matches!(
+            accepted.outcome,
+            ProvisioningOutcome::Authenticated {}
+        ));
+        assert_eq!(service.backend.verify_calls, 2);
+        assert_eq!(service.backend.hash_calls, 1);
+        assert_eq!(fs::read(&paths.state_file).unwrap(), state_before);
+        assert_eq!(
+            fs::read(paths.extrausers_dir.join("shadow")).unwrap(),
+            shadow_before
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

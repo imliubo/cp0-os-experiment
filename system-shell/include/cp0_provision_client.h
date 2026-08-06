@@ -98,6 +98,9 @@ int cp0_provision_change_password(
     char *current_password, char *new_password,
     struct cp0_provision_status *status,
     char error[CP0_PROVISION_ERROR_MAX + 1]);
+int cp0_provision_verify_owner_password(
+    char *current_password,
+    char error[CP0_PROVISION_ERROR_MAX + 1]);
 int cp0_provision_list_wifi(struct cp0_provision_wifi_list *list,
                             char error[CP0_PROVISION_ERROR_MAX + 1]);
 int cp0_provision_connect_wifi(

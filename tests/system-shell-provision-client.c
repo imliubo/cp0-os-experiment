@@ -13,6 +13,9 @@ int cp0_provision_test_parse_wifi(
     const char *response, size_t length, uint64_t request_id,
     struct cp0_provision_wifi_list *list,
     char error[CP0_PROVISION_ERROR_MAX + 1]);
+int cp0_provision_test_parse_authenticated(
+    const char *response, size_t length, uint64_t request_id,
+    char error[CP0_PROVISION_ERROR_MAX + 1]);
 bool cp0_provision_test_escape(const char *input, char *output,
                                size_t capacity);
 
@@ -48,6 +51,9 @@ int main(void)
         "{\"protocol_version\":1,\"request_id\":12,\"outcome\":{"
         "\"status\":\"error\",\"code\":\"authentication\","
         "\"message\":\"current password is incorrect\"}}";
+    static const char authenticated_response[] =
+        "{\"protocol_version\":1,\"request_id\":13,\"outcome\":{"
+        "\"status\":\"authenticated\"}}";
     static const char invalid_signal[] =
         "{\"protocol_version\":1,\"request_id\":10,\"outcome\":{"
         "\"status\":\"wifi-list\",\"networks\":[{\"ssid\":\"Lab\","
@@ -93,6 +99,19 @@ int main(void)
                authentication_response, strlen(authentication_response), 12,
                &status, error) == CP0_PROVISION_AUTHENTICATION);
     assert(strcmp(error, "current password is incorrect") == 0);
+    assert(cp0_provision_test_parse_authenticated(
+               authenticated_response, strlen(authenticated_response), 13,
+               error) == CP0_PROVISION_OK);
+    assert(cp0_provision_test_parse_authenticated(
+               authenticated_response, strlen(authenticated_response), 12,
+               error) == CP0_PROVISION_FAILED);
+    assert(cp0_provision_test_parse_authenticated(
+               authentication_response, strlen(authentication_response), 12,
+               error) == CP0_PROVISION_AUTHENTICATION);
+    assert(strcmp(error, "current password is incorrect") == 0);
+    assert(cp0_provision_test_parse_authenticated(
+               state_response, strlen(state_response), 7, error) ==
+           CP0_PROVISION_FAILED);
     assert(cp0_provision_test_parse_wifi(
                invalid_signal, strlen(invalid_signal), 10, &wifi, error) ==
            CP0_PROVISION_FAILED);

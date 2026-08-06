@@ -15,7 +15,7 @@ case "$staging" in
         ;;
 esac
 
-for file in cp0-appd cp0-audiod cp0-camerad cp0-connectivityd cp0-displayd cp0-documentd cp0-gpiod cp0-networkd cp0-radiod cp0-storaged cp0-stored cp0ctl cardputerzero-app-runtime app.json hello-card.wasm camera-app.json camera.wasm \
+for file in cp0-appd cp0-audiod cp0-camerad cp0-connectivityd cp0-displayd cp0-documentd cp0-gpiod cp0-networkd cp0-radiod cp0-storaged cp0-stored cp0-usb-mediad cp0ctl cardputerzero-app-runtime app.json hello-card.wasm camera-app.json camera.wasm \
     cardputerzero-appd.service cardputerzero-documentd.service \
     cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-appd.conf \
@@ -31,6 +31,8 @@ for file in cp0-appd cp0-audiod cp0-camerad cp0-connectivityd cp0-displayd cp0-d
     cardputerzero-radiod.service cardputerzero-radiod.socket lora.conf \
     cardputerzero-storaged.service cardputerzero-storaged.socket \
     cardputerzero-stored.service cardputerzero-stored.socket \
+    cardputerzero-usb-mediad.service cardputerzero-usb-mediad.socket \
+    cardputerzero-usb-media.conf cardputerzero-usb-media.modules \
     cardputerzero-storage.conf cardputerzero-store.conf store.conf \
     device-policy.json \
     cardputerzero-trust.conf \
@@ -53,7 +55,7 @@ systemctl stop cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-connectivityd.socket \
     cardputerzero-displayd.socket cardputerzero-gpiod.socket \
     cardputerzero-radiod.socket cardputerzero-storaged.socket \
-    cardputerzero-stored.socket \
+    cardputerzero-stored.socket cardputerzero-usb-mediad.socket \
     2>/dev/null || :
 systemctl stop cardputerzero-networkd.service 2>/dev/null || :
 systemctl stop cardputerzero-documentd.service 2>/dev/null || :
@@ -65,6 +67,7 @@ systemctl stop cardputerzero-gpiod.service 2>/dev/null || :
 systemctl stop cardputerzero-radiod.service 2>/dev/null || :
 systemctl stop cardputerzero-storaged.service 2>/dev/null || :
 systemctl stop cardputerzero-stored.service 2>/dev/null || :
+systemctl stop cardputerzero-usb-mediad.service 2>/dev/null || :
 if ! getent group cp0-control >/dev/null 2>&1; then
     groupadd --system cp0-control
 fi
@@ -81,6 +84,10 @@ if ! getent group cp0-connectivity-control >/dev/null 2>&1; then
     groupadd --system cp0-connectivity-control
 fi
 usermod -a -G cp0-connectivity-control cp0-shell
+if ! getent group cp0-usb-media-control >/dev/null 2>&1; then
+    groupadd --system cp0-usb-media-control
+fi
+usermod -a -G cp0-usb-media-control cp0-shell
 if ! getent group cp0-display >/dev/null 2>&1; then
     groupadd --system cp0-display
 fi
@@ -193,6 +200,8 @@ install -o root -g root -m 0755 "$staging/cp0-storaged" \
     /usr/libexec/cardputerzero/cp0-storaged
 install -o root -g root -m 0755 "$staging/cp0-stored" \
     /usr/libexec/cardputerzero/cp0-stored
+install -o root -g root -m 0755 "$staging/cp0-usb-mediad" \
+    /usr/libexec/cardputerzero/cp0-usb-mediad
 install -o root -g root -m 0755 "$staging/cp0ctl" /usr/bin/cp0ctl
 install -o root -g root -m 0755 "$staging/cardputerzero-app-runtime" \
     /usr/libexec/cardputerzero/app-runtime
@@ -250,12 +259,21 @@ install -o root -g root -m 0644 "$staging/cardputerzero-stored.service" \
     /etc/systemd/system/cardputerzero-stored.service
 install -o root -g root -m 0644 "$staging/cardputerzero-stored.socket" \
     /etc/systemd/system/cardputerzero-stored.socket
+install -o root -g root -m 0644 "$staging/cardputerzero-usb-mediad.service" \
+    /etc/systemd/system/cardputerzero-usb-mediad.service
+install -o root -g root -m 0644 "$staging/cardputerzero-usb-mediad.socket" \
+    /etc/systemd/system/cardputerzero-usb-mediad.socket
 install -o root -g root -m 0644 "$staging/cardputerzero-storage.conf" \
     /etc/tmpfiles.d/cardputerzero-storage.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-storage.conf
 install -o root -g root -m 0644 "$staging/cardputerzero-store.conf" \
     /etc/tmpfiles.d/cardputerzero-store.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-store.conf
+install -o root -g root -m 0644 "$staging/cardputerzero-usb-media.conf" \
+    /etc/tmpfiles.d/cardputerzero-usb-media.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-usb-media.conf
+install -o root -g root -m 0644 "$staging/cardputerzero-usb-media.modules" \
+    /etc/modules-load.d/cardputerzero-usb-media.conf
 install -o root -g root -m 0644 "$staging/cardputerzero-trust.conf" \
     /etc/tmpfiles.d/cardputerzero-trust.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/cardputerzero-trust.conf
@@ -296,6 +314,7 @@ install -o root -g root -m 0755 "$staging/device-store-acceptance.sh" \
 install -o root -g root -m 0755 "$staging/device-smoke.sh" \
     /usr/libexec/cardputerzero/device-smoke.sh
 systemctl daemon-reload
+modprobe libcomposite
 systemctl enable --now cardputerzero-appd.socket cardputerzero-broker.socket
 systemctl enable --now cardputerzero-networkd.socket
 systemctl enable --now cardputerzero-documentd.socket
@@ -307,6 +326,7 @@ systemctl enable --now cardputerzero-gpiod.socket
 systemctl enable --now cardputerzero-radiod.socket
 systemctl enable --now cardputerzero-storaged.socket
 systemctl enable --now cardputerzero-stored.socket
+systemctl enable --now cardputerzero-usb-mediad.socket
 systemctl start cardputerzero-appd.service
 systemctl start cardputerzero-system-shell.service
 
@@ -323,6 +343,7 @@ systemctl is-active --quiet cardputerzero-gpiod.socket
 systemctl is-active --quiet cardputerzero-radiod.socket
 systemctl is-active --quiet cardputerzero-storaged.socket
 systemctl is-active --quiet cardputerzero-stored.socket
+systemctl is-active --quiet cardputerzero-usb-mediad.socket
 systemctl is-active --quiet cardputerzero-compositor.service
 systemctl is-active --quiet cardputerzero-system-shell.service
 sha256sum \
@@ -336,6 +357,7 @@ sha256sum \
     /usr/libexec/cardputerzero/cp0-radiod \
     /usr/libexec/cardputerzero/cp0-storaged \
     /usr/libexec/cardputerzero/cp0-stored \
+    /usr/libexec/cardputerzero/cp0-usb-mediad \
     /usr/libexec/cardputerzero/cp0-networkd \
     /usr/bin/cp0ctl \
     /usr/libexec/cardputerzero/app-runtime \

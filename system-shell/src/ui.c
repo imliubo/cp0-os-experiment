@@ -372,6 +372,9 @@ static const char *screen_title(const struct cp0_ui *ui)
     case CP0_UI_SETTINGS:
         if (settings_wifi_active(ui))
             return "WI-FI NETWORKS";
+        if (ui->password_secrets != NULL &&
+            ui->password_secrets->usb_media.active)
+            return "USB MEDIA TRANSFER";
         if (ui->password_change_active)
             return "CHANGE PASSWORD";
         if (ui->developer_hosts_view)
@@ -459,8 +462,8 @@ static void draw_setup_choice(struct canvas *canvas, int y, const char *text,
               selected ? COLOR_TEXT : COLOR_MUTED);
 }
 
-static void draw_setup_input(struct canvas *canvas, const char *value,
-                             bool masked)
+static void draw_setup_input_at(struct canvas *canvas, const char *value,
+                                bool masked, int y, int height)
 {
     char visible[45];
     size_t length = strlen(value);
@@ -473,10 +476,19 @@ static void draw_setup_input(struct canvas *canvas, const char *value,
     for (size_t index = 0; index < shown; index++)
         visible[index] = masked ? '*' : value[first + index];
     visible[shown] = '\0';
-    fill_rect(canvas, 12, 82, 296, 34, COLOR_SURFACE);
-    stroke_rect(canvas, 12, 82, 296, 34, 2, COLOR_GREEN);
-    draw_text_exact(canvas, 22, 95, visible, 1, COLOR_TEXT);
-    fill_rect(canvas, 22 + (int)shown * 6, 104, 5, 2, COLOR_GREEN);
+    int text_y = y + (height - 7) / 2;
+    int cursor_y = text_y + 9;
+
+    fill_rect(canvas, 12, y, 296, height, COLOR_SURFACE);
+    stroke_rect(canvas, 12, y, 296, height, 2, COLOR_GREEN);
+    draw_text_exact(canvas, 22, text_y, visible, 1, COLOR_TEXT);
+    fill_rect(canvas, 22 + (int)shown * 6, cursor_y, 5, 2, COLOR_GREEN);
+}
+
+static void draw_setup_input(struct canvas *canvas, const char *value,
+                             bool masked)
+{
+    draw_setup_input_at(canvas, value, masked, 82, 34);
 }
 
 static void draw_setup(struct canvas *canvas, const struct cp0_ui *ui)
@@ -2260,7 +2272,7 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
     case 5: {
         static const char *labels[] = {
             "INSTALLED APPS", "PERMISSIONS", "STORAGE",
-            "DOCUMENT ACCESS", "AUTO APP UPDATES", "APP METRICS",
+            "USB MEDIA TRANSFER", "AUTO APP UPDATES", "APP METRICS",
         };
         *label = labels[item];
         if (item == 0)
@@ -2270,8 +2282,17 @@ static void settings_item(const struct cp0_ui *ui, unsigned int category,
         else if (item == 2)
             snprintf(value, 24, "DETAILS");
         else if (item == 3) {
-            snprintf(value, 24, "NOT SUPPORTED");
-            *available = false;
+            static const char *states[] = {
+                "OFF", "PREPARING", "CONNECTED", "IMPORTING", "COMPLETE", "ERROR",
+            };
+            if (ui->password_secrets == NULL ||
+                !ui->password_secrets->usb_media.available)
+                snprintf(value, 24, "OPEN");
+            else
+                snprintf(value, 24, "%s",
+                         states[ui->password_secrets->usb_media.state <= CP0_UI_USB_MEDIA_ERROR
+                                    ? ui->password_secrets->usb_media.state
+                                    : CP0_UI_USB_MEDIA_ERROR]);
         } else if (item == 4 && !ui->auto_update_available) {
             snprintf(value, 24, "UNKNOWN");
             *available = false;
@@ -2608,6 +2629,61 @@ static void draw_password_change(struct canvas *canvas,
     draw_setup_footer(canvas, "RIGHT SHOW/HIDE", "ENTER NEXT");
 }
 
+static void draw_usb_media(struct canvas *canvas, const struct cp0_ui *ui)
+{
+    char line[48];
+
+    if (ui->password_secrets->usb_media.state == CP0_UI_USB_MEDIA_PREPARING ||
+        ui->password_secrets->usb_media.state == CP0_UI_USB_MEDIA_IMPORTING) {
+        draw_text(canvas, 12, 57,
+                  ui->password_secrets->usb_media.state == CP0_UI_USB_MEDIA_PREPARING
+                      ? "PREPARING EXCHANGE DRIVE"
+                      : "IMPORTING MUSIC",
+                  2, COLOR_GREEN);
+        draw_text(canvas, 12, 91, "DO NOT DISCONNECT OR POWER OFF", 1,
+                  COLOR_YELLOW);
+        draw_setup_footer(canvas, "PLEASE WAIT", NULL);
+        return;
+    }
+    if (ui->password_secrets->usb_media.state == CP0_UI_USB_MEDIA_CONNECTED) {
+        draw_text(canvas, 12, 37, "USB DRIVE CONNECTED", 2, COLOR_GREEN);
+        snprintf(line, sizeof(line), "%u PHOTO COPIES READY",
+                 ui->password_secrets->usb_media.exported_photos);
+        draw_text(canvas, 12, 68, line, 1, COLOR_TEXT);
+        draw_text(canvas, 12, 89, "EJECT CP0-MEDIA ON COMPUTER", 1,
+                  COLOR_YELLOW);
+        draw_text(canvas, 12, 108, "THEN PRESS ENTER TO IMPORT", 1,
+                  COLOR_MUTED);
+        draw_setup_footer(canvas, "TRANSFER ACTIVE", "ENTER STOP");
+        return;
+    }
+
+    draw_text(canvas, 12, 34, "OWNER AUTHORIZATION", 1, COLOR_MUTED);
+    draw_text(canvas, 12, 52, "CURRENT PASSWORD", 1, COLOR_TEXT);
+    draw_setup_input_at(canvas, ui->password_secrets->current,
+                        !ui->password_secrets->usb_media.show_password, 68,
+                        28);
+    snprintf(line, sizeof(line), "%s  %u CHARS",
+             ui->password_secrets->usb_media.show_password ? "VISIBLE" : "HIDDEN",
+             (unsigned int)strlen(ui->password_secrets->current));
+    draw_text(canvas, 12, 103, line, 1, COLOR_MUTED);
+    if (ui->password_secrets->usb_media.state == CP0_UI_USB_MEDIA_COMPLETE) {
+        snprintf(line, sizeof(line), "%u MUSIC IMPORTED / %u REJECTED",
+                 ui->password_secrets->usb_media.imported_music,
+                 ui->password_secrets->usb_media.rejected_music);
+        draw_text_slice(canvas, 12, 123, line, 0, 46,
+                        ui->password_secrets->usb_media.rejected_music > 0 ? COLOR_YELLOW
+                                                        : COLOR_GREEN);
+    } else if (ui->password_secrets->error[0] != '\0') {
+        draw_text_slice(canvas, 12, 123, ui->password_secrets->error, 0, 46,
+                        COLOR_RED);
+    } else {
+        draw_text(canvas, 12, 123, "ISOLATED 512 MIB FAT32 EXCHANGE", 1,
+                  COLOR_MUTED);
+    }
+    draw_setup_footer(canvas, "RIGHT SHOW/HIDE", "ENTER CONNECT");
+}
+
 static void draw_store_install_prompt(struct canvas *canvas,
                                       const struct cp0_ui *ui)
 {
@@ -2690,6 +2766,9 @@ static void draw_page(struct canvas *canvas, const struct cp0_ui *ui)
     case CP0_UI_SETTINGS:
         if (settings_wifi_active(ui))
             draw_settings_wifi(canvas, ui);
+        else if (ui->password_secrets != NULL &&
+                 ui->password_secrets->usb_media.active)
+            draw_usb_media(canvas, ui);
         else if (ui->password_change_active)
             draw_password_change(canvas, ui);
         else if (ui->developer_hosts_view)
@@ -3463,6 +3542,65 @@ void cp0_ui_password_change_result(struct cp0_ui *ui, bool success,
                            : (error != NULL && error[0] != '\0'
                                   ? error
                                   : "Password update failed"));
+}
+
+bool cp0_ui_usb_media_accepts_text(const struct cp0_ui *ui)
+{
+    return ui != NULL && ui->password_secrets != NULL &&
+           ui->password_secrets->usb_media.active &&
+           ui->password_secrets->usb_media.state != CP0_UI_USB_MEDIA_CONNECTED &&
+           ui->password_secrets->usb_media.state != CP0_UI_USB_MEDIA_PREPARING &&
+           ui->password_secrets->usb_media.state != CP0_UI_USB_MEDIA_IMPORTING;
+}
+
+bool cp0_ui_usb_media_input_ascii(struct cp0_ui *ui, char character)
+{
+    size_t length;
+    if (!cp0_ui_usb_media_accepts_text(ui) || character < ' ' ||
+        character > '~')
+        return false;
+    length = strlen(ui->password_secrets->current);
+    if (length >= CP0_UI_PASSWORD_MAX)
+        return false;
+    ui->password_secrets->current[length] = character;
+    ui->password_secrets->current[length + 1U] = '\0';
+    ui->password_secrets->error[0] = '\0';
+    return true;
+}
+
+bool cp0_ui_usb_media_backspace(struct cp0_ui *ui)
+{
+    size_t length;
+    if (!cp0_ui_usb_media_accepts_text(ui))
+        return false;
+    length = strlen(ui->password_secrets->current);
+    if (length == 0)
+        return false;
+    ui->password_secrets->current[length - 1U] = '\0';
+    ui->password_secrets->error[0] = '\0';
+    return true;
+}
+
+void cp0_ui_set_usb_media_status(
+    struct cp0_ui *ui, bool available, enum cp0_ui_usb_media_state state,
+    uint32_t exported_photos, uint32_t imported_music,
+    uint32_t rejected_music, uint64_t capacity_bytes, const char *error)
+{
+    if (ui == NULL || ui->password_secrets == NULL)
+        return;
+    ui->password_secrets->usb_media.available = available;
+    ui->password_secrets->usb_media.state =
+        available ? state : CP0_UI_USB_MEDIA_ERROR;
+    ui->password_secrets->usb_media.exported_photos = exported_photos;
+    ui->password_secrets->usb_media.imported_music = imported_music;
+    ui->password_secrets->usb_media.rejected_music = rejected_music;
+    (void)capacity_bytes;
+    copy_optional_text(ui->password_secrets->error,
+                       sizeof(ui->password_secrets->error),
+                       error != NULL ? error : "");
+    clear_sensitive(ui->password_secrets->current,
+                    sizeof(ui->password_secrets->current));
+    ui->password_secrets->usb_media.show_password = false;
 }
 
 const char *cp0_ui_setup_locale(const struct cp0_ui *ui)
@@ -5637,6 +5775,52 @@ static enum cp0_ui_event handle_password_change_action(
     return CP0_UI_EVENT_NONE;
 }
 
+static enum cp0_ui_event handle_usb_media_action(
+    struct cp0_ui *ui, enum cp0_ui_action action)
+{
+    if (action == CP0_UI_RIGHT && cp0_ui_usb_media_accepts_text(ui)) {
+        ui->password_secrets->usb_media.show_password =
+            !ui->password_secrets->usb_media.show_password;
+        return CP0_UI_EVENT_NONE;
+    }
+    if (action == CP0_UI_BACK || action == CP0_UI_GO_HOME ||
+        action == CP0_UI_SHOW_TASKS) {
+        if (ui->password_secrets->usb_media.state == CP0_UI_USB_MEDIA_CONNECTED ||
+            ui->password_secrets->usb_media.state == CP0_UI_USB_MEDIA_PREPARING ||
+            ui->password_secrets->usb_media.state == CP0_UI_USB_MEDIA_IMPORTING) {
+            copy_optional_text(ui->password_secrets->error,
+                               sizeof(ui->password_secrets->error),
+                               "Stop transfer before leaving");
+            return CP0_UI_EVENT_NONE;
+        }
+        clear_sensitive(ui->password_secrets->current,
+                        sizeof(ui->password_secrets->current));
+        ui->password_secrets->usb_media.show_password = false;
+        ui->password_secrets->usb_media.active = false;
+        return CP0_UI_EVENT_NONE;
+    }
+    if (action != CP0_UI_ACCEPT)
+        return CP0_UI_EVENT_NONE;
+    if (ui->password_secrets->usb_media.state == CP0_UI_USB_MEDIA_CONNECTED) {
+        ui->password_secrets->usb_media.state = CP0_UI_USB_MEDIA_IMPORTING;
+        ui->password_secrets->error[0] = '\0';
+        return CP0_UI_EVENT_USB_MEDIA_STOP;
+    }
+    if (ui->password_secrets->usb_media.state == CP0_UI_USB_MEDIA_PREPARING ||
+        ui->password_secrets->usb_media.state == CP0_UI_USB_MEDIA_IMPORTING)
+        return CP0_UI_EVENT_NONE;
+    if (ui->password_secrets->current[0] == '\0') {
+        copy_optional_text(ui->password_secrets->error,
+                           sizeof(ui->password_secrets->error),
+                           "Enter the current password");
+        return CP0_UI_EVENT_NONE;
+    }
+    ui->password_secrets->usb_media.state = CP0_UI_USB_MEDIA_PREPARING;
+    ui->password_secrets->error[0] = '\0';
+    ui->password_secrets->usb_media.show_password = false;
+    return CP0_UI_EVENT_USB_MEDIA_START;
+}
+
 enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                                         enum cp0_ui_action action)
 {
@@ -5648,6 +5832,9 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
         return handle_settings_wifi_action(ui, action);
     if (ui->password_change_active)
         return handle_password_change_action(ui, action);
+    if (ui->password_secrets != NULL &&
+        ui->password_secrets->usb_media.active)
+        return handle_usb_media_action(ui, action);
     if (action == CP0_UI_BRIGHTNESS_DOWN || action == CP0_UI_BRIGHTNESS_UP) {
         if (ui->local_simulation && action == CP0_UI_BRIGHTNESS_DOWN)
             ui->brightness_percent = ui->brightness_percent >= 10
@@ -6489,6 +6676,15 @@ enum cp0_ui_event cp0_ui_handle_action(struct cp0_ui *ui,
                 enter_screen(ui, CP0_UI_DEVICE);
                 ui->device_page = 1;
                 ui->settings_detail = false;
+            } else if (ui->settings_selected == 5 && item == 3 &&
+                       action == CP0_UI_ACCEPT &&
+                       ui->password_secrets != NULL) {
+                clear_sensitive(ui->password_secrets->current,
+                                sizeof(ui->password_secrets->current));
+                ui->password_secrets->usb_media.active = true;
+                ui->password_secrets->usb_media.show_password = false;
+                ui->password_secrets->error[0] = '\0';
+                return CP0_UI_EVENT_USB_MEDIA_REFRESH;
             } else if (ui->settings_selected == 5 && item == 4 &&
                        action == CP0_UI_ACCEPT &&
                        ui->auto_update_available &&

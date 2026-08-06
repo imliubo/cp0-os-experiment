@@ -131,6 +131,26 @@ else
     warn device-spidev0.1 "/dev/spidev0.1 missing"
 fi
 
+configfs_type=$(findmnt -n -o FSTYPE /sys/kernel/config 2>/dev/null || true)
+if [[ "$configfs_type" == configfs && -d /sys/kernel/config/usb_gadget ]]; then
+    pass usb-configfs "configfs mounted with USB gadget support"
+else
+    fail usb-configfs "mount=${configfs_type:-missing} usb_gadget unavailable"
+fi
+
+udc=$(find /sys/class/udc -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || true)
+if [[ -n "$udc" ]]; then
+    pass usb-udc "$(basename "$udc")"
+else
+    fail usb-udc "DWC2 peripheral controller missing"
+fi
+
+if [[ -c /dev/loop-control ]]; then
+    pass loop-control "/dev/loop-control available"
+else
+    fail loop-control "/dev/loop-control missing"
+fi
+
 camera_sensor=$(find /sys/bus/i2c/drivers/imx219 -mindepth 1 -maxdepth 1 \
     -type l -name '*-0010' -print -quit 2>/dev/null || true)
 if [[ -n "$camera_sensor" ]]; then

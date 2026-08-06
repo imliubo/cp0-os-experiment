@@ -116,6 +116,9 @@ Phase 5 已实现可信安装、审核发布链、设备 Store daemon 与 320x17
 - Phase 6H verified-update 基础：严格的 OS 发布元数据策略、dm-verity 产物离线
   验证、双副本启动状态、三次待确认启动和 100 轮断电回滚模型；当前镜像仍未启用
   updater 或可信启动。
+- Owner USB Media Transfer：密码确认后只暴露固定 512 MiB FAT32 交换镜像，以
+  `PHOTOS` 导出相机 JPEG/截图 BMP 副本，并从 `MUSIC/IMPORT` 校验、原子导入 WAV；
+  协议不能选择路径或块设备，rootfs、`cp0-data` 和活动数据分区绝不作为 MSC LUN。
 
 ## 快速验证
 
@@ -142,6 +145,8 @@ make verify-image
 详细设计见 [系统架构](docs/ARCHITECTURE.md) 和 [Roadmap](docs/ROADMAP.md)。
 App 开发与分发见 [Developer Guide](docs/DEVELOPER-GUIDE.md) 和
 [App DevKit distribution](docs/APP-DEVKIT-DISTRIBUTION.md)。
+隔离交换盘的 Owner 操作、安全边界与真机验收要求见
+[Owner USB Media Transfer v1](docs/OWNER-MEDIA-TRANSFER-V1.md)。
 
 Phase 1 构建和真机验证方法见 [BSP 与镜像说明](docs/PHASE1-BSP.md)，Phase 2
 compositor 基线见 [Compositor bring-up](docs/PHASE2-COMPOSITOR.md)。

@@ -153,6 +153,9 @@ enum cp0_ui_event {
     CP0_UI_EVENT_TIMEOUT_NEXT,
     CP0_UI_EVENT_KEY_SOUNDS_TOGGLE,
     CP0_UI_EVENT_CHANGE_PASSWORD,
+    CP0_UI_EVENT_USB_MEDIA_REFRESH,
+    CP0_UI_EVENT_USB_MEDIA_START,
+    CP0_UI_EVENT_USB_MEDIA_STOP,
     CP0_UI_EVENT_SETTINGS_LIST_WIFI,
     CP0_UI_EVENT_SETTINGS_CONNECT_WIFI,
     CP0_UI_EVENT_SETTINGS_SET_SSH,
@@ -198,11 +201,31 @@ enum cp0_ui_password_page {
     CP0_UI_PASSWORD_COMPLETE,
 };
 
+enum cp0_ui_usb_media_state {
+    CP0_UI_USB_MEDIA_OFF,
+    CP0_UI_USB_MEDIA_PREPARING,
+    CP0_UI_USB_MEDIA_CONNECTED,
+    CP0_UI_USB_MEDIA_IMPORTING,
+    CP0_UI_USB_MEDIA_COMPLETE,
+    CP0_UI_USB_MEDIA_ERROR,
+};
+
+struct cp0_ui_usb_media {
+    bool active;
+    bool show_password;
+    bool available;
+    enum cp0_ui_usb_media_state state;
+    uint32_t exported_photos;
+    uint32_t imported_music;
+    uint32_t rejected_music;
+};
+
 struct cp0_ui_password_secrets {
     char current[CP0_UI_PASSWORD_MAX + 1];
     char new_password[CP0_UI_PASSWORD_MAX + 1];
     char confirm[CP0_UI_PASSWORD_MAX + 1];
     char error[CP0_UI_PASSWORD_ERROR_MAX + 1];
+    struct cp0_ui_usb_media usb_media;
 };
 
 struct cp0_ui_setup_wifi {
@@ -811,6 +834,13 @@ bool cp0_ui_password_backspace(struct cp0_ui *ui);
 void cp0_ui_password_change_result(struct cp0_ui *ui, bool success,
                                    bool authentication_failed,
                                    const char *error);
+bool cp0_ui_usb_media_accepts_text(const struct cp0_ui *ui);
+bool cp0_ui_usb_media_input_ascii(struct cp0_ui *ui, char character);
+bool cp0_ui_usb_media_backspace(struct cp0_ui *ui);
+void cp0_ui_set_usb_media_status(
+    struct cp0_ui *ui, bool available, enum cp0_ui_usb_media_state state,
+    uint32_t exported_photos, uint32_t imported_music,
+    uint32_t rejected_music, uint64_t capacity_bytes, const char *error);
 void cp0_ui_settings_wifi_set_networks(
     struct cp0_ui *ui, const struct cp0_ui_setup_wifi *networks,
     size_t network_count);

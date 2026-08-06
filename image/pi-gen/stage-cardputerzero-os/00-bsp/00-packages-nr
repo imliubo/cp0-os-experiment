@@ -3,6 +3,7 @@ apparmor
 avahi-daemon
 bubblewrap
 ca-certificates
+dosfstools
 firmware-brcm80211
 iw
 jq

@@ -45,6 +45,7 @@ required=(
     "$release/cp0-radiod"
     "$release/cp0-storaged"
     "$release/cp0-stored"
+    "$release/cp0-usb-mediad"
     "$release/cp0ctl"
 )
 for file in "${required[@]}"; do
@@ -70,6 +71,7 @@ install -m 0755 \
     "$release/cp0-radiod" \
     "$release/cp0-storaged" \
     "$release/cp0-stored" \
+    "$release/cp0-usb-mediad" \
     "$release/cp0ctl" \
     "$repo_root/scripts/device-install-compositor.sh" \
     "$repo_root/scripts/device-install-app-platform.sh" \

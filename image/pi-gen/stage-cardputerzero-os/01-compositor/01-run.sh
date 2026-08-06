@@ -30,6 +30,9 @@ install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/cp0_provision_client.h" \
     "${shell_source}/cp0_provision_client.h"
 install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/cp0_usb_media_client.h" \
+    "${shell_source}/cp0_usb_media_client.h"
+install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/cp0_shell_settings.h" \
     "${shell_source}/cp0_shell_settings.h"
 install -D -m 0644 \
@@ -71,6 +74,9 @@ install -D -m 0644 \
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/provision_client.c" \
     "${shell_source}/provision_client.c"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/usb_media_client.c" \
+    "${shell_source}/usb_media_client.c"
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/shell_settings.c" \
     "${shell_source}/shell_settings.c"
@@ -232,6 +238,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     /tmp/cardputerzero-system-shell/audio_settings_client.c \
     /tmp/cardputerzero-system-shell/connectivity_client.c \
     /tmp/cardputerzero-system-shell/provision_client.c \
+    /tmp/cardputerzero-system-shell/usb_media_client.c \
     /tmp/cardputerzero-system-shell/shell_settings.c \
     /tmp/cardputerzero-system-shell/display_client.c \
     /tmp/cardputerzero-system-shell/developer_client.c \

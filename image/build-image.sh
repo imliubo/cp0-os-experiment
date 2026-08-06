@@ -120,6 +120,7 @@ cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$repo_root/system-shell/include/cp0_audio_settings_client.h" \
     "$repo_root/system-shell/include/cp0_connectivity_client.h" \
     "$repo_root/system-shell/include/cp0_provision_client.h" \
+    "$repo_root/system-shell/include/cp0_usb_media_client.h" \
     "$repo_root/system-shell/include/cp0_shell_settings.h" \
     "$repo_root/system-shell/include/cp0_display_client.h" \
     "$repo_root/system-shell/include/cp0_developer_client.h" \
@@ -135,6 +136,7 @@ cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$repo_root/system-shell/src/audio_settings_client.c" \
     "$repo_root/system-shell/src/connectivity_client.c" \
     "$repo_root/system-shell/src/provision_client.c" \
+    "$repo_root/system-shell/src/usb_media_client.c" \
     "$repo_root/system-shell/src/shell_settings.c" \
     "$repo_root/system-shell/src/display_client.c" \
     "$repo_root/system-shell/src/developer_client.c" \
@@ -183,6 +185,7 @@ cp "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-appd" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-recovery" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-storaged" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-stored" \
+    "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0-usb-mediad" \
     "$repo_root/target/aarch64-unknown-linux-gnu/release/cp0ctl" \
     "$repo_root/target/app-runtime-aarch64/cardputerzero-app-runtime" \
     "$platform_payload/"

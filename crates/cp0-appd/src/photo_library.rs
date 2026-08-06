@@ -1,4 +1,6 @@
 use std::fmt;
+use std::fs::File;
+use std::io::Read;
 
 use cp0_camera_protocol::{CAMERA_PHOTO_HEIGHT, CAMERA_PHOTO_WIDTH, MAX_CAMERA_JPEG_BYTES};
 use sha2::{Digest, Sha256};
@@ -36,14 +38,33 @@ pub(crate) struct CameraOriginal {
     pub(crate) width: u16,
     pub(crate) height: u16,
     pub(crate) jpeg_size_bytes: u32,
+    pub(crate) captured_milliseconds: u64,
+    pub(crate) sha256: [u8; 32],
 }
 
 #[derive(Debug)]
-pub(crate) enum PhotoImportError {
+pub enum PhotoImportError {
     InvalidFrame,
     InvalidIndex,
     ResourceExhausted,
     Storage(StorageClientError),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PhotoExportKind {
+    CameraJpeg,
+    ScreenshotRgb565,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PhotoExport {
+    pub id: u64,
+    pub kind: PhotoExportKind,
+    pub width: u16,
+    pub height: u16,
+    pub size_bytes: u32,
+    pub captured_milliseconds: Option<u64>,
+    pub sha256: Option<[u8; 32]>,
 }
 
 impl fmt::Display for PhotoImportError {
@@ -282,6 +303,113 @@ pub(crate) fn camera_original(
         return Ok(None);
     };
     decode_camera_metadata(&metadata).map(Some)
+}
+
+pub fn list_photo_exports(
+    storage: &StorageClient,
+    request_id: u64,
+) -> Result<Vec<PhotoExport>, PhotoImportError> {
+    let ids = if let Some(encoded_head) = storage.get(
+        request_id,
+        PHOTO_LIBRARY_ID,
+        PHOTO_LIBRARY_QUOTA_BYTES,
+        PHOTO_LIBRARY_HEAD_KEY,
+    )? {
+        let head = decode_head(&encoded_head)?;
+        let page_count = head.slot_count.div_ceil(INDEX_PAGE_PHOTOS as u64);
+        let mut ids = Vec::new();
+        for page_number in 0..page_count {
+            let page_number =
+                u32::try_from(page_number).map_err(|_| PhotoImportError::ResourceExhausted)?;
+            let page = load_page(storage, request_id, page_number)?
+                .ok_or(PhotoImportError::InvalidIndex)?;
+            let slots = page_slots(&head, u64::from(page_number));
+            ids.extend(page.ids[..slots].iter().copied().filter(|id| *id != 0));
+        }
+        if ids.len() as u64 != head.active_count {
+            return Err(PhotoImportError::InvalidIndex);
+        }
+        ids
+    } else {
+        match storage.get(
+            request_id,
+            PHOTO_LIBRARY_ID,
+            PHOTO_LIBRARY_QUOTA_BYTES,
+            PHOTO_LIBRARY_LEGACY_INDEX_KEY,
+        )? {
+            Some(encoded) => {
+                let index = decode_legacy_index(&encoded)?;
+                index.ids[..index.count].to_vec()
+            }
+            None => Vec::new(),
+        }
+    };
+
+    ids.into_iter()
+        .map(|id| {
+            if let Some(original) = camera_original(storage, request_id, id)? {
+                Ok(PhotoExport {
+                    id,
+                    kind: PhotoExportKind::CameraJpeg,
+                    width: original.width,
+                    height: original.height,
+                    size_bytes: original.jpeg_size_bytes,
+                    captured_milliseconds: Some(original.captured_milliseconds),
+                    sha256: Some(original.sha256),
+                })
+            } else {
+                Ok(PhotoExport {
+                    id,
+                    kind: PhotoExportKind::ScreenshotRgb565,
+                    width: PHOTO_WIDTH as u16,
+                    height: PHOTO_HEIGHT as u16,
+                    size_bytes: PHOTO_FRAME_BYTES as u32,
+                    captured_milliseconds: None,
+                    sha256: None,
+                })
+            }
+        })
+        .collect()
+}
+
+pub fn read_photo_export(
+    storage: &StorageClient,
+    request_id: u64,
+    photo: &PhotoExport,
+) -> Result<Vec<u8>, PhotoImportError> {
+    let key = match photo.kind {
+        PhotoExportKind::CameraJpeg => original_blob_key(photo.id),
+        PhotoExportKind::ScreenshotRgb565 => photo_blob_key(photo.id),
+    };
+    let descriptor = storage.open_blob(
+        request_id,
+        PHOTO_LIBRARY_ID,
+        PHOTO_LIBRARY_QUOTA_BYTES,
+        &key,
+        photo.size_bytes,
+    )?;
+    let mut bytes = if let Some(descriptor) = descriptor {
+        let mut file = File::from(descriptor);
+        let mut bytes = Vec::with_capacity(photo.size_bytes as usize);
+        file.read_to_end(&mut bytes)
+            .map_err(StorageClientError::Io)?;
+        bytes
+    } else if photo.kind == PhotoExportKind::ScreenshotRgb565 {
+        load_legacy_photo(storage, request_id, photo.id)?.ok_or(PhotoImportError::InvalidFrame)?
+    } else {
+        return Err(PhotoImportError::InvalidFrame);
+    };
+    if bytes.len() != photo.size_bytes as usize {
+        bytes.clear();
+        return Err(PhotoImportError::InvalidFrame);
+    }
+    if let Some(expected) = photo.sha256 {
+        if Sha256::digest(&bytes).as_slice() != expected {
+            bytes.clear();
+            return Err(PhotoImportError::InvalidFrame);
+        }
+    }
+    Ok(bytes)
 }
 
 fn photo_is_active_in(
@@ -758,6 +886,8 @@ fn decode_camera_metadata(metadata: &[u8]) -> Result<CameraOriginal, PhotoImport
         width: u16::from_le_bytes(metadata[8..10].try_into().unwrap()),
         height: u16::from_le_bytes(metadata[10..12].try_into().unwrap()),
         jpeg_size_bytes: u32::from_le_bytes(metadata[12..16].try_into().unwrap()),
+        captured_milliseconds: u64::from_le_bytes(metadata[16..24].try_into().unwrap()),
+        sha256: metadata[24..].try_into().unwrap(),
     };
     if original.width != CAMERA_PHOTO_WIDTH
         || original.height != CAMERA_PHOTO_HEIGHT

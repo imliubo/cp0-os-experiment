@@ -1,5 +1,10 @@
 # Owner Photo Transfer v1
 
+This document records the original photo-only design. The authoritative
+implemented transport and security contract is now
+`OWNER-MEDIA-TRANSFER-V1.md`: a password-gated, isolated FAT32 USB exchange
+image that adds atomic music import while preserving read-only photo export.
+
 Photo transfer is an Owner data workflow, not an App capability and not a
 Developer Mode feature. It must not require or enable the full Owner SSH Shell.
 
@@ -15,23 +20,10 @@ modify indexes, upload frames, restore a backup or install Apps.
 
 ## Device flow
 
-1. The Owner opens **Gallery > Transfer** or **Settings > Photo Transfer** and
-   confirms the device password.
-2. The device opens a volatile ten-minute pairing/transfer window and displays
-   a short code plus the device name and address.
-3. `cp0ctl photos pair` creates a dedicated Ed25519 photo-transfer key. This key
-   is stored separately from developer deployment and Owner Shell keys.
-4. `cp0ctl photos list` obtains a paginated, immutable snapshot manifest.
-5. `cp0ctl photos pull <destination>` resumes missing items, verifies SHA-256,
-   converts RGB565 frames to PNG on the computer and writes the manifest last.
-6. Closing the UI or reaching the timeout blocks new sessions. The Owner can
-   revoke one computer or all photo-transfer computers from Settings.
-
-The transport may use the existing OpenSSH listener, but every authorized key
-must carry `restrict,command="/usr/bin/cp0ctl photo-session"`. The forced
-command accepts only the bounded photo protocol and remains available
-independently of Developer Mode. Port forwarding, PTY, agent forwarding, file
-upload, arbitrary paths and shell commands stay disabled.
+The Owner opens **Settings > Apps & Privacy > USB Media Transfer**, confirms
+the current password, copies files from `CP0-MEDIA/PHOTOS`, ejects the drive on
+the computer, and stops transfer on the device. The host sees export copies,
+not the live Photo Library. Developer Mode and Owner SSH stay independent.
 
 ## Wire and file contract
 
@@ -65,6 +57,7 @@ the Owner from using Camera or Gallery indefinitely.
    corrupted chunks, SD removal/full behavior and 1/100/10,000-photo memory
    bounds on V0.6.
 
-USB PTP/MTP can be added later as another front end to `cp0-photod`. USB Mass
-Storage is excluded because exporting the live data filesystem would allow the
-computer and device to mutate one filesystem concurrently.
+Exporting a live device partition by USB Mass Storage remains prohibited. The
+implemented MSC path exposes only a fixed, rebuildable image which Linux
+unmounts before host access. It cannot select or export rootfs, `cp0-data`, App
+private data, or any block device.

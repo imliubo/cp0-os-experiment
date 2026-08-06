@@ -240,6 +240,16 @@ root-owned `device-policy.json` 为家长/组织管理提供本地策略上限�
 信任 key。完整 Owner SSH Shell 是独立 marker、默认关闭，开启后仍无 sudo/root；
 Developer Mode 不会隐式开启它。详见 `docs/DEVELOPER-ACCESS.md`。
 
+音乐导入和照片导出使用独立的 Owner USB Media 权限域。Owner 在可信 Settings 中确认
+当前密码后，root `cp0-usb-mediad` 只把固定的 512 MiB FAT32
+`/var/lib/cardputerzero/usb-media/exchange.img` 作为单一 MSC LUN。IPC 不接受路径，绑定前
+拒绝符号链接、块设备和错误容量；rootfs、`cp0-data`、应用私有数据及任何活动分区均不能
+成为 LUN。设备只在 USB 未绑定时以 `nodev,nosuid,noexec` 挂载交换镜像，照片经 storaged
+只读接口复制到 `PHOTOS`，48 kHz 双声道 PCM WAV 经校验和原子发布后进入 Document
+Portal。交换镜像是可重建临时数据且不进入恢复备份。该通道不要求 Developer Mode 或
+Owner SSH Shell，也不开放 shell、App 部署或任意文件访问。详见
+`docs/OWNER-MEDIA-TRANSFER-V1.md`。
+
 该 Developer Mode 通道只安装签名 `.capp` 并代理有界 App 生命周期命令，不允许替换
 appd、System Shell、compositor policy、systemd unit 或系统镜像。因此多任务系统组件
 不能通过开发者通道热更新；真机集成需要一次受控系统 bundle/重启或新镜像，并把三个

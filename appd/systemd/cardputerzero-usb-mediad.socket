@@ -1,0 +1,15 @@
+[Unit]
+Description=CardputerZero isolated USB media control socket
+
+[Socket]
+ListenStream=/run/cardputerzero-usb-mediad/media.sock
+FileDescriptorName=usb-media
+Service=cardputerzero-usb-mediad.service
+SocketUser=root
+SocketGroup=cp0-usb-media-control
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

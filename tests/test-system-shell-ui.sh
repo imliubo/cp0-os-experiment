@@ -101,6 +101,15 @@ mkdir -p "$snapshot_dir"
 "$work_dir/system-shell-provision-client-test"
 
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -DCP0_USB_MEDIA_CLIENT_TEST \
+    -I"$repo_root/system-shell/include" \
+    "$repo_root/system-shell/src/json.c" \
+    "$repo_root/system-shell/src/usb_media_client.c" \
+    "$repo_root/tests/system-shell-usb-media-client.c" \
+    -o "$work_dir/system-shell-usb-media-client-test"
+"$work_dir/system-shell-usb-media-client-test"
+
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -DCP0_STORE_CLIENT_TEST \
     -I"$repo_root/system-shell/include" \
     "$repo_root/system-shell/src/json.c" \
@@ -126,7 +135,7 @@ mkdir -p "$snapshot_dir"
     -o "$work_dir/system-shell-screenshot-store-test"
 "$work_dir/system-shell-screenshot-store-test" "$work_dir/screenshot-store"
 
-snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps-grid.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-auto-update.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-developer-hosts.ppm settings-developer-revoke.ppm settings-display.ppm settings-metrics-confirm.ppm settings-metrics.ppm settings-password-applying.ppm settings-password-complete.ppm settings-password-confirm.ppm settings-password-current.ppm settings-password-error.ppm settings-password-new.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings-wifi-list.ppm settings-wifi-password.ppm settings.ppm setup-busy.ppm setup-complete.ppm setup-hostname.ppm setup-network.ppm setup-password.ppm setup-repair.ppm setup-review.ppm setup-welcome-waiting.ppm setup-welcome.ppm setup-wifi.ppm store-background-progress.ppm store-description.ppm store-detail.ppm store-failed.ppm store-install-confirm.ppm store-install-storage.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-today-collection.ppm store-today.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm system-media-busy.ppm system-media-failed.ppm system-media-sent.ppm system-media-unavailable.ppm system-screenshot-saved.ppm system-screenshot-unavailable.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
+snapshot_files='app-actions.ppm app-overview.ppm app-permissions.ppm app-storage.ppm app-uninstall.ppm apps-empty.ppm apps-grid.ppm apps.ppm device-diagnostics.ppm device-power.ppm device-resources.ppm device-unavailable.ppm device.ppm document.ppm home.ppm network-detail.ppm network-offline.ppm network.ppm notification.ppm permission.ppm power.ppm settings-apps-privacy.ppm settings-auto-update.ppm settings-camera.ppm settings-confirm.ppm settings-connectivity.ppm settings-developer-hosts.ppm settings-developer-revoke.ppm settings-display.ppm settings-metrics-confirm.ppm settings-metrics.ppm settings-password-applying.ppm settings-password-complete.ppm settings-password-confirm.ppm settings-password-current.ppm settings-password-error.ppm settings-password-new.ppm settings-power.ppm settings-security.ppm settings-sound.ppm settings-system.ppm settings-usb-media-auth.ppm settings-usb-media-complete.ppm settings-usb-media-connected.ppm settings-usb-media-importing.ppm settings-usb-media-preparing.ppm settings-wifi-list.ppm settings-wifi-password.ppm settings.ppm setup-busy.ppm setup-complete.ppm setup-hostname.ppm setup-network.ppm setup-password.ppm setup-repair.ppm setup-review.ppm setup-welcome-waiting.ppm setup-welcome.ppm setup-wifi.ppm store-background-progress.ppm store-description.ppm store-detail.ppm store-failed.ppm store-install-confirm.ppm store-install-storage.ppm store-permissions.ppm store-release-notes.ppm store-screenshot.ppm store-search-empty.ppm store-search-max.ppm store-search-none.ppm store-search-recent.ppm store-search.ppm store-today-collection.ppm store-today.ppm store-updates.ppm store.ppm system-brightness.ppm system-help.ppm system-media-busy.ppm system-media-failed.ppm system-media-sent.ppm system-media-unavailable.ppm system-screenshot-saved.ppm system-screenshot-unavailable.ppm theme-high-contrast.ppm theme-light.ppm tasks.ppm'
 if command -v sha256sum >/dev/null 2>&1; then
     actual=$(cd "$snapshot_dir" && sha256sum $snapshot_files)
 else
@@ -154,8 +163,8 @@ efa8b35b22372eaf879a4e47ad5b5b7c30247ce008738a979fddabb78b389c37  network-offlin
 313b696906f097b6ea90845ed321e76c2762e204b05bfa8bec7e70c3ba79c397  notification.ppm
 5ad4e7360ef38b27d0a416e62840e42b8aa88aaccdfe7aa54da944659b261728  permission.ppm
 8b0cfe3da3a68f5c4ebd8138eb56c024a06c4261581430a1ab3bf5e0a62d082b  power.ppm
-3decae67fc0f937c1c97d6585395a98525233494ae7d888cc50cdea2a6da3cc5  settings-apps-privacy.ppm
-72d7f83bd1073ae5591440c5f338b2c4e01a0ab21fddaf1c4c09550fcf98f2f6  settings-auto-update.ppm
+14081cb994681aacb0655c8f44d4034d780d41926bbe0e2f220f304a24dd4e21  settings-apps-privacy.ppm
+9a3be70be1ca9bbbe84136027642c77763b16243a5e886bd67ed183202f0cf59  settings-auto-update.ppm
 699ca1a9ad4d58a27d64c6611f59aa31d9a21d1ea9d311fb68a0f1980ef46c24  settings-camera.ppm
 e215ec94d5623d91197c512594fb1b3543fe8bc483d9918c999ea9c3d12efa8f  settings-confirm.ppm
 ca4e593ca205360a0a7e43d18ddb2ee2469087d3b6509c74d9c94a61bb9369b8  settings-connectivity.ppm
@@ -163,7 +172,7 @@ ed804e0d53f864bf97230a887a7bf79ef569a3c68d45d4a9bdf4ad8051bdc71a  settings-devel
 10c023bc11a77979006543897e8ea3a87eb43e4179e81ecdd26530fc6d698222  settings-developer-revoke.ppm
 4409d709a14a9021a4e681885996ccd59dc712967f31fa978cf008b139a3df6f  settings-display.ppm
 ddf7f0cc652be525f53f38bfb8126aadd1d3935f90deacd753083ca6b55a2035  settings-metrics-confirm.ppm
-563737565034c5e0a27e23f347a0e15605add45a95049f88a8436ba8a80359be  settings-metrics.ppm
+13bea6cf8d7e235bf6841f804d6510312aab03ac2541929f7692acd7c0509d75  settings-metrics.ppm
 2ba725269202cdc204fbac6306b0c47dbd2d05527cd2d191764ba5df7c157206  settings-password-applying.ppm
 505ded61e6f7c3e4fba57ca2ea3716444a6e0e27836609a54f35d4d254498c68  settings-password-complete.ppm
 4d28c36bd4ff214b29e8325ec4375095bab26d69f17da67b53962014d734a3cd  settings-password-confirm.ppm
@@ -174,6 +183,11 @@ c23e302eeb41aa87fa81aa0fbab7d27cefa7f2fb5dc915290bf254b1f451f913  settings-passw
 dfc359cf4f8bc3dbe6d4151588834f69c3d91ab8c823d7083fab4cebdaf0d596  settings-security.ppm
 f10e4e270371f6eaab38e4125f37e40f1fb9a17c3b5ef5473425e7b057fd3be4  settings-sound.ppm
 990b0797662f4cc621bf9510fabc3414babb7c5b058ec963d6957d4041a5d4d1  settings-system.ppm
+a204e71b5af718e478b14680fe0f7df376188308a4f2a58be2829d8ae30f9ce3  settings-usb-media-auth.ppm
+e5d60bca669b7b889fe942846d787a4a1d85f9772de13747cf50ded8d407281d  settings-usb-media-complete.ppm
+37e90e64732d0b4de87440216830bdd289743ebc2f69577fafd4f46369f6b662  settings-usb-media-connected.ppm
+3ac8522f5854275a9da5e515d5ecdb1d0244431cffdd9f19ea170e1e450fa277  settings-usb-media-importing.ppm
+98f2586b40a5085cf60489416daef36b8586b4e7098880653aa40051423e3391  settings-usb-media-preparing.ppm
 0256debe4da55af3173a2cc7b0f6f3edc4a4b561ce1623dc48523ffbc2c35b3a  settings-wifi-list.ppm
 e6fcb8f495f68b677c5875183a4de64bec772c228d6d98339010e0a26eaa8b3a  settings-wifi-password.ppm
 e88bf66b5f3233c8a62b97f5e84323a3a37a3b1d366b4fdeb5e31fd0851e2d23  settings.ppm

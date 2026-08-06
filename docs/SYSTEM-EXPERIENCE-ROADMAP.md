@@ -40,6 +40,10 @@ Left/Right changes bounded values only when a row is editable.
 
 - Media volume and mute with Fn+A/Fn+S/Fn+D integration.
 - System/key sounds and selected output route.
+- USB Media Transfer requires the current Owner password, exposes only the
+  isolated `CP0-MEDIA` exchange image, imports verified music atomically, and
+  exports photo copies read-only. It does not enable Developer Mode or the
+  Owner SSH Shell.
 - Microphone state is informational; application recording remains permission
   mediated and cannot be globally enabled around a denied permission.
 - Do Not Disturb and notification sounds require the notification and media
@@ -113,6 +117,7 @@ write a bounded audit record. The planned providers are:
 | network broker | Wi-Fi scan/connect/forget, airplane transaction, DNS/proxy | credentials, raw NetworkManager or netlink control |
 | display broker | backlight level, timeout and compositor appearance state | raw sysfs/DRM handles |
 | audio broker | output volume, mute, route and focus policy | unrestricted ALSA devices |
+| Owner USB Media broker | fixed exchange-image MSC, bounded music import and read-only photo copies | active partitions, block devices, shell, App deployment, caller paths or photo mutation |
 | camera broker | capture profile and orientation policy | raw V4L2 devices |
 | power broker | implemented restart/shutdown; future supported charge policy | arbitrary systemd or sysfs operations |
 | system broker | time, update, backup/reset and support bundle jobs | shell commands or filesystem paths |
@@ -209,6 +214,10 @@ implemented as an unreliable userspace timer in each application.
 - [x] Add the targetless media-session broker with Runtime-bound identity,
   bounded per-session actions, lifecycle clearing, SDK APIs and explicit Shell
   completion states. Physical `Fn+Q/W/E` remains device acceptance.
+- [x] Implement the independent Owner USB Media daemon, password-gated Shell
+  flow, isolated FAT32 image, WAV import, JPEG/BMP photo export and hashes.
+- [ ] Physically validate enumeration/eject, interruption recovery and hash
+  round trips on V0.6 with macOS, Linux and Windows hosts.
 
 Local broker work may proceed independently. Deployment remains gated on the
 retained stability evidence passing verification and an explicit device step.

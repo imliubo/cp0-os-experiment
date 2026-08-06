@@ -46,6 +46,7 @@ required_executables=(
     usr/libexec/cardputerzero/cp0-radiod
     usr/libexec/cardputerzero/cp0-storaged
     usr/libexec/cardputerzero/cp0-stored
+    usr/libexec/cardputerzero/cp0-usb-mediad
     usr/libexec/cardputerzero/device-core-recovery
     usr/libexec/cardputerzero/device-capability-acceptance
     usr/libexec/cardputerzero/device-factory-acceptance
@@ -76,6 +77,10 @@ required_files=(
     usr/lib/aarch64-linux-gnu/weston/cardputerzero-policy.so
     etc/cardputerzero/device-policy.json
     etc/avahi/avahi-daemon.conf
+    usr/lib/systemd/system/cardputerzero-usb-mediad.service
+    usr/lib/systemd/system/cardputerzero-usb-mediad.socket
+    usr/lib/tmpfiles.d/cardputerzero-usb-media.conf
+    usr/lib/modules-load.d/cardputerzero-usb-media.conf
     usr/lib/systemd/system/cardputerzero-early-splash.service
     usr/share/cardputerzero/boot/splash.rgb565
     usr/share/cardputerzero/builtin-apps.tsv
@@ -191,6 +196,7 @@ if [[ $image_profile == product ]]; then
         sockets.target.wants/cardputerzero-radiod.socket
         sockets.target.wants/cardputerzero-storaged.socket
         sockets.target.wants/cardputerzero-stored.socket
+        sockets.target.wants/cardputerzero-usb-mediad.socket
         multi-user.target.wants/cardputerzero-ssh-access.path
     )
 fi
@@ -362,6 +368,8 @@ if [[ $image_profile == recovery ]]; then
         cardputerzero-radiod.socket
         cardputerzero-storaged.socket
         cardputerzero-stored.socket
+        cardputerzero-usb-mediad.service
+        cardputerzero-usb-mediad.socket
     )
     for unit in "${masked_units[@]}"; do
         mask="$rootfs/etc/systemd/system/$unit"
@@ -378,6 +386,15 @@ grep -Rqx 'Storage=volatile' \
 grep -qE '^tmpfs[[:space:]]+/tmp[[:space:]]+tmpfs' "$rootfs/etc/fstab"
 grep -qE '^tmpfs[[:space:]]+/var/tmp[[:space:]]+tmpfs.*size=128M' \
     "$rootfs/etc/fstab"
+chroot "$rootfs" /usr/bin/dpkg-query -W -f='${Status}\n' \
+    dosfstools | grep -qx 'install ok installed'
+grep -qx 'libcomposite' \
+    "$rootfs/usr/lib/modules-load.d/cardputerzero-usb-media.conf"
+if [[ -e $rootfs/var/lib/cardputerzero/usb-media/exchange.img ||
+      -L $rootfs/var/lib/cardputerzero/usb-media/exchange.img ]]; then
+    echo "error: image pre-seeds a mutable USB exchange backing file" >&2
+    exit 1
+fi
 grep -qx 'kernel.core_pattern=/dev/null' \
     "$rootfs/etc/sysctl.d/90-cardputerzero-os.conf"
 grep -qx 'kernel.unprivileged_bpf_disabled=1' \
@@ -395,6 +412,11 @@ if [[ $(grep -c '^dtoverlay=imx219$' "$bootfs/config.txt") -ne 1 ]]; then
 fi
 if [[ $(grep -c '^start_x=1$' "$bootfs/config.txt") -ne 1 ]]; then
     echo "error: image does not select the standard camera firmware" >&2
+    exit 1
+fi
+if [[ $(grep -c '^dtoverlay=dwc2,dr_mode=peripheral$' \
+    "$bootfs/config.txt") -ne 1 ]]; then
+    echo "error: image does not force the USB controller into peripheral mode" >&2
     exit 1
 fi
 for camera_firmware in start_x.elf fixup_x.dat; do

@@ -43,6 +43,10 @@ store_service="$repo_root/appd/systemd/cardputerzero-stored.service"
 store_socket="$repo_root/appd/systemd/cardputerzero-stored.socket"
 store_tmpfiles="$repo_root/appd/systemd/cardputerzero-store.conf"
 store_config="$repo_root/appd/store.conf"
+usb_media_service="$repo_root/appd/systemd/cardputerzero-usb-mediad.service"
+usb_media_socket="$repo_root/appd/systemd/cardputerzero-usb-mediad.socket"
+usb_media_tmpfiles="$repo_root/appd/systemd/cardputerzero-usb-media.conf"
+usb_media_modules="$repo_root/appd/systemd/cardputerzero-usb-media.modules"
 device_policy="$repo_root/appd/device-policy.json"
 production_device_policy="$repo_root/appd/device-policy-production.json"
 appd_server="$repo_root/crates/cp0-appd/src/server.rs"
@@ -274,6 +278,36 @@ grep -qx 'd /var/lib/cardputerzero/store/packages 0700 cp0-store cp0-store -' "$
 grep -qx 'catalog_url=' "$store_config"
 grep -qx 'metrics_url=' "$store_config"
 grep -q 'cardputerzero-stored.socket' "$service"
+grep -qx 'User=root' "$usb_media_service"
+grep -qx 'RequiresMountsFor=/sys/kernel/config /var/lib/cardputerzero' "$usb_media_service"
+grep -qx 'PrivateMounts=yes' "$usb_media_service"
+grep -qx 'PrivateDevices=no' "$usb_media_service"
+grep -qx 'DevicePolicy=closed' "$usb_media_service"
+grep -qx 'DeviceAllow=/dev/loop-control rw' "$usb_media_service"
+grep -qx 'DeviceAllow=block-loop rw' "$usb_media_service"
+grep -qx 'CapabilityBoundingSet=CAP_SYS_ADMIN CAP_CHOWN' "$usb_media_service"
+grep -qx 'ProtectSystem=strict' "$usb_media_service"
+grep -qx 'ReadWritePaths=/var/lib/cardputerzero/usb-media /var/lib/cardputerzero/documents /sys/kernel/config/usb_gadget' "$usb_media_service"
+grep -qx 'InaccessiblePaths=-/var/lib/cardputerzero/data -/var/lib/cardputerzero/apps -/var/lib/cardputerzero/registry -/var/lib/cardputerzero/store -/var/lib/cardputerzero/provisioning -/var/lib/cardputerzero/developer -/var/lib/extrausers -/etc/shadow -/etc/gshadow -/etc/cardputerzero/trust -/etc/cardputerzero/authorized_keys' "$usb_media_service"
+grep -qx 'RestrictAddressFamilies=AF_UNIX' "$usb_media_service"
+grep -qx 'FileDescriptorName=usb-media' "$usb_media_socket"
+grep -qx 'SocketGroup=cp0-usb-media-control' "$usb_media_socket"
+grep -qx 'SocketMode=0660' "$usb_media_socket"
+grep -qx 'Service=cardputerzero-usb-mediad.service' "$usb_media_socket"
+grep -qx 'd /run/cardputerzero-usb-mediad 0750 root cp0-usb-media-control -' "$usb_media_tmpfiles"
+grep -qx 'd /var/lib/cardputerzero/usb-media 0700 root root -' "$usb_media_tmpfiles"
+grep -qx 'dwc2' "$usb_media_modules"
+grep -qx 'loop' "$usb_media_modules"
+grep -qx 'libcomposite' "$usb_media_modules"
+grep -q 'DEFAULT_USB_MEDIA_ROOT.*"/var/lib/cardputerzero/usb-media"' \
+    "$repo_root/crates/cp0-usb-mediad/src/lib.rs"
+grep -q 'EXCHANGE_IMAGE_NAME.*"exchange.img"' \
+    "$repo_root/crates/cp0-usb-mediad/src/lib.rs"
+if grep -Eq 'UsbMediaCommand::(Start|Stop)[[:space:]]*\{[^}]*path' \
+    "$repo_root/crates/cp0-usb-media-protocol/src/lib.rs"; then
+    echo "error: USB media control protocol accepts a caller-selected path" >&2
+    exit 1
+fi
 jq -e '.store_auto_update_allowed == true' "$device_policy" >/dev/null
 jq -e '.store_auto_update_allowed == true' "$production_device_policy" >/dev/null
 jq -e '.store_metrics_allowed == true' "$device_policy" >/dev/null

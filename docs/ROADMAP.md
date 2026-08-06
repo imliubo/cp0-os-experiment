@@ -242,9 +242,13 @@ Shell 和其他应用数据。
   Gallery 八张分页缓存；取消 32 张淘汰及 Shell PNG 重复副本。
 - [x] Phase 6M-B：在 appd 生命周期层保护 Camera/Gallery 不可卸载，并向 Shell 暴露
   `removable` 元数据；Store 签名升级保持可用。
-- [ ] Phase 6M-C：实现独立于 Developer Mode/Owner Shell 的 Owner Photo Transfer，
-  包含独立配对密钥、限时 UI、只读分页/断点协议、`cp0ctl photos pull`、PNG/hash 和
-  V0.6 大图库验收；协议冻结见 `PHOTO-TRANSFER-V1.md`。
+- [x] Phase 6M-C1：实现独立于 Developer Mode/Owner Shell 的 USB Media Transfer：
+  Owner 密码确认、固定 512 MiB FAT32 交换镜像、单 LUN ConfigFS gadget、相机 JPEG/
+  Screenshot BMP+manifest 导出、WAV 校验和 Document Portal 原子导入；协议不接受路径，
+  严禁暴露 rootfs、`cp0-data`、应用私有目录或任意活动分区。
+- [ ] Phase 6M-C2：取得合法 production USB VID/PID，并在 V0.6 上完成 macOS/Linux/
+  Windows 枚举、弹出、异常拔线、掉电、满盘、FAT 恢复和照片/WAV hash 真机验收；统一
+  契约见 `OWNER-MEDIA-TRANSFER-V1.md`。
 - [x] 实现不接入当前启动链的 OS 发布元数据策略、rootfs/hash tree/FIT 摘要门禁、
   dm-verity 离线验证、三次启动回滚状态机、双副本撕裂写检测和 100 轮断电模型；
   RAUC CMS、签名 FIT 与硬件信任根仍是独立启用门禁。

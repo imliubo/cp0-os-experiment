@@ -49,6 +49,8 @@ install -D -m 0755 "${payload}/cp0-storaged" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-storaged"
 install -D -m 0755 "${payload}/cp0-stored" \
     "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-stored"
+install -D -m 0755 "${payload}/cp0-usb-mediad" \
+    "${ROOTFS_DIR}/usr/libexec/cardputerzero/cp0-usb-mediad"
 install -D -m 0755 "${payload}/cp0ctl" \
     "${ROOTFS_DIR}/usr/bin/cp0ctl"
 install -D -m 0755 "${payload}/cardputerzero-app-runtime" \
@@ -132,6 +134,10 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-stored.service" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-stored.service"
 install -D -m 0644 "${payload}/systemd/cardputerzero-stored.socket" \
     "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-stored.socket"
+install -D -m 0644 "${payload}/systemd/cardputerzero-usb-mediad.service" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-usb-mediad.service"
+install -D -m 0644 "${payload}/systemd/cardputerzero-usb-mediad.socket" \
+    "${ROOTFS_DIR}/usr/lib/systemd/system/cardputerzero-usb-mediad.socket"
 install -D -m 0644 "${payload}/systemd/cardputerzero-gpio.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-gpio.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-display.conf" \
@@ -150,6 +156,10 @@ install -D -m 0644 "${payload}/systemd/cardputerzero-trust.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-trust.conf"
 install -D -m 0644 "${payload}/systemd/cardputerzero-store.conf" \
     "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-store.conf"
+install -D -m 0644 "${payload}/systemd/cardputerzero-usb-media.conf" \
+    "${ROOTFS_DIR}/usr/lib/tmpfiles.d/cardputerzero-usb-media.conf"
+install -D -m 0644 "${payload}/systemd/cardputerzero-usb-media.modules" \
+    "${ROOTFS_DIR}/usr/lib/modules-load.d/cardputerzero-usb-media.conf"
 install -d -o root -g root -m 0755 \
     "${ROOTFS_DIR}/etc/cardputerzero/trust/store" \
     "${ROOTFS_DIR}/etc/cardputerzero/trust/developers" \
@@ -232,6 +242,10 @@ if ! getent group cp0-provision-control >/dev/null 2>&1; then
     groupadd --system cp0-provision-control
 fi
 usermod -a -G cp0-provision-control cp0-shell
+if ! getent group cp0-usb-media-control >/dev/null 2>&1; then
+    groupadd --system cp0-usb-media-control
+fi
+usermod -a -G cp0-usb-media-control cp0-shell
 if ! getent group cp0-power-control >/dev/null 2>&1; then
     groupadd --system cp0-power-control
 fi
@@ -350,6 +364,7 @@ systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-provision.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-storage.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-trust.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-store.conf
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/cardputerzero-usb-media.conf
 CHROOT
 
 if [[ $image_profile == product ]]; then
@@ -402,6 +417,7 @@ systemctl enable cardputerzero-appd.socket cardputerzero-broker.socket \
     cardputerzero-provisiond.socket cardputerzero-provision-apply.service \
     cardputerzero-gpiod.socket cardputerzero-radiod.socket \
     cardputerzero-storaged.socket cardputerzero-stored.socket
+systemctl enable cardputerzero-usb-mediad.socket
 CHROOT
 else
     on_chroot <<'CHROOT'
@@ -419,5 +435,6 @@ systemctl mask cardputerzero-appd.service \
     cardputerzero-displayd.service cardputerzero-displayd.socket \
     cardputerzero-gpiod.socket cardputerzero-radiod.socket \
     cardputerzero-storaged.socket cardputerzero-stored.socket
+systemctl mask cardputerzero-usb-mediad.service cardputerzero-usb-mediad.socket
 CHROOT
 fi

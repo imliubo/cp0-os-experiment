@@ -42,6 +42,7 @@ compiler or upstream signing authority are outside this version's scope.
 | compositor and System Shell | focus, global keys, trusted overlays and user decisions | ordinary Wayland surfaces and bounded app metadata |
 | Store | configured Ed25519 root and monotonically increasing catalog sequence | HTTPS responses, catalogs, packages and interrupted downloads |
 | recovery operator | explicit root ceremony and selected removable media | backup file contents and block-device selection |
+| USB media host | files copied into or out of the isolated exchange image | hostile FAT metadata, names, WAV bytes, disconnects and power loss |
 | boot chain | Raspberry Pi firmware, kernel, initramfs and lower root | mutable SD boot/root contents until verified boot exists |
 | build/release | pinned source revisions and signing keys | dependency supply chain and build host |
 
@@ -68,6 +69,9 @@ applications and application-owned data are untrusted.
 | MGMT-01 | Shared development credential or fixed human identity exposes SSH/sudo | product rootfs removes the pi-gen account, trusted Setup creates one owner in persistent extrausers, sudo stays absent and SSH is explicit marker-controlled opt-in | Fresh-media image inspection and V0.6 SSH deny/allow testing remain release gates; physical SD access can still rewrite unencrypted owner data |
 | DEV-01 | Developer Mode becomes an unrestricted remote shell | sshd owner dispatcher, forced-command paired keys, forwarding disabled, per-request mode/policy checks, no sudo/root and independent `cp0-ssh` Owner Shell group | Real OpenSSH argv/environment behavior and disconnect-on-mode-off require V0.6 acceptance |
 | DEV-02 | Unauthorized computer or signing key installs an App | physical ten-minute pairing window, owner password, Ed25519 SSH key, paired developer key, signed `.capp`, root registry and appd revalidation | A compromised owner password or trusted native service can authorize a host; physical SD access can rewrite unencrypted pairing state |
+| USB-01 | Computer gains raw access to live device data | one fixed regular-file LUN, strict no-path IPC, canonical path/type/size checks, and device unmount before bind | Host can corrupt the disposable FAT image; kernel ConfigFS/MSC bugs remain in the TCB |
+| USB-02 | Host-crafted files escape import or overwrite documents | FAT mounted nodev/nosuid/noexec, O_NOFOLLOW, bounded strict WAV parser, stable inode/size checks and create-without-overwrite publication | Trusted decoder support is intentionally limited to fixed PCM WAV |
+| USB-03 | Exchange image leaks into full backup or production seed | recovery traversal excludes `cardputerzero/usb-media`; rootfs gate rejects pre-seeded `exchange.img` | Authoritative photos and imported documents remain in the unencrypted `cp0-data` backup |
 | SUPPLY-01 | Dependency/build compromise | pinned BSP/pi-gen revisions, locked Rust dependencies and image gates | Reproducible build comparison, SBOM signing and independent review remain open |
 
 ## Release gates
@@ -92,6 +96,9 @@ development image passes functional tests:
 5. The internal threat model and fuzz harnesses do not substitute for an
    independent assessment. The third-party security review remains open and
    its findings must be tracked to closure before a production security claim.
+6. USB Media Transfer cannot ship with the Linux Foundation development
+   VID/PID. A legitimate production VID/PID and V0.6 cross-host MSC/fault
+   acceptance are release blockers.
 
 ## Verification mapping
 

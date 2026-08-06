@@ -128,6 +128,9 @@ pub enum ProvisioningCommand {
         current_password: String,
         new_password: String,
     },
+    VerifyOwnerPassword {
+        current_password: String,
+    },
     ListWifi {},
     ConnectWifi {
         ssid: String,
@@ -160,6 +163,7 @@ pub enum ProvisioningOutcome {
     WifiList {
         networks: Vec<WifiNetwork>,
     },
+    Authenticated {},
     Error {
         code: ProvisioningErrorCode,
         message: String,
@@ -257,6 +261,9 @@ impl ProvisioningRequest {
                 validate_current_password(current_password)?;
                 validate_password(new_password)
             }
+            ProvisioningCommand::VerifyOwnerPassword { current_password } => {
+                validate_current_password(current_password)
+            }
             ProvisioningCommand::ConnectWifi {
                 ssid,
                 security,
@@ -297,6 +304,9 @@ impl ProvisioningRequest {
             } => {
                 current_password.zeroize();
                 new_password.zeroize();
+            }
+            ProvisioningCommand::VerifyOwnerPassword { current_password } => {
+                current_password.zeroize();
             }
             _ => {}
         }
@@ -403,6 +413,14 @@ impl ProvisioningResponse {
         }
     }
 
+    pub fn authenticated(request_id: u64) -> Self {
+        Self {
+            protocol_version: PROVISION_PROTOCOL_VERSION,
+            request_id,
+            outcome: ProvisioningOutcome::Authenticated {},
+        }
+    }
+
     pub fn error(request_id: u64, code: ProvisioningErrorCode, message: impl Into<String>) -> Self {
         Self {
             protocol_version: PROVISION_PROTOCOL_VERSION,
@@ -427,6 +445,7 @@ impl ProvisioningResponse {
                 }
                 Ok(())
             }
+            ProvisioningOutcome::Authenticated {} => Ok(()),
             ProvisioningOutcome::Error { message, .. } => {
                 if message.is_empty()
                     || message.chars().count() > MAX_ERROR_CHARS
@@ -677,6 +696,9 @@ mod tests {
                 current_password: "correct horse".into(),
                 new_password: "new password".into(),
             },
+            ProvisioningCommand::VerifyOwnerPassword {
+                current_password: "correct horse".into(),
+            },
             ProvisioningCommand::UseOffline {},
             ProvisioningCommand::SetSshEnabled { enabled: true },
         ];
@@ -710,6 +732,15 @@ mod tests {
                 current_password,
                 new_password,
             } if current_password.is_empty() && new_password.is_empty()
+        ));
+        let mut verification = request(ProvisioningCommand::VerifyOwnerPassword {
+            current_password: "correct horse".into(),
+        });
+        verification.zeroize_secrets();
+        assert!(matches!(
+            verification.command,
+            ProvisioningCommand::VerifyOwnerPassword { current_password }
+                if current_password.is_empty()
         ));
         assert!(
             request(ProvisioningCommand::ChangePassword {

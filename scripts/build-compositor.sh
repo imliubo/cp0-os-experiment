@@ -47,6 +47,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     "$repo_root/system-shell/src/audio_settings_client.c" \
     "$repo_root/system-shell/src/connectivity_client.c" \
     "$repo_root/system-shell/src/provision_client.c" \
+    "$repo_root/system-shell/src/usb_media_client.c" \
     "$repo_root/system-shell/src/shell_settings.c" \
     "$repo_root/system-shell/src/display_client.c" \
     "$repo_root/system-shell/src/developer_client.c" \

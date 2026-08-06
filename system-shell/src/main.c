@@ -14,6 +14,7 @@
 #include "cp0_system_info.h"
 #include "cp0_task_thumbnail.h"
 #include "cp0_ui.h"
+#include "cp0_usb_media_client.h"
 #include "overlay-state.h"
 #include "weston-output-capture-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
@@ -178,6 +179,35 @@ static void poll_store_catalog(struct shell *shell);
 static void poll_display_state(struct shell *shell);
 static void poll_audio_output_state(struct shell *shell);
 static void poll_connectivity_state(struct shell *shell);
+
+static enum cp0_ui_usb_media_state usb_media_ui_state(
+    enum cp0_usb_media_state state)
+{
+    switch (state) {
+    case CP0_USB_MEDIA_OFF:
+        return CP0_UI_USB_MEDIA_OFF;
+    case CP0_USB_MEDIA_PREPARING:
+        return CP0_UI_USB_MEDIA_PREPARING;
+    case CP0_USB_MEDIA_CONNECTED:
+        return CP0_UI_USB_MEDIA_CONNECTED;
+    case CP0_USB_MEDIA_IMPORTING:
+        return CP0_UI_USB_MEDIA_IMPORTING;
+    case CP0_USB_MEDIA_COMPLETE:
+        return CP0_UI_USB_MEDIA_COMPLETE;
+    case CP0_USB_MEDIA_ERROR:
+    default:
+        return CP0_UI_USB_MEDIA_ERROR;
+    }
+}
+
+static void apply_usb_media_status(
+    struct shell *shell, const struct cp0_usb_media_status *status)
+{
+    cp0_ui_set_usb_media_status(
+        &shell->ui, true, usb_media_ui_state(status->state),
+        status->exported_photos, status->imported_music,
+        status->rejected_music, status->capacity_bytes, NULL);
+}
 
 static void apply_provision_network_status(
     struct shell *shell, const struct cp0_provision_status *status)
@@ -2073,6 +2103,90 @@ static void handle_ui_action(struct shell *shell, enum cp0_ui_action action)
         cp0_ui_password_change_result(
             &shell->ui, result == CP0_PROVISION_OK,
             result == CP0_PROVISION_AUTHENTICATION, error);
+    } else if (event == CP0_UI_EVENT_USB_MEDIA_REFRESH) {
+        struct cp0_usb_media_status status = {0};
+        char error[CP0_USB_MEDIA_ERROR_MAX + 1] = {0};
+        int result = shell->ui.local_simulation
+                         ? CP0_USB_MEDIA_OK
+                         : cp0_usb_media_get_status(&status, error);
+        if (shell->ui.local_simulation)
+            status = (struct cp0_usb_media_status){
+                .state = CP0_USB_MEDIA_OFF,
+            };
+        if (result == CP0_USB_MEDIA_OK)
+            apply_usb_media_status(shell, &status);
+        else
+            cp0_ui_set_usb_media_status(
+                &shell->ui, false, CP0_UI_USB_MEDIA_ERROR, 0, 0, 0, 0,
+                error[0] != '\0' ? error : "USB media service unavailable");
+    } else if (event == CP0_UI_EVENT_USB_MEDIA_START) {
+        struct cp0_usb_media_status status = {0};
+        char provision_error[CP0_PROVISION_ERROR_MAX + 1] = {0};
+        char media_error[CP0_USB_MEDIA_ERROR_MAX + 1] = {0};
+        int authenticated;
+        int result = CP0_USB_MEDIA_FAILED;
+
+        shell_redraw(shell);
+        wl_display_flush(shell->display);
+        if (shell->ui.local_simulation) {
+            authenticated = CP0_PROVISION_OK;
+            status = (struct cp0_usb_media_status){
+                .state = CP0_USB_MEDIA_CONNECTED,
+                .exported_photos = 12,
+                .capacity_bytes = 512ULL * 1024ULL * 1024ULL,
+            };
+            result = CP0_USB_MEDIA_OK;
+        } else {
+            authenticated = cp0_provision_verify_owner_password(
+                shell->ui.password_secrets->current, provision_error);
+            if (authenticated == CP0_PROVISION_OK)
+                result = cp0_usb_media_start(&status, media_error);
+        }
+        if (authenticated == CP0_PROVISION_OK && result == CP0_USB_MEDIA_OK) {
+            apply_usb_media_status(shell, &status);
+        } else {
+            const char *message =
+                authenticated == CP0_PROVISION_AUTHENTICATION
+                    ? "Current password is incorrect"
+                    : (authenticated != CP0_PROVISION_OK
+                           ? (provision_error[0] != '\0'
+                                  ? provision_error
+                                  : "Owner authentication unavailable")
+                           : (media_error[0] != '\0'
+                                  ? media_error
+                                  : "USB media transfer failed"));
+            cp0_ui_set_usb_media_status(
+                &shell->ui, authenticated == CP0_PROVISION_OK,
+                CP0_UI_USB_MEDIA_ERROR, 0, 0, 0,
+                512ULL * 1024ULL * 1024ULL, message);
+        }
+    } else if (event == CP0_UI_EVENT_USB_MEDIA_STOP) {
+        struct cp0_usb_media_status status = {0};
+        char error[CP0_USB_MEDIA_ERROR_MAX + 1] = {0};
+        int result;
+
+        shell_redraw(shell);
+        wl_display_flush(shell->display);
+        if (shell->ui.local_simulation) {
+            status = (struct cp0_usb_media_status){
+                .state = CP0_USB_MEDIA_COMPLETE,
+                .exported_photos =
+                    shell->ui.password_secrets->usb_media.exported_photos,
+                .imported_music = 1,
+                .capacity_bytes = 512ULL * 1024ULL * 1024ULL,
+            };
+            result = CP0_USB_MEDIA_OK;
+        } else {
+            result = cp0_usb_media_stop(&status, error);
+        }
+        if (result == CP0_USB_MEDIA_OK)
+            apply_usb_media_status(shell, &status);
+        else
+            cp0_ui_set_usb_media_status(
+                &shell->ui, true, CP0_UI_USB_MEDIA_ERROR,
+                shell->ui.password_secrets->usb_media.exported_photos, 0, 0,
+                512ULL * 1024ULL * 1024ULL,
+                error[0] != '\0' ? error : "USB media import failed");
     } else if (event == CP0_UI_EVENT_PERMISSION_ONCE ||
         event == CP0_UI_EVENT_PERMISSION_ALWAYS ||
         event == CP0_UI_EVENT_PERMISSION_DENY) {
@@ -2972,7 +3086,11 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
         shell->shift_pressed = pressed;
         return;
     }
-    if (pressed && !shell->ui.setup_active && key != KEY_LEFTMETA &&
+    if (pressed && !shell->ui.setup_active &&
+        !cp0_ui_password_accepts_text(&shell->ui) &&
+        !cp0_ui_usb_media_accepts_text(&shell->ui) &&
+        !cp0_ui_settings_wifi_accepts_text(&shell->ui) &&
+        key != KEY_LEFTMETA &&
         key != KEY_RIGHTMETA &&
         shell->ui.key_sounds && shell->ui.volume_available &&
         !shell->ui.muted)
@@ -3001,6 +3119,23 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
                 cp0_ui_key_character(key, shell_shift_active(shell));
             if (character != '\0')
                 handled = cp0_ui_password_input_ascii(&shell->ui, character);
+        }
+        if (handled) {
+            shell_redraw(shell);
+            return;
+        }
+    }
+    if (pressed && cp0_ui_usb_media_accepts_text(&shell->ui)) {
+        bool handled = false;
+        if (key == KEY_BACKSPACE) {
+            (void)cp0_ui_usb_media_backspace(&shell->ui);
+            handled = true;
+        } else {
+            char character =
+                cp0_ui_key_character(key, shell_shift_active(shell));
+            if (character != '\0')
+                handled =
+                    cp0_ui_usb_media_input_ascii(&shell->ui, character);
         }
         if (handled) {
             shell_redraw(shell);

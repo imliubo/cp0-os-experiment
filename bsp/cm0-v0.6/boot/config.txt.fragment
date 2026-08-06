@@ -7,7 +7,7 @@ max_framebuffers=2
 
 [all]
 enable_uart=1
-dtoverlay=dwc2
+dtoverlay=dwc2,dr_mode=peripheral
 dtoverlay=cardputerzero-v5-overlay
 camera_auto_detect=0
 start_x=1

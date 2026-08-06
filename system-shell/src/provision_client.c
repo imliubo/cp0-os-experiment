@@ -241,6 +241,28 @@ static int parse_envelope(const char *document, size_t length,
     return count;
 }
 
+static int parse_authenticated_response(
+    const char *document, size_t length, uint64_t request_id,
+    char error[CP0_PROVISION_ERROR_MAX + 1])
+{
+    struct cp0_json_token tokens[CP0_PROVISION_JSON_TOKENS];
+    int outcome = -1;
+    int count = parse_envelope(document, length, request_id, tokens,
+                               CP0_PROVISION_JSON_TOKENS, &outcome, error);
+    int status;
+    if (count <= 0)
+        return count <= -(CP0_PROVISION_ERROR_SENTINEL + 1)
+                   ? -count - CP0_PROVISION_ERROR_SENTINEL
+                   : CP0_PROVISION_FAILED;
+    status = cp0_json_object_get(document, tokens, (size_t)count, outcome,
+                                 "status");
+    return status >= 0 &&
+                   cp0_json_string_equals(document, &tokens[status],
+                                          "authenticated")
+               ? CP0_PROVISION_OK
+               : CP0_PROVISION_FAILED;
+}
+
 static int parse_state_response(const char *document, size_t length,
                                 uint64_t request_id,
                                 struct cp0_provision_status *state,
@@ -611,6 +633,45 @@ int cp0_provision_change_password(
     return result;
 }
 
+int cp0_provision_verify_owner_password(
+    char *current_password,
+    char error[CP0_PROVISION_ERROR_MAX + 1])
+{
+    char request[768] = {0};
+    char response[CP0_PROVISION_FRAME_BYTES + 1U] = {0};
+    size_t offset = 0;
+    size_t response_length = 0;
+    uint64_t request_id = next_request_id++;
+    size_t current_length =
+        current_password == NULL ? 0 : strlen(current_password);
+    int result = CP0_PROVISION_FAILED;
+
+    if (current_password == NULL ||
+        !begin_command(request, sizeof(request), &offset, request_id,
+                       "verify-owner-password") ||
+        !append_member(request, sizeof(request), &offset, "current_password",
+                       current_password) ||
+        !finish_command(request, sizeof(request), &offset))
+        goto cleanup;
+    if (exchange(request, offset, response, sizeof(response), &response_length,
+                 CP0_PROVISION_TIMEOUT_PASSWORD) != 0) {
+        if (error != NULL)
+            snprintf(error, CP0_PROVISION_ERROR_MAX + 1U,
+                     "Provisioning service is unavailable");
+        result = CP0_PROVISION_UNAVAILABLE;
+        goto cleanup;
+    }
+    result = parse_authenticated_response(response, response_length, request_id,
+                                          error);
+
+cleanup:
+    clear_secret(request, sizeof(request));
+    clear_secret(response, sizeof(response));
+    if (current_password != NULL)
+        clear_secret(current_password, current_length);
+    return result;
+}
+
 int cp0_provision_list_wifi(struct cp0_provision_wifi_list *list,
                             char error[CP0_PROVISION_ERROR_MAX + 1])
 {
@@ -712,6 +773,13 @@ int cp0_provision_test_parse_wifi(
     char error[CP0_PROVISION_ERROR_MAX + 1])
 {
     return parse_wifi_response(response, length, request_id, list, error);
+}
+
+int cp0_provision_test_parse_authenticated(
+    const char *response, size_t length, uint64_t request_id,
+    char error[CP0_PROVISION_ERROR_MAX + 1])
+{
+    return parse_authenticated_response(response, length, request_id, error);
 }
 
 bool cp0_provision_test_escape(const char *input, char *output,

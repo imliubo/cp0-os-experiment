@@ -1,0 +1,15 @@
+[package]
+name = "cp0-usb-mediad"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+cp0-appd = { path = "../cp0-appd" }
+cp0-document-protocol = { path = "../cp0-document-protocol" }
+cp0-usb-media-protocol = { path = "../cp0-usb-media-protocol" }
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true

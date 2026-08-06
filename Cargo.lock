@@ -788,6 +788,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp0-usb-media-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cp0-usb-mediad"
+version = "0.1.0"
+dependencies = [
+ "cp0-appd",
+ "cp0-document-protocol",
+ "cp0-usb-media-protocol",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "cp0ctl"
 version = "0.1.0"
 dependencies = [

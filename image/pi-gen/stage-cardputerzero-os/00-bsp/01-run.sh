@@ -126,6 +126,7 @@ sed -i '/^# BEGIN CardputerZero OS BSP$/,/^# END CardputerZero OS BSP$/d' \
 for managed_line in \
     'enable_uart=1' \
     'dtoverlay=dwc2' \
+    'dtoverlay=dwc2,dr_mode=peripheral' \
     'dtoverlay=imx219' \
     'dtoverlay=camera-py12-high-overlay' \
     'dtoverlay=cardputerzero-v5-overlay' \
@@ -146,7 +147,7 @@ dtoverlay=vc4-kms-v3d,cma-64
 camera_auto_detect=0
 start_x=1
 enable_uart=1
-dtoverlay=dwc2
+dtoverlay=dwc2,dr_mode=peripheral
 dtoverlay=cardputerzero-v5-overlay
 dtoverlay=imx219
 dtoverlay=bq27220_v5

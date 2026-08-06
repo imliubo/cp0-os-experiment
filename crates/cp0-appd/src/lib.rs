@@ -80,6 +80,9 @@ pub use permissions::{
     Authorization, DEFAULT_PERMISSION_PATH, PermissionChoice, PermissionEngine, PermissionError,
     PermissionStore,
 };
+pub use photo_library::{
+    PhotoExport, PhotoExportKind, PhotoImportError, list_photo_exports, read_photo_export,
+};
 pub use policy::{
     AppLaunchPolicy, DEFAULT_DEVELOPER_MODE_PATH, DEFAULT_DEVICE_POLICY_PATH,
     DEFAULT_RECOVERY_MODE_PATH, DEVICE_POLICY_SCHEMA_VERSION, DeviceMode, DeviceModePaths,

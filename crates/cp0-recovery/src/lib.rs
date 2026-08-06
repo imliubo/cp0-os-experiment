@@ -18,6 +18,7 @@ const MAX_PATH_DEPTH: usize = 32;
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
+const EXCLUDED_TRANSIENT_PATHS: &[&str] = &["cardputerzero/usb-media"];
 
 const REQUIRED_DIRECTORIES: &[&str] = &[
     "cardputerzero",
@@ -323,6 +324,9 @@ fn collect_source_path(
     let path_text = relative
         .to_str()
         .ok_or_else(|| BackupError::Invalid("source contains a non-UTF-8 path".into()))?;
+    if EXCLUDED_TRANSIENT_PATHS.contains(&path_text) {
+        return Ok(());
+    }
     validate_relative_path(path_text)?;
     let path = root.join(relative);
     let metadata = fs::symlink_metadata(&path)?;
@@ -1117,6 +1121,30 @@ mod tests {
             fs::read(restored.join("etc-cardputerzero/image-profile")).expect("profile"),
             b"product\n"
         );
+    }
+
+    #[test]
+    fn backup_excludes_the_transient_usb_exchange_image() {
+        let fixture = Fixture::new("usb-media-excluded");
+        let source = fixture.data_root();
+        create_data_root(&source);
+        let usb_media = source.join("cardputerzero/usb-media");
+        fs::create_dir(&usb_media).expect("create USB media directory");
+        let exchange = usb_media.join("exchange.img");
+        File::create(&exchange)
+            .expect("create exchange image")
+            .set_len(512 * 1024 * 1024)
+            .expect("size exchange image");
+        protect_tree(&source);
+
+        let backup = fixture.backup();
+        create_backup(&source, &backup).expect("backup must ignore exchange image");
+        let restored = fixture.root.join("restored");
+        fs::create_dir(&restored).expect("create restore root");
+        fs::set_permissions(&restored, fs::Permissions::from_mode(0o700))
+            .expect("protect restore root");
+        restore_backup(&backup, &restored).expect("restore backup");
+        assert!(!restored.join("cardputerzero/usb-media").exists());
     }
 
     #[test]

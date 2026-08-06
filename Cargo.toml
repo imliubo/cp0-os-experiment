@@ -28,6 +28,8 @@ members = [
     "crates/cp0-recovery",
     "crates/cp0-storage-protocol",
     "crates/cp0-storaged",
+    "crates/cp0-usb-media-protocol",
+    "crates/cp0-usb-mediad",
     "crates/cp0-store-control",
     "crates/cp0-store-control-server",
     "crates/cp0-store-metrics",

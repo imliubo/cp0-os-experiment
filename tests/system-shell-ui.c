@@ -80,6 +80,12 @@ static void input_password_text(struct cp0_ui *ui, const char *text)
         assert(cp0_ui_password_input_ascii(ui, *text));
 }
 
+static void input_usb_media_password(struct cp0_ui *ui, const char *text)
+{
+    for (; *text != '\0'; text++)
+        assert(cp0_ui_usb_media_input_ascii(ui, *text));
+}
+
 static void input_settings_wifi_text(struct cp0_ui *ui, const char *text)
 {
     for (; *text != '\0'; text++)
@@ -505,6 +511,34 @@ static void write_snapshots(const char *directory, struct cp0_ui *ui,
     write_snapshot(directory, "settings-wifi-password", ui, frame);
     cp0_ui_handle_action(ui, CP0_UI_BACK);
     cp0_ui_handle_action(ui, CP0_UI_BACK);
+    ui->settings_selected = 5;
+    ui->settings_item_selected = 3;
+    ui->settings_detail = true;
+    assert(cp0_ui_handle_action(ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_USB_MEDIA_REFRESH);
+    cp0_ui_set_usb_media_status(ui, true, CP0_UI_USB_MEDIA_OFF, 0, 0, 0,
+                                0, NULL);
+    input_usb_media_password(ui, "owner password");
+    write_snapshot(directory, "settings-usb-media-auth", ui, frame);
+    assert(pixel(frame, 12, 68) == GREEN);
+    assert(pixel(frame, 12, 95) == GREEN);
+    assert(pixel(frame, 12, 96) == BACKGROUND);
+    assert(cp0_ui_handle_action(ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_USB_MEDIA_START);
+    write_snapshot(directory, "settings-usb-media-preparing", ui, frame);
+    cp0_ui_set_usb_media_status(ui, true, CP0_UI_USB_MEDIA_CONNECTED, 12, 0,
+                                0, 512ULL * 1024ULL * 1024ULL, NULL);
+    write_snapshot(directory, "settings-usb-media-connected", ui, frame);
+    assert(cp0_ui_handle_action(ui, CP0_UI_BACK) == CP0_UI_EVENT_NONE);
+    assert(ui->password_secrets->usb_media.active);
+    assert(cp0_ui_handle_action(ui, CP0_UI_ACCEPT) ==
+           CP0_UI_EVENT_USB_MEDIA_STOP);
+    write_snapshot(directory, "settings-usb-media-importing", ui, frame);
+    cp0_ui_set_usb_media_status(ui, true, CP0_UI_USB_MEDIA_COMPLETE, 12, 2,
+                                1, 512ULL * 1024ULL * 1024ULL, NULL);
+    write_snapshot(directory, "settings-usb-media-complete", ui, frame);
+    cp0_ui_handle_action(ui, CP0_UI_BACK);
+    assert(!ui->password_secrets->usb_media.active);
     static const struct cp0_ui_developer_host snapshot_hosts[] = {
         {.label = "workstation",
          .ssh_fingerprint =
