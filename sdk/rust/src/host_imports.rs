@@ -20,6 +20,8 @@ mod target {
         fn raw_cp0_post_notification(title: *const u8, title_length: u32, body: *const u8, body_length: u32) -> i32;
         #[link_name = "cp0_http_get"]
         fn raw_cp0_http_get(url: *const u8, url_length: u32, body: *mut u8, body_capacity: u32) -> i64;
+        #[link_name = "cp0_http_get_range"]
+        fn raw_cp0_http_get_range(url: *const u8, url_length: u32, offset: u64, body: *mut u8, body_capacity: u32) -> i64;
         #[link_name = "cp0_document_open"]
         fn raw_cp0_document_open() -> i64;
         #[link_name = "cp0_document_read"]
@@ -30,6 +32,8 @@ mod target {
         fn raw_cp0_audio_play_pcm_s16le(samples: *const u8, sample_bytes: u32) -> i32;
         #[link_name = "cp0_audio_capture_pcm_s16le"]
         fn raw_cp0_audio_capture_pcm_s16le(samples: *mut u8, sample_capacity: u32) -> i32;
+        #[link_name = "cp0_audio_play_pcm_s16le_stereo_48khz"]
+        fn raw_cp0_audio_play_pcm_s16le_stereo_48khz(samples: *const u8, sample_bytes: u32) -> i32;
         #[link_name = "cp0_camera_capture_rgb565"]
         fn raw_cp0_camera_capture_rgb565(pixels: *mut u8, pixel_bytes: u32) -> i32;
         #[link_name = "cp0_camera_capture_photo"]
@@ -102,6 +106,10 @@ mod target {
         unsafe { raw_cp0_http_get(url, url_length, body, body_capacity) }
     }
 
+    pub(crate) fn cp0_http_get_range(url: *const u8, url_length: u32, offset: u64, body: *mut u8, body_capacity: u32) -> i64 {
+        unsafe { raw_cp0_http_get_range(url, url_length, offset, body, body_capacity) }
+    }
+
     pub(crate) fn cp0_document_open() -> i64 {
         unsafe { raw_cp0_document_open() }
     }
@@ -120,6 +128,10 @@ mod target {
 
     pub(crate) fn cp0_audio_capture_pcm_s16le(samples: *mut u8, sample_capacity: u32) -> i32 {
         unsafe { raw_cp0_audio_capture_pcm_s16le(samples, sample_capacity) }
+    }
+
+    pub(crate) fn cp0_audio_play_pcm_s16le_stereo_48khz(samples: *const u8, sample_bytes: u32) -> i32 {
+        unsafe { raw_cp0_audio_play_pcm_s16le_stereo_48khz(samples, sample_bytes) }
     }
 
     pub(crate) fn cp0_camera_capture_rgb565(pixels: *mut u8, pixel_bytes: u32) -> i32 {
@@ -240,6 +252,10 @@ mod target {
         -2
     }
 
+    pub(crate) const fn cp0_http_get_range(_url: *const u8, _url_length: u32, _offset: u64, _body: *mut u8, _body_capacity: u32) -> i64 {
+        -2
+    }
+
     pub(crate) const fn cp0_document_open() -> i64 {
         -2
     }
@@ -257,6 +273,10 @@ mod target {
     }
 
     pub(crate) const fn cp0_audio_capture_pcm_s16le(_samples: *mut u8, _sample_capacity: u32) -> i32 {
+        -2
+    }
+
+    pub(crate) const fn cp0_audio_play_pcm_s16le_stereo_48khz(_samples: *const u8, _sample_bytes: u32) -> i32 {
         -2
     }
 

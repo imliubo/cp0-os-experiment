@@ -8,8 +8,8 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::time::Duration;
 
 use cp0_network_protocol::{
-    MAX_NETWORK_BODY_BYTES, NetworkCommand, NetworkErrorCode, NetworkProtocolError, NetworkRequest,
-    NetworkResponse, read_request, write_response,
+    MAX_NETWORK_BODY_BYTES, MAX_NETWORK_RANGE_BYTES, NetworkCommand, NetworkErrorCode,
+    NetworkProtocolError, NetworkRequest, NetworkResponse, read_request, write_response,
 };
 use ureq::config::Config;
 use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
@@ -34,6 +34,7 @@ pub struct FetchError {
 
 pub trait HttpFetcher: fmt::Debug + Send + Sync + 'static {
     fn get(&self, url: &str) -> Result<HttpResult, FetchError>;
+    fn get_range(&self, url: &str, offset: u64, length: u16) -> Result<HttpResult, FetchError>;
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +74,42 @@ impl HttpFetcher for UreqFetcher {
         }
         Ok(HttpResult { status_code, body })
     }
+
+    fn get_range(&self, url: &str, offset: u64, length: u16) -> Result<HttpResult, FetchError> {
+        validate_destination_url(url)?;
+        let range = range_header(offset, length)?;
+        let mut response = self
+            .agent
+            .get(url)
+            .header("Range", &range)
+            .call()
+            .map_err(map_ureq_error)?;
+        let status_code = response.status().as_u16();
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(u64::from(length) + 1)
+            .read_to_vec()
+            .map_err(map_ureq_error)?;
+        if body.len() > usize::from(length) {
+            return Err(FetchError {
+                code: NetworkErrorCode::ResponseTooLarge,
+                message: "HTTPS range response exceeds its requested length",
+            });
+        }
+        Ok(HttpResult { status_code, body })
+    }
+}
+
+fn range_header(offset: u64, length: u16) -> Result<String, FetchError> {
+    let end = offset
+        .checked_add(u64::from(length))
+        .and_then(|end| end.checked_sub(1))
+        .ok_or(FetchError {
+            code: NetworkErrorCode::InvalidRequest,
+            message: "invalid HTTPS byte range",
+        })?;
+    Ok(format!("bytes={offset}-{end}"))
 }
 
 fn validate_destination_url(url: &str) -> Result<(), FetchError> {
@@ -332,26 +369,34 @@ impl<F: HttpFetcher> NetworkServer<F> {
 
     pub fn dispatch(&self, request: NetworkRequest) -> NetworkResponse {
         let request_id = request.request_id;
-        match request.command {
-            NetworkCommand::HttpGet { url } => match self.fetcher.get(&url) {
-                Ok(result)
-                    if (100..=599).contains(&result.status_code)
-                        && result.body.len() <= MAX_NETWORK_BODY_BYTES =>
-                {
-                    NetworkResponse::success(request_id, result.status_code, &result.body)
-                }
-                Ok(result) if result.body.len() > MAX_NETWORK_BODY_BYTES => NetworkResponse::error(
-                    request_id,
-                    NetworkErrorCode::ResponseTooLarge,
-                    "HTTPS response body exceeds 2048 bytes",
-                ),
-                Ok(_) => NetworkResponse::error(
-                    request_id,
-                    NetworkErrorCode::Internal,
-                    "network service produced an invalid HTTP status",
-                ),
-                Err(error) => NetworkResponse::error(request_id, error.code, error.message),
-            },
+        let (result, maximum) = match request.command {
+            NetworkCommand::HttpGet { url } => (self.fetcher.get(&url), MAX_NETWORK_BODY_BYTES),
+            NetworkCommand::HttpGetRange {
+                url,
+                offset,
+                length,
+            } => (
+                self.fetcher.get_range(&url, offset, length),
+                MAX_NETWORK_RANGE_BYTES,
+            ),
+        };
+        match result {
+            Ok(result)
+                if (100..=599).contains(&result.status_code) && result.body.len() <= maximum =>
+            {
+                NetworkResponse::success(request_id, result.status_code, &result.body)
+            }
+            Ok(result) if result.body.len() > maximum => NetworkResponse::error(
+                request_id,
+                NetworkErrorCode::ResponseTooLarge,
+                "HTTPS response body exceeds its requested bound",
+            ),
+            Ok(_) => NetworkResponse::error(
+                request_id,
+                NetworkErrorCode::Internal,
+                "network service produced an invalid HTTP status",
+            ),
+            Err(error) => NetworkResponse::error(request_id, error.code, error.message),
         }
     }
 }
@@ -415,6 +460,15 @@ mod tests {
 
     impl HttpFetcher for MockFetcher {
         fn get(&self, _url: &str) -> Result<HttpResult, FetchError> {
+            self.result.clone()
+        }
+
+        fn get_range(
+            &self,
+            _url: &str,
+            _offset: u64,
+            _length: u16,
+        ) -> Result<HttpResult, FetchError> {
             self.result.clone()
         }
     }
@@ -497,6 +551,50 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn constructs_exact_ranges_and_enforces_response_bounds() {
+        assert_eq!(range_header(4096, 8192).unwrap(), "bytes=4096-12287");
+        assert_eq!(
+            range_header(u64::MAX, 2).unwrap_err().code,
+            NetworkErrorCode::InvalidRequest
+        );
+
+        let oversized_normal = NetworkServer::new(
+            MockFetcher {
+                result: Ok(HttpResult {
+                    status_code: 200,
+                    body: vec![0; MAX_NETWORK_BODY_BYTES + 1],
+                }),
+            },
+            [0],
+        )
+        .dispatch(NetworkRequest::http_get(43, "https://example.com/data"));
+        assert!(matches!(
+            oversized_normal.outcome,
+            NetworkOutcome::Error {
+                code: NetworkErrorCode::ResponseTooLarge,
+                ..
+            }
+        ));
+
+        let range = NetworkServer::new(
+            MockFetcher {
+                result: Ok(HttpResult {
+                    status_code: 206,
+                    body: vec![0; MAX_NETWORK_RANGE_BYTES],
+                }),
+            },
+            [0],
+        )
+        .dispatch(NetworkRequest::http_get_range(
+            44,
+            "https://example.com/music.wav",
+            0,
+            MAX_NETWORK_RANGE_BYTES as u16,
+        ));
+        assert!(matches!(range.outcome, NetworkOutcome::Ok { .. }));
     }
 
     #[test]

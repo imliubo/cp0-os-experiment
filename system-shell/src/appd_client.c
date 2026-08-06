@@ -1682,7 +1682,7 @@ static int parse_document_prompt_response(
                                    "size_bytes");
         if (size < 0 ||
             !cp0_json_get_u64(response, &tokens[size], &document->size_bytes) ||
-            document->size_bytes > 16U * 1024U * 1024U)
+            document->size_bytes > 256U * 1024U * 1024U)
             return -1;
     }
     *prompt = decoded;

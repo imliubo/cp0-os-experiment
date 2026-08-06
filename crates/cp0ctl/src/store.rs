@@ -237,7 +237,7 @@ fn review_package(
         ));
     }
     let manifest = crate::package::manifest_from_package(&package)?;
-    if !matches!(manifest.sdk_version.as_str(), "1.0" | "0.1") {
+    if !matches!(manifest.sdk_version.as_str(), "1.1" | "1.0" | "0.1") {
         return Err(format!(
             "{} uses unsupported SDK {}",
             manifest.id, manifest.sdk_version
@@ -282,7 +282,7 @@ fn load_abi() -> Result<AbiContract, String> {
     let abi: AbiContract = serde_json::from_str(ABI_CONTRACT)
         .map_err(|error| format!("invalid built-in ABI: {error}"))?;
     if abi.schema_version != 1
-        || abi.abi_version != "1.0"
+        || abi.abi_version != "1.1"
         || abi.module != "cardputerzero"
         || abi.imports.is_empty()
     {
@@ -350,11 +350,13 @@ fn validate_import_permissions(manifest: &AppManifest, imports: &[String]) -> Re
         }
         let required = match import.as_str() {
             "cp0_post_notification" => Some(Permission::NotificationsPost),
-            "cp0_http_get" => Some(Permission::NetworkClient),
+            "cp0_http_get" | "cp0_http_get_range" => Some(Permission::NetworkClient),
             "cp0_document_open" | "cp0_document_read" | "cp0_document_close" => {
                 Some(Permission::DocumentsOpen)
             }
-            "cp0_audio_play_pcm_s16le" => Some(Permission::AudioPlayback),
+            "cp0_audio_play_pcm_s16le" | "cp0_audio_play_pcm_s16le_stereo_48khz" => {
+                Some(Permission::AudioPlayback)
+            }
             "cp0_audio_capture_pcm_s16le" => Some(Permission::AudioCapture),
             "cp0_camera_capture_rgb565" => Some(Permission::CameraCapture),
             "cp0_gpio_read" | "cp0_gpio_write" => Some(Permission::HardwareGpio),
@@ -588,6 +590,14 @@ mod tests {
 
         let manifest = cp0_manifest::parse_and_validate(&manifest_json()).unwrap();
         assert!(validate_import_permissions(&manifest, &["cp0_http_get".into()]).is_err());
+        assert!(validate_import_permissions(&manifest, &["cp0_http_get_range".into()]).is_err());
+        assert!(
+            validate_import_permissions(
+                &manifest,
+                &["cp0_audio_play_pcm_s16le_stereo_48khz".into()]
+            )
+            .is_err()
+        );
         assert!(
             validate_import_permissions(&manifest, &["cp0_photos_load_rgb565".into()]).is_err()
         );

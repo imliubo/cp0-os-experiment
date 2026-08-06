@@ -7,7 +7,7 @@ use std::os::unix::net::UnixListener;
 use std::process::ExitCode;
 use std::ptr;
 
-use cp0_audiod::{AlsaDevice, AudioServer};
+use cp0_audiod::{AlsaDevice, AudioServer, DEFAULT_KEY_SOUNDS_STATE};
 
 fn main() -> ExitCode {
     match run(env::args().skip(1).collect()) {
@@ -25,9 +25,15 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
             let listener = systemd_listener()?;
             let device = AlsaDevice::open_default().map_err(|error| error.to_string())?;
             let shell_uid = user_uid(c"cp0-shell").map_err(|error| error.to_string())?;
-            AudioServer::new(device, [0], [shell_uid])
-                .serve(listener)
-                .map_err(|error| error.to_string())
+            AudioServer::new_with_key_sounds_state(
+                device,
+                [0],
+                [shell_uid],
+                DEFAULT_KEY_SOUNDS_STATE,
+            )
+            .map_err(|error| format!("cannot load key sounds state: {error}"))?
+            .serve(listener)
+            .map_err(|error| error.to_string())
         }
         _ => Err("usage: cp0-audiod serve".into()),
     }

@@ -11,7 +11,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define CP0_DOCUMENT_MAX_BYTES (16U * 1024U * 1024U)
+#define CP0_DOCUMENT_MAX_BYTES (256U * 1024U * 1024U)
 #define CP0_DOCUMENT_READ_BYTES 4096U
 
 static int active_descriptor = -1;

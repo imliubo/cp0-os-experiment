@@ -23,6 +23,9 @@ cp0_result_t cp0_post_notification(const uint8_t *title, uint32_t title_length, 
 CP0_IMPORT("cp0_http_get")
 int64_t cp0_http_get_raw(const uint8_t *url, uint32_t url_length, uint8_t *body, uint32_t body_capacity);
 
+CP0_IMPORT("cp0_http_get_range")
+int64_t cp0_http_get_range_raw(const uint8_t *url, uint32_t url_length, uint64_t offset, uint8_t *body, uint32_t body_capacity);
+
 CP0_IMPORT("cp0_document_open")
 int64_t cp0_document_open_raw(void);
 
@@ -37,6 +40,9 @@ cp0_result_t cp0_audio_play_pcm_s16le_raw(const uint8_t *samples, uint32_t sampl
 
 CP0_IMPORT("cp0_audio_capture_pcm_s16le")
 int32_t cp0_audio_capture_pcm_s16le_raw(uint8_t *samples, uint32_t sample_capacity);
+
+CP0_IMPORT("cp0_audio_play_pcm_s16le_stereo_48khz")
+cp0_result_t cp0_audio_play_pcm_s16le_stereo_48khz_raw(const uint8_t *samples, uint32_t sample_bytes);
 
 CP0_IMPORT("cp0_camera_capture_rgb565")
 cp0_result_t cp0_camera_capture_rgb565_raw(uint8_t *pixels, uint32_t pixel_bytes);

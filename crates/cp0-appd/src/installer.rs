@@ -14,7 +14,7 @@ pub const DEFAULT_STORE_TRUST_DIR: &str = "/etc/cardputerzero/trust/store";
 pub const DEFAULT_DEVELOPER_TRUST_DIR: &str = "/etc/cardputerzero/trust/developers";
 pub const DEFAULT_REVOKED_KEYS_DIR: &str = "/etc/cardputerzero/trust/revoked";
 pub const DEVICE_SDK_MAJOR: u32 = 1;
-pub const DEVICE_SDK_MINOR: u32 = 0;
+pub const DEVICE_SDK_MINOR: u32 = 1;
 pub const LEGACY_SDK_VERSIONS: &[(u32, u32)] = &[(0, 1)];
 
 static INSTALL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -416,7 +416,7 @@ fn require_compatible_sdk(version: &str) -> Result<(), InstallError> {
     let minor = minor
         .parse::<u32>()
         .map_err(|_| InstallError::Invalid("SDK version minor component is out of range".into()))?;
-    let is_current_line = major == DEVICE_SDK_MAJOR && minor == DEVICE_SDK_MINOR;
+    let is_current_line = major == DEVICE_SDK_MAJOR && minor <= DEVICE_SDK_MINOR;
     let is_supported_legacy = LEGACY_SDK_VERSIONS.contains(&(major, minor));
     if !is_current_line && !is_supported_legacy {
         return Err(InstallError::Invalid(format!(
@@ -936,7 +936,7 @@ mod tests {
     fn rejects_incompatible_sdk_before_extraction() {
         let fixture = Fixture::new("sdk");
         let mut manifest = fixture.manifest();
-        manifest.sdk_version = "1.1".into();
+        manifest.sdk_version = "1.2".into();
         let mut package = CApp::new(vec![
             PackageEntry {
                 path: "app.json".into(),
@@ -1027,7 +1027,7 @@ mod tests {
 
     #[test]
     fn accepts_current_and_exact_legacy_sdk_versions() {
-        for version in ["1.0", "0.1"] {
+        for version in ["1.1", "1.0", "0.1"] {
             require_compatible_sdk(version).unwrap();
         }
     }
@@ -1035,7 +1035,7 @@ mod tests {
     #[test]
     fn rejects_unknown_and_noncanonical_sdk_versions() {
         for version in [
-            "0.0", "0.2", "1.1", "2.0", "01.0", "1.00", "1", "1.0.0", "1.x", "",
+            "0.0", "0.2", "1.2", "2.0", "01.0", "1.00", "1", "1.0.0", "1.x", "",
         ] {
             assert!(
                 matches!(

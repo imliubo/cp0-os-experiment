@@ -1,8 +1,8 @@
 schema_version = 1
-devkit_version = "1.0.0"
+devkit_version = "1.1.0"
 rust_version = "1.85.1"
 rust_target = "wasm32-unknown-unknown"
 node_minimum_version = "20.0.0"
 emscripten_version = "5.0.4"
 emscripten_image_digest = "sha256:ef91f658e0104636cf40a702c99169273969cf04d939f4f08e5d0223965d5788"
-app_sdk_version = "1.0"
+app_sdk_version = "1.1"

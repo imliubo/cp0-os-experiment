@@ -344,6 +344,22 @@ async function runApplication() {
       range(bodyPointer, bodyCapacity).set(body);
       return (200n << 32n) | BigInt(body.length);
     },
+    cp0_http_get_range(urlPointer, urlLength, offset, bodyPointer, bodyCapacity) {
+      metrics.host_calls += 1;
+      if (!allowed("network.client")) return BigInt(ERROR_DENIED);
+      const url = text(urlPointer, urlLength);
+      const capacity = bodyCapacity >>> 0;
+      if (
+        !url.startsWith("https://") || capacity === 0 || capacity > 8 * 1024 ||
+        offset < 0n || offset + BigInt(capacity) > 256n * 1024n * 1024n
+      ) return BigInt(ERROR_INVALID);
+      metrics.network_range_requests += 1;
+      if (offset >= BigInt(document.length)) return 416n << 32n;
+      const start = Number(offset);
+      const count = Math.min(capacity, document.length - start);
+      range(bodyPointer, capacity).set(document.subarray(start, start + count));
+      return (206n << 32n) | BigInt(count);
+    },
     cp0_document_open() {
       metrics.host_calls += 1;
       if (!allowed("documents.open")) return BigInt(ERROR_DENIED);
@@ -365,6 +381,15 @@ async function runApplication() {
       metrics.host_calls += 1;
       range(pointer, bytes);
       return status("audio.playback");
+    },
+    cp0_audio_play_pcm_s16le_stereo_48khz(pointer, bytes) {
+      metrics.host_calls += 1;
+      const count = bytes >>> 0;
+      if (count === 0 || count > 720 * 4 || count % 4 !== 0) return ERROR_INVALID;
+      range(pointer, count);
+      if (!allowed("audio.playback")) return ERROR_DENIED;
+      metrics.music_frames_played += count / 4;
+      return 0;
     },
     cp0_audio_capture_pcm_s16le(pointer, bytes) {
       metrics.host_calls += 1;
@@ -649,6 +674,8 @@ function emptyMetrics() {
     photo_library_keys: 0,
     media_session_updates: 0,
     media_actions_taken: 0,
+    network_range_requests: 0,
+    music_frames_played: 0,
     capability_calls: {},
   };
 }

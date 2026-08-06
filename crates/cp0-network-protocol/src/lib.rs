@@ -4,9 +4,11 @@ use std::io::{self, BufRead, Write};
 use serde::{Deserialize, Serialize};
 
 pub const NETWORK_PROTOCOL_VERSION: u32 = 1;
-pub const MAX_NETWORK_FRAME_BYTES: usize = 4 * 1024;
+pub const MAX_NETWORK_FRAME_BYTES: usize = 16 * 1024;
 pub const MAX_NETWORK_URL_BYTES: usize = 1024;
 pub const MAX_NETWORK_BODY_BYTES: usize = 2 * 1024;
+pub const MAX_NETWORK_RANGE_BYTES: usize = 8 * 1024;
+pub const MAX_NETWORK_RESOURCE_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_NETWORK_ERROR_CHARS: usize = 160;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,7 +22,14 @@ pub struct NetworkRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum NetworkCommand {
-    HttpGet { url: String },
+    HttpGet {
+        url: String,
+    },
+    HttpGetRange {
+        url: String,
+        offset: u64,
+        length: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +75,7 @@ pub enum NetworkProtocolError {
     UnterminatedFrame,
     UnsupportedVersion(u32),
     InvalidUrl,
+    InvalidRange,
     InvalidStatusCode,
     InvalidBodyEncoding,
     InvalidErrorMessage,
@@ -88,6 +98,7 @@ impl fmt::Display for NetworkProtocolError {
             }
             Self::InvalidUrl => formatter
                 .write_str("network URL must be a bounded HTTPS URL without control characters"),
+            Self::InvalidRange => formatter.write_str("network byte range is outside its bounds"),
             Self::InvalidStatusCode => formatter.write_str("invalid HTTP response status code"),
             Self::InvalidBodyEncoding => formatter.write_str(
                 "network response body is not canonical base64 or exceeds the body limit",
@@ -122,6 +133,23 @@ impl NetworkRequest {
         }
     }
 
+    pub fn http_get_range(
+        request_id: u64,
+        url: impl Into<String>,
+        offset: u64,
+        length: u16,
+    ) -> Self {
+        Self {
+            protocol_version: NETWORK_PROTOCOL_VERSION,
+            request_id,
+            command: NetworkCommand::HttpGetRange {
+                url: url.into(),
+                offset,
+                length,
+            },
+        }
+    }
+
     pub fn validate(&self) -> Result<(), NetworkProtocolError> {
         if self.protocol_version != NETWORK_PROTOCOL_VERSION {
             return Err(NetworkProtocolError::UnsupportedVersion(
@@ -129,8 +157,19 @@ impl NetworkRequest {
             ));
         }
         match &self.command {
-            NetworkCommand::HttpGet { url } if !is_valid_https_url(url) => {
+            NetworkCommand::HttpGet { url } | NetworkCommand::HttpGetRange { url, .. }
+                if !is_valid_https_url(url) =>
+            {
                 Err(NetworkProtocolError::InvalidUrl)
+            }
+            NetworkCommand::HttpGetRange { offset, length, .. }
+                if *length == 0
+                    || usize::from(*length) > MAX_NETWORK_RANGE_BYTES
+                    || offset
+                        .checked_add(u64::from(*length))
+                        .is_none_or(|end| end > MAX_NETWORK_RESOURCE_BYTES) =>
+            {
+                Err(NetworkProtocolError::InvalidRange)
             }
             _ => Ok(()),
         }
@@ -140,7 +179,7 @@ impl NetworkRequest {
 impl NetworkResponse {
     pub fn success(request_id: u64, status_code: u16, body: &[u8]) -> Self {
         debug_assert!((100..=599).contains(&status_code));
-        debug_assert!(body.len() <= MAX_NETWORK_BODY_BYTES);
+        debug_assert!(body.len() <= MAX_NETWORK_RANGE_BYTES);
         Self {
             protocol_version: NETWORK_PROTOCOL_VERSION,
             request_id,
@@ -260,7 +299,7 @@ pub fn encode_base64(input: &[u8]) -> String {
 
 pub fn decode_base64(input: &str) -> Result<Vec<u8>, NetworkProtocolError> {
     let encoded = input.as_bytes();
-    if encoded.len() % 4 != 0 || encoded.len() > MAX_NETWORK_BODY_BYTES.div_ceil(3) * 4 {
+    if encoded.len() % 4 != 0 || encoded.len() > MAX_NETWORK_RANGE_BYTES.div_ceil(3) * 4 {
         return Err(NetworkProtocolError::InvalidBodyEncoding);
     }
     let mut output = Vec::with_capacity(encoded.len() / 4 * 3);
@@ -295,7 +334,7 @@ pub fn decode_base64(input: &str) -> Result<Vec<u8>, NetworkProtocolError> {
             }
         }
     }
-    if output.len() > MAX_NETWORK_BODY_BYTES {
+    if output.len() > MAX_NETWORK_RANGE_BYTES {
         return Err(NetworkProtocolError::InvalidBodyEncoding);
     }
     Ok(output)
@@ -385,6 +424,19 @@ mod tests {
             panic!("expected successful response");
         };
         assert_eq!(decode_base64(&body_base64).unwrap(), body);
+
+        let range = NetworkRequest::http_get_range(
+            8,
+            "https://example.com/music.wav",
+            MAX_NETWORK_RESOURCE_BYTES - MAX_NETWORK_RANGE_BYTES as u64,
+            MAX_NETWORK_RANGE_BYTES as u16,
+        );
+        let mut range_frame = Vec::new();
+        write_request(&mut range_frame, &range).unwrap();
+        assert_eq!(
+            read_request(&mut Cursor::new(range_frame)).unwrap(),
+            Some(range)
+        );
     }
 
     #[test]
@@ -407,8 +459,32 @@ mod tests {
         for encoded in ["A", "====", "AB==", "AAB="] {
             assert!(decode_base64(encoded).is_err(), "accepted {encoded}");
         }
-        let oversized = encode_base64(&vec![0; MAX_NETWORK_BODY_BYTES + 1]);
+        let oversized = encode_base64(&vec![0; MAX_NETWORK_RANGE_BYTES + 1]);
         assert!(decode_base64(&oversized).is_err());
+    }
+
+    #[test]
+    fn rejects_zero_oversized_and_out_of_resource_ranges() {
+        for request in [
+            NetworkRequest::http_get_range(1, "https://example.com/music.wav", 0, 0),
+            NetworkRequest::http_get_range(
+                2,
+                "https://example.com/music.wav",
+                0,
+                MAX_NETWORK_RANGE_BYTES as u16 + 1,
+            ),
+            NetworkRequest::http_get_range(
+                3,
+                "https://example.com/music.wav",
+                MAX_NETWORK_RESOURCE_BYTES,
+                1,
+            ),
+        ] {
+            assert!(matches!(
+                request.validate(),
+                Err(NetworkProtocolError::InvalidRange)
+            ));
+        }
     }
 
     #[test]

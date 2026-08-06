@@ -174,7 +174,7 @@ pub fn scan(input: &ScanInput<'_>) -> ScanReport {
             developer_key_sha256,
         );
     }
-    if !matches!(manifest.sdk_version.as_str(), "1.0" | "0.1") {
+    if !matches!(manifest.sdk_version.as_str(), "1.1" | "1.0" | "0.1") {
         return report_with_key(
             "manifest.sdk-unsupported",
             ScanDisposition::NeedsChanges,
@@ -357,7 +357,7 @@ fn inspect_imports(wasm: &[u8]) -> Result<Vec<String>, &'static str> {
         .validate_all(wasm)
         .map_err(|_| "wasm.invalid")?;
     let abi: AbiContract = serde_json::from_str(ABI_CONTRACT).map_err(|_| "scanner.abi-invalid")?;
-    if abi.schema_version != 1 || abi.abi_version != "1.0" || abi.imports.is_empty() {
+    if abi.schema_version != 1 || abi.abi_version != "1.1" || abi.imports.is_empty() {
         return Err("scanner.abi-invalid");
     }
     let allowed = abi
@@ -407,11 +407,13 @@ fn imports_match_permissions(manifest: &AppManifest, imports: &[String]) -> bool
 fn required_permission(import: &str) -> Option<Permission> {
     match import {
         "cp0_post_notification" => Some(Permission::NotificationsPost),
-        "cp0_http_get" => Some(Permission::NetworkClient),
+        "cp0_http_get" | "cp0_http_get_range" => Some(Permission::NetworkClient),
         "cp0_document_open" | "cp0_document_read" | "cp0_document_close" => {
             Some(Permission::DocumentsOpen)
         }
-        "cp0_audio_play_pcm_s16le" => Some(Permission::AudioPlayback),
+        "cp0_audio_play_pcm_s16le" | "cp0_audio_play_pcm_s16le_stereo_48khz" => {
+            Some(Permission::AudioPlayback)
+        }
         "cp0_audio_capture_pcm_s16le" => Some(Permission::AudioCapture),
         "cp0_camera_capture_rgb565" => Some(Permission::CameraCapture),
         "cp0_gpio_read" | "cp0_gpio_write" => Some(Permission::HardwareGpio),
@@ -481,6 +483,14 @@ mod tests {
     #[test]
     fn rejects_undeclared_capability_and_malformed_assets() {
         let mut fixture = Fixture::with_wasm(&host_import_module("cp0_http_get"));
+        let report = fixture.scan();
+        assert_eq!(report.findings[0].code, "wasm.permission-not-declared");
+
+        fixture = Fixture::with_wasm(&host_import_module("cp0_http_get_range"));
+        let report = fixture.scan();
+        assert_eq!(report.findings[0].code, "wasm.permission-not-declared");
+
+        fixture = Fixture::with_wasm(&host_import_module("cp0_audio_play_pcm_s16le_stereo_48khz"));
         let report = fixture.scan();
         assert_eq!(report.findings[0].code, "wasm.permission-not-declared");
 
@@ -595,7 +605,7 @@ mod tests {
             id: "dev.example.scan".into(),
             name: "Scan Test".into(),
             version: "1.0.0".into(),
-            sdk_version: "1.0".into(),
+            sdk_version: "1.1".into(),
             runtime: Runtime::Wamr,
             entrypoint: "app.wasm".into(),
             display: DisplayMode::Standard,

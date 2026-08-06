@@ -14,7 +14,7 @@ declares Apache-2.0, but that declaration alone does not license the other
 bundled files or executable. Internal acceptance archives may be built before
 this decision; do not publish them as public release assets.
 
-Rust is the only release-ready end-to-end App workflow in DevKit 1.0. The
+Rust is the only release-ready end-to-end App workflow in DevKit 1.1. The
 C/C++ headers, ABI contract and LVGL adapter are shipped for advanced
 integration, but `cp0ctl` does not yet generate, finally link, simulate or
 package those projects. Upstream LVGL sources are not bundled. Release notes
@@ -27,8 +27,8 @@ The archive contains:
 - Rust, C/C++, WIT, ABI and LVGL SDK sources;
 - the deterministic PC simulator with focused-key and global-media fixtures;
 - the `cardputerzero-build-app` Skill plus App and Store Listing schemas;
-- Hello Card, Calculator, Neon Snake, Camera, Gallery, Media Controls, Notes
-  and Stopwatch source with reference screenshots;
+- Hello Card, Calculator, Neon Snake, Camera, Gallery, Music, Media Controls,
+  Notes and Stopwatch source with reference screenshots;
 - Developer Mode, photo-library, icon and developer workflow documentation;
 - a machine-readable `devkit.json`, per-file `SHA256SUMS` and archive checksum.
 
@@ -42,9 +42,9 @@ Obtain the archive and adjacent checksum for the destination computer's exact
 OS and CPU. Then verify both the archive and its extracted contents:
 
 ```sh
-shasum -a 256 -c cardputerzero-app-devkit-1.0.0-HOST.tar.xz.sha256
-tar -xJf cardputerzero-app-devkit-1.0.0-HOST.tar.xz
-export CP0_DEVKIT_ROOT="$PWD/cardputerzero-app-devkit-1.0.0-HOST"
+shasum -a 256 -c cardputerzero-app-devkit-1.1.0-HOST.tar.xz.sha256
+tar -xJf cardputerzero-app-devkit-1.1.0-HOST.tar.xz
+export CP0_DEVKIT_ROOT="$PWD/cardputerzero-app-devkit-1.1.0-HOST"
 export PATH="$CP0_DEVKIT_ROOT/bin:$PATH"
 export RUSTUP_TOOLCHAIN=$(awk -F '"' '$1 ~ /^rust_version = / { print $2 }' \
   "$CP0_DEVKIT_ROOT/devkit/toolchain.toml")
@@ -89,9 +89,9 @@ SDK multi-platform digest and Rust toolchain. It includes Rust
 simulator. Build and export it with:
 
 ```sh
-docker build -f devkit/Dockerfile -t cardputerzero/app-devkit:1.0.0 .
-docker save cardputerzero/app-devkit:1.0.0 | xz -T0 > cardputerzero-app-devkit-1.0.0.oci.tar.xz
-shasum -a 256 cardputerzero-app-devkit-1.0.0.oci.tar.xz > cardputerzero-app-devkit-1.0.0.oci.tar.xz.sha256
+docker build -f devkit/Dockerfile -t cardputerzero/app-devkit:1.1.0 .
+docker save cardputerzero/app-devkit:1.1.0 | xz -T0 > cardputerzero-app-devkit-1.1.0.oci.tar.xz
+shasum -a 256 cardputerzero-app-devkit-1.1.0.oci.tar.xz > cardputerzero-app-devkit-1.1.0.oci.tar.xz.sha256
 ```
 
 Release the OCI archive and checksum for offline use. Developers load it with
@@ -110,7 +110,7 @@ Before publishing, verify all of the following on every host artifact:
 2. `bin/cp0ctl new` creates a project whose SDK path resolves inside the
    extracted DevKit.
 3. The generated project builds without the source repository.
-4. All eight bundled examples build; camera/photo and media simulator fixtures
+4. All nine bundled examples build; camera/photo and media simulator fixtures
    produce frames and profiles, and consume their scripted actions.
 5. The Skill passes its structural validator and its `doctor.sh` reports the
    expected toolchain.

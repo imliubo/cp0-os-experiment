@@ -13,9 +13,9 @@ jq -e '.abi_version == "1.0"' "${snapshots[1]}" >/dev/null
 
 jq -e '
     .schema_version == 1 and
-    .abi_version == "1.0" and
+    .abi_version == "1.1" and
     .module == "cardputerzero" and
-    (.imports | length == 33) and
+    (.imports | length == 35) and
     ([.imports[].name] | length == (unique | length)) and
     ([.imports[].c_name] | length == (unique | length)) and
     ([.imports[].wit] | length == (unique | length))
@@ -35,9 +35,9 @@ node "$repo_root/scripts/generate-sdk-bindings.mjs" --check
 
 grep -qx '#define CP0_SDK_VERSION_MAJOR 1' \
     "$repo_root/sdk/c/include/cardputerzero.h"
-grep -qx '#define CP0_SDK_VERSION_MINOR 0' \
+grep -qx '#define CP0_SDK_VERSION_MINOR 1' \
     "$repo_root/sdk/c/include/cardputerzero.h"
-grep -qx 'version = "1.0.0"' "$repo_root/sdk/rust/Cargo.toml"
+grep -qx 'version = "1.1.0"' "$repo_root/sdk/rust/Cargo.toml"
 
 if rg -n 'link_name = "cp0_' "$repo_root/sdk/rust/src" \
     --glob '!host_imports.rs'; then
@@ -46,4 +46,4 @@ if rg -n 'link_name = "cp0_' "$repo_root/sdk/rust/src" \
 fi
 
 registered=$(rg -c '^\{"cp0_' "$repo_root/app-runtime/src/hostcall_symbols.inc")
-test "$registered" -eq 33
+test "$registered" -eq 35

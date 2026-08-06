@@ -30,10 +30,19 @@ pub enum BrokerCommand {
     HttpGet {
         url: String,
     },
+    HttpGetRange {
+        url: String,
+        offset: u64,
+        length: u16,
+    },
     OpenDocument,
     PlayAudio {
         samples_base64: String,
     },
+    PlayAudioStereo48k {
+        samples_base64: String,
+    },
+    PlayKeyClick,
     CaptureAudio {
         frames: u16,
     },
@@ -314,8 +323,26 @@ impl BrokerRequest {
             BrokerCommand::HttpGet { url } if !cp0_network_protocol::is_valid_https_url(url) => {
                 Err(BrokerProtocolError::InvalidUrl)
             }
+            BrokerCommand::HttpGetRange {
+                url,
+                offset,
+                length,
+            } if !cp0_network_protocol::is_valid_https_url(url)
+                || *length == 0
+                || usize::from(*length) > cp0_network_protocol::MAX_NETWORK_RANGE_BYTES
+                || offset
+                    .checked_add(u64::from(*length))
+                    .is_none_or(|end| end > cp0_network_protocol::MAX_NETWORK_RESOURCE_BYTES) =>
+            {
+                Err(BrokerProtocolError::InvalidUrl)
+            }
             BrokerCommand::PlayAudio { samples_base64 }
                 if cp0_audio_protocol::decode_samples(samples_base64).is_err() =>
+            {
+                Err(BrokerProtocolError::InvalidAudio)
+            }
+            BrokerCommand::PlayAudioStereo48k { samples_base64 }
+                if cp0_audio_protocol::decode_music_samples(samples_base64).is_err() =>
             {
                 Err(BrokerProtocolError::InvalidAudio)
             }
@@ -1013,6 +1040,40 @@ mod tests {
         let mut maximum_frame = Vec::new();
         write_broker_response(&mut maximum_frame, &maximum).unwrap();
         assert!(maximum_frame.len() <= MAX_BROKER_FRAME_BYTES);
+
+        let range = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 4,
+            command: BrokerCommand::HttpGetRange {
+                url: "https://example.com/music.wav".into(),
+                offset: cp0_network_protocol::MAX_NETWORK_RESOURCE_BYTES
+                    - cp0_network_protocol::MAX_NETWORK_RANGE_BYTES as u64,
+                length: cp0_network_protocol::MAX_NETWORK_RANGE_BYTES as u16,
+            },
+        };
+        assert!(range.validate().is_ok());
+        let BrokerCommand::HttpGetRange { offset, .. } = range.command else {
+            unreachable!();
+        };
+        for (invalid_offset, invalid_length) in [
+            (offset, 0),
+            (0, cp0_network_protocol::MAX_NETWORK_RANGE_BYTES as u16 + 1),
+            (cp0_network_protocol::MAX_NETWORK_RESOURCE_BYTES, 1),
+        ] {
+            assert!(
+                BrokerRequest {
+                    protocol_version: BROKER_PROTOCOL_VERSION,
+                    request_id: 5,
+                    command: BrokerCommand::HttpGetRange {
+                        url: "https://example.com/music.wav".into(),
+                        offset: invalid_offset,
+                        length: invalid_length,
+                    },
+                }
+                .validate()
+                .is_err()
+            );
+        }
     }
 
     #[test]
@@ -1067,6 +1128,22 @@ mod tests {
             BrokerResponse::audio_captured(5, cp0_audio_protocol::encode_base64(&samples));
         assert!(response.validate().is_ok());
         assert!(BrokerResponse::audio_played(5, 0).validate().is_err());
+        let stereo = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 6,
+            command: BrokerCommand::PlayAudioStereo48k {
+                samples_base64: cp0_audio_protocol::encode_base64(&samples),
+            },
+        };
+        assert!(stereo.validate().is_ok());
+        let invalid_stereo = BrokerRequest {
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            request_id: 7,
+            command: BrokerCommand::PlayAudioStereo48k {
+                samples_base64: cp0_audio_protocol::encode_base64(&samples[..2]),
+            },
+        };
+        assert!(invalid_stereo.validate().is_err());
     }
 
     #[test]

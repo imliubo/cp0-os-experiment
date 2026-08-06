@@ -1,4 +1,4 @@
-package cardputerzero:sdk@1.0.0;
+package cardputerzero:sdk@1.1.0;
 
 interface types {
     record rect {
@@ -54,6 +54,7 @@ interface network {
     }
 
     http-get: func(url: string) -> result<http-response, error-code>;
+    http-get-range: func(url: string, offset: u64, maximum: u16) -> result<http-response, error-code>;
 }
 
 interface documents {
@@ -73,6 +74,7 @@ interface audio {
     use types.{error-code};
 
     play-pcm-s16le: func(samples: list<s16>) -> result<_, error-code>;
+    play-pcm-s16le-stereo-48khz: func(samples: list<s16>) -> result<_, error-code>;
     capture-pcm-s16le: func(frames: u16) -> result<list<s16>, error-code>;
 }
 

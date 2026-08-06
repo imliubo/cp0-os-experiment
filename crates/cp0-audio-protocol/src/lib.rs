@@ -9,6 +9,11 @@ pub const AUDIO_CHANNELS: u8 = 1;
 pub const AUDIO_SAMPLE_BYTES: usize = 2;
 pub const MAX_AUDIO_FRAMES: usize = 1024;
 pub const MAX_AUDIO_BYTES: usize = MAX_AUDIO_FRAMES * AUDIO_SAMPLE_BYTES;
+pub const MUSIC_SAMPLE_RATE_HZ: u32 = 48_000;
+pub const MUSIC_CHANNELS: u8 = 2;
+pub const MUSIC_FRAME_BYTES: usize = AUDIO_SAMPLE_BYTES * MUSIC_CHANNELS as usize;
+pub const MAX_MUSIC_FRAMES: usize = 720;
+pub const MAX_MUSIC_BYTES: usize = MAX_MUSIC_FRAMES * MUSIC_FRAME_BYTES;
 pub const MAX_AUDIO_FRAME_BYTES: usize = 4 * 1024;
 pub const MAX_AUDIO_ERROR_CHARS: usize = 160;
 
@@ -24,11 +29,13 @@ pub struct AudioRequest {
 #[serde(tag = "name", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum AudioCommand {
     PlayPcmS16le { samples_base64: String },
+    PlayPcmS16leStereo48k { samples_base64: String },
     CapturePcmS16le { frames: u16 },
     GetOutputState {},
     SetOutputVolume { percent: u8 },
     AdjustOutputVolume { direction: AudioDirection },
     SetOutputMuted { muted: bool },
+    SetKeySoundsEnabled { enabled: bool },
     PlayKeyClick {},
 }
 
@@ -66,6 +73,9 @@ pub enum AudioOutcome {
     },
     OutputState {
         state: AudioOutputState,
+    },
+    KeySoundsState {
+        enabled: bool,
     },
     Error {
         code: AudioErrorCode,
@@ -157,6 +167,16 @@ impl AudioRequest {
         }
     }
 
+    pub fn playback_stereo_48k(request_id: u64, samples: &[u8]) -> Self {
+        Self {
+            protocol_version: AUDIO_PROTOCOL_VERSION,
+            request_id,
+            command: AudioCommand::PlayPcmS16leStereo48k {
+                samples_base64: encode_base64(samples),
+            },
+        }
+    }
+
     pub fn capture(request_id: u64, frames: u16) -> Self {
         Self {
             protocol_version: AUDIO_PROTOCOL_VERSION,
@@ -205,11 +225,22 @@ impl AudioRequest {
         }
     }
 
+    pub const fn set_key_sounds_enabled(request_id: u64, enabled: bool) -> Self {
+        Self {
+            protocol_version: AUDIO_PROTOCOL_VERSION,
+            request_id,
+            command: AudioCommand::SetKeySoundsEnabled { enabled },
+        }
+    }
+
     pub fn validate(&self) -> Result<(), AudioProtocolError> {
         validate_version(self.protocol_version)?;
         match &self.command {
             AudioCommand::PlayPcmS16le { samples_base64 } => {
                 decode_samples(samples_base64).map(|_| ())
+            }
+            AudioCommand::PlayPcmS16leStereo48k { samples_base64 } => {
+                decode_music_samples(samples_base64).map(|_| ())
             }
             AudioCommand::CapturePcmS16le { frames }
                 if *frames == 0 || usize::from(*frames) > MAX_AUDIO_FRAMES =>
@@ -224,6 +255,7 @@ impl AudioRequest {
             | AudioCommand::SetOutputVolume { .. }
             | AudioCommand::AdjustOutputVolume { .. }
             | AudioCommand::SetOutputMuted { .. }
+            | AudioCommand::SetKeySoundsEnabled { .. }
             | AudioCommand::PlayKeyClick {} => Ok(()),
         }
     }
@@ -256,6 +288,14 @@ impl AudioResponse {
         }
     }
 
+    pub const fn key_sounds_state(request_id: u64, enabled: bool) -> Self {
+        Self {
+            protocol_version: AUDIO_PROTOCOL_VERSION,
+            request_id,
+            outcome: AudioOutcome::KeySoundsState { enabled },
+        }
+    }
+
     pub fn error(request_id: u64, code: AudioErrorCode, message: impl Into<String>) -> Self {
         Self {
             protocol_version: AUDIO_PROTOCOL_VERSION,
@@ -277,6 +317,7 @@ impl AudioResponse {
             }
             AudioOutcome::Captured { samples_base64 } => decode_samples(samples_base64).map(|_| ()),
             AudioOutcome::OutputState { state } => state.validate(),
+            AudioOutcome::KeySoundsState { .. } => Ok(()),
             AudioOutcome::Error { message, .. }
                 if message.is_empty()
                     || message.chars().count() > MAX_AUDIO_ERROR_CHARS
@@ -375,10 +416,20 @@ pub fn encode_base64(input: &[u8]) -> String {
 }
 
 pub fn decode_samples(input: &str) -> Result<Vec<u8>, AudioProtocolError> {
+    decode_bounded_samples(input, MAX_AUDIO_BYTES, AUDIO_SAMPLE_BYTES)
+}
+
+pub fn decode_music_samples(input: &str) -> Result<Vec<u8>, AudioProtocolError> {
+    decode_bounded_samples(input, MAX_MUSIC_BYTES, MUSIC_FRAME_BYTES)
+}
+
+fn decode_bounded_samples(
+    input: &str,
+    maximum_bytes: usize,
+    frame_bytes: usize,
+) -> Result<Vec<u8>, AudioProtocolError> {
     let encoded = input.as_bytes();
-    if encoded.is_empty()
-        || encoded.len() % 4 != 0
-        || encoded.len() > MAX_AUDIO_BYTES.div_ceil(3) * 4
+    if encoded.is_empty() || encoded.len() % 4 != 0 || encoded.len() > maximum_bytes.div_ceil(3) * 4
     {
         return Err(AudioProtocolError::InvalidSamples);
     }
@@ -414,8 +465,7 @@ pub fn decode_samples(input: &str) -> Result<Vec<u8>, AudioProtocolError> {
             }
         }
     }
-    if output.is_empty() || output.len() > MAX_AUDIO_BYTES || output.len() % AUDIO_SAMPLE_BYTES != 0
-    {
+    if output.is_empty() || output.len() > maximum_bytes || output.len() % frame_bytes != 0 {
         return Err(AudioProtocolError::InvalidSamples);
     }
     Ok(output)
@@ -508,6 +558,15 @@ mod tests {
             panic!("expected captured samples");
         };
         assert_eq!(decode_samples(&samples_base64).unwrap(), samples);
+
+        let stereo = [0_u8, 0x80, 0xff, 0x7f];
+        let playback = AudioRequest::playback_stereo_48k(8, &stereo);
+        let mut frame = Vec::new();
+        write_request(&mut frame, &playback).unwrap();
+        assert_eq!(
+            read_request(&mut Cursor::new(frame)).unwrap(),
+            Some(playback)
+        );
     }
 
     #[test]
@@ -518,6 +577,7 @@ mod tests {
             AudioRequest::adjust_output_volume(3, AudioDirection::Decrease),
             AudioRequest::set_output_muted(4, true),
             AudioRequest::play_key_click(5),
+            AudioRequest::set_key_sounds_enabled(6, false),
         ];
         for request in requests {
             let mut frame = Vec::new();
@@ -540,6 +600,13 @@ mod tests {
                 Some(response)
             );
         }
+        let response = AudioResponse::key_sounds_state(6, false);
+        let mut frame = Vec::new();
+        write_response(&mut frame, &response).unwrap();
+        assert_eq!(
+            read_response(&mut Cursor::new(frame)).unwrap(),
+            Some(response)
+        );
     }
 
     #[test]
@@ -563,6 +630,10 @@ mod tests {
         }
         let oversized = encode_base64(&vec![0; MAX_AUDIO_BYTES + 2]);
         assert!(decode_samples(&oversized).is_err());
+        for invalid in [vec![0; 2], vec![0; 6], vec![0; MAX_MUSIC_BYTES + 4]] {
+            assert!(decode_music_samples(&encode_base64(&invalid)).is_err());
+        }
+        assert!(decode_music_samples(&encode_base64(&vec![0; MAX_MUSIC_BYTES])).is_ok());
     }
 
     #[test]

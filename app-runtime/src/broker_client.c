@@ -24,10 +24,15 @@
 #define CP0_NOTIFICATION_BODY_BYTES 640U
 #define CP0_NETWORK_URL_BYTES 1024U
 #define CP0_NETWORK_BODY_BYTES 2048U
+#define CP0_NETWORK_RANGE_BYTES (8U * 1024U)
+#define CP0_NETWORK_RESOURCE_BYTES (256ULL * 1024ULL * 1024ULL)
 #define CP0_DOCUMENT_ID_BYTES 32U
-#define CP0_DOCUMENT_MAX_BYTES (16U * 1024U * 1024U)
+#define CP0_DOCUMENT_MAX_BYTES (256U * 1024U * 1024U)
 #define CP0_AUDIO_MAX_FRAMES 1024U
 #define CP0_AUDIO_MAX_BYTES (CP0_AUDIO_MAX_FRAMES * 2U)
+#define CP0_MUSIC_MAX_FRAMES 720U
+#define CP0_MUSIC_FRAME_BYTES 4U
+#define CP0_MUSIC_MAX_BYTES (CP0_MUSIC_MAX_FRAMES * CP0_MUSIC_FRAME_BYTES)
 #define CP0_CAMERA_WIDTH 320U
 #define CP0_CAMERA_HEIGHT 170U
 #define CP0_CAMERA_FRAME_BYTES (CP0_CAMERA_WIDTH * CP0_CAMERA_HEIGHT * 2U)
@@ -518,7 +523,7 @@ int64_t cp0_broker_decode_http_response(const char *response, uint8_t *body,
     uint16_t status_code;
 
     if (response == NULL || body == NULL || body_capacity == 0U ||
-        body_capacity > CP0_NETWORK_BODY_BYTES)
+        body_capacity > CP0_NETWORK_RANGE_BYTES)
         return CP0_BROKER_INVALID_ARGUMENT;
     if (strstr(response, "\"status\":\"http-response\"") == NULL)
         return decode_result(response);
@@ -587,6 +592,46 @@ int64_t cp0_broker_http_get(const uint8_t *url, size_t url_length,
                       sizeof(suffix) - 1U))
         return CP0_BROKER_INVALID_ARGUMENT;
     result = broker_exchange(request, offset, response, sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    return cp0_broker_decode_http_response(response, body, body_capacity);
+}
+
+int64_t cp0_broker_http_get_range(const uint8_t *url, size_t url_length,
+                                  uint64_t range_offset, uint8_t *body,
+                                  size_t body_capacity) {
+    static const char prefix[] =
+        "{\"protocol_version\":1,\"request_id\":24,\"command\":{"
+        "\"name\":\"http-get-range\",\"url\":";
+    static const char suffix[] = "}}\n";
+    char request[CP0_BROKER_REQUEST_BYTES];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    char range[96];
+    size_t request_offset = 0;
+    int count;
+    int32_t result;
+
+    if (url == NULL || url_length <= sizeof("https://") - 1U ||
+        url_length > CP0_NETWORK_URL_BYTES || body == NULL ||
+        body_capacity == 0U || body_capacity > CP0_NETWORK_RANGE_BYTES ||
+        range_offset > CP0_NETWORK_RESOURCE_BYTES - body_capacity ||
+        memcmp(url, "https://", sizeof("https://") - 1U) != 0)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    count = snprintf(range, sizeof(range),
+                     ",\"offset\":%llu,\"length\":%zu",
+                     (unsigned long long)range_offset, body_capacity);
+    if (count <= 0 || (size_t)count >= sizeof(range) ||
+        !append_bytes(request, sizeof(request), &request_offset, prefix,
+                      sizeof(prefix) - 1U) ||
+        !append_json_string(request, sizeof(request), &request_offset, url,
+                            url_length) ||
+        !append_bytes(request, sizeof(request), &request_offset, range,
+                      (size_t)count) ||
+        !append_bytes(request, sizeof(request), &request_offset, suffix,
+                      sizeof(suffix) - 1U))
+        return CP0_BROKER_INVALID_ARGUMENT;
+    result = broker_exchange(request, request_offset, response,
+                             sizeof(response));
     if (result != CP0_BROKER_OK)
         return result;
     return cp0_broker_decode_http_response(response, body, body_capacity);
@@ -683,6 +728,58 @@ int32_t cp0_broker_play_audio(const uint8_t *samples, size_t sample_bytes) {
         return decode_result(response);
     if (!json_u16_field(response, "frames", &frames) || frames == 0U ||
         (size_t)frames * 2U != sample_bytes)
+        return CP0_BROKER_INTERNAL;
+    return CP0_BROKER_OK;
+}
+
+int32_t cp0_broker_play_key_click(void) {
+    static const char request[] =
+        "{\"protocol_version\":1,\"request_id\":22,\"command\":{"
+        "\"name\":\"play-key-click\"}}\n";
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    uint16_t frames;
+    int32_t result = broker_exchange(request, sizeof(request) - 1U, response,
+                                     sizeof(response));
+
+    if (result != CP0_BROKER_OK)
+        return result;
+    if (strstr(response, "\"status\":\"audio-played\"") == NULL)
+        return decode_result(response);
+    if (!json_u16_field(response, "frames", &frames) || frames != 240U)
+        return CP0_BROKER_INTERNAL;
+    return CP0_BROKER_OK;
+}
+
+int32_t cp0_broker_play_audio_stereo_48k(const uint8_t *samples,
+                                         size_t sample_bytes) {
+    static const char prefix[] =
+        "{\"protocol_version\":1,\"request_id\":23,\"command\":{"
+        "\"name\":\"play-audio-stereo48k\",\"samples_base64\":\"";
+    static const char suffix[] = "\"}}\n";
+    char request[CP0_BROKER_REQUEST_BYTES];
+    char response[CP0_BROKER_RESPONSE_BYTES];
+    size_t offset = 0;
+    uint16_t frames;
+    int32_t result;
+
+    if (samples == NULL || sample_bytes == 0U ||
+        sample_bytes > CP0_MUSIC_MAX_BYTES ||
+        sample_bytes % CP0_MUSIC_FRAME_BYTES != 0U)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    if (!append_bytes(request, sizeof(request), &offset, prefix,
+                      sizeof(prefix) - 1U) ||
+        !append_base64(request, sizeof(request), &offset, samples,
+                       sample_bytes) ||
+        !append_bytes(request, sizeof(request), &offset, suffix,
+                      sizeof(suffix) - 1U))
+        return CP0_BROKER_INVALID_ARGUMENT;
+    result = broker_exchange(request, offset, response, sizeof(response));
+    if (result != CP0_BROKER_OK)
+        return result;
+    if (strstr(response, "\"status\":\"audio-played\"") == NULL)
+        return decode_result(response);
+    if (!json_u16_field(response, "frames", &frames) || frames == 0U ||
+        (size_t)frames * CP0_MUSIC_FRAME_BYTES != sample_bytes)
         return CP0_BROKER_INTERNAL;
     return CP0_BROKER_OK;
 }

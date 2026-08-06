@@ -1,6 +1,6 @@
 use crate::{Error, host_imports};
 
-pub const MAX_DOCUMENT_BYTES: u32 = 16 * 1024 * 1024;
+pub const MAX_DOCUMENT_BYTES: u32 = 256 * 1024 * 1024;
 pub const MAX_READ_BYTES: usize = 4096;
 
 #[derive(Debug, PartialEq, Eq)]

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "abi_version": "1.0",
+  "abi_version": "1.1",
   "module": "cardputerzero",
   "imports": [
     {
@@ -93,6 +93,22 @@
       "wit": "network.http-get"
     },
     {
+      "name": "cp0_http_get_range",
+      "runtime_function": "cp0_http_get_range",
+      "c_name": "cp0_http_get_range_raw",
+      "wamr_signature": "(*~I*~)I",
+      "result": "i64",
+      "parameters": [
+        { "name": "url", "type": "const-u8-ptr" },
+        { "name": "url_length", "type": "u32" },
+        { "name": "offset", "type": "u64" },
+        { "name": "body", "type": "mut-u8-ptr" },
+        { "name": "body_capacity", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "network.http-get-range"
+    },
+    {
       "name": "cp0_document_open",
       "runtime_function": "cp0_open_document",
       "c_name": "cp0_document_open_raw",
@@ -152,6 +168,19 @@
       ],
       "native_fallback": -2,
       "wit": "audio.capture-pcm-s16le"
+    },
+    {
+      "name": "cp0_audio_play_pcm_s16le_stereo_48khz",
+      "runtime_function": "cp0_audio_play_pcm_s16le_stereo_48khz",
+      "c_name": "cp0_audio_play_pcm_s16le_stereo_48khz_raw",
+      "wamr_signature": "(*~)i",
+      "result": "result",
+      "parameters": [
+        { "name": "samples", "type": "const-u8-ptr" },
+        { "name": "sample_bytes", "type": "u32" }
+      ],
+      "native_fallback": -2,
+      "wit": "audio.play-pcm-s16le-stereo-48khz"
     },
     {
       "name": "cp0_camera_capture_rgb565",

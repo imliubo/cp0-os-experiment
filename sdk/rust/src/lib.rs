@@ -18,7 +18,7 @@ pub mod system;
 pub mod ui;
 
 pub const SDK_VERSION_MAJOR: u32 = 1;
-pub const SDK_VERSION_MINOR: u32 = 0;
+pub const SDK_VERSION_MINOR: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn maps_private_host_status_to_stable_sdk_error() {
-        assert_eq!((SDK_VERSION_MAJOR, SDK_VERSION_MINOR), (1, 0));
+        assert_eq!((SDK_VERSION_MAJOR, SDK_VERSION_MINOR), (1, 1));
         assert_eq!(Error::from_host(0), Ok(()));
         assert_eq!(Error::from_host(-1), Err(Error::Denied));
         assert_eq!(Error::from_host(-2), Err(Error::Unavailable));
@@ -58,7 +58,7 @@ mod tests {
     }
 
     #[test]
-    fn public_wit_is_standards_compliant_sdk_1_0() {
+    fn public_wit_is_standards_compliant_sdk_1_1() {
         let mut resolve = wit_parser::Resolve::default();
         let package_id = resolve
             .push_source(
@@ -71,7 +71,7 @@ mod tests {
 
         assert_eq!(package.name.namespace, "cardputerzero");
         assert_eq!(package.name.name, "sdk");
-        assert_eq!((version.major, version.minor, version.patch), (1, 0, 0));
+        assert_eq!((version.major, version.minor, version.patch), (1, 1, 0));
         assert_eq!(package.interfaces.len(), 16);
         assert!(package.worlds.contains_key("cardputer-application"));
         assert!(

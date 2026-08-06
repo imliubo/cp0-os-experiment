@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #define CP0_SDK_VERSION_MAJOR 1
-#define CP0_SDK_VERSION_MINOR 0
+#define CP0_SDK_VERSION_MINOR 1
 #define CP0_DISPLAY_WIDTH 320U
 #define CP0_DISPLAY_HEIGHT 170U
 #define CP0_STANDARD_DISPLAY_HEIGHT 150U
@@ -19,11 +19,16 @@
 #define CP0_MAX_NOTIFICATION_BODY_CHARS 160U
 #define CP0_MAX_NETWORK_URL_BYTES 1024U
 #define CP0_MAX_NETWORK_BODY_BYTES 2048U
-#define CP0_MAX_DOCUMENT_BYTES (16U * 1024U * 1024U)
+#define CP0_MAX_NETWORK_RANGE_BYTES (8U * 1024U)
+#define CP0_MAX_NETWORK_RESOURCE_BYTES (256ULL * 1024ULL * 1024ULL)
+#define CP0_MAX_DOCUMENT_BYTES (256U * 1024U * 1024U)
 #define CP0_MAX_DOCUMENT_READ_BYTES 4096U
 #define CP0_AUDIO_SAMPLE_RATE_HZ 16000U
 #define CP0_AUDIO_CHANNELS 1U
 #define CP0_MAX_AUDIO_FRAMES 1024U
+#define CP0_MUSIC_SAMPLE_RATE_HZ 48000U
+#define CP0_MUSIC_CHANNELS 2U
+#define CP0_MAX_MUSIC_FRAMES 720U
 #define CP0_CAMERA_WIDTH 320U
 #define CP0_CAMERA_HEIGHT 170U
 #define CP0_CAMERA_PIXEL_COUNT (CP0_CAMERA_WIDTH * CP0_CAMERA_HEIGHT)
@@ -51,7 +56,7 @@
     __attribute__((import_module("cardputerzero"), import_name(name)))
 #define CP0_EXPORT(name) __attribute__((export_name(name)))
 #else
-#error "CardputerZero C/C++ SDK 1.0 requires a Clang-compatible wasm compiler"
+#error "CardputerZero C/C++ SDK 1.1 requires a Clang-compatible wasm compiler"
 #endif
 
 #ifdef __cplusplus
@@ -178,6 +183,40 @@ static inline cp0_result_t cp0_http_get(const uint8_t *url,
     return CP0_OK;
 }
 
+static inline cp0_result_t cp0_http_get_range(
+    const uint8_t *url, uint32_t url_length, uint64_t offset, uint8_t *body,
+    uint32_t body_capacity, cp0_http_response_t *response) {
+    int64_t packed;
+    uint32_t status_code;
+    uint32_t body_length;
+    uint32_t index;
+
+    if (url == NULL || body == NULL || response == NULL ||
+        url_length <= 8U || url_length > CP0_MAX_NETWORK_URL_BYTES ||
+        body_capacity == 0U || body_capacity > CP0_MAX_NETWORK_RANGE_BYTES ||
+        offset > CP0_MAX_NETWORK_RESOURCE_BYTES - body_capacity ||
+        url[0] != 'h' || url[1] != 't' || url[2] != 't' || url[3] != 'p' ||
+        url[4] != 's' || url[5] != ':' || url[6] != '/' || url[7] != '/')
+        return CP0_ERROR_INVALID_ARGUMENT;
+    for (index = 0; index < url_length; index++) {
+        if (url[index] < 0x20U || url[index] == 0x7fU)
+            return CP0_ERROR_INVALID_ARGUMENT;
+    }
+    packed = cp0_http_get_range_raw(url, url_length, offset, body,
+                                    body_capacity);
+    if (packed < 0)
+        return packed >= CP0_ERROR_INTERNAL ? (cp0_result_t)packed
+                                           : CP0_ERROR_INTERNAL;
+    status_code = (uint32_t)(((uint64_t)packed >> 32) & 0xffffU);
+    body_length = (uint32_t)((uint64_t)packed & UINT32_MAX);
+    if (status_code < 100U || status_code > 599U ||
+        body_length > body_capacity || body_length > UINT16_MAX)
+        return CP0_ERROR_INTERNAL;
+    response->status_code = (uint16_t)status_code;
+    response->body_length = (uint16_t)body_length;
+    return CP0_OK;
+}
+
 static inline cp0_result_t cp0_document_open(cp0_document_t *document) {
     int64_t packed;
     int32_t handle;
@@ -239,6 +278,16 @@ static inline cp0_result_t cp0_audio_play(const int16_t *samples,
         return CP0_ERROR_INVALID_ARGUMENT;
     return cp0_audio_play_pcm_s16le_raw((const uint8_t *)samples,
                                         frame_count * sizeof(int16_t));
+}
+
+static inline cp0_result_t cp0_audio_play_stereo_48khz(
+    const int16_t *interleaved_samples, uint32_t frame_count) {
+    if (interleaved_samples == NULL || frame_count == 0U ||
+        frame_count > CP0_MAX_MUSIC_FRAMES)
+        return CP0_ERROR_INVALID_ARGUMENT;
+    return cp0_audio_play_pcm_s16le_stereo_48khz_raw(
+        (const uint8_t *)interleaved_samples,
+        frame_count * CP0_MUSIC_CHANNELS * sizeof(int16_t));
 }
 
 static inline cp0_result_t cp0_audio_capture(int16_t *samples,

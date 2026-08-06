@@ -12,7 +12,7 @@ The initial contract is deliberately small:
 - documents live under `/var/lib/cardputerzero/documents`;
 - the trusted System Shell displays at most 16 direct regular files;
 - one document can be active in a Runtime at a time;
-- a document is at most 16 MiB;
+- a document is at most 256 MiB;
 - each SDK read is at most 4096 bytes and uses an explicit 64-bit offset;
 - applications cannot choose or submit a path or document ID.
 

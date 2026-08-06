@@ -82,9 +82,26 @@ impl AudioClient {
             }
             AudioOutcome::Played { .. } => Err(AudioClientError::MismatchedFrameCount),
             AudioOutcome::Error { code, .. } => Err(AudioClientError::Service(code)),
-            AudioOutcome::Captured { .. } | AudioOutcome::OutputState { .. } => {
-                Err(AudioClientError::MismatchedFrameCount)
+            AudioOutcome::Captured { .. }
+            | AudioOutcome::OutputState { .. }
+            | AudioOutcome::KeySoundsState { .. } => Err(AudioClientError::MismatchedFrameCount),
+        }
+    }
+
+    pub fn play_stereo_48k(
+        &self,
+        request_id: u64,
+        samples: &[u8],
+    ) -> Result<u16, AudioClientError> {
+        let request = AudioRequest::playback_stereo_48k(request_id, samples);
+        match self.exchange(&request)? {
+            AudioOutcome::Played { frames }
+                if usize::from(frames) * cp0_audio_protocol::MUSIC_FRAME_BYTES == samples.len() =>
+            {
+                Ok(frames)
             }
+            AudioOutcome::Error { code, .. } => Err(AudioClientError::Service(code)),
+            _ => Err(AudioClientError::MismatchedFrameCount),
         }
     }
 
@@ -99,9 +116,17 @@ impl AudioClient {
                 Ok(samples)
             }
             AudioOutcome::Error { code, .. } => Err(AudioClientError::Service(code)),
-            AudioOutcome::Played { .. } | AudioOutcome::OutputState { .. } => {
-                Err(AudioClientError::MismatchedFrameCount)
-            }
+            AudioOutcome::Played { .. }
+            | AudioOutcome::OutputState { .. }
+            | AudioOutcome::KeySoundsState { .. } => Err(AudioClientError::MismatchedFrameCount),
+        }
+    }
+
+    pub fn play_key_click(&self, request_id: u64) -> Result<(), AudioClientError> {
+        match self.exchange(&AudioRequest::play_key_click(request_id))? {
+            AudioOutcome::Played { frames } if usize::from(frames) == 240 => Ok(()),
+            AudioOutcome::Error { code, .. } => Err(AudioClientError::Service(code)),
+            _ => Err(AudioClientError::MismatchedFrameCount),
         }
     }
 

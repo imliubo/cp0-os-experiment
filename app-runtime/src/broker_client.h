@@ -17,6 +17,9 @@ int32_t cp0_broker_post_notification(const uint8_t *title, size_t title_length,
                                      const uint8_t *body, size_t body_length);
 int64_t cp0_broker_http_get(const uint8_t *url, size_t url_length,
                             uint8_t *body, size_t body_capacity);
+int64_t cp0_broker_http_get_range(const uint8_t *url, size_t url_length,
+                                  uint64_t offset, uint8_t *body,
+                                  size_t body_capacity);
 int64_t cp0_broker_decode_http_response(const char *response, uint8_t *body,
                                         size_t body_capacity);
 int32_t cp0_broker_open_document(int *descriptor, uint32_t *size_bytes);
@@ -25,6 +28,9 @@ int32_t cp0_broker_decode_document_response(const char *response,
                                             int *descriptor,
                                             uint32_t *size_bytes);
 int32_t cp0_broker_play_audio(const uint8_t *samples, size_t sample_bytes);
+int32_t cp0_broker_play_audio_stereo_48k(const uint8_t *samples,
+                                         size_t sample_bytes);
+int32_t cp0_broker_play_key_click(void);
 int32_t cp0_broker_capture_audio(uint8_t *samples, size_t sample_capacity);
 int32_t cp0_broker_decode_audio_capture_response(const char *response,
                                                  uint8_t *samples,

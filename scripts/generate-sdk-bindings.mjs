@@ -40,7 +40,7 @@ function validateIdentifier(value, label) {
 }
 
 function validateContract() {
-  if (contract.schema_version !== 1 || contract.abi_version !== "1.0")
+  if (contract.schema_version !== 1 || contract.abi_version !== "1.1")
     fail("unsupported schema or ABI version");
   if (contract.module !== "cardputerzero" || !Array.isArray(contract.imports))
     fail("invalid module or imports");

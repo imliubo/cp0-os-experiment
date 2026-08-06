@@ -1,4 +1,4 @@
-# CardputerZero Rust SDK 1.0
+# CardputerZero Rust SDK 1.1
 
 This `no_std` crate is the supported Rust API for CardputerZero applications.
 Applications compile for `wasm32-unknown-unknown` and must not declare private
@@ -9,18 +9,22 @@ and its 8 KiB bound. Apps opt in by exporting `cp0_app_checkpoint` and
 `cp0_app_restore` with the stable core-WASM signatures; Apps without them remain
 valid and restart cleanly after capacity eviction.
 
-The SDK 1.0 API exposes display and focused input, a monotonic clock, bounded
-event waiting, notifications, documents, restricted HTTPS GET, fixed-format
-PCM audio, fixed-frame camera, logical GPIO, LoRa, private storage and intent
-capabilities.
-`network::http_get` accepts a caller-owned buffer of at most 2048 bytes and
-returns only the HTTP status and body length. `Error::Unavailable` means a
-capability may be waiting for a System Shell permission decision or a transient
-service may be unavailable and can be retried later.
+The SDK 1.1 API exposes display and focused input, a monotonic clock, bounded
+event waiting, notifications, documents, restricted HTTPS GET/Range,
+fixed-format PCM audio, fixed-frame camera, logical GPIO, LoRa, private storage
+and intent capabilities. `network::http_get` accepts a caller-owned buffer of
+at most 2048 bytes. `network::http_get_range` accepts at most 8 KiB at one exact
+offset within a 256 MiB resource. Both return only the HTTP status and body
+length. `Error::Unavailable` means a capability may be waiting for a System
+Shell permission decision or a transient service may be unavailable and can be
+retried later.
 
 `audio::play_pcm_s16le` and `audio::capture_pcm_s16le` accept at most 1024
 signed 16-bit mono frames at 16 kHz. The application manifest must declare
-playback and capture separately.
+playback and capture separately. `audio::play_pcm_s16le_stereo_48khz` accepts
+at most 720 interleaved 48 kHz stereo frames and uses the same playback
+permission. No API exposes codecs, ALSA devices, mixer controls or format
+negotiation.
 
 `camera::capture_rgb565` fills one caller-owned 320x170 RGB565 preview frame.
 `camera::capture_photo` pauses preview and returns the photo ID of a

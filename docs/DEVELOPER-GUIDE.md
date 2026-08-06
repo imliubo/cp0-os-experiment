@@ -20,7 +20,7 @@ full toolchain image described in `docs/APP-DEVKIT-DISTRIBUTION.md`. Verify the
 release checksum before extraction, then set the root and run its doctor:
 
 ```sh
-export CP0_DEVKIT_ROOT=/path/to/cardputerzero-app-devkit-1.0.0-HOST
+export CP0_DEVKIT_ROOT=/path/to/cardputerzero-app-devkit-1.1.0-HOST
 export PATH="$CP0_DEVKIT_ROOT/bin:$PATH"
 export RUSTUP_TOOLCHAIN=$(awk -F '"' '$1 ~ /^rust_version = / { print $2 }' \
   "$CP0_DEVKIT_ROOT/devkit/toolchain.toml")
@@ -150,13 +150,14 @@ storage fixture enforces the manifest byte quota, 256-key limit and missing-key
 semantics. It is a deterministic SDK test harness, not a security substitute
 for the device namespace, seccomp and cgroup tests.
 
-The DevKit bundles the complete eight-App product example set: Hello Card,
-Calculator, Neon Snake, Camera, Gallery, Media Controls, Notes and Stopwatch.
-Their READMEs and 320-pixel screenshots document the expected interaction.
-Camera and Gallery demonstrate the photo broker but use protected product
-identities, so third-party development starts with `cp0ctl new` and an owned
-App ID. Media Controls demonstrates targetless global actions without claiming
-the separate audio permission.
+The DevKit bundles nine examples. The eight production built-ins are Hello
+Card, Calculator, Neon Snake, Camera, Gallery, Music, Notes and Stopwatch;
+Media Controls remains a supplemental SDK example. Their READMEs and 320-pixel
+screenshots document the expected interaction. Camera and Gallery demonstrate
+the photo broker but use protected product identities, so third-party
+development starts with `cp0ctl new` and an owned App ID. Music demonstrates
+SDK 1.1 local-document and HTTPS Range audio streaming. Media Controls isolates
+the targetless global-action API without claiming audio playback.
 
 Manifest v1 does not package a Launcher icon. The current Apps grid renders a
 System Shell monogram for third-party Apps in its 40x40 slot. Store submission
@@ -269,8 +270,8 @@ does not grant audio access, so actual playback still requires
 
 ## Compatibility
 
-The current manifest SDK requirement is `1.0`, backed by WIT package
-`cardputerzero:sdk@1.0.0`. The device rejects unknown majors and accepts an
+The current manifest SDK requirement is `1.1`, backed by WIT package
+`cardputerzero:sdk@1.1.0`. The device rejects unknown majors and accepts an
 application minor no newer than its own within the same major. It also accepts
 exactly legacy SDK `0.1`; arbitrary `0.x` versions are not compatible. Public
 WIT describes the typed source contract;

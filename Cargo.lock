@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "cp0-sdk"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "wit-parser",
 ]

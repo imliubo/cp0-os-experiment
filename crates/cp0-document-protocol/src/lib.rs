@@ -11,7 +11,7 @@ pub const MAX_DOCUMENT_FRAME_BYTES: usize = 4 * 1024;
 pub const MAX_DOCUMENTS: usize = 16;
 pub const MAX_DOCUMENT_NAME_CHARS: usize = 48;
 pub const MAX_DOCUMENT_NAME_BYTES: usize = 128;
-pub const MAX_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAX_DOCUMENT_BYTES: u64 = 256 * 1024 * 1024;
 pub const DOCUMENT_ID_BYTES: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

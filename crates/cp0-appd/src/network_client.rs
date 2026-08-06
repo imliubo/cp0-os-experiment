@@ -81,18 +81,33 @@ impl NetworkClient {
         let mut stream = UnixStream::connect(&self.socket_path)?;
         stream.set_read_timeout(Some(NETWORK_SERVICE_TIMEOUT))?;
         stream.set_write_timeout(Some(NETWORK_SERVICE_TIMEOUT))?;
-        Self::exchange(&mut stream, request_id, url)
+        Self::exchange(&mut stream, &NetworkRequest::http_get(request_id, url))
+    }
+
+    pub fn http_get_range(
+        &self,
+        request_id: u64,
+        url: &str,
+        offset: u64,
+        length: u16,
+    ) -> Result<NetworkHttpResponse, NetworkClientError> {
+        let mut stream = UnixStream::connect(&self.socket_path)?;
+        stream.set_read_timeout(Some(NETWORK_SERVICE_TIMEOUT))?;
+        stream.set_write_timeout(Some(NETWORK_SERVICE_TIMEOUT))?;
+        Self::exchange(
+            &mut stream,
+            &NetworkRequest::http_get_range(request_id, url, offset, length),
+        )
     }
 
     fn exchange(
         stream: &mut UnixStream,
-        request_id: u64,
-        url: &str,
+        request: &NetworkRequest,
     ) -> Result<NetworkHttpResponse, NetworkClientError> {
-        write_request(&mut *stream, &NetworkRequest::http_get(request_id, url))?;
+        write_request(&mut *stream, request)?;
         let response = read_response(&mut BufReader::new(stream.try_clone()?))?
             .ok_or(NetworkClientError::EmptyResponse)?;
-        if response.request_id != request_id {
+        if response.request_id != request.request_id {
             return Err(NetworkClientError::MismatchedRequestId);
         }
         match response.outcome {
@@ -126,7 +141,11 @@ mod tests {
             assert_eq!(request.request_id, 9);
             write_response(&mut service, &NetworkResponse::success(9, 200, b"ok")).unwrap();
         });
-        let response = NetworkClient::exchange(&mut client, 9, "https://example.com").unwrap();
+        let response = NetworkClient::exchange(
+            &mut client,
+            &NetworkRequest::http_get(9, "https://example.com"),
+        )
+        .unwrap();
         worker.join().unwrap();
         assert_eq!(response.status_code, 200);
         assert_eq!(

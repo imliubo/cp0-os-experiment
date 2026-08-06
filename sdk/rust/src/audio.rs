@@ -3,6 +3,9 @@ use crate::{Error, host_imports};
 pub const SAMPLE_RATE_HZ: u32 = 16_000;
 pub const CHANNELS: u8 = 1;
 pub const MAX_FRAMES: usize = 1024;
+pub const MUSIC_SAMPLE_RATE_HZ: u32 = 48_000;
+pub const MUSIC_CHANNELS: u8 = 2;
+pub const MAX_MUSIC_FRAMES: usize = 720;
 
 pub fn play_pcm_s16le(samples: &[i16]) -> Result<(), Error> {
     if samples.is_empty() || samples.len() > MAX_FRAMES {
@@ -11,6 +14,19 @@ pub fn play_pcm_s16le(samples: &[i16]) -> Result<(), Error> {
     Error::from_host(host_imports::cp0_audio_play_pcm_s16le(
         samples.as_ptr().cast(),
         core::mem::size_of_val(samples) as u32,
+    ))
+}
+
+pub fn play_pcm_s16le_stereo_48khz(interleaved_samples: &[i16]) -> Result<(), Error> {
+    if interleaved_samples.is_empty()
+        || interleaved_samples.len() % MUSIC_CHANNELS as usize != 0
+        || interleaved_samples.len() > MAX_MUSIC_FRAMES * MUSIC_CHANNELS as usize
+    {
+        return Err(Error::InvalidArgument);
+    }
+    Error::from_host(host_imports::cp0_audio_play_pcm_s16le_stereo_48khz(
+        interleaved_samples.as_ptr().cast(),
+        core::mem::size_of_val(interleaved_samples) as u32,
     ))
 }
 

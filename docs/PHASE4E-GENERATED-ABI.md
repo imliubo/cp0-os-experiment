@@ -36,7 +36,7 @@ the flat imports directly.
 The generator's offline structural check validates the WIT package version,
 interface/function mapping and balanced interface blocks. In addition, the SDK
 test suite parses and resolves the complete contract with the standard
-Bytecode Alliance `wit-parser` used by `wasm-tools`; it verifies the 1.0.0
+Bytecode Alliance `wit-parser` used by `wasm-tools`; it verifies the 1.1.0
 package identity, interface count and exported application world. This is a
 build-time test dependency only, not a Runtime or product-image dependency.
 
@@ -49,11 +49,11 @@ present and unchanged. A compatible minor may add imports; removing an import
 or changing a signature requires a new SDK major.
 
 The frozen 1.0 compatibility baseline contains 22 bounded hostcalls and is
-byte-for-byte ABI compatible with legacy 0.1. The current additive contract
-contains 24 hostcalls after adding media-session registration and action
-delivery; all 22 baseline names and signatures remain unchanged. C11, C++17
-and Rust WASM builds consume the generated declarations, while Runtime builds
-consume the same signature source. App installation accepts current SDK 1.0
+byte-for-byte ABI compatible with legacy 0.1. The current SDK 1.1 additive
+contract contains 35 hostcalls, including HTTPS Range and 48 kHz stereo PCM;
+all 22 baseline names and signatures remain unchanged. C11, C++17 and Rust
+WASM builds consume the generated declarations, while Runtime builds consume
+the same signature source. App installation accepts SDK 1.1, compatible 1.0,
 and exact legacy 0.1, but not other pre-1.0 versions.
 
 The pinned WAMR 2.4.5 AArch64 static Runtime rebuilt successfully with the

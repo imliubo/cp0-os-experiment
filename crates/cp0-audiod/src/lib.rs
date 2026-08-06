@@ -1,28 +1,34 @@
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::ffi::{CStr, CString, c_void};
 use std::fmt;
-use std::io::{self, BufReader};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufReader, Write};
 use std::mem;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::time::Duration;
 
 use cp0_audio_protocol::{
     AUDIO_SAMPLE_BYTES, AUDIO_SAMPLE_RATE_HZ, AudioCommand, AudioDirection, AudioErrorCode,
     AudioOutputState, AudioProtocolError, AudioRequest, AudioResponse, MAX_AUDIO_FRAMES,
-    decode_samples, read_request, write_response,
+    MUSIC_FRAME_BYTES, MUSIC_SAMPLE_RATE_HZ, decode_music_samples, decode_samples, read_request,
+    write_response,
 };
 
 pub const DEFAULT_AUDIO_DEVICE: &str = "hw:ES8389Audio,0";
 pub const DEFAULT_MIXER_CARD: &str = "hw:ES8389Audio";
+pub const DEFAULT_KEY_SOUNDS_STATE: &str = "/var/lib/cardputerzero/audio/key-sounds.conf";
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(2);
 const SND_PCM_STREAM_PLAYBACK: libc::c_int = 0;
 const SND_PCM_STREAM_CAPTURE: libc::c_int = 1;
 const SND_PCM_FORMAT_S16_LE: libc::c_int = 2;
 const SND_PCM_ACCESS_RW_INTERLEAVED: libc::c_int = 3;
-const PCM_LATENCY_MICROSECONDS: libc::c_uint = 100_000;
+const PCM_LATENCY_MICROSECONDS: libc::c_uint = 20_000;
 const HARDWARE_CHANNELS: libc::c_uint = 2;
 const OUTPUT_VOLUME_STEP_PERCENT: u8 = 10;
 const SND_MIXER_SCHN_MONO: libc::c_int = 0;
@@ -49,6 +55,7 @@ impl std::error::Error for AudioDeviceError {}
 
 pub trait AudioDevice {
     fn play_pcm_s16le(&self, samples: &[u8]) -> Result<(), AudioDeviceError>;
+    fn play_pcm_s16le_stereo_48k(&self, samples: &[u8]) -> Result<(), AudioDeviceError>;
     fn capture_pcm_s16le(&self, frames: u16) -> Result<Vec<u8>, AudioDeviceError>;
 }
 
@@ -104,7 +111,6 @@ struct AlsaLibrary {
     pcm_readi: PcmRead,
     pcm_recover: PcmRecover,
     pcm_start: PcmSimple,
-    pcm_drain: PcmSimple,
     pcm_close: PcmSimple,
     mixer_open: MixerOpen,
     mixer_attach: MixerAttach,
@@ -139,7 +145,6 @@ impl AlsaLibrary {
                 pcm_readi: load_symbol(handle, c"snd_pcm_readi")?,
                 pcm_recover: load_symbol(handle, c"snd_pcm_recover")?,
                 pcm_start: load_symbol(handle, c"snd_pcm_start")?,
-                pcm_drain: load_symbol(handle, c"snd_pcm_drain")?,
                 pcm_close: load_symbol(handle, c"snd_pcm_close")?,
                 mixer_open: load_symbol(handle, c"snd_mixer_open")?,
                 mixer_attach: load_symbol(handle, c"snd_mixer_attach")?,
@@ -199,6 +204,7 @@ pub struct AlsaDevice {
     library: AlsaLibrary,
     device: CString,
     mixer_card: CString,
+    playback: RefCell<Option<*mut c_void>>,
 }
 
 impl AlsaDevice {
@@ -207,10 +213,32 @@ impl AlsaDevice {
             library: AlsaLibrary::load()?,
             device: CString::new(DEFAULT_AUDIO_DEVICE).expect("static ALSA device has no NUL"),
             mixer_card: CString::new(DEFAULT_MIXER_CARD).expect("static ALSA card has no NUL"),
+            playback: RefCell::new(None),
         })
     }
 
-    fn open_pcm(&self, stream: libc::c_int) -> Result<PcmHandle<'_>, AudioDeviceError> {
+    fn playback_pcm(&self) -> Result<*mut c_void, AudioDeviceError> {
+        if let Some(raw) = *self.playback.borrow() {
+            return Ok(raw);
+        }
+        let pcm = self.open_pcm(SND_PCM_STREAM_PLAYBACK, MUSIC_SAMPLE_RATE_HZ)?;
+        let raw = pcm.raw;
+        mem::forget(pcm);
+        self.playback.replace(Some(raw));
+        Ok(raw)
+    }
+
+    fn close_playback_pcm(&self) {
+        if let Some(raw) = self.playback.replace(None) {
+            unsafe { (self.library.pcm_close)(raw) };
+        }
+    }
+
+    fn open_pcm(
+        &self,
+        stream: libc::c_int,
+        sample_rate_hz: u32,
+    ) -> Result<PcmHandle<'_>, AudioDeviceError> {
         let mut raw: *mut c_void = ptr::null_mut();
         let result =
             unsafe { (self.library.pcm_open)(&raw mut raw, self.device.as_ptr(), stream, 0) };
@@ -227,7 +255,7 @@ impl AlsaDevice {
                 SND_PCM_FORMAT_S16_LE,
                 SND_PCM_ACCESS_RW_INTERLEAVED,
                 HARDWARE_CHANNELS,
-                AUDIO_SAMPLE_RATE_HZ,
+                sample_rate_hz,
                 1,
                 PCM_LATENCY_MICROSECONDS,
             )
@@ -356,42 +384,26 @@ impl AlsaDevice {
 
 impl AudioDevice for AlsaDevice {
     fn play_pcm_s16le(&self, samples: &[u8]) -> Result<(), AudioDeviceError> {
-        let pcm = self.open_pcm(SND_PCM_STREAM_PLAYBACK)?;
+        let pcm = self.playback_pcm()?;
         let mono: Vec<i16> = samples
             .chunks_exact(AUDIO_SAMPLE_BYTES)
             .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
             .collect();
-        let interleaved = mono_to_stereo(&mono);
-        let frame_count = interleaved.len() / HARDWARE_CHANNELS as usize;
-        let mut offset = 0;
-        while offset < frame_count {
-            let result = unsafe {
-                (self.library.pcm_writei)(
-                    pcm.raw,
-                    interleaved[offset * HARDWARE_CHANNELS as usize..]
-                        .as_ptr()
-                        .cast(),
-                    (frame_count - offset) as libc::c_ulong,
-                )
-            };
-            if result < 0 {
-                recover(&self.library, pcm.raw, result)?;
-                continue;
-            }
-            if result == 0 {
-                return Err(AudioDeviceError::Device);
-            }
-            offset += usize::try_from(result).map_err(|_| AudioDeviceError::Device)?;
-        }
-        let result = unsafe { (self.library.pcm_drain)(pcm.raw) };
-        if result < 0 {
-            return Err(map_alsa_error(result));
-        }
-        Ok(())
+        let interleaved = mono_16k_to_stereo_48k(&mono);
+        self.write_stereo_frames(pcm, &interleaved)
+    }
+
+    fn play_pcm_s16le_stereo_48k(&self, samples: &[u8]) -> Result<(), AudioDeviceError> {
+        let pcm = self.playback_pcm()?;
+        let interleaved: Vec<i16> = samples
+            .chunks_exact(AUDIO_SAMPLE_BYTES)
+            .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
+            .collect();
+        self.write_stereo_frames(pcm, &interleaved)
     }
 
     fn capture_pcm_s16le(&self, frames: u16) -> Result<Vec<u8>, AudioDeviceError> {
-        let pcm = self.open_pcm(SND_PCM_STREAM_CAPTURE)?;
+        let pcm = self.open_pcm(SND_PCM_STREAM_CAPTURE, AUDIO_SAMPLE_RATE_HZ)?;
         let result = unsafe { (self.library.pcm_start)(pcm.raw) };
         if result < 0 {
             return Err(map_alsa_error(result));
@@ -427,10 +439,52 @@ impl AudioDevice for AlsaDevice {
     }
 }
 
-fn mono_to_stereo(mono: &[i16]) -> Vec<i16> {
-    let mut interleaved = Vec::with_capacity(mono.len() * HARDWARE_CHANNELS as usize);
+impl AlsaDevice {
+    fn write_stereo_frames(
+        &self,
+        pcm: *mut c_void,
+        interleaved: &[i16],
+    ) -> Result<(), AudioDeviceError> {
+        let frame_count = interleaved.len() / HARDWARE_CHANNELS as usize;
+        let mut offset = 0;
+        while offset < frame_count {
+            let result = unsafe {
+                (self.library.pcm_writei)(
+                    pcm,
+                    interleaved[offset * HARDWARE_CHANNELS as usize..]
+                        .as_ptr()
+                        .cast(),
+                    (frame_count - offset) as libc::c_ulong,
+                )
+            };
+            if result < 0 {
+                if let Err(error) = recover(&self.library, pcm, result) {
+                    self.close_playback_pcm();
+                    return Err(error);
+                }
+                continue;
+            }
+            if result == 0 {
+                return Err(AudioDeviceError::Device);
+            }
+            offset += usize::try_from(result).map_err(|_| AudioDeviceError::Device)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for AlsaDevice {
+    fn drop(&mut self) {
+        self.close_playback_pcm();
+    }
+}
+
+fn mono_16k_to_stereo_48k(mono: &[i16]) -> Vec<i16> {
+    let mut interleaved = Vec::with_capacity(mono.len() * HARDWARE_CHANNELS as usize * 3);
     for sample in mono {
-        interleaved.extend_from_slice(&[*sample, *sample]);
+        for _ in 0..3 {
+            interleaved.extend_from_slice(&[*sample, *sample]);
+        }
     }
     interleaved
 }
@@ -549,6 +603,8 @@ pub struct AudioServer<D> {
     device: D,
     trusted_pcm_uids: BTreeSet<u32>,
     trusted_output_uids: BTreeSet<u32>,
+    key_sounds_enabled: std::sync::atomic::AtomicBool,
+    key_sounds_state: Option<PathBuf>,
 }
 
 impl<D: AudioDevice + AudioOutputDevice> AudioServer<D> {
@@ -561,7 +617,26 @@ impl<D: AudioDevice + AudioOutputDevice> AudioServer<D> {
             device,
             trusted_pcm_uids: trusted_pcm_uids.into_iter().collect(),
             trusted_output_uids: trusted_output_uids.into_iter().collect(),
+            key_sounds_enabled: std::sync::atomic::AtomicBool::new(true),
+            key_sounds_state: None,
         }
+    }
+
+    pub fn new_with_key_sounds_state(
+        device: D,
+        trusted_pcm_uids: impl IntoIterator<Item = u32>,
+        trusted_output_uids: impl IntoIterator<Item = u32>,
+        state_path: impl Into<PathBuf>,
+    ) -> io::Result<Self> {
+        let state_path = state_path.into();
+        let enabled = load_key_sounds_state(&state_path)?.unwrap_or(true);
+        Ok(Self {
+            device,
+            trusted_pcm_uids: trusted_pcm_uids.into_iter().collect(),
+            trusted_output_uids: trusted_output_uids.into_iter().collect(),
+            key_sounds_enabled: std::sync::atomic::AtomicBool::new(enabled),
+            key_sounds_state: Some(state_path),
+        })
     }
 
     pub fn serve(&self, listener: UnixListener) -> io::Result<()> {
@@ -628,7 +703,9 @@ impl<D: AudioDevice + AudioOutputDevice> AudioServer<D> {
     }
 
     pub fn command_authorized(&self, uid: u32, command: &AudioCommand) -> bool {
-        if is_output_command(command) {
+        if matches!(command, AudioCommand::PlayKeyClick {}) {
+            self.trusted_output_uids.contains(&uid) || self.trusted_pcm_uids.contains(&uid)
+        } else if is_output_command(command) {
             self.trusted_output_uids.contains(&uid)
         } else {
             self.trusted_pcm_uids.contains(&uid)
@@ -652,6 +729,24 @@ impl<D: AudioDevice + AudioOutputDevice> AudioServer<D> {
                 let frames = u16::try_from(samples.len() / AUDIO_SAMPLE_BYTES)
                     .expect("audio protocol frame count fits u16");
                 match self.device.play_pcm_s16le(&samples) {
+                    Ok(()) => AudioResponse::played(request_id, frames),
+                    Err(error) => device_error_response(request_id, error),
+                }
+            }
+            AudioCommand::PlayPcmS16leStereo48k { samples_base64 } => {
+                let samples = match decode_music_samples(&samples_base64) {
+                    Ok(samples) => samples,
+                    Err(_) => {
+                        return AudioResponse::error(
+                            request_id,
+                            AudioErrorCode::InvalidRequest,
+                            "invalid bounded stereo playback samples",
+                        );
+                    }
+                };
+                let frames = u16::try_from(samples.len() / MUSIC_FRAME_BYTES)
+                    .expect("music protocol frame count fits u16");
+                match self.device.play_pcm_s16le_stereo_48k(&samples) {
                     Ok(()) => AudioResponse::played(request_id, frames),
                     Err(error) => device_error_response(request_id, error),
                 }
@@ -708,7 +803,31 @@ impl<D: AudioDevice + AudioOutputDevice> AudioServer<D> {
             AudioCommand::SetOutputMuted { muted } => {
                 self.output_response(request_id, self.device.set_output_muted(muted))
             }
+            AudioCommand::SetKeySoundsEnabled { enabled } => {
+                if let Some(path) = &self.key_sounds_state
+                    && let Err(error) = save_key_sounds_state(path, enabled)
+                {
+                    eprintln!("cp0-audiod: cannot persist key sounds setting: {error}");
+                    return AudioResponse::error(
+                        request_id,
+                        AudioErrorCode::Internal,
+                        "key sounds setting could not be persisted",
+                    );
+                }
+                self.key_sounds_enabled
+                    .store(enabled, std::sync::atomic::Ordering::Relaxed);
+                AudioResponse::key_sounds_state(request_id, enabled)
+            }
             AudioCommand::PlayKeyClick {} => {
+                if !self
+                    .key_sounds_enabled
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    return AudioResponse::played(
+                        request_id,
+                        u16::try_from(KEY_CLICK_FRAMES).expect("key click fits u16"),
+                    );
+                }
                 let samples = key_click_samples();
                 match self.device.play_pcm_s16le(&samples) {
                     Ok(()) => AudioResponse::played(
@@ -733,6 +852,44 @@ impl<D: AudioDevice + AudioOutputDevice> AudioServer<D> {
     }
 }
 
+fn load_key_sounds_state(path: &Path) -> io::Result<Option<bool>> {
+    let encoded = match fs::read(path) {
+        Ok(encoded) => encoded,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    match encoded.as_slice() {
+        b"version=1\nenabled=0\n" => Ok(Some(false)),
+        b"version=1\nenabled=1\n" => Ok(Some(true)),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid key sounds state",
+        )),
+    }
+}
+
+fn save_key_sounds_state(path: &Path, enabled: bool) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "state path has no parent"))?;
+    let temporary = path.with_extension("tmp");
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(&temporary)?;
+    file.write_all(if enabled {
+        b"version=1\nenabled=1\n"
+    } else {
+        b"version=1\nenabled=0\n"
+    })?;
+    file.sync_all()?;
+    fs::rename(&temporary, path)?;
+    File::open(parent)?.sync_all()
+}
+
 fn is_output_command(command: &AudioCommand) -> bool {
     matches!(
         command,
@@ -740,6 +897,7 @@ fn is_output_command(command: &AudioCommand) -> bool {
             | AudioCommand::SetOutputVolume { .. }
             | AudioCommand::AdjustOutputVolume { .. }
             | AudioCommand::SetOutputMuted { .. }
+            | AudioCommand::SetKeySoundsEnabled { .. }
             | AudioCommand::PlayKeyClick {}
     )
 }
@@ -814,10 +972,13 @@ fn protocol_io(error: AudioProtocolError) -> io::Error {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use cp0_audio_protocol::{AudioOutcome, AudioRequest};
 
     use super::*;
+
+    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     #[derive(Debug)]
     struct MockDevice {
@@ -838,6 +999,11 @@ mod tests {
 
     impl AudioDevice for MockDevice {
         fn play_pcm_s16le(&self, samples: &[u8]) -> Result<(), AudioDeviceError> {
+            self.played.borrow_mut().extend_from_slice(samples);
+            Ok(())
+        }
+
+        fn play_pcm_s16le_stereo_48k(&self, samples: &[u8]) -> Result<(), AudioDeviceError> {
             self.played.borrow_mut().extend_from_slice(samples);
             Ok(())
         }
@@ -874,6 +1040,10 @@ mod tests {
         let response = server.dispatch(AudioRequest::playback(4, &[1, 0, 2, 0]));
         assert_eq!(response.outcome, AudioOutcome::Played { frames: 2 });
         assert_eq!(&*server.device.played.borrow(), &[1, 0, 2, 0]);
+
+        let response = server.dispatch(AudioRequest::playback_stereo_48k(5, &[1, 0, 2, 0]));
+        assert_eq!(response.outcome, AudioOutcome::Played { frames: 1 });
+        assert_eq!(&*server.device.played.borrow(), &[1, 0, 2, 0, 1, 0, 2, 0]);
     }
 
     #[test]
@@ -962,10 +1132,77 @@ mod tests {
     }
 
     #[test]
+    fn disabled_key_sounds_do_not_touch_the_audio_device() {
+        let server = AudioServer::new(MockDevice::default(), [0], [1000]);
+        assert_eq!(
+            server
+                .dispatch(AudioRequest::set_key_sounds_enabled(21, false))
+                .outcome,
+            AudioOutcome::KeySoundsState { enabled: false }
+        );
+        assert_eq!(
+            server.dispatch(AudioRequest::play_key_click(22)).outcome,
+            AudioOutcome::Played {
+                frames: KEY_CLICK_FRAMES as u16
+            }
+        );
+        assert!(server.device.played.borrow().is_empty());
+    }
+
+    #[test]
+    fn key_sounds_setting_survives_audio_server_restart() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp")
+            .join(format!(
+                "audiod-key-sounds-{}-{}",
+                std::process::id(),
+                TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+        fs::create_dir_all(&root).unwrap();
+        let state = root.join("key-sounds.conf");
+        let server =
+            AudioServer::new_with_key_sounds_state(MockDevice::default(), [0], [1000], &state)
+                .unwrap();
+        assert!(matches!(
+            server
+                .dispatch(AudioRequest::set_key_sounds_enabled(30, false))
+                .outcome,
+            AudioOutcome::KeySoundsState { enabled: false }
+        ));
+        drop(server);
+
+        let restarted =
+            AudioServer::new_with_key_sounds_state(MockDevice::default(), [0], [1000], &state)
+                .unwrap();
+        restarted.dispatch(AudioRequest::play_key_click(31));
+        assert!(restarted.device.played.borrow().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn adapts_the_mono_sdk_contract_to_stereo_hardware() {
         assert_eq!(
-            mono_to_stereo(&[i16::MIN, 0, i16::MAX]),
-            [i16::MIN, i16::MIN, 0, 0, i16::MAX, i16::MAX,]
+            mono_16k_to_stereo_48k(&[i16::MIN, 0, i16::MAX]),
+            [
+                i16::MIN,
+                i16::MIN,
+                i16::MIN,
+                i16::MIN,
+                i16::MIN,
+                i16::MIN,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                i16::MAX,
+                i16::MAX,
+                i16::MAX,
+                i16::MAX,
+                i16::MAX,
+                i16::MAX,
+            ]
         );
         assert_eq!(stereo_to_mono(&[i16::MIN, i16::MAX, 100, 300]), [0, 200]);
     }

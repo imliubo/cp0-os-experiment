@@ -68,6 +68,18 @@ static int64_t cp0_http_get(wasm_exec_env_t execution_environment,
                                (size_t)body_capacity);
 }
 
+static int64_t cp0_http_get_range(wasm_exec_env_t execution_environment,
+                                  const uint8_t *url, uint32_t url_length,
+                                  int64_t offset, uint8_t *body,
+                                  uint32_t body_capacity) {
+    (void)execution_environment;
+    if (offset < 0)
+        return CP0_BROKER_INVALID_ARGUMENT;
+    return cp0_broker_http_get_range(url, (size_t)url_length,
+                                     (uint64_t)offset, body,
+                                     (size_t)body_capacity);
+}
+
 static int64_t cp0_open_document(wasm_exec_env_t execution_environment) {
     (void)execution_environment;
     return cp0_document_open();
@@ -94,6 +106,13 @@ static int32_t cp0_audio_play_pcm_s16le(
     uint32_t sample_bytes) {
     (void)execution_environment;
     return cp0_broker_play_audio(samples, (size_t)sample_bytes);
+}
+
+static int32_t cp0_audio_play_pcm_s16le_stereo_48khz(
+    wasm_exec_env_t execution_environment, const uint8_t *samples,
+    uint32_t sample_bytes) {
+    (void)execution_environment;
+    return cp0_broker_play_audio_stereo_48k(samples, (size_t)sample_bytes);
 }
 
 static int32_t cp0_audio_capture_pcm_s16le(

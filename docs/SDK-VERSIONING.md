@@ -12,7 +12,8 @@ WIT package 版本使用语义化版本。应用在 manifest 中声明所需的 
 在 SDK 1.0 前，0.x 的每个 minor 都可以包含破坏性变更，但仓库必须同时更新 WIT、
 示例、运行时和迁移说明。
 
-当前设备 SDK 冻结为 `1.0`，WIT package 为 `cardputerzero:sdk@1.0.0`。除当前 major
+当前设备 SDK 为 `1.1`，WIT package 为 `cardputerzero:sdk@1.1.0`。同一 major 下的
+`1.0` 应用保持兼容；除当前 major
 的向后兼容规则外，设备仅通过显式 allowlist 接受精确的 legacy `0.1`；`0.0`、
 `0.2` 和其他任意 `0.x` 都不会因为 major 相同而被接受。manifest 和安装器都要求
 规范的十进制 `major.minor`，拒绝 `01.0`、`1.00` 和三段版本。
@@ -37,7 +38,7 @@ WIT package 版本使用语义化版本。应用在 manifest 中声明所需的 
 但不能删除或改变历史快照中的 module、name 或 WAMR signature。Runtime 注册表、C
 导入和 Rust 私有导入均由该契约生成，CI 拒绝任何手工漂移。
 
-当前保留 `0.1` 和 `1.0` 两份不可变快照。两者都包含首版的 22 个 hostcall，因此
-当前 24 个 hostcall 的 Runtime 注册表仍完整包含这 22 个名称和签名；新增的两个
-media-session hostcall 不改变既有应用的导入。1.0 应用和 legacy 0.1 应用继续使用
+当前保留 `0.1` 和 `1.0` 两份不可变快照。两者都包含首版的 22 个 hostcall；1.1
+新增受限 HTTPS Range 和 48 kHz 双声道 PCM hostcall，Runtime 注册表仍完整包含历史
+名称和签名。1.0 应用和 legacy 0.1 应用继续使用
 同一套受限 Runtime 注册表，不需要第二套宿主接口。

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image=${CP0_DEVKIT_IMAGE:-cardputerzero/app-devkit:1.0.0}
+image=${CP0_DEVKIT_IMAGE:-cardputerzero/app-devkit:1.1.0}
 project=${1:-$PWD}
 
 if [[ ! -d $project ]]; then
