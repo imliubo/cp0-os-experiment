@@ -73,6 +73,7 @@ target_include_directories(cp0-wamr PUBLIC
 target_compile_options(cp0-wamr PRIVATE -Os -fstack-protector-strong)
 
 add_executable(cardputerzero-app-runtime
+  ../common/input_ascii.c
   src/broker_client.c
   src/camera.c
   src/display.c
@@ -80,6 +81,7 @@ add_executable(cardputerzero-app-runtime
   src/frame_pacing.c
   src/hostcalls.c
   src/input_queue.c
+  src/keyboard_state.c
   src/main.c
   src/pixels.c
   src/photos.c
@@ -103,6 +105,7 @@ target_link_options(cardputerzero-app-runtime PRIVATE
   -Wl,-z,noexecstack
 )
 target_include_directories(cardputerzero-app-runtime PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../common"
   "${WAYLAND_PROTOCOL_DIR}"
 )
 target_link_libraries(cardputerzero-app-runtime PRIVATE

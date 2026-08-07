@@ -1,4 +1,5 @@
 #include "cp0_ui.h"
+#include "input_ascii.h"
 
 #include <limits.h>
 #include <stddef.h>
@@ -282,62 +283,7 @@ static void cancel_password_change(struct cp0_ui *ui)
 
 char cp0_ui_key_character(uint32_t key, bool shifted)
 {
-    char character = '\0';
-
-    /* Standard Linux evdev keycodes using the US printable layout. */
-    switch (key) {
-    case 30: character = 'a'; break;
-    case 48: character = 'b'; break;
-    case 46: character = 'c'; break;
-    case 32: character = 'd'; break;
-    case 18: character = 'e'; break;
-    case 33: character = 'f'; break;
-    case 34: character = 'g'; break;
-    case 35: character = 'h'; break;
-    case 23: character = 'i'; break;
-    case 36: character = 'j'; break;
-    case 37: character = 'k'; break;
-    case 38: character = 'l'; break;
-    case 50: character = 'm'; break;
-    case 49: character = 'n'; break;
-    case 24: character = 'o'; break;
-    case 25: character = 'p'; break;
-    case 16: character = 'q'; break;
-    case 19: character = 'r'; break;
-    case 31: character = 's'; break;
-    case 20: character = 't'; break;
-    case 22: character = 'u'; break;
-    case 47: character = 'v'; break;
-    case 17: character = 'w'; break;
-    case 45: character = 'x'; break;
-    case 21: character = 'y'; break;
-    case 44: character = 'z'; break;
-    default: break;
-    }
-    if (character != '\0')
-        return shifted ? (char)(character - 'a' + 'A') : character;
-    if (key >= 2 && key <= 10) {
-        static const char shifted_digits[] = "!@#$%^&*(";
-        return shifted ? shifted_digits[key - 2]
-                       : (char)('1' + (key - 2));
-    }
-    if (key == 11)
-        return shifted ? ')' : '0';
-    switch (key) {
-    case 12: return shifted ? '_' : '-';
-    case 13: return shifted ? '+' : '=';
-    case 26: return shifted ? '{' : '[';
-    case 27: return shifted ? '}' : ']';
-    case 39: return shifted ? ':' : ';';
-    case 40: return shifted ? '"' : '\'';
-    case 41: return shifted ? '~' : '`';
-    case 43: return shifted ? '|' : '\\';
-    case 51: return shifted ? '<' : ',';
-    case 52: return shifted ? '>' : '.';
-    case 53: return shifted ? '?' : '/';
-    case 57: return ' ';
-    default: return '\0';
-    }
+    return (char)cp0_input_ascii_character(key, shifted);
 }
 
 static bool settings_wifi_active(const struct cp0_ui *ui)

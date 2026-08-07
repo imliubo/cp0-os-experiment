@@ -82,7 +82,10 @@ Shell；当前一 App 一 task 的约束使 UID 可以阻止跨应用 surface �
 - 只读应用包、一个带配额的私有数据目录、空的设备目录；
 - 不暴露 system D-Bus、Wayland socket 路径、evdev、DRM、ALSA 和 GPIO；
 - PID 1 只把预连接的 Wayland FD 3 交给受信任的 App Runtime，由它代理 SDK 调用。
-- Runtime 仅在 `wl_keyboard.enter/leave` 焦点区间向有界 SDK 队列写入按键事件。
+- Runtime 仅在 `wl_keyboard.enter/leave` 焦点区间向有界 SDK 队列写入按键事件；它与
+  System Shell 共用 V0.6 printable ASCII 映射。32 个 `Sym` 组合用各自唯一的键码直接
+  生成字符，普通字母则合并 depressed XKB Shift 与物理 Shift 回退后生成
+  `KeyEvent.character`。App 使用系统字符字段处理文本，不维护私有键表。
 
 System Shell 通过认证后的 appd 控制 socket 获取已安装 manifest 摘要，不从 Wayland
 surface 推断安装状态。Launcher 的 app ID、显示名称和标准/沉浸策略来自 root 控制

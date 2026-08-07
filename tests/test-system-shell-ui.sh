@@ -9,7 +9,9 @@ snapshot_dir="$work_dir/snapshots"
 mkdir -p "$snapshot_dir"
 
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+    -I"$repo_root/common" \
     -I"$repo_root/system-shell/include" \
+    "$repo_root/common/input_ascii.c" \
     "$repo_root/system-shell/src/ui.c" \
     "$repo_root/tests/system-shell-ui.c" \
     -o "$work_dir/system-shell-ui-test"

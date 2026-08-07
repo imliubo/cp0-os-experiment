@@ -34,12 +34,14 @@ wayland-scanner private-code "$protocol" \
     "$output/cardputerzero-system-shell-protocol.c"
 
 cc -std=c11 -Os -Wall -Wextra -Werror \
+    -I"$repo_root/common" \
     -I"$repo_root/system-shell/include" \
     -I"$repo_root/compositor-policy" \
     -I"$output" \
     -I"$weston_build/protocol" \
     "$repo_root/system-shell/src/main.c" \
     "$repo_root/system-shell/src/ui.c" \
+    "$repo_root/common/input_ascii.c" \
     "$repo_root/system-shell/src/task_thumbnail.c" \
     "$repo_root/system-shell/src/screenshot_store.c" \
     "$repo_root/system-shell/src/json.c" \

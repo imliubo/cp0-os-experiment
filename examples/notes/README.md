@@ -1,8 +1,9 @@
 # Notes
 
 Notes is a compact, permission-free text editor. It accepts the printable
-CardputerZero ASCII layout and stores one bounded 192-byte draft in the app's
-isolated private storage.
+CardputerZero ASCII layout, renders punctuation and letter case with the SDK
+font, and stores one bounded 192-byte draft in the app's isolated private
+storage.
 
 ![Notes containing a saved draft](assets/screenshot.png)
 

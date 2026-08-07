@@ -101,6 +101,13 @@ same public SDK ABI.
 Neither UI path grants direct framebuffer, DRM, Wayland or evdev access. A
 frame submission and every input event pass through App Runtime.
 
+For text fields, consume Rust `KeyEvent::character` or C/C++
+`cp0_key_event_t.character`; zero/`None` means the key has no printable text.
+The Runtime applies the same V0.6 printable layout used by first boot and
+System Shell, including held-Shift uppercase and every printed `Sym` symbol.
+Do not translate Linux key codes inside an App. Keep `code` only for navigation,
+shortcuts and game controls, and process `character` only on press/repeat.
+
 When a physical key wakes a sleeping display, the compositor consumes that
 key's complete press/repeat/release sequence. The foreground App receives the
 next deliberate key. Confirmation, save, send and delete flows must remain

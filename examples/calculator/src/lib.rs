@@ -2,9 +2,10 @@
 
 #[cfg(not(test))]
 use core::panic::PanicInfo;
+#[cfg(not(test))]
+use cp0_sdk::input;
 use cp0_sdk::{
     display::{self, Rect},
-    input,
     ui::{ButtonStyle, Canvas, color},
 };
 
@@ -17,6 +18,8 @@ struct Calculator {
     pending: u16,
     entering: bool,
     error: bool,
+    selection: u8,
+    selection_active: bool,
 }
 
 impl Calculator {
@@ -27,43 +30,106 @@ impl Calculator {
             pending: 0,
             entering: false,
             error: false,
+            selection: BUTTON_EQUAL,
+            selection_active: false,
         }
     }
 
-    fn key(&mut self, code: u16, modifiers: u8) {
-        if let Some(operator) = operator_for_key(code, modifiers) {
+    fn key(&mut self, code: u16, character: Option<u8>) {
+        if self.navigate(code) {
+            return;
+        }
+        if code == KEY_SPACE
+            || ((code == KEY_ENTER || code == KEY_KPENTER) && self.selection_active)
+        {
+            self.activate_selection();
+            self.selection_active = false;
+            return;
+        }
+        if let Some(operator) = operator_for_key(code, character) {
+            self.selection_active = false;
             if operator == KEY_EQUAL {
                 self.apply();
                 self.pending = 0;
             } else {
-                self.apply();
-                self.pending = operator;
-                self.entering = false;
+                self.select_operator(operator);
             }
             return;
         }
-        if let Some(digit) = digit_for_key(code, modifiers) {
-            if self.error || !self.entering {
-                self.value = 0;
-                self.error = false;
-            }
-            self.value = self.value.saturating_mul(10).saturating_add(digit);
-            self.value = self.value.min(999_999_999);
-            self.entering = true;
+        if let Some(digit) = digit_for_character(character) {
+            self.selection_active = false;
+            self.enter_digit(digit);
             return;
         }
         match code {
             46 => *self = Self::new(),
             14 => {
+                self.selection_active = false;
                 self.value /= 10;
                 self.entering = true;
             }
-            28 | 96 => {
+            KEY_ENTER | KEY_KPENTER => {
+                self.selection_active = false;
                 self.apply();
                 self.pending = 0;
             }
             _ => {}
         }
+    }
+
+    fn navigate(&mut self, code: u16) -> bool {
+        let row = self.selection / BUTTON_COLUMNS;
+        let column = self.selection % BUTTON_COLUMNS;
+        self.selection = match code {
+            KEY_LEFT => row * BUTTON_COLUMNS + (column + BUTTON_COLUMNS - 1) % BUTTON_COLUMNS,
+            KEY_RIGHT => row * BUTTON_COLUMNS + (column + 1) % BUTTON_COLUMNS,
+            KEY_UP => ((row + BUTTON_ROWS - 1) % BUTTON_ROWS) * BUTTON_COLUMNS + column,
+            KEY_DOWN => ((row + 1) % BUTTON_ROWS) * BUTTON_COLUMNS + column,
+            _ => return false,
+        };
+        self.selection_active = true;
+        true
+    }
+
+    fn activate_selection(&mut self) {
+        match self.selection {
+            0 => self.enter_digit(7),
+            1 => self.enter_digit(8),
+            2 => self.enter_digit(9),
+            BUTTON_DIVIDE => self.select_operator(KEY_KPSLASH),
+            4 => self.enter_digit(4),
+            5 => self.enter_digit(5),
+            6 => self.enter_digit(6),
+            BUTTON_MULTIPLY => self.select_operator(KEY_KPASTERISK),
+            8 => self.enter_digit(1),
+            9 => self.enter_digit(2),
+            10 => self.enter_digit(3),
+            BUTTON_SUBTRACT => self.select_operator(KEY_KPMINUS),
+            BUTTON_CLEAR => *self = Self::new(),
+            13 => self.enter_digit(0),
+            BUTTON_EQUAL => {
+                self.apply();
+                self.pending = 0;
+            }
+            BUTTON_ADD => self.select_operator(KEY_KPPLUS),
+            _ => {}
+        }
+    }
+
+    fn enter_digit(&mut self, digit: i32) {
+        if self.error || !self.entering {
+            self.value = 0;
+            self.error = false;
+        }
+        self.value = self.value.saturating_mul(10).saturating_add(digit);
+        self.value = self.value.min(999_999_999);
+        self.entering = true;
+    }
+
+    fn select_operator(&mut self, operator: u16) {
+        self.apply();
+        self.pending = operator;
+        self.entering = false;
     }
 
     fn apply(&mut self) {
@@ -90,38 +156,52 @@ impl Calculator {
     }
 }
 
-const KEY_8: u16 = 9;
-const KEY_MINUS: u16 = 12;
 const KEY_EQUAL: u16 = 13;
-const KEY_SLASH: u16 = 53;
 const KEY_KPASTERISK: u16 = 55;
 const KEY_KPMINUS: u16 = 74;
 const KEY_KPPLUS: u16 = 78;
 const KEY_KPSLASH: u16 = 98;
+const KEY_KPENTER: u16 = 96;
+const KEY_ENTER: u16 = 28;
+const KEY_SPACE: u16 = 57;
+const KEY_UP: u16 = 103;
+const KEY_LEFT: u16 = 105;
+const KEY_RIGHT: u16 = 106;
+const KEY_DOWN: u16 = 108;
 
-fn shifted(modifiers: u8) -> bool {
-    modifiers & input::MODIFIER_SHIFT != 0
-}
+const BUTTON_COLUMNS: u8 = 4;
+const BUTTON_ROWS: u8 = 4;
+const BUTTON_DIVIDE: u8 = 3;
+const BUTTON_MULTIPLY: u8 = 7;
+const BUTTON_SUBTRACT: u8 = 11;
+const BUTTON_CLEAR: u8 = 12;
+const BUTTON_EQUAL: u8 = 14;
+const BUTTON_ADD: u8 = 15;
 
-fn operator_for_key(code: u16, modifiers: u8) -> Option<u16> {
-    match (code, shifted(modifiers)) {
-        (KEY_EQUAL, true) | (KEY_KPPLUS, _) => Some(KEY_KPPLUS),
-        (KEY_MINUS, false) | (KEY_KPMINUS, _) => Some(KEY_KPMINUS),
-        (KEY_8, true) | (KEY_KPASTERISK, _) => Some(KEY_KPASTERISK),
-        (KEY_SLASH, false) | (KEY_KPSLASH, _) => Some(KEY_KPSLASH),
-        (KEY_EQUAL, false) => Some(KEY_EQUAL),
+fn operator_for_key(code: u16, character: Option<u8>) -> Option<u16> {
+    match (code, character) {
+        (KEY_KPPLUS, _) | (_, Some(b'+')) => Some(KEY_KPPLUS),
+        (KEY_KPMINUS, _) | (_, Some(b'-')) => Some(KEY_KPMINUS),
+        (KEY_KPASTERISK, _) | (_, Some(b'*')) => Some(KEY_KPASTERISK),
+        (KEY_KPSLASH, _) | (_, Some(b'/')) => Some(KEY_KPSLASH),
+        (KEY_EQUAL, _) | (_, Some(b'=')) => Some(KEY_EQUAL),
         _ => None,
     }
 }
 
-fn digit_for_key(code: u16, modifiers: u8) -> Option<i32> {
-    if shifted(modifiers) {
-        return None;
-    }
-    match code {
-        11 => Some(0),
-        2..=10 => Some(i32::from(code - 1)),
-        _ => None,
+fn digit_for_character(character: Option<u8>) -> Option<i32> {
+    character
+        .filter(u8::is_ascii_digit)
+        .map(|byte| i32::from(byte - b'0'))
+}
+
+fn operator_label(operator: u16) -> &'static str {
+    match operator {
+        KEY_KPMINUS => "-",
+        KEY_KPPLUS => "+",
+        KEY_KPASTERISK => "*",
+        KEY_KPSLASH => "/",
+        _ => "",
     }
 }
 
@@ -168,6 +248,9 @@ fn render(calculator: &Calculator, pixels: &mut [u8]) {
         },
         2,
     );
+    if calculator.pending != 0 {
+        canvas.draw_text(18, 18, operator_label(calculator.pending), color::ACCENT, 2);
+    }
 
     let labels = [
         ["7", "8", "9", "/"],
@@ -194,7 +277,31 @@ fn render(calculator: &Calculator, pixels: &mut [u8]) {
                     ButtonStyle::SECONDARY
                 },
             );
+            let button = (row * usize::from(BUTTON_COLUMNS) + column) as u8;
+            if (calculator.selection_active && calculator.selection == button)
+                || calculator.pending != 0 && operator_for_button(button) == calculator.pending
+            {
+                canvas.stroke_rect(
+                    Rect {
+                        x: 7 + column as u16 * 77,
+                        y: 51 + row as u16 * 24,
+                        width: 74,
+                        height: 22,
+                    },
+                    color::ACCENT,
+                );
+            }
         }
+    }
+}
+
+fn operator_for_button(button: u8) -> u16 {
+    match button {
+        BUTTON_DIVIDE => KEY_KPSLASH,
+        BUTTON_MULTIPLY => KEY_KPASTERISK,
+        BUTTON_SUBTRACT => KEY_KPMINUS,
+        BUTTON_ADD => KEY_KPPLUS,
+        _ => 0,
     }
 }
 
@@ -233,7 +340,7 @@ pub extern "C" fn main() -> i32 {
         }
         match input::poll_key_event(250) {
             Ok(Some(event)) if event.pressed => {
-                calculator.key(event.code, event.modifiers);
+                calculator.key(event.code, event.character);
                 dirty = true;
             }
             Ok(_) => {}
@@ -248,38 +355,67 @@ mod tests {
 
     #[test]
     fn cardputer_symbol_keys_drive_all_operations() {
-        let shift = input::MODIFIER_SHIFT;
         let mut calculator = Calculator::new();
 
-        calculator.key(8, 0);
-        calculator.key(KEY_8, shift);
-        calculator.key(7, 0);
-        calculator.key(KEY_EQUAL, 0);
+        calculator.key(8, Some(b'7'));
+        calculator.key(9, Some(b'*'));
+        calculator.key(7, Some(b'6'));
+        calculator.key(KEY_EQUAL, Some(b'='));
         assert_eq!(calculator.value, 42);
 
-        calculator.key(KEY_MINUS, 0);
-        calculator.key(3, 0);
-        calculator.key(KEY_EQUAL, 0);
+        calculator.key(12, Some(b'-'));
+        calculator.key(3, Some(b'2'));
+        calculator.key(KEY_EQUAL, Some(b'='));
         assert_eq!(calculator.value, 40);
 
-        calculator.key(KEY_SLASH, 0);
-        calculator.key(5, 0);
-        calculator.key(KEY_EQUAL, 0);
+        calculator.key(53, Some(b'/'));
+        calculator.key(5, Some(b'4'));
+        calculator.key(KEY_EQUAL, Some(b'='));
         assert_eq!(calculator.value, 10);
 
-        calculator.key(KEY_EQUAL, shift);
-        calculator.key(2, 0);
-        calculator.key(KEY_EQUAL, 0);
+        calculator.key(KEY_EQUAL, Some(b'+'));
+        calculator.key(2, Some(b'1'));
+        calculator.key(KEY_EQUAL, Some(b'='));
         assert_eq!(calculator.value, 11);
     }
 
     #[test]
-    fn shifted_number_is_not_entered_as_a_digit() {
-        assert_eq!(digit_for_key(KEY_8, input::MODIFIER_SHIFT), None);
-        assert_eq!(
-            operator_for_key(KEY_8, input::MODIFIER_SHIFT),
-            Some(KEY_KPASTERISK)
-        );
+    fn system_symbol_is_not_entered_as_a_digit() {
+        assert_eq!(digit_for_character(Some(b'*')), None);
+        assert_eq!(operator_for_key(9, Some(b'*')), Some(KEY_KPASTERISK));
+    }
+
+    #[test]
+    fn arrow_navigation_enters_operators_without_symbol_layer() {
+        let mut calculator = Calculator::new();
+
+        calculator.key(2, Some(b'1'));
+        calculator.key(KEY_RIGHT, None);
+        calculator.key(KEY_ENTER, None);
+        assert_eq!(calculator.pending, KEY_KPPLUS);
+        assert_eq!(operator_label(calculator.pending), "+");
+
+        calculator.key(3, Some(b'2'));
+        calculator.key(KEY_ENTER, None);
+        assert_eq!(calculator.value, 3);
+        assert_eq!(calculator.pending, 0);
+    }
+
+    #[test]
+    fn on_screen_keypad_reaches_every_operation() {
+        let mut calculator = Calculator::new();
+
+        for (button, operator) in [
+            (BUTTON_DIVIDE, KEY_KPSLASH),
+            (BUTTON_MULTIPLY, KEY_KPASTERISK),
+            (BUTTON_SUBTRACT, KEY_KPMINUS),
+            (BUTTON_ADD, KEY_KPPLUS),
+        ] {
+            calculator.selection = button;
+            calculator.activate_selection();
+            assert_eq!(calculator.pending, operator);
+            assert_eq!(operator_for_button(button), operator);
+        }
     }
 }
 

@@ -5,10 +5,10 @@ Report the V0.6 physical Shift key as an ordinary held modifier. Remove its
 one-shot, double-click lock, and long-press behavior so an unmodified letter
 is lowercase and only a concurrently held Shift makes it uppercase.
 
-Map the 32 Sym combinations by physical matrix scan code to standard US evdev
-keys. Emit synthetic Shift in a separate input frame only for symbols that
-require it, keeping compositor and client modifier state ordered. Reference
-count overlapping physical and synthetic modifiers to preserve release order.
+Map the 32 Sym combinations by physical matrix scan code to the stable,
+otherwise unreachable evdev identifiers used by the V0.6 keymap. Userspace
+maps those identifiers directly to the printed symbols, so symbol input never
+depends on a synthetic Shift event racing compositor modifier state.
 
 ---
 diff --git a/modules/tca8418-1.0/tca8418_keypad_m5stack.c b/modules/tca8418-1.0/tca8418_keypad_m5stack.c
@@ -39,38 +39,38 @@ index fd452bf..064c7e7 100644
 +
 +static const struct tca8418_symbol_translation tca8418_symbols[] = {
 +	/* Physical keys from the CardputerZero V0.6 Sym legend. */
-+	{ 0x44, KEY_1, true },
-+	{ 0x00, KEY_2, true },
-+	{ 0x01, KEY_3, true },
-+	{ 0x02, KEY_4, true },
-+	{ 0x03, KEY_5, true },
-+	{ 0x04, KEY_6, true },
-+	{ 0x05, KEY_7, true },
-+	{ 0x06, KEY_8, true },
-+	{ 0x07, KEY_9, true },
-+	{ 0x08, KEY_0, true },
-+	{ 0x10, KEY_GRAVE, true },
-+	{ 0x11, KEY_GRAVE, false },
-+	{ 0x12, KEY_MINUS, true },
-+	{ 0x13, KEY_MINUS, false },
-+	{ 0x14, KEY_EQUAL, true },
-+	{ 0x15, KEY_EQUAL, false },
-+	{ 0x16, KEY_LEFTBRACE, false },
-+	{ 0x17, KEY_RIGHTBRACE, false },
-+	{ 0x18, KEY_LEFTBRACE, true },
-+	{ 0x19, KEY_RIGHTBRACE, true },
-+	{ 0x20, KEY_SEMICOLON, false },
-+	{ 0x21, KEY_SEMICOLON, true },
-+	{ 0x22, KEY_APOSTROPHE, false },
-+	{ 0x24, KEY_APOSTROPHE, true },
-+	{ 0x25, KEY_COMMA, true },
-+	{ 0x26, KEY_DOT, true },
-+	{ 0x27, KEY_BACKSLASH, false },
-+	{ 0x28, KEY_BACKSLASH, true },
-+	{ 0x35, KEY_COMMA, false },
-+	{ 0x36, KEY_DOT, false },
-+	{ 0x37, KEY_SLASH, false },
-+	{ 0x38, KEY_SLASH, true },
++	{ 0x44, KEY_LEFTBRACE, false },
++	{ 0x00, KEY_RIGHTBRACE, false },
++	{ 0x01, KEY_SEMICOLON, false },
++	{ 0x02, KEY_APOSTROPHE, false },
++	{ 0x03, KEY_GRAVE, false },
++	{ 0x04, KEY_BACKSLASH, false },
++	{ 0x05, KEY_COMMA, false },
++	{ 0x06, KEY_DOT, false },
++	{ 0x07, KEY_SLASH, false },
++	{ 0x08, KEY_MUHENKAN, false },
++	{ 0x10, KEY_KPASTERISK, false },
++	{ 0x11, KEY_NUMLOCK, false },
++	{ 0x12, KEY_SCROLLLOCK, false },
++	{ 0x13, KEY_KP7, false },
++	{ 0x14, KEY_KP8, false },
++	{ 0x15, KEY_KP9, false },
++	{ 0x16, KEY_KPMINUS, false },
++	{ 0x17, KEY_KP4, false },
++	{ 0x18, KEY_KP5, false },
++	{ 0x19, KEY_KP6, false },
++	{ 0x20, KEY_KP1, false },
++	{ 0x21, KEY_KP2, false },
++	{ 0x22, KEY_KP3, false },
++	{ 0x24, KEY_KP0, false },
++	{ 0x25, KEY_KPDOT, false },
++	{ 0x26, KEY_ZENKAKUHANKAKU, false },
++	{ 0x27, KEY_102ND, false },
++	{ 0x28, KEY_RO, false },
++	{ 0x35, KEY_KATAKANA, false },
++	{ 0x36, KEY_HIRAGANA, false },
++	{ 0x37, KEY_HENKAN, false },
++	{ 0x38, KEY_KATAKANAHIRAGANA, false },
 +};
 +
 +static bool tca8418_translate_symbol_key(unsigned int scan_code,

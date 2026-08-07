@@ -84,7 +84,8 @@ typedef struct cp0_key_event {
     uint8_t pressed;
     uint8_t repeated;
     uint8_t modifiers;
-    uint8_t reserved[3];
+    uint8_t character;
+    uint8_t reserved[2];
 } cp0_key_event_t;
 
 typedef struct cp0_http_response {

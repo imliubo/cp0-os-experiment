@@ -11,6 +11,12 @@ from `sdk/abi/cardputerzero-hostcalls-v1.json`. Applications include only
 `tests/test-sdk-abi.sh` guarantees that the C declarations, Rust imports and
 Runtime registration table remain byte-for-byte synchronized with the contract.
 
+`cp0_key_event_t.character` is the platform-translated printable ASCII byte;
+zero means the event has no text. It follows the same held-Shift and V0.6 `Sym`
+mapping as first boot and System Shell. Applications use this field for text
+entry and keep `code` for navigation or game controls instead of maintaining a
+private evdev-to-character table.
+
 Apps that want resumable task eviction may export `cp0_app_checkpoint` and
 `cp0_app_restore` with the declarations in `cardputerzero.h`. The Runtime owns
 the temporary linear-memory buffers, copies at most 8 KiB, and rejects schema

@@ -75,9 +75,13 @@ static void cp0_lvgl_read_key(lv_indev_t *input, lv_indev_data_t *data) {
     (void)input;
     result = cp0_poll_key_event(&event, sizeof(event), 0);
     if (result == 1) {
-        last_key = cp0_lvgl_key(event.code);
-        last_key_state = event.pressed ? LV_INDEV_STATE_PRESSED
-                                       : LV_INDEV_STATE_RELEASED;
+        if (event.pressed != 0U || event.repeated != 0U) {
+            last_key = event.character != 0U ? event.character
+                                             : cp0_lvgl_key(event.code);
+        }
+        last_key_state = event.pressed != 0U || event.repeated != 0U
+                             ? LV_INDEV_STATE_PRESSED
+                             : LV_INDEV_STATE_RELEASED;
     }
     data->key = last_key;
     data->state = last_key_state;

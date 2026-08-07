@@ -321,6 +321,7 @@ async function runApplication() {
       output[1] = (event.code >>> 8) & 0xff;
       output[2] = 1;
       output[4] = event.modifiers;
+      output[5] = printableAscii(event.code, event.modifiers);
       metrics.key_events += 1;
       return 1;
     },
@@ -726,6 +727,29 @@ function parseKeys(value) {
     if (!code) throw new Error(`unknown key name ${name}`);
     return { code, modifiers: 0 };
   });
+}
+
+function printableAscii(code, modifiers) {
+  const shifted = (modifiers & 1) !== 0;
+  const letters = {
+    16: "q", 17: "w", 18: "e", 19: "r", 20: "t", 21: "y", 22: "u",
+    23: "i", 24: "o", 25: "p", 30: "a", 31: "s", 32: "d", 33: "f",
+    34: "g", 35: "h", 36: "j", 37: "k", 38: "l", 44: "z", 45: "x",
+    46: "c", 47: "v", 48: "b", 49: "n", 50: "m",
+  };
+  if (letters[code]) {
+    return (shifted ? letters[code].toUpperCase() : letters[code]).charCodeAt(0);
+  }
+  if (code >= 2 && code <= 10) {
+    const row = shifted ? "!@#$%^&*(" : "123456789";
+    return row.charCodeAt(code - 2);
+  }
+  if (code === 11) return (shifted ? ")" : "0").charCodeAt(0);
+  const pairs = {
+    12: "-_", 13: "=+", 26: "[{", 27: "]}", 39: ";:", 40: "'\"",
+    41: "`~", 43: "\\|", 51: ",<", 52: ".>", 53: "/?", 57: "  ",
+  };
+  return pairs[code]?.charCodeAt(shifted ? 1 : 0) || 0;
 }
 
 function rgb565ToPpm(frame, width, height) {

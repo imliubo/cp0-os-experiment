@@ -1,6 +1,8 @@
 #include "cardputerzero.h"
 
 _Static_assert(sizeof(cp0_key_event_t) == 8U, "key event ABI changed");
+_Static_assert(offsetof(cp0_key_event_t, character) == 5U,
+               "key character wire offset changed");
 _Static_assert(sizeof(cp0_rect_t) == 8U, "damage rectangle ABI changed");
 _Static_assert(sizeof(cp0_lora_metadata_t) == CP0_LORA_METADATA_BYTES,
                "LoRa metadata ABI changed");

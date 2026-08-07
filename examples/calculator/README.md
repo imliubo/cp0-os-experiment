@@ -11,6 +11,10 @@ shows division-by-zero errors in the display.
 - `0`-`9`: enter digits.
 - `+`, `-`, `*`, `/`: select an operator. On V0.6, use the printed `Sym`
   combinations for symbols.
+- Arrow keys: select any on-screen number or operator; Enter activates the
+  selection. This provides a complete fallback when entering symbols is
+  inconvenient.
+- Space: activate the selected on-screen key.
 - `=` or Enter: calculate the result.
 - `C`: clear the calculation.
 - Backspace: remove the last digit.

@@ -114,10 +114,11 @@ without Shift is lower-case; a letter is upper-case only while Shift is
 physically held. The Shell uses only the depressed XKB Shift modifier, with the
 raw key event retained as a fallback; latched and locked Shift states do not
 change text case. The Sym layer maps the 32 physical combinations from the V0.6
-keyboard legend and `按键sym.csv` to standard US Linux evdev keys. It synthesizes
-Shift only for `!@#$%^&*()~_+{}:"<>|?`; unshifted symbols use the same standard
-keys for `` `-=[];'\\,./ ``. Setup, system text fields and SDK applications
-therefore receive the same lower-case, upper-case and symbol semantics.
+keyboard legend and `按键sym.csv` to distinct Linux evdev identifiers. The
+shared System Shell and Runtime character table converts each identifier
+directly to its printed symbol, without synthetic Shift. Setup, system text
+fields and SDK applications therefore receive the same lower-case, upper-case
+and symbol semantics.
 Password pages disable key-click sound, mask text by default and must never
 appear with cleartext in screenshots, crash reports or support bundles.
 
@@ -493,10 +494,11 @@ keyboard driver emitted its synthetic `KEY_LEFTSHIFT` press and the following
 letter in one input synchronization frame; the compositor could therefore
 deliver the letter before the client-visible modifier state changed. The image
 now carries a patch on top of the pinned BSP that replaces the ASMUX
-single/double-click and long-press state machine with ordinary held Shift. Sym
-characters that require Shift commit their synthetic modifier in a separate
-input frame before the character. Shell-side XKB and raw-event tracking remain
-as independent safeguards.
+single/double-click and long-press state machine with ordinary held Shift. A
+later App-input regression showed that synthesizing Shift for Sym unnecessarily
+coupled characters to compositor modifier timing, so the final mapping uses the
+V0.6 keymap's distinct symbol identifiers directly. Shell-side XKB and raw-event
+tracking remain independent safeguards for physical Shift and letter case.
 
 The locale files were present and both supported locales had been generated;
 the failing boundary was the restricted broker's `localectl` D-Bus mutation.

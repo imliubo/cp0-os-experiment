@@ -12,6 +12,20 @@ pub struct KeyEvent {
     pub pressed: bool,
     pub repeated: bool,
     pub modifiers: u8,
+    pub character: Option<u8>,
+}
+
+fn decode_key_event(wire: [u8; 8]) -> KeyEvent {
+    KeyEvent {
+        code: u16::from_le_bytes([wire[0], wire[1]]),
+        pressed: wire[2] != 0,
+        repeated: wire[3] != 0,
+        modifiers: wire[4],
+        character: match wire[5] {
+            0 => None,
+            value => Some(value),
+        },
+    }
 }
 
 pub fn poll_key_event(timeout_milliseconds: u32) -> Result<Option<KeyEvent>, Error> {
@@ -25,12 +39,7 @@ pub fn poll_key_event(timeout_milliseconds: u32) -> Result<Option<KeyEvent>, Err
         timeout_milliseconds as i32,
     ) {
         0 => Ok(None),
-        1 => Ok(Some(KeyEvent {
-            code: u16::from_le_bytes([wire[0], wire[1]]),
-            pressed: wire[2] != 0,
-            repeated: wire[3] != 0,
-            modifiers: wire[4],
-        })),
+        1 => Ok(Some(decode_key_event(wire))),
         status => Error::from_host(status).map(|()| None),
     }
 }
@@ -46,5 +55,21 @@ mod tests {
             poll_key_event(MAX_POLL_MILLISECONDS + 1),
             Err(Error::InvalidArgument)
         );
+    }
+
+    #[test]
+    fn decodes_system_character_without_changing_wire_size() {
+        let event = decode_key_event([30, 0, 1, 0, MODIFIER_SHIFT, b'A', 0, 0]);
+        assert_eq!(
+            event,
+            KeyEvent {
+                code: 30,
+                pressed: true,
+                repeated: false,
+                modifiers: MODIFIER_SHIFT,
+                character: Some(b'A'),
+            }
+        );
+        assert_eq!(decode_key_event([1, 0, 0, 0, 0, 0, 0, 0]).character, None);
     }
 }

@@ -10,7 +10,6 @@ use cp0_sdk::{
 
 const KEY_BACKSPACE: u16 = 14;
 const KEY_ENTER: u16 = 28;
-const KEY_SPACE: u16 = 57;
 const NOTE_KEY: &str = "draft.v1";
 const NOTE_BYTES: usize = 192;
 const LINE_COLUMNS: usize = 48;
@@ -70,116 +69,16 @@ fn load_note() -> Note {
     note
 }
 
-fn key_character(code: u16, shifted: bool) -> Option<u8> {
-    let character = match code {
-        2..=10 => {
-            const NORMAL: &[u8; 9] = b"123456789";
-            const SHIFTED: &[u8; 9] = b"!@#$%^&*(";
-            if shifted {
-                SHIFTED[(code - 2) as usize]
-            } else {
-                NORMAL[(code - 2) as usize]
-            }
-        }
-        11 => {
-            if shifted {
-                b')'
-            } else {
-                b'0'
-            }
-        }
-        12 => {
-            if shifted {
-                b'_'
-            } else {
-                b'-'
-            }
-        }
-        13 => {
-            if shifted {
-                b'+'
-            } else {
-                b'='
-            }
-        }
-        16..=25 => letter(code, b"qwertyuiop")?,
-        26 => {
-            if shifted {
-                b'{'
-            } else {
-                b'['
-            }
-        }
-        27 => {
-            if shifted {
-                b'}'
-            } else {
-                b']'
-            }
-        }
-        30..=38 => letter(code - 14, b"asdfghjkl")?,
-        39 => {
-            if shifted {
-                b':'
-            } else {
-                b';'
-            }
-        }
-        40 => {
-            if shifted {
-                b'"'
-            } else {
-                b'\''
-            }
-        }
-        41 => {
-            if shifted {
-                b'~'
-            } else {
-                b'`'
-            }
-        }
-        43 => {
-            if shifted {
-                b'|'
-            } else {
-                b'\\'
-            }
-        }
-        44..=50 => letter(code - 28, b"zxcvbnm")?,
-        51 => {
-            if shifted {
-                b'<'
-            } else {
-                b','
-            }
-        }
-        52 => {
-            if shifted {
-                b'>'
-            } else {
-                b'.'
-            }
-        }
-        53 => {
-            if shifted {
-                b'?'
-            } else {
-                b'/'
-            }
-        }
-        KEY_SPACE => b' ',
-        _ => return None,
-    };
-    Some(if shifted && character.is_ascii_lowercase() {
-        character.to_ascii_uppercase()
+fn apply_key(note: &mut Note, event: input::KeyEvent) -> bool {
+    if event.code == KEY_BACKSPACE {
+        note.backspace()
+    } else if event.code == KEY_ENTER {
+        note.push(b'\n')
+    } else if let Some(character) = event.character {
+        note.push(character)
     } else {
-        character
-    })
-}
-
-fn letter(code: u16, row: &[u8]) -> Option<u8> {
-    row.get((code - 16) as usize).copied()
+        false
+    }
 }
 
 fn render(note: &Note, pixels: &mut [u8], saved: bool) {
@@ -285,17 +184,7 @@ pub extern "C" fn main() -> i32 {
         }
         match input::poll_key_event(100) {
             Ok(Some(event)) if event.pressed => {
-                let changed = if event.code == KEY_BACKSPACE {
-                    note.backspace()
-                } else if event.code == KEY_ENTER {
-                    note.push(b'\n')
-                } else if let Some(character) =
-                    key_character(event.code, event.modifiers & input::MODIFIER_SHIFT != 0)
-                {
-                    note.push(character)
-                } else {
-                    false
-                };
+                let changed = apply_key(&mut note, event);
                 if changed {
                     saved = false;
                     needs_save = true;
@@ -314,13 +203,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn maps_cardputer_text_keys_and_bounds_note() {
-        assert_eq!(key_character(30, false), Some(b'a'));
-        assert_eq!(key_character(30, true), Some(b'A'));
-        assert_eq!(key_character(13, true), Some(b'+'));
+    fn consumes_system_characters_and_bounds_note() {
         let mut note = Note::empty();
+        for character in b"aA!@#$%^&*()~`_-+=[]{};:'\"<>\\|,./? " {
+            assert!(apply_key(
+                &mut note,
+                input::KeyEvent {
+                    code: 0,
+                    pressed: true,
+                    repeated: false,
+                    modifiers: 0,
+                    character: Some(*character),
+                },
+            ));
+        }
         for _ in 0..NOTE_BYTES {
-            assert!(note.push(b'x'));
+            if note.length < NOTE_BYTES {
+                assert!(note.push(b'x'));
+            }
         }
         assert!(!note.push(b'y'));
         assert!(note.backspace());

@@ -19,6 +19,12 @@ length. `Error::Unavailable` means a capability may be waiting for a System
 Shell permission decision or a transient service may be unavailable and can be
 retried later.
 
+`input::KeyEvent::character` contains the platform-translated printable ASCII
+byte for text input, or `None` for navigation, modifier and release events. It
+uses the same V0.6 mapping as System Shell, so Apps do not interpret evdev key
+codes or implement their own Shift/`Sym` tables. Raw `code` and `modifiers`
+remain available for non-text controls.
+
 `audio::play_pcm_s16le` and `audio::capture_pcm_s16le` accept at most 1024
 signed 16-bit mono frames at 16 kHz. The application manifest must declare
 playback and capture separately. `audio::play_pcm_s16le_stereo_48khz` accepts
@@ -55,7 +61,8 @@ Play/Pause, Previous or Next action. The API contains no target application or
 media metadata and does not grant the separate `audio.playback` permission.
 
 `ui::Canvas` is the allocation-free reference renderer for the 320-pixel-wide
-display. It provides clipped RGB565 rectangles, a compact 5x7 font, buttons and
+display. It provides clipped RGB565 rectangles, a compact 5x7 font covering all
+printable ASCII with distinct uppercase and lowercase glyphs, buttons and
 progress bars. Applications own their frame buffer and submit it through
 `display::present_rgb565`; the SDK never creates a Linux window or exposes a
 framebuffer device.

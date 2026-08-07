@@ -1,13 +1,14 @@
 #include "display.h"
 #include "broker_client.h"
 #include "frame_pacing.h"
+#include "input_ascii.h"
 #include "input_queue.h"
+#include "keyboard_state.h"
 #include "pixels.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/memfd.h>
-#include <linux/input-event-codes.h>
 #include <poll.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -51,7 +52,7 @@ struct cp0_display_state {
     uint16_t content_offset_y;
     struct cp0_input_queue input_queue;
     struct cp0_frame_pacer frame_pacer;
-    uint8_t held_modifiers;
+    struct cp0_keyboard_state keyboard_state;
     bool has_xrgb8888;
     bool configured;
     bool failed;
@@ -126,87 +127,6 @@ static const struct wl_shm_listener shm_listener = {
     .format = handle_shm_format,
 };
 
-enum cp0_modifier {
-    CP0_MODIFIER_SHIFT = 1U << 0,
-    CP0_MODIFIER_CONTROL = 1U << 1,
-    CP0_MODIFIER_ALT = 1U << 2,
-    CP0_MODIFIER_SUPER = 1U << 3,
-};
-
-enum cp0_held_modifier {
-    CP0_HELD_LEFT_SHIFT = 1U << 0,
-    CP0_HELD_RIGHT_SHIFT = 1U << 1,
-    CP0_HELD_LEFT_CONTROL = 1U << 2,
-    CP0_HELD_RIGHT_CONTROL = 1U << 3,
-    CP0_HELD_LEFT_ALT = 1U << 4,
-    CP0_HELD_RIGHT_ALT = 1U << 5,
-    CP0_HELD_LEFT_SUPER = 1U << 6,
-    CP0_HELD_RIGHT_SUPER = 1U << 7,
-};
-
-static void set_modifier_key(struct cp0_display_state *display, uint32_t key,
-                             bool pressed) {
-    uint8_t bit = 0;
-
-    switch (key) {
-    case KEY_LEFTSHIFT:
-        bit = CP0_HELD_LEFT_SHIFT;
-        break;
-    case KEY_RIGHTSHIFT:
-        bit = CP0_HELD_RIGHT_SHIFT;
-        break;
-    case KEY_LEFTCTRL:
-        bit = CP0_HELD_LEFT_CONTROL;
-        break;
-    case KEY_RIGHTCTRL:
-        bit = CP0_HELD_RIGHT_CONTROL;
-        break;
-    case KEY_LEFTALT:
-        bit = CP0_HELD_LEFT_ALT;
-        break;
-    case KEY_RIGHTALT:
-        bit = CP0_HELD_RIGHT_ALT;
-        break;
-    case KEY_LEFTMETA:
-        bit = CP0_HELD_LEFT_SUPER;
-        break;
-    case KEY_RIGHTMETA:
-        bit = CP0_HELD_RIGHT_SUPER;
-        break;
-    default:
-        return;
-    }
-    if (pressed)
-        display->held_modifiers |= bit;
-    else
-        display->held_modifiers &= (uint8_t)~bit;
-}
-
-static uint8_t modifier_mask(const struct cp0_display_state *display) {
-    uint8_t modifiers = 0;
-
-    if ((display->held_modifiers &
-         (CP0_HELD_LEFT_SHIFT | CP0_HELD_RIGHT_SHIFT)) != 0U)
-        modifiers |= CP0_MODIFIER_SHIFT;
-    if ((display->held_modifiers &
-         (CP0_HELD_LEFT_CONTROL | CP0_HELD_RIGHT_CONTROL)) != 0U)
-        modifiers |= CP0_MODIFIER_CONTROL;
-    if ((display->held_modifiers &
-         (CP0_HELD_LEFT_ALT | CP0_HELD_RIGHT_ALT)) != 0U)
-        modifiers |= CP0_MODIFIER_ALT;
-    if ((display->held_modifiers &
-         (CP0_HELD_LEFT_SUPER | CP0_HELD_RIGHT_SUPER)) != 0U)
-        modifiers |= CP0_MODIFIER_SUPER;
-    return modifiers;
-}
-
-static bool is_modifier_key(uint32_t key) {
-    return key == KEY_LEFTSHIFT || key == KEY_RIGHTSHIFT ||
-           key == KEY_LEFTCTRL || key == KEY_RIGHTCTRL ||
-           key == KEY_LEFTALT || key == KEY_RIGHTALT ||
-           key == KEY_LEFTMETA || key == KEY_RIGHTMETA;
-}
-
 static void handle_keyboard_keymap(void *data, struct wl_keyboard *keyboard,
                                    uint32_t format, int32_t descriptor,
                                    uint32_t size) {
@@ -229,9 +149,9 @@ static void handle_keyboard_enter(void *data, struct wl_keyboard *keyboard,
     if (surface != display->surface)
         return;
     cp0_input_queue_reset(&display->input_queue);
-    display->held_modifiers = 0;
+    cp0_keyboard_state_reset(&display->keyboard_state);
     wl_array_for_each(key, keys)
-        set_modifier_key(display, *key, true);
+        cp0_keyboard_state_set_key(&display->keyboard_state, *key, true);
     display->keyboard_focused = true;
 }
 
@@ -244,7 +164,7 @@ static void handle_keyboard_leave(void *data, struct wl_keyboard *keyboard,
     (void)surface;
 
     display->keyboard_focused = false;
-    display->held_modifiers = 0;
+    cp0_keyboard_state_reset(&display->keyboard_state);
     cp0_input_queue_reset(&display->input_queue);
 }
 
@@ -253,17 +173,23 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *keyboard,
                                 uint32_t key_state) {
     struct cp0_display_state *display = data;
     bool pressed = key_state == WL_KEYBOARD_KEY_STATE_PRESSED;
+    uint8_t modifiers;
+    uint8_t character;
     (void)keyboard;
     (void)serial;
     (void)time;
 
     if (!display->keyboard_focused || key > UINT16_MAX)
         return;
-    set_modifier_key(display, key, pressed);
+    cp0_keyboard_state_set_key(&display->keyboard_state, key, pressed);
+    modifiers = cp0_keyboard_state_modifiers(&display->keyboard_state);
+    character = pressed
+                    ? cp0_input_ascii_character(
+                          key, (modifiers & CP0_MODIFIER_SHIFT) != 0U)
+                    : 0U;
     bool delivered = cp0_input_queue_push(&display->input_queue, (uint16_t)key,
-                                          pressed, false,
-                                          modifier_mask(display));
-    if (delivered && pressed && !is_modifier_key(key))
+                                          pressed, false, modifiers, character);
+    if (delivered && pressed && !cp0_keyboard_state_is_modifier_key(key))
         (void)cp0_broker_play_key_click();
 }
 
@@ -272,13 +198,13 @@ static void handle_keyboard_modifiers(void *data,
                                       uint32_t serial, uint32_t depressed,
                                       uint32_t latched, uint32_t locked,
                                       uint32_t group) {
-    (void)data;
+    struct cp0_display_state *display = data;
     (void)keyboard;
     (void)serial;
-    (void)depressed;
     (void)latched;
     (void)locked;
     (void)group;
+    cp0_keyboard_state_set_depressed(&display->keyboard_state, depressed);
 }
 
 static void handle_keyboard_repeat_info(void *data,
@@ -313,7 +239,7 @@ static void handle_seat_capabilities(void *data, struct wl_seat *seat,
         wl_keyboard_destroy(display->keyboard);
         display->keyboard = NULL;
         display->keyboard_focused = false;
-        display->held_modifiers = 0;
+        cp0_keyboard_state_reset(&display->keyboard_state);
         cp0_input_queue_reset(&display->input_queue);
     }
 }

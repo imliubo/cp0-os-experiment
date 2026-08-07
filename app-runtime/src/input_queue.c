@@ -10,7 +10,8 @@ void cp0_input_queue_reset(struct cp0_input_queue *queue) {
 }
 
 bool cp0_input_queue_push(struct cp0_input_queue *queue, uint16_t code,
-                          bool pressed, bool repeated, uint8_t modifiers) {
+                          bool pressed, bool repeated, uint8_t modifiers,
+                          uint8_t character) {
     size_t tail;
     struct cp0_key_event *event;
 
@@ -25,6 +26,9 @@ bool cp0_input_queue_push(struct cp0_input_queue *queue, uint16_t code,
     event->pressed = pressed ? 1U : 0U;
     event->repeated = repeated ? 1U : 0U;
     event->modifiers = modifiers;
+    if ((pressed || repeated) && character >= (uint8_t)' ' &&
+        character <= (uint8_t)'~')
+        event->character = character;
     queue->length++;
     return true;
 }

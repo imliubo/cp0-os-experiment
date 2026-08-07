@@ -26,11 +26,13 @@ int main(void) {
 ```
 
 The adapter uses `LV_DISPLAY_RENDER_MODE_FULL`, RGB565 color format and one
-keypad input device. Arrow, Enter, Escape and Backspace evdev codes are mapped
-to the corresponding LVGL keys; all other key codes are passed through. Only
-one LVGL context may exist because an OS application owns one foreground
-surface. The standard mode is 320x150 below the trusted 20-pixel status bar;
-immersive mode is 320x170.
+keypad input device. Printable input comes from the Runtime-produced
+`cp0_key_event_t.character`, so LVGL text widgets inherit the same Shift and
+`Sym` behavior as first boot. Arrow, Enter, Escape and Backspace evdev codes are
+mapped to the corresponding LVGL keys when an event has no character. Only one
+LVGL context may exist because an OS application owns one foreground surface.
+The standard mode is 320x150 below the trusted 20-pixel status bar; immersive
+mode is 320x170.
 
 The build test uses a minimal LVGL 9 declaration fixture to verify the WebAssembly
 ABI without vendoring LVGL. A released SDK toolchain will pin and package the

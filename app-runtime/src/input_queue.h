@@ -12,7 +12,8 @@ struct cp0_key_event {
     uint8_t pressed;
     uint8_t repeated;
     uint8_t modifiers;
-    uint8_t reserved[3];
+    uint8_t character;
+    uint8_t reserved[2];
 };
 
 struct cp0_input_queue {
@@ -24,7 +25,8 @@ struct cp0_input_queue {
 
 void cp0_input_queue_reset(struct cp0_input_queue *queue);
 bool cp0_input_queue_push(struct cp0_input_queue *queue, uint16_t code,
-                          bool pressed, bool repeated, uint8_t modifiers);
+                          bool pressed, bool repeated, uint8_t modifiers,
+                          uint8_t character);
 bool cp0_input_queue_pop(struct cp0_input_queue *queue,
                          struct cp0_key_event *event);
 bool cp0_input_queue_take_overflow(struct cp0_input_queue *queue);

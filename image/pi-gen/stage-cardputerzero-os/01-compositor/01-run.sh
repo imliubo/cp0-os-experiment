@@ -56,6 +56,12 @@ install -D -m 0644 \
 install -D -m 0644 \
     "${STAGE_DIR}/01-compositor/system-shell/cp0_task_thumbnail.h" \
     "${shell_source}/cp0_task_thumbnail.h"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/input_ascii.h" \
+    "${shell_source}/input_ascii.h"
+install -D -m 0644 \
+    "${STAGE_DIR}/01-compositor/system-shell/input_ascii.c" \
+    "${shell_source}/input_ascii.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/ui.c" \
     "${shell_source}/ui.c"
 install -D -m 0644 \
@@ -233,6 +239,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     -I/tmp/cardputerzero-weston-build/protocol \
     /tmp/cardputerzero-system-shell/main.c \
     /tmp/cardputerzero-system-shell/ui.c \
+    /tmp/cardputerzero-system-shell/input_ascii.c \
     /tmp/cardputerzero-system-shell/task_thumbnail.c \
     /tmp/cardputerzero-system-shell/screenshot_store.c \
     /tmp/cardputerzero-system-shell/json.c \

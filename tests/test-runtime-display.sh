@@ -25,9 +25,12 @@ ${HOST_CC:-cc} -std=c11 -Wall -Wextra -Werror \
 "$frame_pacing_output"
 
 ${HOST_CC:-cc} -std=c11 -Wall -Wextra -Werror \
+    -I"$repo_root/common" \
     -I"$repo_root/app-runtime/src" \
     "$repo_root/tests/runtime-input-test.c" \
+    "$repo_root/common/input_ascii.c" \
     "$repo_root/app-runtime/src/input_queue.c" \
+    "$repo_root/app-runtime/src/keyboard_state.c" \
     -o "$input_output"
 "$input_output"
 

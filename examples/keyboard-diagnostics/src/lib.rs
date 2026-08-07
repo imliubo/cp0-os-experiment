@@ -10,43 +10,11 @@ use cp0_sdk::{
     ui::{Canvas, color},
 };
 
-const KEY_1: u16 = 2;
-const KEY_0: u16 = 11;
-const KEY_MINUS: u16 = 12;
-const KEY_EQUAL: u16 = 13;
 const KEY_BACKSPACE: u16 = 14;
-const KEY_Q: u16 = 16;
-const KEY_W: u16 = 17;
-const KEY_E: u16 = 18;
-const KEY_R: u16 = 19;
-const KEY_T: u16 = 20;
-const KEY_Y: u16 = 21;
-const KEY_U: u16 = 22;
-const KEY_I: u16 = 23;
-const KEY_O: u16 = 24;
-const KEY_P: u16 = 25;
 const KEY_ENTER: u16 = 28;
 const KEY_A: u16 = 30;
-const KEY_S: u16 = 31;
-const KEY_D: u16 = 32;
-const KEY_G: u16 = 34;
-const KEY_H: u16 = 35;
-const KEY_J: u16 = 36;
-const KEY_K: u16 = 37;
-const KEY_L: u16 = 38;
-const KEY_SEMICOLON: u16 = 39;
-const KEY_APOSTROPHE: u16 = 40;
-const KEY_GRAVE: u16 = 41;
 const KEY_LEFTSHIFT: u16 = 42;
-const KEY_BACKSLASH: u16 = 43;
 const KEY_Z: u16 = 44;
-const KEY_V: u16 = 47;
-const KEY_B: u16 = 48;
-const KEY_N: u16 = 49;
-const KEY_M: u16 = 50;
-const KEY_COMMA: u16 = 51;
-const KEY_DOT: u16 = 52;
-const KEY_SLASH: u16 = 53;
 const KEY_RIGHTSHIFT: u16 = 54;
 
 #[cfg(not(test))]
@@ -97,38 +65,38 @@ const TESTS: [TestCase; 37] = [
         false,
         b'z',
     ),
-    test("HOLD SYM + 1", "EXCLAMATION", KEY_1, true, b'!'),
-    test("HOLD SYM + 2", "AT SIGN", KEY_1 + 1, true, b'@'),
-    test("HOLD SYM + 3", "HASH", KEY_1 + 2, true, b'#'),
-    test("HOLD SYM + 4", "DOLLAR", KEY_1 + 3, true, b'$'),
-    test("HOLD SYM + 5", "PERCENT", KEY_1 + 4, true, b'%'),
-    test("HOLD SYM + 6", "CARET", KEY_1 + 5, true, b'^'),
-    test("HOLD SYM + 7", "AMPERSAND", KEY_1 + 6, true, b'&'),
-    test("HOLD SYM + 8", "ASTERISK", KEY_1 + 7, true, b'*'),
-    test("HOLD SYM + 9", "LEFT PAREN", KEY_1 + 8, true, b'('),
-    test("HOLD SYM + 0", "RIGHT PAREN", KEY_0, true, b')'),
-    test("HOLD SYM + Q", "TILDE", KEY_GRAVE, true, b'~'),
-    test("HOLD SYM + W", "BACKTICK", KEY_GRAVE, false, b'`'),
-    test("HOLD SYM + E", "UNDERSCORE", KEY_MINUS, true, b'_'),
-    test("HOLD SYM + R", "MINUS", KEY_MINUS, false, b'-'),
-    test("HOLD SYM + T", "PLUS", KEY_EQUAL, true, b'+'),
-    test("HOLD SYM + Y", "EQUAL", KEY_EQUAL, false, b'='),
-    test("HOLD SYM + U", "LEFT BRACKET", 26, false, b'['),
-    test("HOLD SYM + I", "RIGHT BRACKET", 27, false, b']'),
-    test("HOLD SYM + O", "LEFT BRACE", 26, true, b'{'),
-    test("HOLD SYM + P", "RIGHT BRACE", 27, true, b'}'),
-    test("HOLD SYM + A", "SEMICOLON", KEY_SEMICOLON, false, b';'),
-    test("HOLD SYM + S", "COLON", KEY_SEMICOLON, true, b':'),
-    test("HOLD SYM + D", "APOSTROPHE", KEY_APOSTROPHE, false, b'\''),
-    test("HOLD SYM + G", "DOUBLE QUOTE", KEY_APOSTROPHE, true, b'\"'),
-    test("HOLD SYM + H", "LESS THAN", KEY_COMMA, true, b'<'),
-    test("HOLD SYM + J", "GREATER THAN", KEY_DOT, true, b'>'),
-    test("HOLD SYM + K", "BACKSLASH", KEY_BACKSLASH, false, b'\\'),
-    test("HOLD SYM + L", "PIPE", KEY_BACKSLASH, true, b'|'),
-    test("HOLD SYM + V", "COMMA", KEY_COMMA, false, b','),
-    test("HOLD SYM + B", "DOT", KEY_DOT, false, b'.'),
-    test("HOLD SYM + N", "SLASH", KEY_SLASH, false, b'/'),
-    test("HOLD SYM + M", "QUESTION", KEY_SLASH, true, b'?'),
+    test("HOLD SYM + 1", "EXCLAMATION", 26, false, b'!'),
+    test("HOLD SYM + 2", "AT SIGN", 27, false, b'@'),
+    test("HOLD SYM + 3", "HASH", 39, false, b'#'),
+    test("HOLD SYM + 4", "DOLLAR", 40, false, b'$'),
+    test("HOLD SYM + 5", "PERCENT", 41, false, b'%'),
+    test("HOLD SYM + 6", "CARET", 43, false, b'^'),
+    test("HOLD SYM + 7", "AMPERSAND", 51, false, b'&'),
+    test("HOLD SYM + 8", "ASTERISK", 52, false, b'*'),
+    test("HOLD SYM + 9", "LEFT PAREN", 53, false, b'('),
+    test("HOLD SYM + 0", "RIGHT PAREN", 94, false, b')'),
+    test("HOLD SYM + Q", "TILDE", 55, false, b'~'),
+    test("HOLD SYM + W", "BACKTICK", 69, false, b'`'),
+    test("HOLD SYM + E", "UNDERSCORE", 70, false, b'_'),
+    test("HOLD SYM + R", "MINUS", 71, false, b'-'),
+    test("HOLD SYM + T", "PLUS", 72, false, b'+'),
+    test("HOLD SYM + Y", "EQUAL", 73, false, b'='),
+    test("HOLD SYM + U", "LEFT BRACKET", 74, false, b'['),
+    test("HOLD SYM + I", "RIGHT BRACKET", 75, false, b']'),
+    test("HOLD SYM + O", "LEFT BRACE", 76, false, b'{'),
+    test("HOLD SYM + P", "RIGHT BRACE", 77, false, b'}'),
+    test("HOLD SYM + A", "SEMICOLON", 79, false, b';'),
+    test("HOLD SYM + S", "COLON", 80, false, b':'),
+    test("HOLD SYM + D", "APOSTROPHE", 81, false, b'\''),
+    test("HOLD SYM + G", "DOUBLE QUOTE", 82, false, b'\"'),
+    test("HOLD SYM + H", "LESS THAN", 83, false, b'<'),
+    test("HOLD SYM + J", "GREATER THAN", 85, false, b'>'),
+    test("HOLD SYM + K", "BACKSLASH", 86, false, b'\\'),
+    test("HOLD SYM + L", "PIPE", 89, false, b'|'),
+    test("HOLD SYM + V", "COMMA", 90, false, b','),
+    test("HOLD SYM + B", "DOT", 91, false, b'.'),
+    test("HOLD SYM + N", "SLASH", 92, false, b'/'),
+    test("HOLD SYM + M", "QUESTION", 93, false, b'?'),
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -263,7 +231,7 @@ impl Diagnostics {
 
     fn capture(&mut self, event: KeyEvent) {
         let case = TESTS[self.index];
-        let actual_ascii = us_ascii(event.code, event.modifiers);
+        let actual_ascii = event.character;
         let clean_modifiers = event.modifiers & !MODIFIER_SHIFT == 0;
         let shifted = event.modifiers & MODIFIER_SHIFT != 0;
         self.captured_matches = event.code == case.code
@@ -360,127 +328,6 @@ impl Diagnostics {
 
 const fn is_modifier(code: u16) -> bool {
     code == KEY_LEFTSHIFT || code == KEY_RIGHTSHIFT
-}
-
-fn us_ascii(code: u16, modifiers: u8) -> Option<u8> {
-    let shift = modifiers & MODIFIER_SHIFT != 0;
-    let value = match code {
-        KEY_1..=KEY_0 => {
-            const PLAIN: &[u8; 10] = b"1234567890";
-            const SHIFTED: &[u8; 10] = b"!@#$%^&*()";
-            let index = usize::from(code - KEY_1);
-            if shift { SHIFTED[index] } else { PLAIN[index] }
-        }
-        KEY_Q => letter(b'q', shift),
-        KEY_W => letter(b'w', shift),
-        KEY_E => letter(b'e', shift),
-        KEY_R => letter(b'r', shift),
-        KEY_T => letter(b't', shift),
-        KEY_Y => letter(b'y', shift),
-        KEY_U => letter(b'u', shift),
-        KEY_I => letter(b'i', shift),
-        KEY_O => letter(b'o', shift),
-        KEY_P => letter(b'p', shift),
-        KEY_A => letter(b'a', shift),
-        KEY_S => letter(b's', shift),
-        KEY_D => letter(b'd', shift),
-        33 => letter(b'f', shift),
-        KEY_G => letter(b'g', shift),
-        KEY_H => letter(b'h', shift),
-        KEY_J => letter(b'j', shift),
-        KEY_K => letter(b'k', shift),
-        KEY_L => letter(b'l', shift),
-        KEY_Z => letter(b'z', shift),
-        45 => letter(b'x', shift),
-        46 => letter(b'c', shift),
-        KEY_V => letter(b'v', shift),
-        KEY_B => letter(b'b', shift),
-        KEY_N => letter(b'n', shift),
-        KEY_M => letter(b'm', shift),
-        KEY_MINUS => {
-            if shift {
-                b'_'
-            } else {
-                b'-'
-            }
-        }
-        KEY_EQUAL => {
-            if shift {
-                b'+'
-            } else {
-                b'='
-            }
-        }
-        26 => {
-            if shift {
-                b'{'
-            } else {
-                b'['
-            }
-        }
-        27 => {
-            if shift {
-                b'}'
-            } else {
-                b']'
-            }
-        }
-        KEY_SEMICOLON => {
-            if shift {
-                b':'
-            } else {
-                b';'
-            }
-        }
-        KEY_APOSTROPHE => {
-            if shift {
-                b'\"'
-            } else {
-                b'\''
-            }
-        }
-        KEY_GRAVE => {
-            if shift {
-                b'~'
-            } else {
-                b'`'
-            }
-        }
-        KEY_BACKSLASH => {
-            if shift {
-                b'|'
-            } else {
-                b'\\'
-            }
-        }
-        KEY_COMMA => {
-            if shift {
-                b'<'
-            } else {
-                b','
-            }
-        }
-        KEY_DOT => {
-            if shift {
-                b'>'
-            } else {
-                b'.'
-            }
-        }
-        KEY_SLASH => {
-            if shift {
-                b'?'
-            } else {
-                b'/'
-            }
-        }
-        _ => return None,
-    };
-    Some(value)
-}
-
-const fn letter(lowercase: u8, shifted: bool) -> u8 {
-    if shifted { lowercase - 32 } else { lowercase }
 }
 
 #[cfg(not(test))]
@@ -753,12 +600,13 @@ fn panic(_information: &PanicInfo<'_>) -> ! {
 mod tests {
     use super::*;
 
-    fn event(code: u16, modifiers: u8) -> KeyEvent {
+    fn event(code: u16, modifiers: u8, character: Option<u8>) -> KeyEvent {
         KeyEvent {
             code,
             pressed: true,
             repeated: false,
             modifiers,
+            character,
         }
     }
 
@@ -772,26 +620,26 @@ mod tests {
     }
 
     #[test]
-    fn case_mapping_uses_only_the_shift_modifier() {
-        assert_eq!(us_ascii(KEY_A, 0), Some(b'a'));
-        assert_eq!(us_ascii(KEY_A, MODIFIER_SHIFT), Some(b'A'));
-        assert_eq!(us_ascii(KEY_Z, 0), Some(b'z'));
-        assert_eq!(us_ascii(KEY_Z, MODIFIER_SHIFT), Some(b'Z'));
+    fn diagnostics_uses_the_system_character() {
+        let mut state = Diagnostics::new();
+        assert!(state.handle(event(KEY_A, 0, Some(b'x'))));
+        assert_eq!(state.captured_ascii, Some(b'x'));
+        assert!(!state.captured_matches);
     }
 
     #[test]
     fn review_requires_explicit_confirmation_or_retry() {
         let mut state = Diagnostics::new();
-        assert!(state.handle(event(KEY_A, 0)));
+        assert!(state.handle(event(KEY_A, 0, Some(b'a'))));
         assert_eq!(state.phase, Phase::Review);
         assert!(state.captured_matches);
 
-        assert!(state.handle(event(KEY_BACKSPACE, 0)));
+        assert!(state.handle(event(KEY_BACKSPACE, 0, None)));
         assert_eq!(state.phase, Phase::Waiting);
         assert_eq!(state.index, 0);
 
-        assert!(state.handle(event(KEY_A, 0)));
-        assert!(state.handle(event(KEY_ENTER, 0)));
+        assert!(state.handle(event(KEY_A, 0, Some(b'a'))));
+        assert!(state.handle(event(KEY_ENTER, 0, None)));
         assert_eq!(state.phase, Phase::Waiting);
         assert_eq!((state.index, state.confirmed, state.passed), (1, 1, 1));
     }
@@ -799,7 +647,7 @@ mod tests {
     #[test]
     fn modifier_events_are_logged_but_not_captured() {
         let mut state = Diagnostics::new();
-        assert!(!state.handle(event(KEY_LEFTSHIFT, MODIFIER_SHIFT)));
+        assert!(!state.handle(event(KEY_LEFTSHIFT, MODIFIER_SHIFT, None)));
         assert_eq!(state.phase, Phase::Waiting);
         assert!(state.captured.is_none());
         assert!(
@@ -812,9 +660,9 @@ mod tests {
     #[test]
     fn mismatch_is_preserved_after_user_confirmation() {
         let mut state = Diagnostics::new();
-        assert!(state.handle(event(KEY_A, MODIFIER_SHIFT)));
+        assert!(state.handle(event(KEY_A, MODIFIER_SHIFT, Some(b'A'))));
         assert!(!state.captured_matches);
-        assert!(state.handle(event(KEY_ENTER, 0)));
+        assert!(state.handle(event(KEY_ENTER, 0, None)));
         assert_eq!((state.confirmed, state.passed), (1, 0));
         assert!(
             core::str::from_utf8(state.log.slice())
@@ -828,17 +676,19 @@ mod tests {
         let mut state = Diagnostics::new();
         for case in TESTS {
             if case.shifted {
-                state.handle(event(KEY_LEFTSHIFT, MODIFIER_SHIFT));
+                state.handle(event(KEY_LEFTSHIFT, MODIFIER_SHIFT, None));
             }
             assert!(state.handle(event(
                 case.code,
                 if case.shifted { MODIFIER_SHIFT } else { 0 },
+                Some(case.ascii),
             )));
             state.handle(KeyEvent {
                 code: case.code,
                 pressed: false,
                 repeated: false,
                 modifiers: if case.shifted { MODIFIER_SHIFT } else { 0 },
+                character: None,
             });
             if case.shifted {
                 state.handle(KeyEvent {
@@ -846,14 +696,16 @@ mod tests {
                     pressed: false,
                     repeated: false,
                     modifiers: 0,
+                    character: None,
                 });
             }
-            assert!(state.handle(event(KEY_ENTER, 0)));
+            assert!(state.handle(event(KEY_ENTER, 0, None)));
             state.handle(KeyEvent {
                 code: KEY_ENTER,
                 pressed: false,
                 repeated: false,
                 modifiers: 0,
+                character: None,
             });
         }
         assert_eq!(state.phase, Phase::Complete);

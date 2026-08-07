@@ -698,23 +698,22 @@ int main(int argc, char **argv)
 
     static const struct {
         uint32_t key;
-        char plain;
-        char shifted;
+        char character;
     } symbol_keys[] = {
-        {2, '1', '!'},  {3, '2', '@'},  {4, '3', '#'},
-        {5, '4', '$'},  {6, '5', '%'},  {7, '6', '^'},
-        {8, '7', '&'},  {9, '8', '*'},  {10, '9', '('},
-        {11, '0', ')'}, {12, '-', '_'}, {13, '=', '+'},
-        {26, '[', '{'}, {27, ']', '}'}, {39, ';', ':'},
-        {40, '\'', '"'}, {41, '`', '~'}, {43, '\\', '|'},
-        {51, ',', '<'}, {52, '.', '>'}, {53, '/', '?'},
+        {26, '!'}, {27, '@'}, {39, '#'}, {40, '$'}, {41, '%'},
+        {43, '^'}, {51, '&'}, {52, '*'}, {53, '('}, {94, ')'},
+        {55, '~'}, {69, '`'}, {70, '_'}, {71, '-'}, {72, '+'},
+        {73, '='}, {74, '['}, {75, ']'}, {76, '{'}, {77, '}'},
+        {79, ';'}, {80, ':'}, {81, '\''}, {82, '"'}, {83, '<'},
+        {85, '>'}, {86, '\\'}, {89, '|'}, {90, ','}, {91, '.'},
+        {92, '/'}, {93, '?'},
     };
     for (size_t index = 0;
          index < sizeof(symbol_keys) / sizeof(symbol_keys[0]); index++) {
         assert(cp0_ui_key_character(symbol_keys[index].key, false) ==
-               symbol_keys[index].plain);
+               symbol_keys[index].character);
         assert(cp0_ui_key_character(symbol_keys[index].key, true) ==
-               symbol_keys[index].shifted);
+               symbol_keys[index].character);
     }
     assert(cp0_ui_key_character(30, false) == 'a');
     assert(cp0_ui_key_character(30, true) == 'A');

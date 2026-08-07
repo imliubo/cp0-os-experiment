@@ -14,8 +14,9 @@ The guided sequence covers:
 - all 32 `Sym` combinations from the V0.6 keyboard reference CSV.
 
 For each step, press the requested key or chord. The review screen shows the
-received Linux key code, modifier mask, decoded US ASCII name/code and whether
-it matches the expected event. Press Enter to confirm and continue, or
+received Linux key code, modifier mask, decoded V0.6 ASCII name/code and whether
+it matches the expected event. The character shown is produced by Runtime and
+read directly from the SDK event. Press Enter to confirm and continue, or
 Backspace to discard the capture and retry the same step.
 
 ## Run in the simulator
@@ -38,8 +39,8 @@ sudo cat /var/lib/cardputerzero/data/dev.cardputerzero.keyboard-diagnostics/keyb
 ```
 
 The compact CSV begins with `CP0K,1,<test-count>`. It contains every
-press/release event seen by the Runtime, including physical or synthetic Shift
-transitions. Record types are `S` (step), `E` (event), `C` (capture), `K`
+press/release event seen by the Runtime, including physical Shift transitions.
+Record types are `S` (step), `E` (event), `C` (capture), `K`
 (confirmation), `R` (retry), `D` (done) and `X` (error). The fixed event columns
 are sequence, step, Linux key code, pressed, repeated and modifier mask.
 
@@ -49,6 +50,6 @@ Analyze a collected log with:
 ./scripts/analyze-keyboard-diagnostics.sh keyboard-test.log
 ```
 
-The analyzer separates key-code translation, modifier-state and userspace
-ASCII mapping failures. If every Runtime event matches, the remaining fault is
-in the consuming text widget or renderer rather than the keyboard event chain.
+The analyzer separates key-code translation, modifier-state and Runtime ASCII
+mapping failures. If every Runtime event matches, the remaining fault is in the
+consuming text widget or renderer rather than the keyboard event chain.

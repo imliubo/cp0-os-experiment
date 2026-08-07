@@ -14,3 +14,5 @@ EM_CACHE="$output/em-cache" emcc -std=c11 -ffreestanding \
     -o "$output/cardputerzero_lvgl.o"
 
 file "$output/cardputerzero_lvgl.o" | grep -q 'WebAssembly'
+grep -q 'event.character != 0U' \
+    "$repo_root/sdk/lvgl/cardputerzero_lvgl.c"
