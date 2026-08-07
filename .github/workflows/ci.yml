@@ -10,12 +10,31 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      - name: Check JSON
-        run: jq empty schemas/app-manifest-v1.schema.json examples/hello-card/app.json
-      - name: Build and test
-        run: cargo test --workspace --locked
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            developer-portal/package-lock.json
+            review-console/package-lock.json
+            store-operations/package-lock.json
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal --target wasm32-unknown-unknown --component clippy,rustfmt
+          rustup override set 1.85.1
+      - name: Install web dependencies
+        run: |
+          npm --prefix developer-portal ci
+          npm --prefix review-console ci
+          npm --prefix store-operations ci
+      - name: Run repository acceptance checks
+        run: make check
+      - name: Run workspace Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D clippy::correctness
+      - name: Verify web applications
+        run: make portal-check review-console-check store-operations-check
+      - name: Verify clean diff
+        run: git diff --check

@@ -71,11 +71,11 @@ check: fmt
 	./tests/test-malicious-apps.sh
 	./tests/test-security-validation.sh
 	./tests/test-patch-cm0-dtb.sh
-	cargo check --workspace --all-targets
-	cargo test --workspace
+	cargo check --workspace --all-targets --locked
+	cargo test --workspace --locked
 
 test:
-	cargo test --workspace
+	cargo test --workspace --locked
 
 fmt:
 	cargo fmt --all -- --check

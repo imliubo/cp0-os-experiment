@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install nightly
         run: rustup toolchain install nightly --profile minimal
       - name: Install cargo-fuzz
@@ -22,7 +22,7 @@ jobs:
         run: ./scripts/fuzz-smoke.sh 30
       - name: Preserve crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fuzz-artifacts
           path: fuzz/artifacts
