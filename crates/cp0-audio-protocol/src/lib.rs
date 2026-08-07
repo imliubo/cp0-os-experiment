@@ -13,9 +13,9 @@ pub const MAX_AUDIO_BYTES: usize = MAX_AUDIO_FRAMES * AUDIO_SAMPLE_BYTES;
 pub const MUSIC_SAMPLE_RATE_HZ: u32 = 48_000;
 pub const MUSIC_CHANNELS: u8 = 2;
 pub const MUSIC_FRAME_BYTES: usize = AUDIO_SAMPLE_BYTES * MUSIC_CHANNELS as usize;
-pub const MAX_MUSIC_FRAMES: usize = 720;
+pub const MAX_MUSIC_FRAMES: usize = 1920;
 pub const MAX_MUSIC_BYTES: usize = MAX_MUSIC_FRAMES * MUSIC_FRAME_BYTES;
-pub const MAX_AUDIO_FRAME_BYTES: usize = 4 * 1024;
+pub const MAX_AUDIO_FRAME_BYTES: usize = 12 * 1024;
 pub const MAX_AUDIO_ERROR_CHARS: usize = 160;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -312,7 +312,7 @@ impl AudioResponse {
         validate_version(self.protocol_version)?;
         match &self.outcome {
             AudioOutcome::Played { frames }
-                if *frames == 0 || usize::from(*frames) > MAX_AUDIO_FRAMES =>
+                if *frames == 0 || usize::from(*frames) > MAX_MUSIC_FRAMES =>
             {
                 Err(AudioProtocolError::InvalidFrameCount)
             }
@@ -567,6 +567,26 @@ mod tests {
         assert_eq!(
             read_request(&mut Cursor::new(frame)).unwrap(),
             Some(playback)
+        );
+
+        let maximum_music = vec![0_u8; MAX_MUSIC_BYTES];
+        let playback = AudioRequest::playback_stereo_48k(9, &maximum_music);
+        let mut frame = Vec::new();
+        write_request(&mut frame, &playback).unwrap();
+        assert!(frame.len() <= MAX_AUDIO_FRAME_BYTES);
+        assert_eq!(
+            read_request(&mut Cursor::new(frame)).unwrap(),
+            Some(playback)
+        );
+        assert!(
+            AudioResponse::played(9, MAX_MUSIC_FRAMES as u16)
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            AudioResponse::played(9, MAX_MUSIC_FRAMES as u16 + 1)
+                .validate()
+                .is_err()
         );
     }
 

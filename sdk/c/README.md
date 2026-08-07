@@ -37,7 +37,7 @@ socket, DNS, TLS override or arbitrary-header API.
 `cp0_audio_play` and `cp0_audio_capture` exchange caller-owned signed 16-bit
 PCM buffers. Their compatibility format is fixed to 16 kHz mono S16_LE and one
 call is limited to 1024 frames. SDK 1.1 also provides
-`cp0_audio_play_stereo_48khz` for at most 720 interleaved stereo frames per
+`cp0_audio_play_stereo_48khz` for at most 1920 interleaved stereo frames per
 call. Playback and capture require separate manifest permissions; the SDK
 exposes no ALSA device, mixer, codec or format negotiation API.
 

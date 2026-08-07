@@ -5,7 +5,7 @@ pub const CHANNELS: u8 = 1;
 pub const MAX_FRAMES: usize = 1024;
 pub const MUSIC_SAMPLE_RATE_HZ: u32 = 48_000;
 pub const MUSIC_CHANNELS: u8 = 2;
-pub const MAX_MUSIC_FRAMES: usize = 720;
+pub const MAX_MUSIC_FRAMES: usize = 1920;
 
 pub fn play_pcm_s16le(samples: &[i16]) -> Result<(), Error> {
     if samples.is_empty() || samples.len() > MAX_FRAMES {

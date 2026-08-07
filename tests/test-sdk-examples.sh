@@ -12,6 +12,16 @@ for manifest in "$repo_root"/examples/*/app.json; do
     test -s "$example_dir/assets/screenshot.png"
 done
 
+text_apps=(calculator music-player notes keyboard-diagnostics)
+for app in "${text_apps[@]}"; do
+    app_source="$repo_root/examples/$app/src/lib.rs"
+    grep -q 'event.character' "$app_source"
+    if grep -Eq 'fn (key_character|us_ascii)' "$app_source"; then
+        echo "error: $app implements a private text keymap" >&2
+        exit 1
+    fi
+done
+
 cargo fmt --manifest-path "$repo_root/examples/neon-snake/Cargo.toml" -- --check
 cargo test --quiet --manifest-path "$repo_root/examples/neon-snake/Cargo.toml"
 cargo fmt --manifest-path "$repo_root/examples/calculator/Cargo.toml" -- --check
@@ -32,7 +42,7 @@ cargo fmt --manifest-path "$repo_root/examples/keyboard-diagnostics/Cargo.toml" 
 cargo test --quiet --manifest-path "$repo_root/examples/keyboard-diagnostics/Cargo.toml"
 cargo run --quiet --manifest-path "$repo_root/Cargo.toml" -p cp0ctl -- \
     run "$repo_root/examples/calculator" \
-    --duration 250 --permissions deny --keys 1,2,plus,3,equal \
+    --duration 250 --permissions deny --keys 1,2,right,enter,3,enter \
     --output "$output/calculator.ppm" --profile "$output/calculator.json"
 cargo run --quiet --manifest-path "$repo_root/Cargo.toml" -p cp0ctl -- \
     run "$repo_root/examples/camera" \
@@ -76,7 +86,7 @@ for image in \
     "$output/stopwatch.ppm"; do
     head -n 1 "$image" | grep -qx 'P6'
 done
-jq -e '.key_events == 5 and .frames_presented >= 2' \
+jq -e '.key_events == 6 and .frames_presented >= 2' \
     "$output/calculator.json" >/dev/null
 jq -e '
     .key_events == 1 and

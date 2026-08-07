@@ -156,7 +156,7 @@ Shell 显示单前台选择器；应用请求不包含路径或文档 ID。选�
 音频能力不暴露 ALSA 设备或 mixer。`cp0-audiod` 是唯一可访问 `char-alsa` 的服务，
 固定打开 ES8389 的 `hw:ES8389Audio,0` 和 48 kHz 双声道硬件流。兼容接口继续接受
 16 kHz 单声道 S16_LE、每次最多 1024 帧，并在服务内固定 3 倍上采样和复制声道；
-SDK 1.1 增加 48 kHz 双声道 S16_LE、每次最多 720 帧的音乐播放接口。
+SDK 1.1 增加 48 kHz 双声道 S16_LE、每次最多 1920 帧的音乐播放接口。
 `audio.playback` 和 `audio.capture` 分别授权；协议、appd broker、Runtime 线性内存和
 SDK 四层都重复验证长度与帧对齐。
 服务使用专用账户、空 capability 集和 systemd 设备白名单。同一服务还提供与应用 PCM

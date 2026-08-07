@@ -93,6 +93,21 @@ trait Reader {
     fn length(&self) -> Option<u64>;
 }
 
+fn read_stream_chunk(reader: &impl Reader, offset: u64, buffer: &mut [u8]) -> Result<usize, Error> {
+    let mut total = 0_usize;
+    while total < buffer.len() {
+        let count = reader.read_at(offset + total as u64, &mut buffer[total..])?;
+        if count == 0 {
+            break;
+        }
+        if count > buffer.len() - total {
+            return Err(Error::Internal);
+        }
+        total += count;
+    }
+    Ok(total)
+}
+
 struct LocalReader<'a> {
     document: &'a Document,
 }
@@ -423,13 +438,15 @@ fn play(reader: &impl Reader, kind: SourceKind, pixels: &mut [u8]) -> PlayerResu
         let samples = stream();
         let bytes = stream_bytes(samples);
         let wanted = (info.data_bytes - position).min(bytes.len() as u64) as usize;
-        let count = match reader.read_at(info.data_offset + position, &mut bytes[..wanted]) {
-            Ok(count) => count.min(wanted),
-            Err(_) => {
-                let _ = media::update_session(PlaybackState::Inactive, ActionCapabilities::NONE);
-                return PlayerResult::Failed;
-            }
-        };
+        let count =
+            match read_stream_chunk(reader, info.data_offset + position, &mut bytes[..wanted]) {
+                Ok(count) => count.min(wanted),
+                Err(_) => {
+                    let _ =
+                        media::update_session(PlaybackState::Inactive, ActionCapabilities::NONE);
+                    return PlayerResult::Failed;
+                }
+            };
         let usable = count - count % 4;
         if usable == 0 {
             let _ = media::update_session(PlaybackState::Inactive, ActionCapabilities::NONE);
@@ -457,69 +474,8 @@ fn play(reader: &impl Reader, kind: SourceKind, pixels: &mut [u8]) -> PlayerResu
     PlayerResult::Complete
 }
 
-fn key_character(code: u16, shifted: bool) -> Option<u8> {
-    let byte = match code {
-        2..=10 => {
-            let normal = b"123456789";
-            let shifted_row = b"!@#$%^&*(";
-            if shifted {
-                shifted_row[(code - 2) as usize]
-            } else {
-                normal[(code - 2) as usize]
-            }
-        }
-        11 => {
-            if shifted {
-                b')'
-            } else {
-                b'0'
-            }
-        }
-        12 => {
-            if shifted {
-                b'_'
-            } else {
-                b'-'
-            }
-        }
-        13 => {
-            if shifted {
-                b'+'
-            } else {
-                b'='
-            }
-        }
-        16..=25 => b"qwertyuiop"[(code - 16) as usize],
-        30..=38 => b"asdfghjkl"[(code - 30) as usize],
-        44..=50 => b"zxcvbnm"[(code - 44) as usize],
-        51 => {
-            if shifted {
-                b'<'
-            } else {
-                b','
-            }
-        }
-        52 => {
-            if shifted {
-                b'>'
-            } else {
-                b'.'
-            }
-        }
-        53 => {
-            if shifted {
-                b'?'
-            } else {
-                b'/'
-            }
-        }
-        _ => return None,
-    };
-    Some(if shifted && byte.is_ascii_lowercase() {
-        byte.to_ascii_uppercase()
-    } else {
-        byte
-    })
+fn append_url_character(url: &mut Url, event: &input::KeyEvent) -> bool {
+    event.character.is_some_and(|byte| url.push(byte))
 }
 
 #[cfg(not(test))]
@@ -555,10 +511,8 @@ pub extern "C" fn main() -> i32 {
                     PlayerResult::Failed => "CHECK URL, FORMAT, PERMISSIONS",
                 };
                 editing_url = false;
-            } else if let Some(byte) =
-                key_character(event.code, event.modifiers & input::MODIFIER_SHIFT != 0)
-            {
-                url.push(byte);
+            } else {
+                append_url_character(&mut url, &event);
             }
             continue;
         }
@@ -641,11 +595,65 @@ mod tests {
     fn url_editor_preserves_https_prefix_and_symbols() {
         let mut url = Url::new();
         assert!(!url.backspace());
-        assert!(url.push(b'a'));
-        assert!(url.push(b'.'));
-        assert!(url.push(b'/'));
-        assert_eq!(url.as_str(), "https://a./");
-        assert_eq!(key_character(53, false), Some(b'/'));
-        assert_eq!(key_character(52, false), Some(b'.'));
+        for character in [b'a', b'.', b'/', b'?', b'&', b'='] {
+            assert!(append_url_character(
+                &mut url,
+                &input::KeyEvent {
+                    code: 0,
+                    pressed: true,
+                    repeated: false,
+                    modifiers: 0,
+                    character: Some(character),
+                },
+            ));
+        }
+        assert_eq!(url.as_str(), "https://a./?&=");
+    }
+
+    struct ShortReader<'a> {
+        bytes: &'a [u8],
+        maximum_read: usize,
+    }
+
+    impl Reader for ShortReader<'_> {
+        fn read_at(&self, offset: u64, buffer: &mut [u8]) -> Result<usize, Error> {
+            let offset = offset as usize;
+            if offset >= self.bytes.len() {
+                return Ok(0);
+            }
+            let count = buffer
+                .len()
+                .min(self.maximum_read)
+                .min(self.bytes.len() - offset);
+            buffer[..count].copy_from_slice(&self.bytes[offset..offset + count]);
+            Ok(count)
+        }
+
+        fn length(&self) -> Option<u64> {
+            Some(self.bytes.len() as u64)
+        }
+    }
+
+    #[test]
+    fn combines_bounded_document_reads_into_one_music_chunk() {
+        let source = [0x5a_u8; STREAM_BYTES];
+        let reader = ShortReader {
+            bytes: &source,
+            maximum_read: documents::MAX_READ_BYTES,
+        };
+        let mut output = [0_u8; STREAM_BYTES];
+
+        assert_eq!(
+            read_stream_chunk(&reader, 0, &mut output).unwrap(),
+            STREAM_BYTES
+        );
+        assert_eq!(output, source);
+
+        let mut tail = [0_u8; 32];
+        assert_eq!(
+            read_stream_chunk(&reader, (STREAM_BYTES - 8) as u64, &mut tail).unwrap(),
+            8
+        );
+        assert_eq!(&tail[..8], &[0x5a; 8]);
     }
 }

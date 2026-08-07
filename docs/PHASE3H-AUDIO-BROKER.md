@@ -9,8 +9,8 @@ application. The device contract is fixed to the CardputerZero V0.6 ES8389:
 - ALSA endpoint: `hw:ES8389Audio,0`;
 - format: signed 16-bit little-endian PCM;
 - legacy/general audio: 16 kHz mono, at most 1024 frames, 2048 bytes or 64 ms;
-- SDK 1.1 music playback: 48 kHz stereo, at most 720 frames, 2880 bytes or
-  15 ms per call;
+- SDK 1.1 music playback: 48 kHz stereo, at most 1920 frames, 7680 bytes or
+  40 ms per call;
 - permissions: `audio.playback` and `audio.capture` are independent.
 
 The two exact formats avoid negotiation, codecs and container parsers in the
@@ -72,10 +72,11 @@ audio.
 ## Protocol And Failure Behavior
 
 The Runtime-to-appd and appd-to-audiod protocols are strict newline-delimited
-JSON frames capped at 4096 bytes. Binary samples use canonical base64. Every
-layer rejects empty, misaligned, oversized or noncanonical data, capture frame
-counts outside 1 through 1024, music requests outside 1 through 720 stereo
-frames, mismatched request IDs and mismatched returned lengths.
+JSON frames capped at 16 KiB and 12 KiB respectively. Binary samples use
+canonical base64. Every layer rejects empty, misaligned, oversized or
+noncanonical data, capture frame counts outside 1 through 1024, music requests
+outside 1 through 1920 stereo frames, mismatched request IDs and mismatched
+returned lengths.
 
 Busy devices map to the stable SDK resource-limit result. Missing ALSA support,
 device failures and a pending permission prompt map to unavailable. Denied or

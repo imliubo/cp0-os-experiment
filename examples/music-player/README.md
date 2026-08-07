@@ -2,6 +2,8 @@
 
 Music is the production audio player example for SDK 1.1. It streams 16-bit,
 48 kHz, stereo PCM WAV audio without loading the whole track into App memory.
+Playback combines bounded document reads into 40 ms audio chunks to tolerate
+CM0 scheduling jitter without increasing the App's filesystem authority.
 
 ![Music App](assets/screenshot.png)
 

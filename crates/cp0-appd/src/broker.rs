@@ -682,7 +682,7 @@ impl BrokerResponse {
         }
         match &self.outcome {
             BrokerOutcome::AudioPlayed { frames }
-                if *frames == 0 || usize::from(*frames) > cp0_audio_protocol::MAX_AUDIO_FRAMES =>
+                if *frames == 0 || usize::from(*frames) > cp0_audio_protocol::MAX_MUSIC_FRAMES =>
             {
                 return Err(BrokerProtocolError::InvalidAudio);
             }
@@ -1136,6 +1136,16 @@ mod tests {
             },
         };
         assert!(stereo.validate().is_ok());
+        assert!(
+            BrokerResponse::audio_played(6, cp0_audio_protocol::MAX_MUSIC_FRAMES as u16)
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            BrokerResponse::audio_played(6, cp0_audio_protocol::MAX_MUSIC_FRAMES as u16 + 1,)
+                .validate()
+                .is_err()
+        );
         let invalid_stereo = BrokerRequest {
             protocol_version: BROKER_PROTOCOL_VERSION,
             request_id: 7,

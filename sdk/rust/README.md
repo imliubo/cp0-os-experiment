@@ -28,7 +28,7 @@ remain available for non-text controls.
 `audio::play_pcm_s16le` and `audio::capture_pcm_s16le` accept at most 1024
 signed 16-bit mono frames at 16 kHz. The application manifest must declare
 playback and capture separately. `audio::play_pcm_s16le_stereo_48khz` accepts
-at most 720 interleaved 48 kHz stereo frames and uses the same playback
+at most 1920 interleaved 48 kHz stereo frames and uses the same playback
 permission. No API exposes codecs, ALSA devices, mixer controls or format
 negotiation.
 
