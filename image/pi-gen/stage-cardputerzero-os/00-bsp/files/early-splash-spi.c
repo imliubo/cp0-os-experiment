@@ -1,9 +1,10 @@
 /*
  * CardputerZero V0.6 pre-driver splash renderer.
  *
- * The register-level ST7789 bring-up is adapted from CardputerZero/pi-gen
- * commit e05b81c80f1f5a8e589956937adba5b5d04f0ca9. Unlike that experimental
- * implementation, this is a bounded initramfs helper rather than PID 1.
+ * The register-level SPI path is adapted from CardputerZero/pi-gen commit
+ * e05b81c80f1f5a8e589956937adba5b5d04f0ca9. The controller configuration
+ * matches the product's pinned MIPI DBI firmware instead of that prototype's
+ * solid-color setup, and this remains a bounded helper rather than PID 1.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -52,12 +53,23 @@
 #define RENDER_TIMEOUT_SECONDS 2U
 
 #define ST7789_SLPOUT 0x11U
+#define ST7789_INVON 0x21U
 #define ST7789_DISPON 0x29U
 #define ST7789_CASET 0x2aU
 #define ST7789_RASET 0x2bU
 #define ST7789_RAMWR 0x2cU
 #define ST7789_MADCTL 0x36U
 #define ST7789_COLMOD 0x3aU
+#define ST7789_PORCTRL 0xb2U
+#define ST7789_GCTRL 0xb7U
+#define ST7789_VDVVRHEN 0xc2U
+#define ST7789_VRHS 0xc3U
+#define ST7789_VDVS 0xc4U
+#define ST7789_VCOMS 0xbbU
+#define ST7789_FRCTRL2 0xc5U
+#define ST7789_PWCTRL1 0xd0U
+#define ST7789_PVGAMCTRL 0xe0U
+#define ST7789_NVGAMCTRL 0xe1U
 
 static volatile uint32_t *gpio_registers;
 static volatile uint32_t *spi_registers;
@@ -114,18 +126,37 @@ static int drain_receive_fifo(void)
 
 static int spi_transfer(const uint8_t *bytes, size_t length, int swap_pairs)
 {
-    size_t index;
+    size_t received = 0;
+    size_t transmitted = 0;
+    uint32_t idle_attempts = 0;
+
+    if (swap_pairs && (length & 1U) != 0U)
+        return -1;
 
     *reg(spi_registers, SPI_CS) =
         SPI_CS_TA | SPI_CS_CLEAR_TX | SPI_CS_CLEAR_RX;
-    for (index = 0; index < length; index++) {
-        size_t source = swap_pairs ? (index ^ 1U) : index;
+    while (transmitted < length || received < transmitted) {
+        int progressed = 0;
 
-        if (wait_for_spi(SPI_CS_TXD) != 0)
+        while (transmitted < length &&
+               (*reg(spi_registers, SPI_CS) & SPI_CS_TXD) != 0U) {
+            size_t source = swap_pairs ? (transmitted ^ 1U) : transmitted;
+
+            *reg(spi_registers, SPI_FIFO) = bytes[source];
+            transmitted++;
+            progressed = 1;
+        }
+        while (received < transmitted &&
+               (*reg(spi_registers, SPI_CS) & SPI_CS_RXD) != 0U) {
+            (void)*reg(spi_registers, SPI_FIFO);
+            received++;
+            progressed = 1;
+        }
+        if (progressed) {
+            idle_attempts = 0;
+        } else if (++idle_attempts >= SPI_WAIT_LIMIT) {
             goto fail;
-        *reg(spi_registers, SPI_FIFO) = bytes[source];
-        if (drain_receive_fifo() != 0)
-            goto fail;
+        }
     }
     if (wait_for_spi(SPI_CS_DONE) != 0)
         goto fail;
@@ -218,13 +249,45 @@ static void initialize_spi(void)
 
 static int initialize_display(void)
 {
-    const uint8_t madctl = 0x60U;
     const uint8_t color_mode = 0x55U;
+    const uint8_t madctl = 0xa0U;
+    const uint8_t porch_control[] = {0x05U, 0x05U, 0x05U, 0x00U, 0x33U};
+    const uint8_t gate_control = 0x75U;
+    const uint8_t vdv_vrh_enable[] = {0x01U, 0xffU};
+    const uint8_t vrh = 0x13U;
+    const uint8_t vdv = 0x20U;
+    const uint8_t vcom = 0x22U;
+    const uint8_t frame_control = 0x20U;
+    const uint8_t power_control[] = {0xa4U, 0xa1U};
+    const uint8_t positive_gamma[] = {
+        0xd0U, 0x05U, 0x0aU, 0x09U, 0x08U, 0x05U, 0x2eU,
+        0x44U, 0x45U, 0x0fU, 0x17U, 0x16U, 0x2bU, 0x33U,
+    };
+    const uint8_t negative_gamma[] = {
+        0xd0U, 0x05U, 0x0aU, 0x09U, 0x08U, 0x05U, 0x2eU,
+        0x43U, 0x45U, 0x0fU, 0x16U, 0x16U, 0x2bU, 0x33U,
+    };
 
     if (command(ST7789_SLPOUT) != 0 || delay_milliseconds(120L) != 0 ||
-        command_data(ST7789_MADCTL, &madctl, 1U) != 0 ||
         command_data(ST7789_COLMOD, &color_mode, 1U) != 0 ||
-        command(ST7789_DISPON) != 0 || delay_milliseconds(20L) != 0)
+        command_data(ST7789_MADCTL, &madctl, 1U) != 0 ||
+        command_data(ST7789_PORCTRL, porch_control,
+                     sizeof(porch_control)) != 0 ||
+        command_data(ST7789_GCTRL, &gate_control, 1U) != 0 ||
+        command_data(ST7789_VDVVRHEN, vdv_vrh_enable,
+                     sizeof(vdv_vrh_enable)) != 0 ||
+        command_data(ST7789_VRHS, &vrh, 1U) != 0 ||
+        command_data(ST7789_VDVS, &vdv, 1U) != 0 ||
+        command_data(ST7789_VCOMS, &vcom, 1U) != 0 ||
+        command_data(ST7789_FRCTRL2, &frame_control, 1U) != 0 ||
+        command_data(ST7789_PWCTRL1, power_control,
+                     sizeof(power_control)) != 0 ||
+        command_data(ST7789_PVGAMCTRL, positive_gamma,
+                     sizeof(positive_gamma)) != 0 ||
+        command_data(ST7789_NVGAMCTRL, negative_gamma,
+                     sizeof(negative_gamma)) != 0 ||
+        command(ST7789_INVON) != 0 ||
+        command(ST7789_DISPON) != 0)
         return -1;
     return 0;
 }

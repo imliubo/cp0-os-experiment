@@ -12,17 +12,33 @@ SPI0/GPIO 寄存器，以与 V0.6 驱动一致的约
 20 MHz 时钟初始化 ST7789，并将固定的 108800-byte `splash.rgb565` 写入 panel RAM。
 这条路径不等待 DRM、udev、根分区、OverlayFS 或 systemd。随后启动非阻塞 framebuffer
 worker，在 Linux 驱动接管并可能重置 panel RAM 后重绘相同图片。最终 root 中的
-`cardputerzero-early-splash.service` 保留为 compositor 前的有界兜底。三层路径都不向
-App 暴露 framebuffer，失败时也不阻止 Home；recovery initramfs 不包含 helper、worker
-或图片。
+`cardputerzero-early-splash.service` 保留为 compositor 前的有界兜底。framebuffer
+worker 成功后会在 `/run/cardputerzero-early-splash/` 写入 boot-scoped marker；原子目录锁
+阻止 worker 与 systemd 兜底并发写屏，因此 DRM 接管后最多重绘一次。三层路径都不向 App
+暴露 framebuffer，失败时也不阻止 Home；recovery initramfs 不包含 helper、worker 或
+图片。
 
-寄存器初始化顺序、CM0 peripheral base、SPI0 CS0、GPIO25 DC、MADCTL、35-line offset
-来自 CardputerZero 官方 `pi-gen` 的 `ci/early-splash` 分支提交
-`e05b81c80f1f5a8e589956937adba5b5d04f0ca9`。官方原型将程序作为替代 `/init` 且只填充
-蓝色；本实现将其收敛为正常 initramfs 中的有界 helper，读取经过哈希固定的产品图片，
-保留标准 initramfs 的 root discovery、数据扩容和 OverlayFS 链路。helper 自身通过
-`alarm(2)` 终止异常寄存器访问，调用脚本另有 BusyBox `timeout -s KILL 2` 兜底；SPI
-RX FIFO 轮询同样有次数上限，因此任何 LCD 失败都只能跳过 splash，不能阻断启动。
+peripheral base、SPI0 CS0、GPIO25 DC 和 35-line offset 来自 CardputerZero 官方
+`pi-gen` 的 `ci/early-splash` 分支提交
+`e05b81c80f1f5a8e589956937adba5b5d04f0ca9`。该实验原型只填充纯蓝色，使用的
+`MADCTL=0x60` 和最小初始化序列没有经过图片方向、gamma 或 display inversion 验证。
+2026-08-07 的 V0.6 真机复验确认它会使产品图片上下反转且颜色错误。direct-SPI helper
+现与固定 BSP `c3b254819307c177a34100b66fe19e52059ce8c4` 中
+`cardputerzero,st7789v_lcd.bin` 的控制器配置一致：使用 `MADCTL=0xa0`、完整
+power/gamma 参数和 display inversion，再将同一 RGB565_LE 产品图片按 MSB-first 写入。
+
+官方当前 `cardputerzero_v0.6` 镜像在 VideoCore `start.elf` 中显示 `splash.bmp`，因此
+能早于 ARM 内核出现；其固件 SHA256 仍为
+`d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd`。真机已经证明
+该固件强制 256/256 MB ARM/VideoCore 划分，不能为追求显示速度重新引入。本实现继续
+使用标准相机固件和 64/448 MB 预算，但把 SPI 发送改为有界的 TX/RX FIFO 流式泵送，
+不再每写一个字节就单独排空一次 RX FIFO；同时删除实验原型在 `DISPON` 后多出的
+20 ms 等待，因为固定 BSP 在该命令后会立即 flush。
+
+helper 是正常 initramfs 中的有界程序，读取经过哈希固定的产品图片，保留标准
+initramfs 的 root discovery、数据扩容和 OverlayFS 链路。它自身通过 `alarm(2)` 终止
+异常寄存器访问，调用脚本另有 BusyBox `timeout -s KILL 2` 兜底；SPI 空闲等待和 RX
+FIFO 轮询同样有次数上限，因此任何 LCD 失败都只能跳过 splash，不能阻断启动。
 
 不再打包 M5Stack `m5stack_bootscreen` 固件。其历史 SHA256
 `d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd`

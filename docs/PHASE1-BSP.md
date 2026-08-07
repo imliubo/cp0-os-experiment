@@ -145,12 +145,14 @@ CP0_RESUME_BUILD=1 ./image/build-image.sh
 product 镜像使用固定的 early splash，并设置 `quiet loglevel=3 logo.nologo`、
 `vt.global_cursor_default=0`、`fbcon=map:off` 和 systemd status suppression。LCD 不再
 显示内核、initramfs、systemd 日志或启动摘要，`cardputerzero-console-banner.service`
-也不会启用。initramfs `init-top` 中的静态 helper 参考官方 `ci/early-splash` 实现，在
-显示驱动加载前直接通过 BCM2837 SPI0 初始化 ST7789 并写入固定图片；ST7789 framebuffer
-出现后，initramfs 中的非阻塞 root worker 再将固定的
+也不会启用。initramfs `init-top` 中的静态 helper 参考官方 `ci/early-splash` 的直接
+SPI 路径，但使用固定 BSP 已由 DRM 路径验证的 `MADCTL=0xa0`、power/gamma 和 display
+inversion 配置，并通过有界 TX/RX FIFO 流式泵送写入用户提供的固定图片；ST7789
+framebuffer 出现后，initramfs 中的非阻塞 root worker 再将同一份
 320x170 RGB565 帧写入 LCD，不等待数据分区扩容、OverlayFS 切根或 systemd；最终 root
-中的 oneshot 负责有界重试。该画面保持到 compositor 和 System Shell 接管显示；在此
-之前 LCD 不显示启动日志。
+中的 oneshot 负责有界重试。worker 与 oneshot 共享 `/run` 中的完成标记和原子锁，DRM
+接管后只允许一次 framebuffer 写入。该画面保持到 compositor 和 System Shell 接管显示；
+在此之前 LCD 不显示启动日志。
 
 recovery 镜像继续使用 `loglevel=6 consoleblank=0 fbcon=map:1`，启用启动摘要和
 `getty@tty1`。product development 镜像运行时进入 Recovery Mode 时，受限 helper 会

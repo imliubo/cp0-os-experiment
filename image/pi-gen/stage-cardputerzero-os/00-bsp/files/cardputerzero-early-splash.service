@@ -5,6 +5,7 @@ Before=cardputerzero-compositor.service cardputerzero-display-retry.service
 RequiresMountsFor=/var/lib/cardputerzero/registry
 ConditionPathExists=/usr/share/cardputerzero/boot/splash.rgb565
 ConditionPathExists=!/var/lib/cardputerzero/registry/recovery-mode
+ConditionPathExists=!/run/cardputerzero-early-splash/framebuffer-shown
 
 [Service]
 Type=oneshot

@@ -88,6 +88,8 @@ grep -q 'cardputerzero-early-splash.service' "$stage"
 grep -qx 'Before=cardputerzero-compositor.service cardputerzero-display-retry.service' \
     "$early_splash_unit"
 grep -qx 'RequiresMountsFor=/var/lib/cardputerzero/registry' "$early_splash_unit"
+grep -qx 'ConditionPathExists=!/run/cardputerzero-early-splash/framebuffer-shown' \
+    "$early_splash_unit"
 grep -qx 'WantedBy=multi-user.target' "$early_splash_unit"
 test -x "$initramfs_splash"
 sh -n "$initramfs_splash"
@@ -120,6 +122,29 @@ grep -Fq '*reg(spi_registers, SPI_CLK) = 12U;' "$early_splash_spi"
 grep -Fq 'SPI_WAIT_LIMIT' "$early_splash_spi"
 grep -Fq '#define RENDER_TIMEOUT_SECONDS 2U' "$early_splash_spi"
 grep -Fq 'static int drain_receive_fifo(void)' "$early_splash_spi"
+grep -Fq 'const uint8_t madctl = 0xa0U;' "$early_splash_spi"
+grep -Fq 'const uint8_t porch_control[] = {0x05U, 0x05U, 0x05U, 0x00U, 0x33U};' "$early_splash_spi"
+grep -Fq 'const uint8_t gate_control = 0x75U;' "$early_splash_spi"
+grep -Fq 'const uint8_t vdv_vrh_enable[] = {0x01U, 0xffU};' "$early_splash_spi"
+grep -Fq 'const uint8_t power_control[] = {0xa4U, 0xa1U};' "$early_splash_spi"
+grep -Fq '0xd0U, 0x05U, 0x0aU, 0x09U, 0x08U, 0x05U, 0x2eU,' "$early_splash_spi"
+grep -Fq '0x44U, 0x45U, 0x0fU, 0x17U, 0x16U, 0x2bU, 0x33U,' "$early_splash_spi"
+grep -Fq '0x43U, 0x45U, 0x0fU, 0x16U, 0x16U, 0x2bU, 0x33U,' "$early_splash_spi"
+grep -Fq 'command(ST7789_INVON)' "$early_splash_spi"
+grep -Fq 'command_data(ST7789_PVGAMCTRL, positive_gamma' "$early_splash_spi"
+grep -Fq 'command_data(ST7789_NVGAMCTRL, negative_gamma' "$early_splash_spi"
+grep -Fq 'command(ST7789_DISPON) != 0)' "$early_splash_spi"
+grep -Fq 'while (transmitted < length || received < transmitted)' "$early_splash_spi"
+grep -Fq 'while (transmitted < length &&' "$early_splash_spi"
+grep -Fq 'while (received < transmitted &&' "$early_splash_spi"
+if grep -Fq 'const uint8_t madctl = 0x60U;' "$early_splash_spi"; then
+    echo "error: direct SPI splash uses the upside-down prototype orientation" >&2
+    exit 1
+fi
+if grep -Fq 'delay_milliseconds(20L)' "$early_splash_spi"; then
+    echo "error: direct SPI splash retains the prototype post-DISPON delay" >&2
+    exit 1
+fi
 grep -Fq '(void)alarm(RENDER_TIMEOUT_SECONDS);' "$early_splash_spi"
 cc -std=c11 -Wall -Wextra -Werror -fsyntax-only "$early_splash_spi"
 grep -q 'panel-mipi-dbid' "$early_splash"
@@ -146,10 +171,21 @@ CP0_EARLY_SPLASH_UID=0 \
 CP0_EARLY_SPLASH_SYSFS_ROOT="$early_splash_tmp/sys" \
 CP0_EARLY_SPLASH_DEVICE_ROOT="$early_splash_tmp/dev" \
 CP0_EARLY_SPLASH_FILE="$splash_rgb565" \
+CP0_EARLY_SPLASH_STATE_ROOT="$early_splash_tmp/state" \
     sh "$early_splash" >/dev/null
 test "$(wc -c <"$early_splash_tmp/dev/fb7" | tr -d ' ')" = 108800
 cmp "$splash_rgb565" "$early_splash_tmp/dev/fb7"
 grep -qx '0' "$early_splash_tmp/sys/class/graphics/fb7/blank"
+test -f "$early_splash_tmp/state/framebuffer-shown"
+printf 'already-rendered\n' >"$early_splash_tmp/dev/fb7"
+CP0_EARLY_SPLASH_UID=0 \
+CP0_EARLY_SPLASH_SYSFS_ROOT="$early_splash_tmp/sys" \
+CP0_EARLY_SPLASH_DEVICE_ROOT="$early_splash_tmp/dev" \
+CP0_EARLY_SPLASH_FILE="$splash_rgb565" \
+CP0_EARLY_SPLASH_STATE_ROOT="$early_splash_tmp/state" \
+    sh "$early_splash" >/dev/null
+grep -qx 'already-rendered' "$early_splash_tmp/dev/fb7"
+test ! -e "$early_splash_tmp/state/framebuffer-rendering"
 grep -q 'fb_load.service' "$stage"
 grep -q 'rm -f /etc/systemd/system/fb_load.service' "$stage"
 grep -q 'cardputerzero-console-banner.service' "$stage"
