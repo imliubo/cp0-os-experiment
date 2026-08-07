@@ -30,6 +30,7 @@ if [[ $image_profile == recovery && $access_profile != development ]]; then
 fi
 
 required_executables=(
+    usr/bin/cardputerzero-boot-splash
     usr/bin/cardputerzero-system-shell
     usr/bin/cp0-recovery
     usr/bin/cp0ctl

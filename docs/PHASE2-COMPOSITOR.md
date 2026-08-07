@@ -45,6 +45,25 @@ placing mutually conflicting display sessions in the same systemd transaction.
 The compositor's `OnFailure=getty@tty1.service` remains an independent fallback
 for failures after normal-session selection.
 
+## Splash handoff
+
+The product keeps the BSP RGB565 splash visible while the cold-boot display
+stabilizer waits. It then starts Weston exactly once. Kiosk shell autolaunches
+`cardputerzero-boot-splash` as `cp0-compositor`; compositor policy accepts its
+reserved app-id only from that UID and places it above normal apps but below
+the trusted System Shell. The compositor service makes a bounded wait for the
+splash client's first frame callback before it becomes active, so the normal
+System Shell startup cannot race the Wayland splash. Its first complete Setup
+or Home surface then covers the splash without an intermediate clear. A broken
+splash client does not block recovery or Home indefinitely.
+
+The splash surface is excluded from app discovery, Tasks and screenshots of
+application state. It remains available during the boot session so an early
+System Shell restart exposes the product image rather than a black compositor
+background. This handoff complements the initramfs and framebuffer renderers;
+it does not use the retired VideoCore firmware or change the 64/448 MB memory
+budget.
+
 V0.6 hardware validation passed with Weston 14.0.2, the DRM atomic backend,
 Pixman shadow framebuffer, kiosk shell and `weston-simple-shm` at
 `320x170@30Hz`. Libinput selected `tca8418c` when the custom seat was active.

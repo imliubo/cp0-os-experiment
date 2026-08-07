@@ -61,6 +61,13 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     $(pkg-config --cflags --libs wayland-client libpng libdrm xkbcommon) \
     -o "$output/cardputerzero-system-shell"
 
+cc -std=c11 -Os -Wall -Wextra -Werror \
+    -I"$weston_build/protocol" \
+    "$repo_root/system-shell/src/boot_splash.c" \
+    "$weston_build/protocol/xdg-shell-protocol.c" \
+    $(pkg-config --cflags --libs wayland-client) \
+    -o "$output/cardputerzero-boot-splash"
+
 cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \
     -I"$output" \
     -I"$weston_source" \
@@ -77,5 +84,7 @@ cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \
     -o "$output/cardputerzero-policy.so"
 
 file "$output/cardputerzero-system-shell" | grep -q 'ELF 64-bit LSB.*ARM aarch64'
+file "$output/cardputerzero-boot-splash" | grep -q 'ELF 64-bit LSB.*ARM aarch64'
 file "$output/cardputerzero-policy.so" | grep -q 'ELF 64-bit LSB.*ARM aarch64'
-sha256sum "$output/cardputerzero-system-shell" "$output/cardputerzero-policy.so"
+sha256sum "$output/cardputerzero-system-shell" \
+    "$output/cardputerzero-boot-splash" "$output/cardputerzero-policy.so"

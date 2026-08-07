@@ -4,6 +4,7 @@ set -eu
 runtime_dir=${XDG_RUNTIME_DIR:-/run/cardputerzero}
 display=${WAYLAND_DISPLAY:-wayland-0}
 socket="$runtime_dir/$display"
+boot_splash_ready=${CP0_BOOT_SPLASH_READY_PATH:-$runtime_dir/boot-splash-ready}
 backlight_path=${CP0_BACKLIGHT_BRIGHTNESS_PATH:-/sys/class/backlight/backlight/brightness}
 backlight_max_path=${CP0_BACKLIGHT_MAX_PATH:-/sys/class/backlight/backlight/max_brightness}
 backlight_state_path=${CP0_BACKLIGHT_STATE_PATH:-$runtime_dir/backlight-before-sleep}
@@ -30,6 +31,19 @@ while [ ! -S "$socket" ]; do
         exit 1
     fi
     sleep 0.1
+done
+
+# Weston autolaunches a trusted splash surface. Give that surface the first
+# scanout opportunity before restoring a previously-zero backlight. A failed
+# marker is non-fatal so compositor recovery cannot strand the display off.
+attempt=0
+while [ ! -f "$boot_splash_ready" ]; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 60 ]; then
+        echo "Boot splash frame was not acknowledged: $boot_splash_ready" >&2
+        break
+    fi
+    sleep 0.05
 done
 
 if [ -e "$backlight_path" ]; then

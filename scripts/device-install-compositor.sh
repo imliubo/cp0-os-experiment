@@ -15,7 +15,8 @@ case "$staging" in
         ;;
 esac
 
-for file in cardputerzero-system-shell cardputerzero-policy.so \
+for file in cardputerzero-system-shell cardputerzero-boot-splash \
+    cardputerzero-policy.so splash.rgb565 weston.ini start-compositor.sh \
     cardputerzero-app-runtime cardputerzero-compositor.service \
     cardputerzero-display-generator \
     cardputerzero-display-retry.service retry-display-once.sh \
@@ -75,8 +76,16 @@ install -D -o root -g root -m 0755 \
     /usr/lib/systemd/system-generators/cardputerzero-display-generator
 install -o root -g root -m 0755 "$staging/cardputerzero-system-shell" \
     /usr/bin/cardputerzero-system-shell
+install -o root -g root -m 0755 "$staging/cardputerzero-boot-splash" \
+    /usr/bin/cardputerzero-boot-splash
 install -o root -g root -m 0755 "$staging/cardputerzero-policy.so" \
     /usr/lib/aarch64-linux-gnu/weston/cardputerzero-policy.so
+install -o root -g root -m 0755 "$staging/start-compositor.sh" \
+    /usr/libexec/cardputerzero/start-compositor.sh
+install -o root -g root -m 0644 "$staging/weston.ini" \
+    /etc/xdg/weston/weston.ini
+install -o root -g root -m 0644 "$staging/splash.rgb565" \
+    /usr/share/cardputerzero/boot/splash.rgb565
 install -o root -g root -m 0755 "$staging/cardputerzero-app-runtime" \
     /usr/libexec/cardputerzero/app-runtime
 systemctl disable getty@tty1.service cardputerzero-compositor.service \
@@ -103,5 +112,6 @@ wait_active cardputerzero-compositor.service
 wait_active cardputerzero-system-shell.service
 sha256sum \
     /usr/bin/cardputerzero-system-shell \
+    /usr/bin/cardputerzero-boot-splash \
     /usr/lib/aarch64-linux-gnu/weston/cardputerzero-policy.so \
     /usr/libexec/cardputerzero/app-runtime

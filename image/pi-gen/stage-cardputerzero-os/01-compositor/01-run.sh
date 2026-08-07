@@ -95,6 +95,8 @@ install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/store_client.c" \
     "${shell_source}/store_client.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/system_info.c" \
     "${shell_source}/system_info.c"
+install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/boot_splash.c" \
+    "${shell_source}/boot_splash.c"
 install -D -m 0644 "${STAGE_DIR}/01-compositor/system-shell/main.c" \
     "${shell_source}/main.c"
 install -D -m 0644 \
@@ -252,6 +254,13 @@ cc -std=c11 -Os -Wall -Wextra -Werror \
     \$(pkg-config --cflags --libs wayland-client libpng libdrm xkbcommon) \
     -o /tmp/cardputerzero-system-shell/cardputerzero-system-shell
 
+cc -std=c11 -Os -Wall -Wextra -Werror \
+    -I/tmp/cardputerzero-weston-build/protocol \
+    /tmp/cardputerzero-system-shell/boot_splash.c \
+    /tmp/cardputerzero-weston-build/protocol/xdg-shell-protocol.c \
+    \$(pkg-config --cflags --libs wayland-client) \
+    -o /tmp/cardputerzero-system-shell/cardputerzero-boot-splash
+
 cc -std=c11 -Os -Wall -Wextra -Werror -fPIC -shared -Wl,-z,defs \
     -I/tmp/cardputerzero-policy \
     -I/tmp/cardputerzero-weston \
@@ -277,6 +286,9 @@ install -D -m 0755 /tmp/cardputerzero-weston-install/usr/bin/weston-simple-shm \
 install -D -m 0755 \
     /tmp/cardputerzero-system-shell/cardputerzero-system-shell \
     /usr/bin/cardputerzero-system-shell
+install -D -m 0755 \
+    /tmp/cardputerzero-system-shell/cardputerzero-boot-splash \
+    /usr/bin/cardputerzero-boot-splash
 install -D -m 0755 \
     /tmp/cardputerzero-weston-install/usr/lib/aarch64-linux-gnu/libweston-14.so.0.0.2 \
     /usr/lib/aarch64-linux-gnu/libweston-14.so.0.0.2
@@ -311,6 +323,10 @@ if ldd /usr/lib/aarch64-linux-gnu/weston/cardputerzero-policy.so | \
 fi
 if ldd /usr/bin/cardputerzero-system-shell | grep -q 'not found'; then
     echo 'CardputerZero System Shell runtime dependency is missing' >&2
+    exit 1
+fi
+if ldd /usr/bin/cardputerzero-boot-splash | grep -q 'not found'; then
+    echo 'CardputerZero boot splash runtime dependency is missing' >&2
     exit 1
 fi
 

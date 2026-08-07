@@ -12,7 +12,8 @@ case "$drm_device" in
         ;;
 esac
 
-rm -f "$XDG_RUNTIME_DIR/wayland-0" "$XDG_RUNTIME_DIR/wayland-0.lock"
+rm -f "$XDG_RUNTIME_DIR/wayland-0" "$XDG_RUNTIME_DIR/wayland-0.lock" \
+    "$XDG_RUNTIME_DIR/boot-splash-ready"
 
 exec /usr/bin/weston \
     --backend=drm \

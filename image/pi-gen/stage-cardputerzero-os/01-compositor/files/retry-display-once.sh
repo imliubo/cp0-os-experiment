@@ -4,7 +4,6 @@ set -eu
 not_before_ms=${CP0_DISPLAY_RETRY_NOT_BEFORE_MS:-8000}
 uptime_file=${CP0_DISPLAY_RETRY_UPTIME_FILE:-/proc/uptime}
 sleep_command=${CP0_DISPLAY_RETRY_SLEEP:-sleep}
-systemctl_command=${CP0_DISPLAY_RETRY_SYSTEMCTL:-systemctl}
 
 case "$not_before_ms" in
     ''|*[!0-9]*)
@@ -28,17 +27,6 @@ if [ "$uptime_ms" -lt "$not_before_ms" ]; then
     "$sleep_command" "$delay"
 fi
 
-# This service is ordered before the System Shell. The SPI panel can miss its
-# early fbdev initialization, so force a fresh DRM disable/enable and complete
-# the ST7789 reset before any Setup or Home state becomes visible.
-"$systemctl_command" restart cardputerzero-compositor.service
-
-attempt=0
-while ! "$systemctl_command" is-active --quiet cardputerzero-compositor.service; do
-    attempt=$((attempt + 1))
-    if [ "$attempt" -ge 40 ]; then
-        echo "Compositor did not recover after the display retry" >&2
-        exit 1
-    fi
-    sleep 0.25
-done
+# Keep the initramfs/framebuffer splash in panel RAM until the cold-boot LCD
+# stabilization point, then let Weston take ownership exactly once. Restarting
+# Weston here caused a visible black interval and discarded its first frame.

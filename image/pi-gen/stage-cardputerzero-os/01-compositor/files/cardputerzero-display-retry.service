@@ -1,8 +1,7 @@
 [Unit]
-Description=Stabilize the CardputerZero LCD before showing the System Shell
+Description=Hold the splash until the CardputerZero LCD is stable
 Wants=cardputerzero-compositor.service
-After=cardputerzero-compositor.service
-Before=cardputerzero-system-shell.service
+Before=cardputerzero-compositor.service cardputerzero-system-shell.service
 ConditionPathExists=!/var/lib/cardputerzero/registry/recovery-mode
 
 [Service]

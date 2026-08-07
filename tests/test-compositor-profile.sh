@@ -31,6 +31,7 @@ overlay_state="$repo_root/compositor-policy/overlay-state.c"
 overlay_state_test="$repo_root/tests/compositor-overlay-state.c"
 protocol="$repo_root/protocols/cardputerzero-system-shell-v1.xml"
 shell_client="$repo_root/system-shell/src/main.c"
+boot_splash_client="$repo_root/system-shell/src/boot_splash.c"
 provision_client="$repo_root/system-shell/src/provision_client.c"
 builder="$repo_root/scripts/build-compositor.sh"
 builder_image="$repo_root/containers/compositor-builder/Containerfile"
@@ -78,27 +79,38 @@ grep -q 'libpng-dev' "$builder_image"
 grep -q 'containers/compositor-builder/Containerfile' "$repo_root/Makefile"
 grep -q 'cardputerzero-system-shell-v1.xml' "$repo_root/image/build-image.sh"
 grep -q '^modules=cardputerzero-policy.so$' "$config"
+grep -q '^path=/usr/bin/cardputerzero-boot-splash$' "$config"
+grep -q '^watch=false$' "$config"
 grep -q '/usr/libexec/cardputerzero/start-compositor.sh' "$service"
 grep -q '^ExecStartPost=+/usr/libexec/cardputerzero/unblank-display.sh$' "$service"
 grep -q 'files/unblank-display.sh' "$stage"
 grep -q '^Wants=cardputerzero-system-shell.service$' "$service"
 grep -q '^Wants=cardputerzero-compositor.service$' "$display_retry_service"
-grep -q '^After=cardputerzero-compositor.service$' "$display_retry_service"
-grep -q '^Before=cardputerzero-system-shell.service$' "$display_retry_service"
+grep -q '^Before=cardputerzero-compositor.service cardputerzero-system-shell.service$' \
+    "$display_retry_service"
 grep -q '^Type=oneshot$' "$display_retry_service"
 grep -q '^RemainAfterExit=yes$' "$display_retry_service"
 grep -q '^WantedBy=multi-user.target$' "$display_retry_service"
-grep -q '"$systemctl_command" restart cardputerzero-compositor.service' "$display_retry"
-if grep -q 'systemctl is-active --quiet cardputerzero-system-shell.service' \
+if grep -q 'systemctl.*\(restart\|stop\).*cardputerzero-compositor.service' \
     "$display_retry"; then
-    echo 'display retry cannot wait for a visible System Shell' >&2
+    echo 'cold-boot stabilization must not clear or restart the compositor' >&2
     exit 1
 fi
-grep -q '"$systemctl_command" is-active --quiet cardputerzero-compositor.service' \
-    "$display_retry"
 grep -q 'cardputerzero-display-retry.service' "$stage"
 grep -q '^not_before_ms=${CP0_DISPLAY_RETRY_NOT_BEFORE_MS:-8000}$' "$display_retry"
 grep -q '^uptime_file=${CP0_DISPLAY_RETRY_UPTIME_FILE:-/proc/uptime}$' "$display_retry"
+grep -q 'boot-splash-ready' "$launcher"
+grep -q 'boot-splash-ready' "$unblanker"
+grep -q '^#define SPLASH_PATH "/usr/share/cardputerzero/boot/splash.rgb565"$' \
+    "$boot_splash_client"
+grep -q '^#define READY_PATH "/run/cardputerzero/boot-splash-ready"$' \
+    "$boot_splash_client"
+grep -q 'WL_SHM_FORMAT_XRGB8888' "$boot_splash_client"
+grep -q 'os.cardputerzero.boot-splash' "$boot_splash_client"
+grep -q 'wl_surface_frame' "$boot_splash_client"
+grep -q 'cardputerzero-boot-splash' "$stage"
+grep -q 'system-shell/boot_splash.c' "$stage"
+grep -q 'system-shell/src/boot_splash.c' "$repo_root/image/build-image.sh"
 grep -q '^ProtectProc=invisible$' "$display_retry_service"
 if grep -q '^ProcSubset=pid$' "$display_retry_service"; then
     echo 'error: display retry requires the system-wide proc subset for uptime' >&2
@@ -360,6 +372,10 @@ grep -q '<request name="sleep_display" since="3">' "$protocol"
 grep -q '<request name="set_idle_timeout" since="6">' "$protocol"
 grep -q '<entry name="notification" value="3" since="4"' "$protocol"
 grep -q '^#define CP0_APP_ID_MAX 128$' "$policy"
+grep -q '^#define CP0_BOOT_SPLASH_APP_ID "os.cardputerzero.boot-splash"$' "$policy"
+grep -q '^#define CP0_COMPOSITOR_USER "cp0-compositor"$' "$policy"
+grep -q 'WESTON_LAYER_POSITION_UI' "$policy"
+grep -q 'is_boot_splash_surface' "$policy"
 grep -q 'WL_SHM_FORMAT_ARGB8888' "$shell_client"
 grep -q 'DRM_FORMAT_ARGB8888' "$shell_client"
 grep -q 'weston_capture_source_v1_capture' "$shell_client"

@@ -20,7 +20,9 @@
 #include <wayland-server-core.h>
 
 #define CP0_SHELL_APP_ID "os.cardputerzero.shell"
+#define CP0_BOOT_SPLASH_APP_ID "os.cardputerzero.boot-splash"
 #define CP0_SHELL_USER "cp0-shell"
+#define CP0_COMPOSITOR_USER "cp0-compositor"
 #define CP0_APP_ID_MAX 128
 #define CP0_ESC_POLL_MSEC 20
 #define CP0_SYSTEM_SHELL_PROTOCOL_VERSION 7U
@@ -55,11 +57,14 @@ struct cp0_surface_watch {
 struct cp0_policy {
     struct weston_compositor *compositor;
     uid_t trusted_uid;
+    uid_t boot_splash_uid;
     struct wl_global *global;
     struct wl_resource *shell_resource;
     struct weston_surface *trusted_surface;
+    struct weston_surface *boot_splash_surface;
     struct weston_surface *active_surface;
     struct weston_layer trusted_layer;
+    struct weston_layer boot_splash_layer;
     struct weston_layer app_layer;
     struct weston_layer hidden_layer;
     struct wl_listener compositor_destroy_listener;
@@ -231,6 +236,11 @@ reassert_layers(struct cp0_policy *policy)
                               CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_HIDDEN
                           ? &policy->trusted_layer.view_list
                           : &policy->hidden_layer.view_list);
+        } else if (root == policy->boot_splash_surface) {
+            weston_view_move_to_layer(
+                view, first_mapped_view(policy->trusted_surface) == NULL
+                          ? &policy->boot_splash_layer.view_list
+                          : &policy->hidden_layer.view_list);
         } else {
             weston_view_move_to_layer(
                 view, policy->overlay_mode !=
@@ -357,6 +367,23 @@ surface_client_uid(struct weston_surface *surface, uint32_t *account_uid)
     return true;
 }
 
+static bool
+is_boot_splash_surface(struct cp0_policy *policy,
+                       struct weston_surface *surface)
+{
+    struct weston_desktop_surface *desktop_surface;
+    const char *app_id;
+    uint32_t account_uid;
+
+    if (surface == NULL || desktop_root_surface(surface) != surface ||
+        !surface_client_uid(surface, &account_uid) ||
+        account_uid != (uint32_t)policy->boot_splash_uid)
+        return false;
+    desktop_surface = weston_surface_get_desktop_surface(surface);
+    app_id = weston_desktop_surface_get_app_id(desktop_surface);
+    return app_id != NULL && strcmp(app_id, CP0_BOOT_SPLASH_APP_ID) == 0;
+}
+
 static void
 announce_app(struct cp0_surface_watch *watch)
 {
@@ -371,6 +398,7 @@ announce_app(struct cp0_surface_watch *watch)
         wl_resource_get_version(policy->shell_resource) < 2 ||
         desktop_root_surface(watch->surface) != watch->surface ||
         watch->surface == policy->trusted_surface ||
+        watch->surface == policy->boot_splash_surface ||
         first_mapped_view(watch->surface) == NULL)
         return;
 
@@ -434,7 +462,14 @@ surface_committed(struct wl_listener *listener, void *data)
         wl_container_of(listener, watch, commit_listener);
     (void)data;
 
+    if (watch->policy->boot_splash_surface == NULL &&
+        is_boot_splash_surface(watch->policy, watch->surface)) {
+        watch->policy->boot_splash_surface = watch->surface;
+        weston_log("cardputerzero-policy: trusted boot splash registered\n");
+    }
+
     if (watch->surface != watch->policy->trusted_surface &&
+        watch->surface != watch->policy->boot_splash_surface &&
         desktop_root_surface(watch->surface) == watch->surface) {
         if (first_mapped_view(watch->surface) != NULL) {
             announce_app(watch);
@@ -471,6 +506,8 @@ surface_destroyed(struct wl_listener *listener, void *data)
         policy->trusted_surface = NULL;
         policy->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     }
+    if (policy->boot_splash_surface == watch->surface)
+        policy->boot_splash_surface = NULL;
     if (active_lost)
         policy->active_surface = NULL;
 
@@ -972,6 +1009,7 @@ policy_destroyed(struct wl_listener *listener, void *data)
     if (policy->global != NULL)
         wl_global_destroy(policy->global);
     weston_layer_fini(&policy->trusted_layer);
+    weston_layer_fini(&policy->boot_splash_layer);
     weston_layer_fini(&policy->app_layer);
     weston_layer_fini(&policy->hidden_layer);
     free(policy);
@@ -982,6 +1020,7 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
 {
     struct cp0_policy *policy;
     struct passwd *shell_user;
+    struct passwd *compositor_user;
     struct wl_event_loop *loop;
     (void)argc;
     (void)argv;
@@ -992,21 +1031,31 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
                    CP0_SHELL_USER);
         return -1;
     }
+    compositor_user = getpwnam(CP0_COMPOSITOR_USER);
+    if (compositor_user == NULL) {
+        weston_log("cardputerzero-policy: user %s does not exist\n",
+                   CP0_COMPOSITOR_USER);
+        return -1;
+    }
 
     policy = calloc(1, sizeof(*policy));
     if (policy == NULL)
         return -1;
     policy->compositor = compositor;
     policy->trusted_uid = shell_user->pw_uid;
+    policy->boot_splash_uid = compositor_user->pw_uid;
     policy->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     cp0_backlight_state_init(&policy->backlight);
     wl_list_init(&policy->surface_watches);
 
     weston_layer_init(&policy->trusted_layer, compositor);
+    weston_layer_init(&policy->boot_splash_layer, compositor);
     weston_layer_init(&policy->app_layer, compositor);
     weston_layer_init(&policy->hidden_layer, compositor);
     weston_layer_set_position(&policy->trusted_layer,
                               WESTON_LAYER_POSITION_TOP_UI);
+    weston_layer_set_position(&policy->boot_splash_layer,
+                              WESTON_LAYER_POSITION_UI);
     weston_layer_set_position(&policy->app_layer,
                               WESTON_LAYER_POSITION_NORMAL);
     weston_layer_set_position(&policy->hidden_layer,
@@ -1016,6 +1065,7 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
     policy->esc_timer = wl_event_loop_add_timer(loop, esc_gesture_timer, policy);
     if (policy->esc_timer == NULL) {
         weston_layer_fini(&policy->trusted_layer);
+        weston_layer_fini(&policy->boot_splash_layer);
         weston_layer_fini(&policy->app_layer);
         weston_layer_fini(&policy->hidden_layer);
         free(policy);
@@ -1049,6 +1099,7 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
         wl_list_remove(&policy->screenshot_authority_listener.link);
         wl_list_remove(&policy->compositor_destroy_listener.link);
         weston_layer_fini(&policy->trusted_layer);
+        weston_layer_fini(&policy->boot_splash_layer);
         weston_layer_fini(&policy->app_layer);
         weston_layer_fini(&policy->hidden_layer);
         free(policy);
@@ -1073,7 +1124,8 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
     add_system_binding(policy, KEY_HELP);
     add_system_binding(policy, KEY_SYSRQ);
 
-    weston_log("cardputerzero-policy: trusted uid=%u policy active\n",
-               (unsigned int)policy->trusted_uid);
+    weston_log("cardputerzero-policy: trusted uid=%u boot-splash uid=%u policy active\n",
+               (unsigned int)policy->trusted_uid,
+               (unsigned int)policy->boot_splash_uid);
     return 0;
 }

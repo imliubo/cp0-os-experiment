@@ -52,18 +52,17 @@ V0.6 profile 设置 `start_x=1`，使用 `raspi-firmware` 的
 `start_x.elf`/`fixup_x.dat`。M5Stack 官方镜像曾使用不透明的
 `m5stack_bootscreen` 变体提供内核前 splash，但真机证明它会无视 64 MB 配置并强制
 256/256 MB 内存划分，因此不再打包。镜像门禁明确拒绝该旧固件哈希；probe 状态记录
-实际固件模式、变体和哈希。product splash 改由 Linux framebuffer 一次性绘制，详见
-ADR 0008。
+实际固件模式、变体和哈希。product splash 改由 initramfs direct-SPI、Linux
+framebuffer 和受信任 Wayland surface 连续交接，详见 ADR 0008。
 
 V0.6 冷启动真机还观察到早期 fbdev 初始化未被面板接受，而后续 compositor
 disable/enable 会可靠发送完整的 ST7789 soft-reset、sleep-out 和 display-on 序列。
-产品镜像因此在 System Shell 首次显示前执行一次有界的 compositor 重启；Setup/Home
-必须等该 oneshot 完成后才启动，因此不会在用户可见后被重置。服务不在 recovery
-镜像启用，也不会形成重启循环。2026-08-02 摄像头复验发现
-1 秒重试仍可能早于面板稳定窗口，而稍后的手动 disable/enable 可立即恢复 Home；
-重试下限因此设为开机后 8 秒。服务按 `/proc/uptime` 只等待剩余时间，而不是从服务
-启动时再固定睡 8 秒；晚启动时可避免把整段等待叠加到启动关键路径。最终冷启动门禁
-须在包含该改动的新镜像上完成。
+早期实现因此在 System Shell 前主动重启一次 compositor，但这会清除已经显示的
+splash，并在约 8 秒处产生可见黑屏。当前实现让 display retry oneshot 只等待到该
+稳定窗口，在等待期间保留 panel RAM 中的 framebuffer splash，之后只启动一次
+Weston。服务按 `/proc/uptime` 只等待剩余时间，而不是从服务启动时再固定睡 8 秒；
+晚启动时可避免把整段等待叠加到启动关键路径。Weston 内的受信任 splash 随后保持到
+Setup/Home 首帧，最终冷启动门禁须在包含该改动的新镜像上完成。
 
 ## 构建最小镜像
 

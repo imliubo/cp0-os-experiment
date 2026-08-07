@@ -13,7 +13,10 @@ custom `m5stack_bootscreen` VideoCore firmware before the ARM kernel. That is
 earlier than an initramfs helper, but the opaque firmware ignores the product's
 64 MB GPU budget and leaves Linux with only about 227 MiB. It is intentionally
 rejected by the production image gate; `splash.png` remains the canonical user
-asset for both bounded Linux render paths.
+asset for both bounded Linux render paths and the trusted Wayland handoff. The
+framebuffer image remains visible through the cold-boot stabilization window;
+Weston then presents the same image until the first complete Setup or Home
+surface is mapped.
 
 Regenerate the raw frame with FFmpeg:
 

@@ -21,11 +21,15 @@ camera="$repo_root/target/apps/dev.cardputerzero.camera/0.1.0"
 required=(
     "$runtime"
     "$compositor/cardputerzero-system-shell"
+    "$compositor/cardputerzero-boot-splash"
     "$compositor/cardputerzero-policy.so"
+    "$repo_root/bsp/cm0-v0.6/boot/splash.rgb565"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-compositor.service"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-retry.service"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/retry-display-once.sh"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/unblank-display.sh"
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/start-compositor.sh"
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/weston.ini"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-generator"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-recovery-console.service"
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-system-shell.service"
@@ -59,6 +63,7 @@ mkdir -p "$output"
 install -m 0755 "$runtime" "$output/cardputerzero-app-runtime"
 install -m 0755 \
     "$compositor/cardputerzero-system-shell" \
+    "$compositor/cardputerzero-boot-splash" \
     "$compositor/cardputerzero-policy.so" \
     "$release/cp0-appd" \
     "$release/cp0-audiod" \
@@ -85,12 +90,15 @@ install -m 0755 \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/cardputerzero-display-generator" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/retry-display-once.sh" \
     "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/unblank-display.sh" \
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/start-compositor.sh" \
     "$output/"
 install -m 0644 "$hello/app.json" "$output/app.json"
 install -m 0644 "$hello/bin/hello-card.wasm" "$output/hello-card.wasm"
 install -m 0644 "$camera/app.json" "$output/camera-app.json"
 install -m 0644 "$camera/bin/camera.wasm" "$output/camera.wasm"
 install -m 0644 \
+    "$repo_root/bsp/cm0-v0.6/boot/splash.rgb565" \
+    "$repo_root/image/pi-gen/stage-cardputerzero-os/01-compositor/files/weston.ini" \
     "$repo_root/appd/systemd/"* \
     "$repo_root/appd/lora.conf" \
     "$repo_root/appd/store.conf" \

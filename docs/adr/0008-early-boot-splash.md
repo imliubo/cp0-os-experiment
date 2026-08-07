@@ -35,6 +35,32 @@ power/gamma 参数和 display inversion，再将同一 RGB565_LE 产品图片按
 不再每写一个字节就单独排空一次 RX FIFO；同时删除实验原型在 `DISPON` 后多出的
 20 ms 等待，因为固定 BSP 在该命令后会立即 flush。
 
+官方切换到该启动方式的参考提交是
+`CardputerZero/pi-gen@cc5a7375dfa903757b040e76a1e64e5b0dcf8e7f`。该提交只把
+U-Boot 替换成定制 `start.elf`，并安装 `splash.bmp`；它没有定义 Linux DRM、Weston
+和桌面之间的画面交接。保留在本仓库用于来源审计的二进制与该提交引入、后续
+`554544921c1659f39bf296b7986715fdeac898c8` 快照中未改变的文件哈希一致。
+
+## 持续显示交接
+
+product 启动不得在 direct-SPI、fbdev、Weston 和 Setup/Home 之间主动清屏。具体顺序为：
+
+1. initramfs direct-SPI helper 尽早写入产品图片；
+2. DRM fbdev 出现后，后台 worker 用同一份 RGB565 图片重绘，以覆盖驱动 probe 对
+   panel RAM 的重置；
+3. `cardputerzero-display-retry.service` 只等待冷启动 LCD 稳定点，并在此期间保留
+   framebuffer 内容；它不得再停止或重启 Weston；
+4. Weston 只启动一次，并立即 autolaunch 由 `cp0-compositor` 运行的受信任
+   `os.cardputerzero.boot-splash` Wayland 客户端；
+5. `unblank-display.sh` 等待该 surface 的首个 frame callback，再恢复可能为 0 的背光；
+6. compositor policy 仅在完整的受信任 System Shell surface 已映射后隐藏 splash，
+   因而 Setup 或 Home 的第一帧直接替换同一张图片。
+
+Wayland splash 使用独立的 `WESTON_LAYER_POSITION_UI` layer，不注册为 App，也不进入
+Apps 或 Tasks。app-id 本身不是授权：policy 同时校验客户端必须属于
+`cp0-compositor` UID，普通应用不能伪装成启动画面。如果 System Shell 在启动交接时
+退出，policy 会重新显示仍存活的 splash，而不是暴露黑色背景或其他应用内容。
+
 helper 是正常 initramfs 中的有界程序，读取经过哈希固定的产品图片，保留标准
 initramfs 的 root discovery、数据扩容和 OverlayFS 链路。它自身通过 `alarm(2)` 终止
 异常寄存器访问，调用脚本另有 BusyBox `timeout -s KILL 2` 兜底；SPI 空闲等待和 RX
@@ -76,3 +102,8 @@ Circle bare-metal splash 可以从源码构建，但当前稳定实现需要重�
 product 的正常启动不再在 LCD 显示 IP、登录提示或内核错误。诊断依赖 Home、网络
 租约、mDNS、Owner 授权的 SSH，或显式 recovery 镜像/Recovery Mode。recovery 镜像
 仍保留完整可见控制台，避免 splash 策略消除本地修复路径。
+
+静态和构建门禁验证不存在 compositor restart/stop 启动路径、Wayland splash 的固定
+尺寸和资源路径、受信任 UID 检查、首帧 marker，以及 System Shell 的启动顺序。最终
+结论仍必须以 V0.6 冷启动录像或连续观测为准，因为 panel RAM、DRM atomic modeset 和
+背光控制之间的交接无法由 host 测试证明。

@@ -144,6 +144,7 @@ cp "$repo_root/system-shell/include/cp0_ui.h" \
     "$repo_root/system-shell/src/screenshot_store.c" \
     "$repo_root/system-shell/src/store_client.c" \
     "$repo_root/system-shell/src/system_info.c" \
+    "$repo_root/system-shell/src/boot_splash.c" \
     "$repo_root/system-shell/src/main.c" \
     "$pi_gen_dir/stage-cardputerzero-os/01-compositor/system-shell/"
 mkdir -p "$pi_gen_dir/stage-cardputerzero-os/01-compositor/policy"
