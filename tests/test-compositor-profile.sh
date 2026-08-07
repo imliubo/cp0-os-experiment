@@ -374,6 +374,18 @@ grep -q '<entry name="notification" value="3" since="4"' "$protocol"
 grep -q '^#define CP0_APP_ID_MAX 128$' "$policy"
 grep -q '^#define CP0_BOOT_SPLASH_APP_ID "os.cardputerzero.boot-splash"$' "$policy"
 grep -q '^#define CP0_COMPOSITOR_USER "cp0-compositor"$' "$policy"
+awk '
+    /shell_uid = shell_user->pw_uid;/ { shell_snapshot = NR }
+    /compositor_user = getpwnam\(CP0_COMPOSITOR_USER\);/ {
+        compositor_lookup = NR
+    }
+    END {
+        exit !(shell_snapshot && compositor_lookup &&
+               shell_snapshot < compositor_lookup)
+    }
+' "$policy"
+grep -q 'policy->trusted_uid = shell_uid;' "$policy"
+grep -q 'policy->boot_splash_uid = compositor_uid;' "$policy"
 grep -q 'WESTON_LAYER_POSITION_UI' "$policy"
 grep -q 'is_boot_splash_surface' "$policy"
 grep -q 'WL_SHM_FORMAT_ARGB8888' "$shell_client"

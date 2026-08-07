@@ -1021,6 +1021,8 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
     struct cp0_policy *policy;
     struct passwd *shell_user;
     struct passwd *compositor_user;
+    uid_t shell_uid;
+    uid_t compositor_uid;
     struct wl_event_loop *loop;
     (void)argc;
     (void)argv;
@@ -1031,19 +1033,22 @@ wet_module_init(struct weston_compositor *compositor, int *argc, char *argv[])
                    CP0_SHELL_USER);
         return -1;
     }
+    /* getpwnam() may reuse static storage for the next account lookup. */
+    shell_uid = shell_user->pw_uid;
     compositor_user = getpwnam(CP0_COMPOSITOR_USER);
     if (compositor_user == NULL) {
         weston_log("cardputerzero-policy: user %s does not exist\n",
                    CP0_COMPOSITOR_USER);
         return -1;
     }
+    compositor_uid = compositor_user->pw_uid;
 
     policy = calloc(1, sizeof(*policy));
     if (policy == NULL)
         return -1;
     policy->compositor = compositor;
-    policy->trusted_uid = shell_user->pw_uid;
-    policy->boot_splash_uid = compositor_user->pw_uid;
+    policy->trusted_uid = shell_uid;
+    policy->boot_splash_uid = compositor_uid;
     policy->overlay_mode = CP0_SYSTEM_SHELL_V1_OVERLAY_MODE_FULL;
     cp0_backlight_state_init(&policy->backlight);
     wl_list_init(&policy->surface_watches);
