@@ -21,6 +21,20 @@ int main(void)
     assert(settings.key_sounds);
     assert(!cp0_shell_settings_load(path, &loaded));
 
+    FILE *stream = fopen(path, "w");
+    assert(stream != NULL);
+    assert(fputs("version=1\n", stream) >= 0);
+    assert(fclose(stream) == 0);
+    loaded = (struct cp0_shell_settings){
+        .theme = 2,
+        .screen_timeout = 3,
+        .key_sounds = false,
+    };
+    assert(!cp0_shell_settings_load(path, &loaded));
+    assert(loaded.theme == 2);
+    assert(loaded.screen_timeout == 3);
+    assert(!loaded.key_sounds);
+
     settings.theme = 2;
     settings.screen_timeout = 3;
     settings.key_sounds = false;
@@ -30,7 +44,7 @@ int main(void)
     assert(settings.screen_timeout == loaded.screen_timeout);
     assert(settings.key_sounds == loaded.key_sounds);
 
-    FILE *stream = fopen(path, "w");
+    stream = fopen(path, "w");
     assert(stream != NULL);
     assert(fputs("version=1\ntheme=99\nscreen_timeout=0\nkey_sounds=1\n",
                  stream) >= 0);

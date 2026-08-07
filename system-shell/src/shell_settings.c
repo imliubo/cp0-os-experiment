@@ -39,18 +39,19 @@ bool cp0_shell_settings_load(const char *path,
     stream = fopen(path, "re");
     if (stream == NULL)
         return false;
-    bool parsed = fscanf(stream,
-                         "version=%u\ntheme=%u\nscreen_timeout=%u\n"
-                         "key_sounds=%u\n%c",
-                         &version, &theme, &timeout, &key_sounds, &trailing) == 4;
+    int parsed = fscanf(stream,
+                        "version=%u\ntheme=%u\nscreen_timeout=%u\n"
+                        "key_sounds=%u\n%c",
+                        &version, &theme, &timeout, &key_sounds, &trailing);
     bool closed = fclose(stream) == 0;
+    if (parsed != 4 || !closed || version != 1 || key_sounds > 1)
+        return false;
     struct cp0_shell_settings candidate = {
         .theme = theme,
         .screen_timeout = timeout,
         .key_sounds = key_sounds == 1,
     };
-    if (!parsed || !closed || version != 1 || key_sounds > 1 ||
-        !valid(&candidate))
+    if (!valid(&candidate))
         return false;
     *settings = candidate;
     return true;
