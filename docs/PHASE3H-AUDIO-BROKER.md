@@ -20,11 +20,16 @@ are not SDK features. PCM WAV parsing remains in the sandboxed Music App;
 future compressed formats belong in a separate bounded system decoder.
 
 The V0.6 ES8389 hardware PCM endpoint runs at 48 kHz with exactly two
-interleaved channels. Audiod keeps one playback handle open, sends SDK 1.1 music
-frames directly, and preserves the mono SDK contract by repeating each 16 kHz
-sample three times and duplicating it to both hardware channels. Capture remains
-16 kHz stereo at the hardware boundary and averages left/right samples back to
-one mono sample. Applications cannot select or observe the hardware layout.
+interleaved channels. Audiod reuses one playback handle while audio is active,
+then closes it after 200 ms without a completed write so an idle codec path does
+not leave the speaker hissing. A 50 ms lifecycle check shares the device mutex
+with playback, so it cannot close a handle during a write. Pause and stop do not
+change the user's mixer mute state; later playback opens the fixed endpoint
+again. SDK 1.1 music frames are sent directly, and the mono SDK contract is
+preserved by repeating each 16 kHz sample three times and duplicating it to both
+hardware channels. Capture remains 16 kHz stereo at the hardware boundary and
+averages left/right samples back to one mono sample. Applications cannot select
+or observe the hardware layout.
 The capture stream is explicitly started before its first read because the
 V0.6 driver returns `EIO` instead of performing ALSA's usual implicit start.
 
@@ -37,12 +42,15 @@ every write returns observed volume and mute state. The persisted Key Sounds
 setting is owned by audiod so both Shell and foreground App key events follow
 one policy. Password and Wi-Fi secret entry stay silent.
 
-The key cue is a fixed 32 ms, 16 kHz mono PCM derivative of UI SFX Soft
-`typing` (CC0-1.0). In service mode, `play-key-click` places one token into a
-bounded eight-entry queue and returns before touching ALSA. A dedicated
-128 KiB-stack worker drains every accepted token in order. A full queue applies
-backpressure instead of dropping key feedback. Tokens reached while Key Sounds
-is disabled are discarded before hardware access.
+The audible key cue is a fixed 12 ms, 16 kHz mono PCM derivative of UI SFX Soft
+`typing` (CC0-1.0). Audiod appends 20 ms of zero-valued samples before writing
+the cue to ALSA: the 32 ms submission exceeds the endpoint's period-rounded
+20 ms automatic-start threshold, while the audible tail remains 12 ms. In
+service mode, `play-key-click` places one token into a bounded eight-entry queue
+and returns before touching ALSA. A dedicated 128 KiB-stack worker drains every
+accepted token in order. A full queue applies backpressure instead of dropping
+key feedback. Tokens reached while Key Sounds is disabled are discarded before
+hardware access.
 
 ## Trust Flow
 
@@ -100,8 +108,8 @@ Automated coverage includes:
 - separate manifest permission routing in appd;
 - Runtime capture decoding and length mismatch rejection;
 - cached 48 kHz playback, 16-to-48 kHz conversion, key-click enable/disable,
-  persistence across audiod restart, rapid-click queue draining without loss,
-  and no hardware access while disabled;
+  silent threshold padding, persistence across audiod restart, rapid-click
+  queue draining without loss, and no hardware access while disabled;
 - Rust, C11, C++17 and WIT SDK surfaces;
 - hardened systemd service and image-stage assertions;
 - AArch64 audiod/appd and static Runtime plus wasm32 Hello Card builds.

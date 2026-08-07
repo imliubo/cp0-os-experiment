@@ -55,7 +55,7 @@ storage_protocol="$repo_root/crates/cp0-storage-protocol/src/lib.rs"
 storage_service_source="$repo_root/crates/cp0-storaged/src/lib.rs"
 audio_protocol="$repo_root/crates/cp0-audio-protocol/src/lib.rs"
 audio_service_source="$repo_root/crates/cp0-audiod/src/lib.rs"
-key_click_asset="$repo_root/crates/cp0-audiod/assets/key-click-soft-typing-s16le.pcm"
+key_click_asset="$repo_root/crates/cp0-audiod/assets/key-click-crisp-typing-s16le.pcm"
 key_click_license="$repo_root/crates/cp0-audiod/assets/LICENSE-AUDIO"
 
 grep -q '^Requires=.*cardputerzero-appd.socket.*cardputerzero-broker.socket.*cardputerzero-networkd.socket' "$service"
@@ -112,15 +112,21 @@ grep -q 'trusted_pcm_uids.contains' "$audio_service_source"
 grep -q 'c"DACL"' "$audio_service_source"
 grep -q 'c"DACR"' "$audio_service_source"
 grep -q 'c"Speaker"' "$audio_service_source"
-grep -q '^pub const KEY_CLICK_FRAMES: u16 = 512;$' "$audio_protocol"
-grep -q 'include_bytes!("../assets/key-click-soft-typing-s16le.pcm")' \
+grep -q '^pub const KEY_CLICK_FRAMES: u16 = 192;$' "$audio_protocol"
+grep -q 'include_bytes!("../assets/key-click-crisp-typing-s16le.pcm")' \
     "$audio_service_source"
 grep -q '^const KEY_CLICK_QUEUE_DEPTH: usize = 8;$' "$audio_service_source"
-grep -q 'spawn_scoped(scope, || self.play_key_clicks(receiver))' \
+grep -q 'self.play_key_clicks(receiver, idle_check_interval)' \
     "$audio_service_source"
-test "$(wc -c <"$key_click_asset" | tr -d ' ')" = 1024
+grep -q '^const PLAYBACK_IDLE_TIMEOUT: Duration = Duration::from_millis(200);$' \
+    "$audio_service_source"
+grep -q '^const KEY_CLICK_PLAYBACK_FRAMES: usize = 512;$' "$audio_service_source"
+grep -q 'device.play_pcm_s16le(&KEY_CLICK_PLAYBACK_PCM_S16LE)' \
+    "$audio_service_source"
+grep -q '^pub const MAX_MUSIC_FRAMES: usize = 1920;$' "$audio_protocol"
+test "$(wc -c <"$key_click_asset" | tr -d ' ')" = 384
 test "$(shasum -a 256 "$key_click_asset" | awk '{print $1}')" = \
-    d0cc34b9c4e4707439ce959a0592d7391496f7f7f57a01e44d65c5a14f7efefc
+    36a1701b4f097388972a9c4becbe28bdfd49487fa60736ba7eb2927a59eea821
 grep -q 'SPDX identifier: CC0-1.0' "$key_click_license"
 grep -qx 'd /run/cardputerzero-camerad 0755 root root -' "$tmpfiles"
 grep -qx 'User=cp0-camera' "$camera_service"

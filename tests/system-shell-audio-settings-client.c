@@ -34,7 +34,7 @@ int main(void)
         "\"volume_percent\":70,\"muted\":null}}}";
     static const char key_click[] =
         "{\"protocol_version\":3,\"request_id\":11,\"outcome\":{"
-        "\"status\":\"played\",\"frames\":512}}";
+        "\"status\":\"played\",\"frames\":192}}";
     static const char key_sounds[] =
         "{\"protocol_version\":3,\"request_id\":12,\"outcome\":{"
         "\"status\":\"key-sounds-state\",\"enabled\":false}}";

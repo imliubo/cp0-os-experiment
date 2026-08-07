@@ -11,10 +11,10 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cp0_audio_protocol::{
     AUDIO_SAMPLE_BYTES, AUDIO_SAMPLE_RATE_HZ, AudioCommand, AudioDirection, AudioErrorCode,
@@ -32,13 +32,28 @@ const SND_PCM_STREAM_CAPTURE: libc::c_int = 1;
 const SND_PCM_FORMAT_S16_LE: libc::c_int = 2;
 const SND_PCM_ACCESS_RW_INTERLEAVED: libc::c_int = 3;
 const PCM_LATENCY_MICROSECONDS: libc::c_uint = 20_000;
+const PLAYBACK_IDLE_TIMEOUT: Duration = Duration::from_millis(200);
+const PLAYBACK_IDLE_CHECK_INTERVAL: Duration = Duration::from_millis(50);
 const HARDWARE_CHANNELS: libc::c_uint = 2;
 const OUTPUT_VOLUME_STEP_PERCENT: u8 = 10;
 const SND_MIXER_SCHN_MONO: libc::c_int = 0;
-const KEY_CLICK_PCM_S16LE: &[u8] = include_bytes!("../assets/key-click-soft-typing-s16le.pcm");
+const KEY_CLICK_PCM_S16LE: &[u8] = include_bytes!("../assets/key-click-crisp-typing-s16le.pcm");
+const KEY_CLICK_PLAYBACK_FRAMES: usize = 512;
+const KEY_CLICK_PLAYBACK_BYTES: usize = KEY_CLICK_PLAYBACK_FRAMES * AUDIO_SAMPLE_BYTES;
 const KEY_CLICK_QUEUE_DEPTH: usize = 8;
 const KEY_CLICK_WORKER_STACK_BYTES: usize = 128 * 1024;
 const _: [(); KEY_CLICK_FRAMES as usize * AUDIO_SAMPLE_BYTES] = [(); KEY_CLICK_PCM_S16LE.len()];
+const KEY_CLICK_PLAYBACK_PCM_S16LE: [u8; KEY_CLICK_PLAYBACK_BYTES] = padded_key_click_pcm();
+
+const fn padded_key_click_pcm() -> [u8; KEY_CLICK_PLAYBACK_BYTES] {
+    let mut playback = [0_u8; KEY_CLICK_PLAYBACK_BYTES];
+    let mut index = 0;
+    while index < KEY_CLICK_PCM_S16LE.len() {
+        playback[index] = KEY_CLICK_PCM_S16LE[index];
+        index += 1;
+    }
+    playback
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioDeviceError {
@@ -63,6 +78,8 @@ pub trait AudioDevice {
     fn play_pcm_s16le(&self, samples: &[u8]) -> Result<(), AudioDeviceError>;
     fn play_pcm_s16le_stereo_48k(&self, samples: &[u8]) -> Result<(), AudioDeviceError>;
     fn capture_pcm_s16le(&self, frames: u16) -> Result<Vec<u8>, AudioDeviceError>;
+
+    fn close_idle_playback(&self) {}
 }
 
 pub trait AudioOutputDevice {
@@ -211,6 +228,32 @@ pub struct AlsaDevice {
     device: CString,
     mixer_card: CString,
     playback: RefCell<Option<*mut c_void>>,
+    playback_activity: RefCell<PlaybackActivity>,
+}
+
+#[derive(Debug, Default)]
+struct PlaybackActivity {
+    last_write: Option<Instant>,
+}
+
+impl PlaybackActivity {
+    fn mark_written_at(&mut self, now: Instant) {
+        self.last_write = Some(now);
+    }
+
+    fn take_if_idle_at(&mut self, now: Instant, timeout: Duration) -> bool {
+        let idle = self
+            .last_write
+            .is_some_and(|last_write| now.saturating_duration_since(last_write) >= timeout);
+        if idle {
+            self.last_write = None;
+        }
+        idle
+    }
+
+    fn clear(&mut self) {
+        self.last_write = None;
+    }
 }
 
 // SAFETY: POSIX loader handles and ALSA PCM handles may move between threads.
@@ -224,6 +267,7 @@ impl AlsaDevice {
             device: CString::new(DEFAULT_AUDIO_DEVICE).expect("static ALSA device has no NUL"),
             mixer_card: CString::new(DEFAULT_MIXER_CARD).expect("static ALSA card has no NUL"),
             playback: RefCell::new(None),
+            playback_activity: RefCell::new(PlaybackActivity::default()),
         })
     }
 
@@ -239,6 +283,7 @@ impl AlsaDevice {
     }
 
     fn close_playback_pcm(&self) {
+        self.playback_activity.borrow_mut().clear();
         if let Some(raw) = self.playback.replace(None) {
             unsafe { (self.library.pcm_close)(raw) };
         }
@@ -447,6 +492,16 @@ impl AudioDevice for AlsaDevice {
         }
         Ok(samples)
     }
+
+    fn close_idle_playback(&self) {
+        if self
+            .playback_activity
+            .borrow_mut()
+            .take_if_idle_at(Instant::now(), PLAYBACK_IDLE_TIMEOUT)
+        {
+            self.close_playback_pcm();
+        }
+    }
 }
 
 impl AlsaDevice {
@@ -475,10 +530,14 @@ impl AlsaDevice {
                 continue;
             }
             if result == 0 {
+                self.close_playback_pcm();
                 return Err(AudioDeviceError::Device);
             }
             offset += usize::try_from(result).map_err(|_| AudioDeviceError::Device)?;
         }
+        self.playback_activity
+            .borrow_mut()
+            .mark_written_at(Instant::now());
         Ok(())
     }
 }
@@ -678,6 +737,14 @@ impl<D: AudioDevice + AudioOutputDevice + Send> AudioServer<D> {
     }
 
     fn with_key_click_worker<T>(&self, operation: impl FnOnce() -> T) -> io::Result<T> {
+        self.with_key_click_worker_timeout(PLAYBACK_IDLE_CHECK_INTERVAL, operation)
+    }
+
+    fn with_key_click_worker_timeout<T>(
+        &self,
+        idle_check_interval: Duration,
+        operation: impl FnOnce() -> T,
+    ) -> io::Result<T> {
         let (sender, receiver) = sync_channel(KEY_CLICK_QUEUE_DEPTH);
         {
             let mut slot = self.key_click_sender.lock().map_err(lock_io)?;
@@ -696,7 +763,9 @@ impl<D: AudioDevice + AudioOutputDevice + Send> AudioServer<D> {
             let worker = thread::Builder::new()
                 .name("cp0-key-click".into())
                 .stack_size(KEY_CLICK_WORKER_STACK_BYTES)
-                .spawn_scoped(scope, || self.play_key_clicks(receiver))?;
+                .spawn_scoped(scope, || {
+                    self.play_key_clicks(receiver, idle_check_interval)
+                })?;
             let result = operation();
             drop(guard);
             worker
@@ -706,18 +775,29 @@ impl<D: AudioDevice + AudioOutputDevice + Send> AudioServer<D> {
         })
     }
 
-    fn play_key_clicks(&self, receiver: Receiver<()>) {
-        while receiver.recv().is_ok() {
-            if !self
-                .key_sounds_enabled
-                .load(std::sync::atomic::Ordering::Relaxed)
-            {
-                continue;
-            }
-            if let Err(error) =
-                self.with_device(|device| device.play_pcm_s16le(KEY_CLICK_PCM_S16LE))
-            {
-                eprintln!("cp0-audiod: queued key click failed: {error}");
+    fn play_key_clicks(&self, receiver: Receiver<()>, idle_check_interval: Duration) {
+        loop {
+            match receiver.recv_timeout(idle_check_interval) {
+                Ok(()) => {
+                    if !self
+                        .key_sounds_enabled
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        continue;
+                    }
+                    if let Err(error) = self
+                        .with_device(|device| device.play_pcm_s16le(&KEY_CLICK_PLAYBACK_PCM_S16LE))
+                    {
+                        eprintln!("cp0-audiod: queued key click failed: {error}");
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    let _ = self.with_device(|device| {
+                        device.close_idle_playback();
+                        Ok(())
+                    });
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         }
     }
@@ -879,15 +959,15 @@ impl<D: AudioDevice + AudioOutputDevice + Send> AudioServer<D> {
                 self.with_device(|device| device.set_output_muted(muted)),
             ),
             AudioCommand::SetKeySoundsEnabled { enabled } => {
-                if let Some(path) = &self.key_sounds_state
-                    && let Err(error) = save_key_sounds_state(path, enabled)
-                {
-                    eprintln!("cp0-audiod: cannot persist key sounds setting: {error}");
-                    return AudioResponse::error(
-                        request_id,
-                        AudioErrorCode::Internal,
-                        "key sounds setting could not be persisted",
-                    );
+                if let Some(path) = &self.key_sounds_state {
+                    if let Err(error) = save_key_sounds_state(path, enabled) {
+                        eprintln!("cp0-audiod: cannot persist key sounds setting: {error}");
+                        return AudioResponse::error(
+                            request_id,
+                            AudioErrorCode::Internal,
+                            "key sounds setting could not be persisted",
+                        );
+                    }
                 }
                 self.key_sounds_enabled
                     .store(enabled, std::sync::atomic::Ordering::Relaxed);
@@ -924,7 +1004,7 @@ impl<D: AudioDevice + AudioOutputDevice + Send> AudioServer<D> {
             .clone();
         match sender {
             Some(sender) => sender.send(()).map_err(|_| AudioDeviceError::Device),
-            None => self.with_device(|device| device.play_pcm_s16le(KEY_CLICK_PCM_S16LE)),
+            None => self.with_device(|device| device.play_pcm_s16le(&KEY_CLICK_PLAYBACK_PCM_S16LE)),
         }
     }
 
@@ -1065,6 +1145,7 @@ mod tests {
         played: RefCell<Vec<u8>>,
         captured: Vec<u8>,
         output: RefCell<AudioOutputState>,
+        idle_checks: RefCell<usize>,
     }
 
     impl Default for MockDevice {
@@ -1073,6 +1154,7 @@ mod tests {
                 played: RefCell::new(Vec::new()),
                 captured: Vec::new(),
                 output: RefCell::new(AudioOutputState::available(60, false)),
+                idle_checks: RefCell::new(0),
             }
         }
     }
@@ -1095,6 +1177,10 @@ mod tests {
                 .copied()
                 .take(usize::from(frames) * AUDIO_SAMPLE_BYTES)
                 .collect())
+        }
+
+        fn close_idle_playback(&self) {
+            *self.idle_checks.borrow_mut() += 1;
         }
     }
 
@@ -1137,6 +1223,7 @@ mod tests {
                 played: RefCell::new(Vec::new()),
                 captured: vec![0, 128, 255, 127],
                 output: RefCell::new(AudioOutputState::available(60, false)),
+                idle_checks: RefCell::new(0),
             },
             [0],
             [1000],
@@ -1213,9 +1300,18 @@ mod tests {
         let samples = played_samples(&server);
         assert_eq!(
             samples.len(),
-            usize::from(KEY_CLICK_FRAMES) * AUDIO_SAMPLE_BYTES
+            KEY_CLICK_PLAYBACK_FRAMES * AUDIO_SAMPLE_BYTES
         );
-        assert!(samples.iter().any(|sample| *sample != 0));
+        assert_eq!(&samples[..KEY_CLICK_PCM_S16LE.len()], KEY_CLICK_PCM_S16LE);
+        assert!(
+            samples[KEY_CLICK_PCM_S16LE.len()..]
+                .iter()
+                .all(|sample| *sample == 0)
+        );
+        assert!(
+            KEY_CLICK_PLAYBACK_FRAMES * 1_000_000
+                > AUDIO_SAMPLE_RATE_HZ as usize * PCM_LATENCY_MICROSECONDS as usize
+        );
     }
 
     #[test]
@@ -1240,8 +1336,27 @@ mod tests {
 
         assert_eq!(
             played_samples(&server).len(),
-            CLICKS * usize::from(KEY_CLICK_FRAMES) * AUDIO_SAMPLE_BYTES
+            CLICKS * KEY_CLICK_PLAYBACK_FRAMES * AUDIO_SAMPLE_BYTES
         );
+    }
+
+    #[test]
+    fn key_click_worker_checks_for_idle_playback() {
+        let server = AudioServer::new(MockDevice::default(), [0], [1000]);
+
+        server
+            .with_key_click_worker_timeout(Duration::from_millis(1), || {
+                let deadline = Instant::now() + Duration::from_millis(100);
+                loop {
+                    let checks = *server.device.lock().unwrap().idle_checks.borrow();
+                    if checks > 0 {
+                        break;
+                    }
+                    assert!(Instant::now() < deadline, "idle playback was never checked");
+                    thread::yield_now();
+                }
+            })
+            .unwrap();
     }
 
     #[test]
@@ -1318,5 +1433,30 @@ mod tests {
             ]
         );
         assert_eq!(stereo_to_mono(&[i16::MIN, i16::MAX, 100, 300]), [0, 200]);
+    }
+
+    #[test]
+    fn closes_playback_only_after_a_full_idle_window() {
+        let start = Instant::now();
+        let mut activity = PlaybackActivity::default();
+        activity.mark_written_at(start);
+        assert!(!activity.take_if_idle_at(
+            start + PLAYBACK_IDLE_TIMEOUT - Duration::from_millis(1),
+            PLAYBACK_IDLE_TIMEOUT,
+        ));
+
+        let refreshed = start + PLAYBACK_IDLE_TIMEOUT - Duration::from_millis(1);
+        activity.mark_written_at(refreshed);
+        assert!(!activity.take_if_idle_at(
+            refreshed + PLAYBACK_IDLE_TIMEOUT - Duration::from_millis(1),
+            PLAYBACK_IDLE_TIMEOUT,
+        ));
+        assert!(
+            activity.take_if_idle_at(refreshed + PLAYBACK_IDLE_TIMEOUT, PLAYBACK_IDLE_TIMEOUT,)
+        );
+        assert!(
+            !activity
+                .take_if_idle_at(refreshed + PLAYBACK_IDLE_TIMEOUT * 2, PLAYBACK_IDLE_TIMEOUT,)
+        );
     }
 }
