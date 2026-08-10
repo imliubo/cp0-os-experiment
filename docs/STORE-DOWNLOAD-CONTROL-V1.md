@@ -1,5 +1,8 @@
 # Store Download Control v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-DOWNLOAD-CONTROL-V1.zh-CN.md)
+
 S7A adds bounded, user-visible control of one Store installation without
 weakening Catalog, package, or appd verification. The device still runs only
 one Store mutation job at a time.

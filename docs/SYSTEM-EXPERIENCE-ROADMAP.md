@@ -1,5 +1,8 @@
 # System Experience Roadmap
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](SYSTEM-EXPERIENCE-ROADMAP.zh-CN.md)
+
 ## Principles
 
 The Home entries are trusted system surfaces, but the Shell remains

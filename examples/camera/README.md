@@ -1,5 +1,8 @@
 # Camera
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Camera displays a 320x170 preview from the trusted 30 FPS camera pipeline.
 Enter or Space encodes the next frame as a 1280x720 JPEG and saves the original
 plus a 320x170 thumbnail to the shared photo library without restarting preview.

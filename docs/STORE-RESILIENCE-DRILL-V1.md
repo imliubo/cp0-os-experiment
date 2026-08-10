@@ -1,5 +1,8 @@
 # Store resilience drill v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-RESILIENCE-DRILL-V1.zh-CN.md)
+
 S8E combines capacity, publication, CDN, database recovery, queue replay and
 signer failure gates. These are engineering acceptance drills, not a claim
 that production multi-region infrastructure or an HSM ceremony is complete.

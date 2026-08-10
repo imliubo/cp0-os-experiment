@@ -1,5 +1,8 @@
 # Power control
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](POWER-CONTROL.zh-CN.md)
+
 ## Contract
 
 Restart and Power Off are trusted global actions. The System Shell keeps the

@@ -1,5 +1,8 @@
 # Store Publisher, Catalog Builder and Transparency Committer
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-PUBLISHER.zh-CN.md)
+
 S5G adds `cp0-store-publisher`, the only reference process allowed to read the
 Store Ed25519 private key. It consumes Release control-plane events, revalidates
 approved immutable content, Store-signs packages, builds a deterministic signed

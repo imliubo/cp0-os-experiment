@@ -1,5 +1,8 @@
 # Phase 3C: permission decisions and trusted prompts
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3C-PERMISSIONS.zh-CN.md)
+
 ## Security model
 
 Applications declare capabilities and a user-facing reason in the validated

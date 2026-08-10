@@ -1,6 +1,10 @@
 # Store Listing v1
 
-`store-listing-v1` 是开发者提交应用时的公开元数据契约。建议 SDK 项目使用以下固定位置：
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-LISTING-V1.zh-CN.md)
+
+`store-listing-v1` is the public metadata contract for application submissions.
+SDK projects should use the following fixed layout:
 
 ```text
 my-app/
@@ -12,10 +16,12 @@ my-app/
       screen-1.png
 ```
 
-`listing.json` 中的资源路径相对于 `store/` 目录。路径必须是安全的 ASCII 相对 PNG 路径，
-不能包含 `..`、反斜线或空组件。开发者私钥和 Store 签名不属于这个目录。
+Resource paths in `listing.json` are relative to the `store/` directory. Each
+path must be a safe ASCII relative path to a PNG file and must not contain `..`,
+backslashes, or empty components. Developer private keys and Store signatures
+do not belong in this directory.
 
-## 示例
+## Example
 
 ```json
 {
@@ -56,38 +62,52 @@ my-app/
 }
 ```
 
-## 冻结边界
+## Frozen Contract
 
-- Listing JSON 最大 32 KiB，拒绝未知字段。
-- `app_id` 和 `version` 必须与开发者签名 `.capp` 内的 manifest 完全一致。
-- locale 采用有界的规范 BCP 47 子集，例如 `en`、`en-US`、`zh-Hans-CN`、`es-419`。
-- 最多 8 个 locale；必须按 locale 排序且包含 `default_locale`。
-- 每个 locale 最多 8 个关键词；关键词必须唯一并按字典序排序。
-- 分类固定为 `developer-tools`、`education`、`entertainment`、`games`、`hardware`、
-  `media`、`productivity`、`utilities`。
-- 年龄分级固定为 `4+`、`9+`、`12+`、`17+`，开发者声明仍需审核确认。
-- 图标固定为 48x48 PNG、最大 64 KiB；1-5 张截图固定为 320x170 PNG、每张最大
-  512 KiB。
-- 隐私和支持链接必须使用 HTTPS，禁止凭据、fragment、空白和控制字符。
+- Listing JSON is limited to 32 KiB, and unknown fields are rejected.
+- `app_id` and `version` must exactly match the manifest in the
+  developer-signed `.capp`.
+- Locales use a bounded canonical subset of BCP 47, such as `en`, `en-US`,
+  `zh-Hans-CN`, and `es-419`.
+- A listing may contain at most 8 locales. They must be sorted by locale and
+  include `default_locale`.
+- Each locale may contain at most 8 keywords. Keywords must be unique and
+  sorted lexicographically.
+- Categories are limited to `developer-tools`, `education`, `entertainment`,
+  `games`, `hardware`, `media`, `productivity`, and `utilities`.
+- Age ratings are limited to `4+`, `9+`, `12+`, and `17+`; the developer's
+  declaration remains subject to review.
+- The icon must be a 48x48 PNG no larger than 64 KiB. A listing must contain
+  1-5 screenshots, each a 320x170 PNG no larger than 512 KiB.
+- Privacy and support URLs must use HTTPS and must not contain credentials,
+  fragments, spaces, or control characters.
 
-JSON schema 位于 `schemas/store-listing-v1.schema.json`，共享严格验证器位于
-`cp0-store-metadata` crate。开发者签名包和 Listing 准备好后运行：
+The JSON schema is in `schemas/store-listing-v1.schema.json`, and the shared
+strict validator is in the `cp0-store-metadata` crate. After preparing the
+developer-signed package and listing, run:
 
 ```sh
 cp0ctl store validate dev.cardputerzero.notes-1.2.0.signed.capp store/listing.json
 ```
 
-该命令验证开发者签名、包/Listing 身份、资源路径、PNG 结构与像素，并复算资源大小和
-SHA-256；它拒绝已经带有 Store 签名的提交。扫描 worker 仍会在隔离环境中独立重复验证
-并完整解码资源，再把 Listing、资源和包摘要绑定为一个 Submission revision。仅通过
-本地预检不能发布应用。
+This command verifies the developer signature, package/listing identity,
+resource paths, PNG structure, and pixel dimensions, then recalculates resource
+sizes and SHA-256 digests. It rejects submissions that already carry a Store
+signature. The scan worker independently repeats verification and fully decodes
+the resources in an isolated environment, binding the listing, resources, and
+package summary into one submission revision. Passing the local precheck alone
+does not make an application eligible for publication.
 
-Developer Portal 注册 App ID 后，可以通过 OAuth Device Flow 提交同一组文件：
+After registering an App ID in the Developer Portal, submit the same files using
+OAuth Device Flow:
 
 ```sh
 cp0ctl store submit dev.cardputerzero.notes-1.2.0.signed.capp store/listing.json
 ```
 
-授权说明写入 stderr；成功时 stdout 只输出包含 `submission_id`、`state`、`content_sha256`
-和 `portal_url` 的 JSON。上传按 256 KiB 分片重试，token 只保存在进程内存。正式端点固定为
-`https://developer.cardputerzero.dev`；开发环境可通过 `CP0_STORE_API` 指定另一个 HTTPS origin。
+Authorization instructions are written to stderr. On success, stdout emits only
+JSON containing `submission_id`, `state`, `content_sha256`, and `portal_url`.
+Uploads retry in 256 KiB chunks, and the token is kept only in process memory.
+The production endpoint is fixed at `https://developer.cardputerzero.dev`;
+development environments may use `CP0_STORE_API` to specify another HTTPS
+origin.

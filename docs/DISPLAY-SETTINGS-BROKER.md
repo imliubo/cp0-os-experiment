@@ -1,5 +1,8 @@
 # Display settings broker v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](DISPLAY-SETTINGS-BROKER.zh-CN.md)
+
 `cp0-displayd` is the first privileged settings provider used by the trusted
 System Shell. It is not an application capability and has no SDK or Runtime
 host call. Applications cannot request, probe or inherit display control.

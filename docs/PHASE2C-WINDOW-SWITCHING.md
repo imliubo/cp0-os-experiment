@@ -1,5 +1,8 @@
 # Phase 2C: Single-foreground window switching
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE2C-WINDOW-SWITCHING.zh-CN.md)
+
 ## Window policy
 
 The compositor policy now owns three explicit layers:

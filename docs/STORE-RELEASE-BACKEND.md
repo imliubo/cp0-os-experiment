@@ -1,5 +1,8 @@
 # Store Release Backend
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-RELEASE-BACKEND.zh-CN.md)
+
 S5F adds the developer-facing PostgreSQL and HTTP control path for a reviewed
 Store version. It runs outside the device image and does not hold Store signing
 keys.

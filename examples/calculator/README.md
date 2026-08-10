@@ -1,5 +1,8 @@
 # Calculator
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Calculator is a permission-free, built-in arithmetic application for the
 CardputerZero keyboard. It performs bounded signed integer arithmetic and
 shows division-by-zero errors in the display.

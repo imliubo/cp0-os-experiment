@@ -1,5 +1,8 @@
 # CardputerZero application developer guide
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](DEVELOPER-GUIDE.zh-CN.md)
+
 ## Application model
 
 CardputerZero applications are WebAssembly modules built against the platform

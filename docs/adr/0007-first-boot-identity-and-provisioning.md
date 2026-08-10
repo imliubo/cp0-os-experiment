@@ -1,5 +1,8 @@
 # ADR 0007: first-boot identity and provisioning
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](0007-first-boot-identity-and-provisioning.zh-CN.md)
+
 - Status: accepted; implemented behind fresh-media acceptance gate
 - Date: 2026-08-02
 

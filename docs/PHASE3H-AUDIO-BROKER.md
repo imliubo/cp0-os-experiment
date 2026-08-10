@@ -1,5 +1,8 @@
 # Phase 3H: Restricted audio broker
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3H-AUDIO-BROKER.zh-CN.md)
+
 ## Scope
 
 The audio API provides bounded synchronous PCM playback and capture operations

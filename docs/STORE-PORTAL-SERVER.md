@@ -1,5 +1,8 @@
 # Store Portal Server
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-PORTAL-SERVER.zh-CN.md)
+
 `cp0-store-portal-server` is the browser-facing authentication BFF for the
 Developer Portal. It terminates the Portal session, performs external OpenID
 Connect Authorization Code + PKCE exchanges, and reads the Store identity

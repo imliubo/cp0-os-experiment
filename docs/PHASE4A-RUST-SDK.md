@@ -1,5 +1,8 @@
 # Phase 4A: Rust SDK foundation
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE4A-RUST-SDK.zh-CN.md)
+
 ## Public application API
 
 `sdk/rust` is the first supported CardputerZero application SDK. It is a

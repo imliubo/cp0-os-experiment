@@ -1,5 +1,8 @@
 # Store Update Queue v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-UPDATE-QUEUE-V1.zh-CN.md)
+
 S7B adds an explicit, bounded Update All operation without introducing parallel
 downloads or weakening the signed Catalog identity used for installation. A
 single application install and an Update All batch use the same daemon-owned

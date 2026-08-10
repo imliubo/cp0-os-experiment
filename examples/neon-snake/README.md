@@ -1,5 +1,8 @@
 # Neon Snake
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Neon Snake is a complete CardputerZero SDK 1.0 application. It renders a
 320x150 RGB565 surface below the trusted system status bar, reads only focused
 keyboard events and stores the best score in the application's isolated

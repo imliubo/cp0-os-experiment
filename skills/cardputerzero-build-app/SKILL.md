@@ -5,6 +5,9 @@ description: Build, modify, debug, simulate, package, sign, pair, deploy, and su
 
 # Build CardputerZero Apps
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](SKILL.zh-CN.md)
+
 Use the supported SDK and `cp0ctl`; never target Raspberry Pi Linux APIs,
 desktop frameworks, device nodes, sockets, shell commands, DRM, evdev or WASI.
 Applications are isolated WebAssembly modules and receive only declared broker

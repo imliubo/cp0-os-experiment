@@ -1,5 +1,8 @@
 # CardputerZero App Icon Specification v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](APP-ICON-SPEC-V1.zh-CN.md)
+
 The Apps screen has two user-selectable views. Pressing Tab at the Apps root
 switches between List and Grid without changing the selected application.
 

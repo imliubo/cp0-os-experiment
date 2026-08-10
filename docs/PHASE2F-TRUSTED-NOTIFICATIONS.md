@@ -1,5 +1,8 @@
 # Phase 2F: Trusted notification banners
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE2F-TRUSTED-NOTIFICATIONS.zh-CN.md)
+
 ## Presentation contract
 
 Application notifications are queued by `appd`, but only the authenticated

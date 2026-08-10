@@ -1,5 +1,8 @@
 # Phase 2A: System Shell prototype
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE2-SYSTEM-SHELL.zh-CN.md)
+
 ## Scope
 
 Phase 2A replaces the diagnostic `weston-simple-shm` startup client with a

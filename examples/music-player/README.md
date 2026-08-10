@@ -1,5 +1,8 @@
 # Music
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Music is the production audio player example for SDK 1.1. It streams 16-bit,
 48 kHz, stereo PCM WAV audio without loading the whole track into App memory.
 Playback combines bounded document reads into 40 ms audio chunks to tolerate

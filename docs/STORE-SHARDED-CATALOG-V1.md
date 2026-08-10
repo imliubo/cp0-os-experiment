@@ -1,5 +1,8 @@
 # Store Sharded Catalog v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-SHARDED-CATALOG-V1.zh-CN.md)
+
 S6E extends Store discovery beyond the legacy 64-application Catalog without
 changing the legacy signed bytes or signature domain. A generation containing
 at most 64 applications continues to publish the v1-v4 `SignedCatalog` at

@@ -1,5 +1,8 @@
 # Phase 6A: immutable root and persistent data
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE6A-IMMUTABLE-ROOT.zh-CN.md)
+
 ## Image layout
 
 Product images use an MBR partition table with three aligned partitions:

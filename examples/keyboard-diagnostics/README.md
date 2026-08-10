@@ -1,5 +1,8 @@
 # Keyboard Diagnostics
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 This focused SDK application records the keyboard events delivered through the
 trusted Runtime input boundary. It does not open evdev and does not modify the
 keyboard configuration.

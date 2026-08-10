@@ -1,5 +1,8 @@
 # Owner USB Media Transfer v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](OWNER-MEDIA-TRANSFER-V1.zh-CN.md)
+
 Owner USB Media Transfer is the product workflow for copying Camera and
 Screenshot photos to a computer and importing local music. It uses USB Mass
 Storage only for a dedicated exchange image. It never exports a mounted device

@@ -1,5 +1,8 @@
 # Store Review Risk Policy
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-RISK-POLICY.zh-CN.md)
+
 Store risk is reviewer guidance derived from the immutable Scanner result. It is
 not supplied by the developer or calculated by the Review Console.
 

@@ -1,5 +1,8 @@
 # Store search privacy v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-SEARCH-PRIVACY-V1.zh-CN.md)
+
 S8D freezes Store search as an on-device operation. A query travels only from
 the trusted System Shell to `cp0-stored` over the local Unix socket. The daemon
 ranks applications from the already verified Catalog in memory and returns a

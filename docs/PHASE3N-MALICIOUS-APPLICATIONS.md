@@ -1,5 +1,8 @@
 # Phase 3N: Malicious application regression set
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3N-MALICIOUS-APPLICATIONS.zh-CN.md)
+
 The negative test set makes the application isolation contract independently
 repeatable instead of relying only on a successful example application.
 

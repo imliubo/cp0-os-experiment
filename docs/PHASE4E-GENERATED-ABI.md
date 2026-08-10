@@ -1,5 +1,8 @@
 # Phase 4E: generated host ABI
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE4E-GENERATED-ABI.zh-CN.md)
+
 ## One flat contract
 
 `sdk/abi/cardputerzero-hostcalls-v1.json` is the canonical WAMR import contract.

@@ -1,5 +1,8 @@
 # App Troubleshooting
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](troubleshooting.zh-CN.md)
+
 ## Doctor fails
 
 - Missing `sdk/rust` or simulator: `CP0_DEVKIT_ROOT` points at the wrong level

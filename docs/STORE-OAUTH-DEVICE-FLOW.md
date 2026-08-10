@@ -1,5 +1,8 @@
 # Store OAuth Device Flow
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-OAUTH-DEVICE-FLOW.zh-CN.md)
+
 S5I implements the developer authorization path used by `cp0ctl store submit`.
 It follows the OAuth Device Authorization Grant polling model while keeping the
 control plane's existing PostgreSQL identity, RBAC, 2FA, audit, and outbox

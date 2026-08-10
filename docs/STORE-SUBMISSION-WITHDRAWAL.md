@@ -1,5 +1,8 @@
 # Store Submission Withdrawal
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-SUBMISSION-WITHDRAWAL.zh-CN.md)
+
 S5J implements the frozen `POST /v1/submissions/{submission_id}:withdraw`
 control-plane operation. Withdrawal closes one immutable revision; it does not
 delete uploaded content or rewrite its history.

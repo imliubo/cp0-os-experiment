@@ -1,5 +1,8 @@
 # ADR 0006: verified OS updates and rollback
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](0006-verified-updates-and-rollback.zh-CN.md)
+
 - Status: accepted architecture; hardware enablement deferred
 - Date: 2026-07-31
 

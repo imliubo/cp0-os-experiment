@@ -1,5 +1,8 @@
 # Store Install Preflight v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-INSTALL-PREFLIGHT-V1.zh-CN.md)
+
 S7D makes permission consent, device policy, and storage capacity mandatory
 before a Store download is accepted. The System Shell is the trusted consent
 surface; applications cannot connect to `cp0-stored`, and root remains an

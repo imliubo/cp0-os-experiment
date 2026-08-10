@@ -1,5 +1,8 @@
 # ADR 0004: Weston trusted compositor policy
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](0004-trusted-compositor-policy.zh-CN.md)
+
 - Status: Accepted
 - Date: 2026-07-30
 

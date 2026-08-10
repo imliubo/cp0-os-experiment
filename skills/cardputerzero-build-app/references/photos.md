@@ -1,5 +1,8 @@
 # Shared Photo Library
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](photos.zh-CN.md)
+
 Use this reference when an App captures, saves, lists, displays or deletes a
 photo. The library is a brokered SDK capability, not a filesystem or private
 storage namespace.

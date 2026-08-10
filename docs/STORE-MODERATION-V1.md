@@ -1,5 +1,8 @@
 # Store Moderation v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-MODERATION-V1.zh-CN.md)
+
 Status: engineering preview; production enforcement is disabled.
 
 This contract defines the privacy boundary and transactional state machines for

@@ -1,5 +1,8 @@
 # CardputerZero Photo Library v2
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHOTO-LIBRARY-V2.zh-CN.md)
+
 Camera and Gallery are production built-in WASM applications. They remain
 sandboxed and cannot access `/dev/video*`, an SD-card path, another App's data,
 or the photo-library files. appd rejects uninstall requests for

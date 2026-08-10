@@ -1,5 +1,8 @@
 # Store Review Backend
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-REVIEW-BACKEND.zh-CN.md)
+
 S5E adds the first PostgreSQL and HTTP vertical slice for human Store review.
 S5L extends it with mandatory independent secondary review and double approval.
 S8J adds the immutable review read model, bounded Submission detail API, and

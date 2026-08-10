@@ -1,5 +1,8 @@
 # Phase 2E: Installed application Launcher
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE2E-LAUNCHER-LIFECYCLE.zh-CN.md)
+
 ## Lifecycle model
 
 The System Shell no longer treats a mapped Wayland surface as an installed

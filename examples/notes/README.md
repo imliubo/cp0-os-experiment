@@ -1,5 +1,8 @@
 # Notes
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Notes is a compact, permission-free text editor. It accepts the printable
 CardputerZero ASCII layout, renders punctuation and letter case with the SDK
 font, and stores one bounded 192-byte draft in the app's isolated private

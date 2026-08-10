@@ -1,5 +1,8 @@
 # ADR 0005: Application sandbox lifecycle
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](0005-application-sandbox-lifecycle.zh-CN.md)
+
 - Status: accepted for Phase 3 implementation
 - Date: 2026-07-30
 

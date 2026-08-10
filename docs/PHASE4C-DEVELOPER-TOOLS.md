@@ -1,5 +1,8 @@
 # Phase 4C: simulator, deployment and logs
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE4C-DEVELOPER-TOOLS.zh-CN.md)
+
 ## PC run loop
 
 `cp0ctl run` builds only the SDK application and executes its WASM module with

@@ -1,5 +1,8 @@
 # Phase 3D: Controlled application display
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3D-CONTROLLED-DISPLAY.zh-CN.md)
+
 ## Security boundary
 
 Application accounts are not persistent members of `cp0-wayland`. Each

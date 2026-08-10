@@ -1,5 +1,8 @@
 # Trusted Screenshot Broker
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](SCREENSHOT-BROKER.zh-CN.md)
+
 ## Contract
 
 `Fn+J` is owned by the compositor and never reaches an application as a raw

@@ -1,5 +1,8 @@
 # Phase 6F: resource and performance acceptance
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE6F-RESOURCE-PERFORMANCE.zh-CN.md)
+
 Phase 6F turns the CM0 performance budget into enforced runtime limits and a
 repeatable local device report. It does not relax any application isolation
 boundary and its performance collector never uploads. The separate optional

@@ -1,5 +1,8 @@
 # CardputerZero App DevKit distribution
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](APP-DEVKIT-DISTRIBUTION.zh-CN.md)
+
 ## Release contract
 
 Every App SDK release has one version across the manifest contract, Rust/C/C++

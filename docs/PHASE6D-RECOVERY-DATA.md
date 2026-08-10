@@ -1,5 +1,8 @@
 # Phase 6D: bounded backup, restore and factory reset
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE6D-RECOVERY-DATA.zh-CN.md)
+
 ## Scope
 
 Phase 6D provides an offline operator workflow for the complete `cp0-data`

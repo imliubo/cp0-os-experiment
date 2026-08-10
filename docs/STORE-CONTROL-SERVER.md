@@ -1,5 +1,8 @@
 # Store Control Server
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-CONTROL-SERVER.zh-CN.md)
+
 `cp0-store-control-server` is the PostgreSQL and HTTP adapter for the frozen
 Store Control API. It is a developer/reviewer control-plane service and is not
 part of the CardputerZero device image.

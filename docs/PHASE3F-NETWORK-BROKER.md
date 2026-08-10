@@ -1,5 +1,8 @@
 # Phase 3F: Restricted HTTPS client broker
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3F-NETWORK-BROKER.zh-CN.md)
+
 ## Scope
 
 `network.client` provides one synchronous, bounded HTTPS GET operation. It is

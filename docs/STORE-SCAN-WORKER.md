@@ -1,5 +1,8 @@
 # Store Scan Worker
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-SCAN-WORKER.zh-CN.md)
+
 `cp0-store-scan-worker` consumes finalized Submission events and advances only
 verified content from `processing` to `ready-for-review`. It is a backend
 service and is never included in the CardputerZero device image.

@@ -1,5 +1,8 @@
 # Phase 4D: small-screen UI and reference applications
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE4D-SDK-UI-EXAMPLES.zh-CN.md)
+
 ## SDK UI surface
 
 The Rust SDK now includes an allocation-free RGB565 `Canvas` designed for the

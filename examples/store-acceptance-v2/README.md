@@ -1,5 +1,8 @@
 # Store Acceptance v2
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Store Acceptance v2 is the 1.1.0 upgrade payload used by the deterministic
 Store resume, update and persistence acceptance flow. It has no controls or
 permissions and is not intended as a user application.

@@ -1,5 +1,8 @@
 # Phase 5C: device policy and user-controlled modes
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE5C-DEVICE-POLICY.zh-CN.md)
+
 ## Policy boundary
 
 `/etc/cardputerzero/device-policy.json` is the root-owned upper bound for

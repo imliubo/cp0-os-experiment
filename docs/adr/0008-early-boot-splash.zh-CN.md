@@ -1,0 +1,112 @@
+# ADR 0008：V0.6 early boot splash 与静默启动
+
+<!-- doc-locale: zh-CN -->
+> [English](0008-early-boot-splash.md) | **简体中文**
+
+- 状态：Accepted
+- 日期：2026-08-06
+
+## 决策
+
+CM0 V0.6 product 镜像设置 `start_x=1`，使用 `raspi-firmware` 提供的
+`start_x.elf`/`fixup_x.dat`。initramfs 的 `init-top` 阶段首先运行静态、有界的
+`early-splash-spi`：它直接映射 BCM2837 的 `0x3f000000` peripheral window 中的
+SPI0/GPIO 寄存器，以与 V0.6 驱动一致的约
+20 MHz 时钟初始化 ST7789，并将固定的 108800-byte `splash.rgb565` 写入 panel RAM。
+这条路径不等待 DRM、udev、根分区、OverlayFS 或 systemd。随后启动非阻塞 framebuffer
+worker，在 Linux 驱动接管并可能重置 panel RAM 后重绘相同图片。最终 root 中的
+`cardputerzero-early-splash.service` 保留为 compositor 前的有界兜底。framebuffer
+worker 成功后会在 `/run/cardputerzero-early-splash/` 写入 boot-scoped marker；原子目录锁
+阻止 worker 与 systemd 兜底并发写屏，因此 DRM 接管后最多重绘一次。三层路径都不向 App
+暴露 framebuffer，失败时也不阻止 Home；recovery initramfs 不包含 helper、worker 或
+图片。
+
+peripheral base、SPI0 CS0、GPIO25 DC 和 35-line offset 来自 CardputerZero 官方
+`pi-gen` 的 `ci/early-splash` 分支提交
+`e05b81c80f1f5a8e589956937adba5b5d04f0ca9`。该实验原型只填充纯蓝色，使用的
+`MADCTL=0x60` 和最小初始化序列没有经过图片方向、gamma 或 display inversion 验证。
+2026-08-07 的 V0.6 真机复验确认它会使产品图片上下反转且颜色错误。direct-SPI helper
+现与固定 BSP `c3b254819307c177a34100b66fe19e52059ce8c4` 中
+`cardputerzero,st7789v_lcd.bin` 的控制器配置一致：使用 `MADCTL=0xa0`、完整
+power/gamma 参数和 display inversion，再将同一 RGB565_LE 产品图片按 MSB-first 写入。
+
+官方当前 `cardputerzero_v0.6` 镜像在 VideoCore `start.elf` 中显示 `splash.bmp`，因此
+能早于 ARM 内核出现；其固件 SHA256 仍为
+`d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd`。真机已经证明
+该固件强制 256/256 MB ARM/VideoCore 划分，不能为追求显示速度重新引入。本实现继续
+使用标准相机固件和 64/448 MB 预算，但把 SPI 发送改为有界的 TX/RX FIFO 流式泵送，
+不再每写一个字节就单独排空一次 RX FIFO；同时删除实验原型在 `DISPON` 后多出的
+20 ms 等待，因为固定 BSP 在该命令后会立即 flush。
+
+官方切换到该启动方式的参考提交是
+`CardputerZero/pi-gen@cc5a7375dfa903757b040e76a1e64e5b0dcf8e7f`。该提交只把
+U-Boot 替换成定制 `start.elf`，并安装 `splash.bmp`；它没有定义 Linux DRM、Weston
+和桌面之间的画面交接。保留在本仓库用于来源审计的二进制与该提交引入、后续
+`554544921c1659f39bf296b7986715fdeac898c8` 快照中未改变的文件哈希一致。
+
+## 持续显示交接
+
+product 启动不得在 direct-SPI、fbdev、Weston 和 Setup/Home 之间主动清屏。具体顺序为：
+
+1. initramfs direct-SPI helper 尽早写入产品图片；
+2. DRM fbdev 出现后，后台 worker 用同一份 RGB565 图片重绘，以覆盖驱动 probe 对
+   panel RAM 的重置；
+3. `cardputerzero-display-retry.service` 只等待冷启动 LCD 稳定点，并在此期间保留
+   framebuffer 内容；它不得再停止或重启 Weston；
+4. Weston 只启动一次，并立即 autolaunch 由 `cp0-compositor` 运行的受信任
+   `os.cardputerzero.boot-splash` Wayland 客户端；
+5. `unblank-display.sh` 等待该 surface 的首个 frame callback，再恢复可能为 0 的背光；
+6. compositor policy 仅在完整的受信任 System Shell surface 已映射后隐藏 splash，
+   因而 Setup 或 Home 的第一帧直接替换同一张图片。
+
+Wayland splash 使用独立的 `WESTON_LAYER_POSITION_UI` layer，不注册为 App，也不进入
+Apps 或 Tasks。app-id 本身不是授权：policy 同时校验客户端必须属于
+`cp0-compositor` UID，普通应用不能伪装成启动画面。如果 System Shell 在启动交接时
+退出，policy 会重新显示仍存活的 splash，而不是暴露黑色背景或其他应用内容。
+
+helper 是正常 initramfs 中的有界程序，读取经过哈希固定的产品图片，保留标准
+initramfs 的 root discovery、数据扩容和 OverlayFS 链路。它自身通过 `alarm(2)` 终止
+异常寄存器访问，调用脚本另有 BusyBox `timeout -s KILL 2` 兜底；SPI 空闲等待和 RX
+FIFO 轮询同样有次数上限，因此任何 LCD 失败都只能跳过 splash，不能阻断启动。
+
+不再打包 M5Stack `m5stack_bootscreen` 固件。其历史 SHA256
+`d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd`
+由构建阶段和最终 rootfs 门禁明确拒绝；标准固件版本则记录在每份镜像的软件包清单中。
+
+product cmdline 使用 `quiet loglevel=3 logo.nologo`、
+`vt.global_cursor_default=0`、`fbcon=map:off`、`systemd.show_status=false` 和
+`rd.systemd.show_status=false`，且不启用 LCD console banner。recovery 镜像保留
+`loglevel=6 fbcon=map:1` 与启动摘要。运行时 Recovery Mode 通过固定 helper 将 tty1
+映射到 udev 管理的 `/dev/fb_lcd`，不依赖 HDMI/LCD 的 framebuffer 枚举顺序。
+
+## 理由
+
+供应商固件可以在 ARM 内核前初始化 ST7789，但 2026-08-06 真机证明它忽略
+`gpu_mem_512=64` 并强制 256 MB VideoCore，Linux 只获得约 227 MiB。这个代价破坏
+512 MB CM0 的 App 容量、性能门禁和 ADR 0003，不能接受。product 已用
+`quiet loglevel=3 logo.nologo fbcon=map:off` 隐藏内核和 console 输出，因此在 Linux
+直接 SPI helper 执行前保持黑屏，随后立即显示 splash，不会把启动日志暴露到 LCD，
+也不必等待 framebuffer、可写数据分区或用户空间服务。
+
+Circle bare-metal splash 可以从源码构建，但当前稳定实现需要重命名内核、写 FAT32
+并二次重启。它增加冷启动时间和掉电窗口，不作为 product 默认链路。Linux initramfs
+直接 SPI helper 已进入 ARM 内核的 initramfs 阶段，仍晚于 VideoCore 固件方案，但早于
+任何 Linux 显示驱动；它保留标准可维护固件、正确内存划分和单次启动。后续 worker 在
+后台轮询，不能延迟 root discovery 或首次启动的数据分区扩容。
+
+## 后果
+
+每次 `raspi-firmware` 更新仍须完成 V0.6 冷启动、无 HDMI/有 HDMI、IMX219、LCD
+方向与色彩、64/448 MB 划分、正常重启、意外掉电和 recovery console 验收。镜像门禁
+验证标准 `start_x` 选择、固件文件存在、旧供应商哈希不存在，以及 splash 的精确大小
+和哈希，并确认 `early-splash-spi` 为静态 ARM64 可执行文件且存在于 product initramfs、
+不存在于 recovery initramfs。
+
+product 的正常启动不再在 LCD 显示 IP、登录提示或内核错误。诊断依赖 Home、网络
+租约、mDNS、Owner 授权的 SSH，或显式 recovery 镜像/Recovery Mode。recovery 镜像
+仍保留完整可见控制台，避免 splash 策略消除本地修复路径。
+
+静态和构建门禁验证不存在 compositor restart/stop 启动路径、Wayland splash 的固定
+尺寸和资源路径、受信任 UID 检查、首帧 marker，以及 System Shell 的启动顺序。最终
+结论仍必须以 V0.6 冷启动录像或连续观测为准，因为 panel RAM、DRM atomic modeset 和
+背光控制之间的交接无法由 host 测试证明。

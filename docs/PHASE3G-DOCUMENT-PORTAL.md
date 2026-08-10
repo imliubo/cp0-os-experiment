@@ -1,5 +1,8 @@
 # Phase 3G: Restricted Document Portal
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3G-DOCUMENT-PORTAL.zh-CN.md)
+
 ## Scope
 
 The first Document Portal implementation lets a WASM application request one

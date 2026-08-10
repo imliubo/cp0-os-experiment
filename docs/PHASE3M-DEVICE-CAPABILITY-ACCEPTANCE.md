@@ -1,5 +1,8 @@
 # Phase 3M: Device capability acceptance
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3M-DEVICE-CAPABILITY-ACCEPTANCE.zh-CN.md)
+
 The Phase 3 device gate uses real SDK applications rather than privileged test
 requests. `dev.cardputerzero.acceptance` and
 `dev.cardputerzero.isolation` are developer-signed acceptance packages that

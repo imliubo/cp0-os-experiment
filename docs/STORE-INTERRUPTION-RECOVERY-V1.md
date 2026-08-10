@@ -1,5 +1,8 @@
 # Store Interruption Recovery v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-INTERRUPTION-RECOVERY-V1.zh-CN.md)
+
 S7E defines recovery at each durable boundary of a Store installation. Recovery
 never trusts process memory, a partial file name supplied by a client, or an
 ambiguous appd response. A retry always starts with a new S7D preflight and

@@ -1,5 +1,8 @@
 # Store aggregate metrics v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-METRICS-V1.zh-CN.md)
+
 S8B adds an optional Store quality signal without creating a device identity or
 uploading raw activity. Consent defaults to off. The device keeps only bounded
 weekly counters for exact published application versions and sends only the

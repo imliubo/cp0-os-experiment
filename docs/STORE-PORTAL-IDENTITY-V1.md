@@ -1,5 +1,8 @@
 # Store Portal Identity v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-PORTAL-IDENTITY-V1.zh-CN.md)
+
 ## Boundary
 
 The Developer Portal is a browser application behind a dedicated BFF. The BFF

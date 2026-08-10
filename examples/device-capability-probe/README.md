@@ -1,5 +1,8 @@
 # Device Capability Probe
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Device Capability Probe is an automated factory and acceptance application. It
 tests bounded audio playback, microphone capture, the logical Grove GPIO line
 and private-storage quota behavior. It is not intended as a user application.

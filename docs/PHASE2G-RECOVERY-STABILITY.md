@@ -1,5 +1,8 @@
 # Phase 2G: Core recovery and stability acceptance
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE2G-RECOVERY-STABILITY.zh-CN.md)
+
 ## Recovery contract
 
 `device-core-recovery.sh` exercises the three trusted long-running services on

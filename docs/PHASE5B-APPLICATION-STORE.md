@@ -1,5 +1,8 @@
 # Phase 5B: reviewed application store
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE5B-APPLICATION-STORE.zh-CN.md)
+
 ## Trust chain
 
 The store never turns a network response directly into an installed

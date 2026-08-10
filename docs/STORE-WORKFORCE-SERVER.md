@@ -1,5 +1,8 @@
 # Store Workforce Server
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-WORKFORCE-SERVER.zh-CN.md)
+
 `cp0-store-workforce-server` is the browser authentication BFF for Review Console and Store
 Operations. It runs independently from the Store control server and Developer Portal. Review and
 Operations share implementation but never share origins, cookies, sessions, callback URIs or Store

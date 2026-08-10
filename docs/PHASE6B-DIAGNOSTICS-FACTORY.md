@@ -1,5 +1,8 @@
 # Phase 6B: privacy-preserving diagnostics and factory acceptance
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE6B-DIAGNOSTICS-FACTORY.zh-CN.md)
+
 ## Policy
 
 CardputerZero diagnostic and support tooling does not upload telemetry.

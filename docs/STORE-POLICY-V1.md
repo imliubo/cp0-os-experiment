@@ -1,59 +1,86 @@
 # Store Policy v1
 
-本文件是 CardputerZero Store 首版审核和运营的工程政策基线，适用于免费应用。它定义可自动
-执行的最低规则和结构化原因码，但不替代目标市场的开发者协议、隐私政策或法律意见；生产
-开放前仍需产品、安全和法务共同签署。
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-POLICY-V1.zh-CN.md)
 
-## 1. 内容与行为
+This document is the engineering policy baseline for review and operations in the first
+CardputerZero Store release, which supports free apps only. It defines minimum enforceable
+rules and structured reason codes, but does not replace developer terms, privacy policy, or
+legal advice for a target market. Product, security, and legal owners must approve the final
+production policy before public launch.
 
-应用不得包含或促成以下行为：
+## 1. Content and Behavior
 
-- 恶意代码、凭据窃取、未声明下载执行、沙箱逃逸、权限绕过或干扰可信 System Shell；
-- 欺骗性身份、仿冒系统权限提示、伪造安装/安全状态或隐瞒核心功能；
-- 未经授权收集、出售或关联个人数据，设备指纹，或把敏感数据放入 URL/日志；
-- 违法内容、明确的人身伤害指导、骚扰仇恨、儿童性剥削或未经许可的知识产权内容；
-- 在没有安全约束和清晰风险说明时控制可能造成人身/财产损害的 GPIO、无线电或外设；
-- 绕过地区频率、发射功率、出口管制或其他硬件合规限制；
-- 首版不支持的支付、订阅、博彩、真实货币交易、广告归因或加密资产托管。
+An app must not contain or facilitate:
 
-应用必须能在描述的离线/联网条件下完成核心功能，不能把空壳、网站快捷方式、调试探针或
-仅用于测试权限的包作为面向普通用户的正式应用。开发/验收工具可以通过明确的私有分发渠道
-提供，不进入公开榜单。
+- malware, credential theft, undeclared download-and-execute behavior, sandbox escape,
+  permission bypass, or interference with trusted System Shell;
+- deceptive identity, imitation system permission prompts, forged install/security state,
+  or concealment of core behavior;
+- unauthorized collection, sale, or correlation of personal data, device fingerprinting,
+  or disclosure of sensitive data through URLs or logs;
+- illegal content, explicit instructions for physical harm, harassment or hate, child sexual
+  exploitation, or unlicensed intellectual property;
+- control of GPIO, radio, or peripherals that could cause physical or property damage without
+  safety bounds and a clear risk explanation;
+- bypass of regional frequency, transmit-power, export-control, or other hardware-compliance
+  limits;
+- payments, subscriptions, gambling, real-money transactions, advertising attribution, or
+  crypto-asset custody, none of which the first release supports.
 
-## 2. 隐私
+An app must perform its core function under the offline/network conditions described in its
+Listing. Empty shells, website shortcuts, debug probes, and permission-test-only packages
+must not be published as ordinary user apps. Development and acceptance tools may use an
+explicit private distribution channel and do not appear in public rankings.
 
-- Listing 必须提供可公开访问的 HTTPS 隐私链接，即使应用声明“不收集数据”。
-- 每项 manifest 权限必须有与实际功能一致的用户可理解理由；未使用权限必须移除。
-- `network.client` 不意味着允许发送其他能力获得的数据。审核会检查数据类型、目的、接收方、
-  保留期限和删除方式。
-- 不得收集键盘输入、文档、麦克风、相机、GPIO、LoRa 数据或稳定设备标识用于跨应用/跨服务
-  跟踪，除非它是用户主动请求功能所必需且政策另行批准。
-- 应用私有数据默认只留在设备；对外传输必须最小化、使用 HTTPS，并在隐私说明中准确披露。
-- Store 搜索词不上传。Store 遥测首版默认关闭；未来聚合指标需单独同意、去标识化和固定保留期。
-- 支持或审核材料不得要求开发者提交真实用户数据；复现数据必须合成或明确脱敏。
+## 2. Privacy
 
-隐私说明、manifest 权限或实际网络行为任一变化都创建新的 Submission revision 并重新审核。
+- Every Listing provides a publicly accessible HTTPS privacy URL, including when the app
+  declares that it collects no data.
+- Every manifest permission has a user-comprehensible reason consistent with actual behavior;
+  unused permissions are removed.
+- `network.client` does not authorize transmission of data obtained through another
+  capability. Review covers data type, purpose, recipient, retention, and deletion.
+- Keyboard input, documents, microphone, camera, GPIO, LoRa data, and stable device
+  identifiers must not be collected for cross-app or cross-service tracking unless required
+  for a user-requested function and separately approved by policy.
+- App-private data remains on the device by default. External transfer is minimized, uses
+  HTTPS, and is accurately disclosed in the privacy statement.
+- Store search terms are not uploaded. Store telemetry is disabled by default in the first
+  release; future aggregate metrics require separate consent, de-identification, and a fixed
+  retention period.
+- Support or review materials must not require real user data. Reproduction data is synthetic
+  or explicitly redacted.
 
-## 3. 年龄分级
+A change to the privacy statement, manifest permissions, or actual network behavior creates
+a new Submission revision and requires another review.
 
-开发者从 `4+`、`9+`、`12+`、`17+` 中声明等级，审核员根据暴力、恐惧、成人主题、用户生成
-内容、外部网页和不受控通信能力上调。应用描述和截图必须适合其展示等级。首版不提供家长
-账户或购买控制，因此无法通过设备设置降低本政策要求。
+## 3. Age Rating
 
-## 4. 审核流程
+The developer declares `4+`, `9+`, `12+`, or `17+`. Reviewers raise the rating as required by
+violence, fear, mature themes, user-generated content, external web pages, or uncontrolled
+communication. Descriptions and screenshots must be appropriate for the displayed rating.
+The first release has no parental account or purchase controls, so device settings cannot
+weaken this policy.
 
-自动扫描在无网络、限 CPU/RAM/时间的环境中验证：
+## 4. Review Process
 
-- `.capp` 格式、开发者签名、manifest、WASM/AOT、imports 和权限绑定；
-- Listing schema、本地化、资源摘要、PNG 完整解码、尺寸和恶意样本；
-- 与上一公开版本的权限、imports、网络目标和二进制差异；
-- 已知恶意摘要、秘密/凭据泄漏、异常压缩和解析器差异。
+Automated scanning runs without network access and with bounded CPU, RAM, and time. It checks:
 
-人工审核验证 Listing 与实际功能一致、键盘流程可完成、320x170 无关键遮挡、权限在正确时机
-触发、隐私说明准确。`audio.capture`、`camera.capture`、`hardware.gpio`、`radio.lora` 以及安全
-例外要求第二名审核员批准。
+- `.capp` format, developer signature, manifest, WASM/AOT, imports, and permission binding;
+- Listing schema, localization, resource digests, complete PNG decoding, dimensions, and
+  malicious fixtures;
+- permission, import, network-target, and binary differences from the previous published
+  version;
+- known malicious digests, leaked secrets/credentials, abnormal compression, and parser
+  differentials.
 
-审核决定使用稳定原因码，至少包括：
+Manual review verifies that the Listing matches behavior, the keyboard workflow can be
+completed, no critical content is obscured at 320x170, permissions trigger at the right time,
+and the privacy statement is accurate. `audio.capture`, `camera.capture`, `hardware.gpio`,
+`radio.lora`, and security exceptions require approval from a second reviewer.
+
+Review decisions use stable reason codes including at least:
 
 ```text
 content-illegal              metadata-misleading
@@ -65,39 +92,49 @@ age-rating-incorrect         asset-invalid
 package-invalid              duplicate-or-spam
 ```
 
-`needs-changes` 和 `rejected` 必须包含字段级原因与可操作说明；安全检测细节可以限量披露，避免
-帮助绕过扫描。开发者回复是 append-only；修改任何提交对象必须创建新 revision。审核员不能
-直接修改开发者文案、资源或包。
+`needs-changes` and `rejected` include field-level reasons and actionable guidance. Security
+detection detail may be limited to avoid helping evasion. Developer replies are append-only;
+changing any submitted object requires a new revision. Reviewers cannot directly edit
+developer copy, resources, or packages.
 
-## 5. 发布、暂停与下架
+## 5. Publication, Pause, and Removal
 
-只有 `APPROVED` submission 可以创建 Release。运营推荐只能引用可发布 Release，不能绕过
-审核。以下情况可以暂停或下架：
+Only an `APPROVED` Submission can create a Release. Editorial placement can reference only a
+releasable Release and cannot bypass review. A Release may be paused or removed for:
 
-- 开发者主动撤回；
-- 严重崩溃、数据损坏或与当前 OS 不兼容；
-- 隐私、内容、知识产权或地区合规问题；
-- 开发者 key 泄漏、恶意行为或正在利用的安全漏洞；
-- 法律命令或可信的紧急安全响应。
+- developer withdrawal;
+- severe crashes, data corruption, or incompatibility with the current OS;
+- privacy, content, intellectual-property, or regional-compliance issues;
+- developer-key compromise, malicious behavior, or an actively exploited vulnerability;
+- a legal order or trusted emergency-security response.
 
-普通暂停/下架通过更高 sequence Catalog 停止新的发现、安装和更新，不覆盖或删除不可变发布
-对象。已经安装的应用和私有数据不会被 Store 静默删除。若已安装版本构成立即风险，安全团队
-必须使用单独签名的设备策略/OS 更新阻止启动，保留审计证据，并向用户明确说明影响与数据
-恢复方式。
+Ordinary pause/removal stops new discovery, installation, and update through a
+higher-sequence Catalog. It neither overwrites nor deletes immutable publication objects.
+The Store does not silently remove installed apps or their private data. If an installed
+version presents an immediate risk, the security team uses separately signed device policy
+or an OS update to block launch, retains audit evidence, and clearly explains the impact and
+data-recovery path to users.
 
-紧急操作至少记录 actor、双人批准或紧急例外、原因、对象摘要、受影响地区、Catalog sequence
-和通知状态。恢复可见性同样需要更高 sequence，不能复用或回滚旧 Catalog。
+An emergency action records at least the actor, dual approval or emergency exception, reason,
+object digest, affected region, Catalog sequence, and notification status. Restoring
+visibility also requires a higher sequence; an old Catalog cannot be reused or rolled back.
 
-## 6. 申诉与透明度
+## 6. Appeals and Transparency
 
-开发者可以对审核或下架提交一次结构化申诉，由未作出原决定的审核员处理；安全紧急处置在
-风险解除前不因申诉自动暂停。所有决定、回复、升级和策略例外保留不可修改时间线。
+A developer may file one structured appeal of a review or removal. A reviewer who did not
+make the original decision handles it. An appeal does not automatically suspend emergency
+security action before the risk is resolved. Every decision, reply, escalation, and policy
+exception remains on an immutable timeline.
 
-Store 定期发布聚合透明度数据：提交量、各原因码决定量、申诉结果、紧急下架和平均处理时间，
-不公开开发者秘密、漏洞细节或用户数据。审核公平性和误报率进入独立复盘。
+The Store periodically publishes aggregate transparency data: submission volume, decisions
+by reason code, appeal outcomes, emergency removals, and average handling time. It does not
+publish developer secrets, vulnerability details, or user data. Review fairness and false
+positive rates receive an independent retrospective.
 
-## 7. 生产门禁
+## 7. Production Gates
 
-公开上线前必须完成：政策/隐私/开发者协议的正式版本与变更通知机制；审核员培训和访问审计；
-举报、知识产权、儿童安全、执法请求和安全事件值班流程；地区适用性确认；数据保留/删除作业；
-以及一次下架、申诉、Catalog 撤回和已安装恶意版本阻断演练。
+Before public launch, complete: final policy/privacy/developer terms and a change-notification
+mechanism; reviewer training and access audits; on-call procedures for reports, intellectual
+property, child safety, law-enforcement requests, and security incidents; regional
+applicability review; data retention/deletion jobs; and a drill covering removal, appeal,
+Catalog withdrawal, and blocking an already installed malicious version.

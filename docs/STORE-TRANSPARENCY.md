@@ -1,5 +1,8 @@
 # Store Publication Transparency Log
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-TRANSPARENCY.zh-CN.md)
+
 S5H adds a bounded append-only transparency record for every committed Catalog
 snapshot. Its purpose is to make publication history independently
 recomputable: publishing, pausing, resuming and removing a Release all produce a

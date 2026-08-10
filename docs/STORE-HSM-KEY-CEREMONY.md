@@ -1,5 +1,8 @@
 # Store HSM key ceremony evidence
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-HSM-KEY-CEREMONY.zh-CN.md)
+
 The production Store signing key must be generated, rotated, revoked and
 destroyed inside an HSM boundary. This document defines the provider-neutral
 evidence contract. It does not authorize a production ceremony or select an HSM

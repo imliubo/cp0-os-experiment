@@ -1,5 +1,8 @@
 # App Development Workflows
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](workflows.zh-CN.md)
+
 ## Rust
 
 Select `cp0ctl` from an extracted DevKit:

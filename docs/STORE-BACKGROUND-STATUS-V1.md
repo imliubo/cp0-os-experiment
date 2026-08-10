@@ -1,5 +1,8 @@
 # Store Background Status v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-BACKGROUND-STATUS-V1.zh-CN.md)
+
 S7C keeps an accepted Store operation visible after the user leaves the Store
 page and produces a trusted completion notification. It does not add background
 or automatic update policy: every install still begins with an explicit user or

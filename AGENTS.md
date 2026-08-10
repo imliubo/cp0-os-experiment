@@ -1,135 +1,193 @@
-# CardputerZero-OS Agent 协作约定
+# CardputerZero-OS Agent Collaboration Rules
 
-本文件适用于整个仓库。它定义长期有效的协作、实现和验证规则，不记录某一次任务的
-临时进度。若子目录以后增加更具体的 `AGENTS.md`，其规则只覆盖该子目录，且不得放宽
-这里的安全、需求和验收边界。
+<!-- doc-locale: en -->
+> **English** | [简体中文](AGENTS.zh-CN.md)
 
-## 1. 单一事实来源
+This file applies to the entire repository. It defines durable rules for
+collaboration, implementation, and validation; it does not record temporary
+progress for a particular task. If a subdirectory gains a more specific
+`AGENTS.md`, that file applies only within the subdirectory and must not relax
+the security, requirement, or acceptance boundaries defined here.
 
-处理需求和判断实现是否正确时，按以下顺序取证：
+## 1. Sources of Truth
 
-1. 当前用户明确提出的需求、限制和最新反馈；
-2. `docs/ROADMAP.md` 及相关专项 roadmap 中尚未关闭的验收条件；
-3. `docs/adr/` 中状态为 Accepted 的架构决策；
-4. `docs/ARCHITECTURE.md`、`docs/THREAT-MODEL.md` 和对应 Phase 文档；
-5. 已提交代码、schema、测试和构建脚本所表达的现有契约；
-6. README、历史报告和注释等辅助材料。
+Use the following order when interpreting requirements and deciding whether an
+implementation is correct:
 
-若这些来源冲突，不要自行挑选最方便的解释。先确认来源是否过期，再把冲突、影响和
-建议明确交给主 Agent 或用户。真机现象优先于未经真机验证的代码推断，但一次现象仍需
-记录镜像版本、硬件版本和复现条件。
+1. The user's current explicit requirements, constraints, and latest feedback.
+2. Open acceptance criteria in `docs/ROADMAP.md` and related specialized
+   roadmaps.
+3. Architecture decisions with Accepted status in `docs/adr/`.
+4. `docs/ARCHITECTURE.md`, `docs/THREAT-MODEL.md`, and the corresponding phase
+   documents.
+5. Existing contracts expressed by committed code, schemas, tests, and build
+   scripts.
+6. Supporting material such as README files, historical reports, and comments.
 
-不要把以下内容当成已经完成的需求：roadmap 中未勾选的事项、ADR 中的未来方案、测试
-fixture、mock、仅 host 通过的硬件路径，以及文档中明确标为 pending/deferred/open 的
-工作。
+When these sources conflict, do not select the most convenient interpretation.
+First determine whether a source is obsolete, then clearly report the conflict,
+impact, and recommendation to the primary agent or the user. Evidence from a
+physical device takes precedence over inferences from code that has not been
+validated on a physical device, but every observation must still record the
+image version, hardware version, and reproduction conditions.
 
-## 2. 开始工作前的同步
+Do not treat the following as completed requirements: unchecked roadmap items,
+future approaches in ADRs, test fixtures, mocks, hardware paths that pass only
+on the host, or work explicitly marked pending, deferred, or open in the
+documentation.
 
-每个 Agent 开始分析或编辑前必须：
+## 2. Synchronization Before Work
 
-- 阅读本文件，以及目标目录中更具体的 `AGENTS.md`（若存在）；
-- 阅读与任务直接相关的 roadmap、ADR、Phase 文档和测试；
-- 执行 `git status --short`，识别已有修改和未跟踪文件；
-- 对准备修改的文件执行 `git diff -- <path>`，确认当前内容和 HEAD 的差异；
-- 检查同一行为是否还有镜像构建、runtime、service、schema、测试和文档等其他消费者；
-- 基于当前工作区内容工作，不基于任务开始时的旧快照继续写入。
+Before analysis or editing, every agent must:
 
-已有修改默认属于用户或其他 Agent。不要回滚、覆盖、格式化或顺手整理无关改动。若已有
-修改与任务重叠，应先理解并在其基础上继续；只有无法安全合并时才请求协调。
+- Read this file and any more specific `AGENTS.md` in the target directory.
+- Read the roadmaps, ADRs, phase documents, and tests directly related to the
+  task.
+- Run `git status --short` to identify existing modifications and untracked
+  files.
+- Run `git diff -- <path>` for every file it plans to edit, comparing the
+  working copy with `HEAD`.
+- Check for other consumers of the same behavior, including image builds,
+  runtimes, services, schemas, tests, and documentation.
+- Work from the current workspace contents, not from a stale snapshot captured
+  when the task began.
 
-## 3. 多 Agent 协作协议
+Existing modifications belong to the user or another agent by default. Do not
+revert, overwrite, reformat, or opportunistically clean up unrelated changes.
+When existing changes overlap the task, understand and build on them; request
+coordination only when they cannot be merged safely.
 
-主 Agent 对需求解释、任务拆分、最终集成和对外结论负责。子 Agent 只处理被明确分配的
-范围，不擅自扩大需求或修改相邻模块。
+## 3. Multi-Agent Collaboration Protocol
 
-### 3.1 分工
+The primary agent is responsible for interpreting requirements, dividing work,
+final integration, and reporting the result. A sub-agent handles only its
+explicitly assigned scope and must not expand requirements or modify adjacent
+modules without authorization.
 
-- 优先按互不重叠的目录或文件分配编辑权；共享文件在同一时间只能有一个写入者。
-- 调研、代码阅读和测试分析可以并行；同一实现链的连续编辑应由一个 Agent 完成。
-- 分配任务时必须同时给出目标、需求依据、允许修改的路径、禁止触碰的路径和期望验证。
-- 子 Agent 若发现范围外问题，只报告证据、严重性和建议，不直接修改。
-- 主 Agent 在派发任务和接收 handoff 时，都要重新检查工作区状态，避免使用陈旧信息。
+### 3.1 Division of Work
 
-### 3.2 状态同步
+- Prefer assigning edit ownership by non-overlapping directories or files. A
+  shared file may have only one writer at a time.
+- Research, code reading, and test analysis may run in parallel; continuous
+  edits along one implementation path should be owned by one agent.
+- Every assignment must state the objective, requirement basis, paths that may
+  be modified, paths that must not be touched, and expected validation.
+- A sub-agent that discovers an out-of-scope issue reports its evidence,
+  severity, and recommendation without editing it.
+- The primary agent must recheck workspace state both when dispatching work and
+  when receiving a handoff, so it does not rely on stale information.
 
-任务状态以当前用户消息、Agent 间消息和实际工作区为准。不要仅凭聊天摘要、旧 diff、
-先前测试结果或本文件推断当前状态。
+### 3.2 State Synchronization
 
-每次 handoff 必须包含以下字段，无法完成的字段写明原因：
+Task state comes from current user messages, agent messages, and the actual
+workspace. Do not infer current state solely from a conversation summary, old
+diff, previous test result, or this file.
+
+Every handoff must contain the following fields. If a field cannot be completed,
+state why:
 
 ```text
-目标：
-状态：完成 / 部分完成 / 阻塞
-需求依据：
-关键判断：
-修改文件：
-未修改但相关的文件：
-已执行验证：命令 + PASS/FAIL
-未执行验证：原因
-开放风险或真机复验项：
+Objective:
+Status: complete / partially complete / blocked
+Requirement basis:
+Key decisions:
+Modified files:
+Related files not modified:
+Validation performed: command + PASS/FAIL
+Validation not performed: reason
+Open risks or physical-device retest items:
 ```
 
-测试结果必须对应 handoff 时的最新文件。测试后又发生编辑，则旧结果不能描述为最终
-PASS。主 Agent 合并所有工作后必须复读完整 diff，并重新运行与最终状态相匹配的验证。
+Test results must match the latest files at handoff time. If any edit occurs
+after a test, that earlier result must not be reported as the final PASS. After
+integrating all work, the primary agent must reread the complete diff and rerun
+validation appropriate to the final state.
 
-### 3.3 冲突处理
+### 3.3 Conflict Handling
 
-- 发现文件在工作期间被其他人改变时，停止写入该文件，重新读取 diff 后再决定如何合并。
-- 不使用 `git reset --hard`、`git checkout --`、强制清理或批量覆盖来解决协作冲突。
-- 不删除不明来源的文件，不把其他 Agent 的修改据为自己的验证结果。
-- 对共享接口的修改必须同步检查生产者、消费者、schema、版本兼容和测试 fixture。
+- If a file changes during the work, stop writing it and reread the diff before
+  deciding how to merge.
+- Do not use `git reset --hard`, `git checkout --`, forced cleanup, or bulk
+  overwrites to resolve collaboration conflicts.
+- Do not delete files of unknown origin or claim another agent's modifications
+  as your own validated work.
+- Changes to a shared interface require coordinated compatibility checks across
+  producers, consumers, schemas, versions, and test fixtures.
 
-## 4. 需求驱动的修改边界
+## 4. Requirement-Driven Change Boundaries
 
-任何代码修改都必须能指向用户需求、roadmap 验收条件、已接受 ADR、安全不变量或明确
-复现的缺陷。不要借任务之机增加功能、改公共接口、替换依赖、升级工具链、调整视觉设计
-或进行大范围重构。
+Every code change must trace to a user requirement, roadmap acceptance
+criterion, accepted ADR, security invariant, or explicitly reproduced defect.
+Do not use a task as an opportunity to add features, change public interfaces,
+replace dependencies, upgrade toolchains, alter visual design, or perform broad
+refactoring.
 
-修复问题时优先选择最小且完整的行为改动：
+Prefer the smallest complete behavioral change when fixing a problem:
 
-- 先确认根因和调用链，再编辑；
-- 保持现有协议、错误语义和 fail-closed 行为；
-- 对确定的回归增加测试，测试应锁定行为或契约，而不是只匹配无关实现细节；
-- 若需求不明确，先从 roadmap 和 ADR 查证；仍会影响产品行为时再请求用户决策；
-- 不能用“代码已存在”替代镜像、真机、生产基础设施或长时间稳定性验收。
+- Establish the root cause and call chain before editing.
+- Preserve existing protocols, error semantics, and fail-closed behavior.
+- Add regression tests for confirmed defects; tests should lock down behavior
+  or contracts rather than irrelevant implementation details.
+- When a requirement is unclear, first check the roadmap and ADRs. Ask the user
+  only if the remaining ambiguity affects product behavior.
+- Do not substitute "the code exists" for image, physical-device, production
+  infrastructure, or long-duration stability acceptance.
 
-代码审查应先报告问题，再提出修改。每项问题至少记录严重性、需求依据、代码证据、影响、
-修改方案、修改位置、验证结果和残余风险。
+Code reviews report findings before proposing changes. Each finding must include
+severity, requirement basis, code evidence, impact, proposed change, location,
+validation result, and residual risk.
 
-## 5. 项目不变量
+## 5. Project Invariants
 
-除非用户明确改变需求并同步更新相关 ADR/roadmap，否则保持以下边界：
+Unless the user explicitly changes a requirement and the related ADR or roadmap
+is updated, preserve these boundaries:
 
-- 目标硬件是 CardputerZero V0.6：Raspberry Pi CM0、512 MB RAM、320x170 LCD 和 SD 卡。
-- 产品内存目标是 64 MB VideoCore / 448 MB ARM；不得重新引入会强制 256/256 MB 划分的
-  M5Stack bootscreen 固件。依据见 `docs/adr/0003-cm0-memory-and-bsp.md` 和 ADR 0008。
-- BSP、firmware、kernel、Weston、Rust 和 Node 版本按仓库现有固定策略处理；升级属于
-  独立需求，必须说明兼容性和供应链影响。
-- 产品 splash 使用仓库固定并校验哈希的用户图片；方向、色彩、DRM 接管和启动时序按
-  `docs/adr/0008-early-boot-splash.md` 处理。
-- 第三方 App 只能通过 SDK/WASM 和 capability broker 使用系统能力，不能获得 Linux
-  设备、路径、任意 IPC 或其他 App 数据的 ambient authority。
-- System Shell、compositor、appd、broker、Store 和更新/恢复链路的身份认证、大小限制、
-  超时、原子写入及 fail-closed 约束不能为了简化实现而放宽。
-- 产品镜像与 recovery 镜像的控制台、SSH、可写根和服务边界必须保持分离。
-- 不提交密码、token、私钥、生产端点、真实用户数据或仅适用于本机的绝对路径。
+- The target hardware is CardputerZero V0.6: Raspberry Pi CM0, 512 MB RAM,
+  320x170 LCD, and SD card.
+- The product memory target is 64 MB VideoCore / 448 MB ARM. Do not reintroduce
+  the M5Stack bootscreen firmware that forces a 256/256 MB split. See
+  `docs/adr/0003-cm0-memory-and-bsp.md` and ADR 0008.
+- BSP, firmware, kernel, Weston, Rust, and Node versions follow the repository's
+  existing pinning policy. An upgrade is a separate requirement and must state
+  its compatibility and supply-chain impact.
+- The product splash uses the user-provided image pinned and hash-verified in
+  the repository. Orientation, color, DRM takeover, and boot timing follow
+  `docs/adr/0008-early-boot-splash.md`.
+- Third-party apps may use system capabilities only through the SDK/WASM layer
+  and capability brokers. They must not gain ambient authority over Linux
+  devices, paths, arbitrary IPC, or another app's data.
+- Authentication, size limits, timeouts, atomic writes, and fail-closed
+  constraints in System Shell, the compositor, appd, brokers, Store, and the
+  update/recovery path must not be weakened for implementation convenience.
+- Keep console, SSH, writable-root, and service boundaries separate between the
+  production and recovery images.
+- Do not commit passwords, tokens, private keys, production endpoints, real
+  user data, or absolute paths that apply only to one local machine.
 
-## 6. 编辑约定
+## 6. Editing Conventions
 
-- 遵循目标文件现有语言、格式和命名风格；默认使用 ASCII，文档已有中文时可继续中文。
-- 保持改动聚焦，不运行会触及无关文件的全仓库自动修复或格式化。
-- 结构化数据使用对应 parser/serializer，不用脆弱的字符串拼接代替。
-- Shell 脚本使用严格引用和有界等待；C/C++ 注意整数范围、长度、初始化、资源释放和错误
-  路径；Rust 保持 workspace MSRV 与 `Cargo.lock` 兼容。
-- 注释解释非显然的约束或原因，不复述代码。
-- 生成物、二进制 firmware 和 splash 素材只有在需求明确要求时才能更新；同时更新来源、
-  哈希、生成方法和镜像门禁。
+- Follow the target file's existing language, format, and naming style. Use
+  ASCII by default. Maintained Markdown documentation follows
+  `docs/LOCALIZATION.md`: English is the default `FILE.md`, and Simplified
+  Chinese is the paired `FILE.zh-CN.md`.
+- Keep changes focused. Do not run repository-wide automated fixes or
+  formatting that touches unrelated files.
+- Use an appropriate parser or serializer for structured data instead of
+  fragile string concatenation.
+- Use strict quoting and bounded waits in shell scripts. In C/C++, account for
+  integer ranges, lengths, initialization, resource release, and error paths.
+  Keep Rust compatible with the workspace MSRV and `Cargo.lock`.
+- Comments should explain non-obvious constraints or reasons, not restate code.
+- Update generated artifacts, binary firmware, or splash assets only when the
+  requirement explicitly calls for it; update their source, hash, generation
+  method, and image gate at the same time.
 
-## 7. 验证策略
+## 7. Validation Strategy
 
-验证范围随风险扩大。至少先运行目标模块的最小测试，再考虑完整门禁。
+Validation scope grows with risk. Run the smallest relevant module test first,
+then consider the complete gate.
 
-常用入口：
+Common entry points:
 
 ```sh
 make check
@@ -139,40 +197,61 @@ make store-operations-check
 make verify-image
 ```
 
-还应按改动选择：
+Also select validation appropriate to the change:
 
-- Rust：`cargo test -p <crate> --locked`，必要时使用固定的 Rust 1.85.1 执行 Clippy；
-- C/System Shell：对应 `tests/test-*.sh`，并使用现有编译参数检查 warning；
-- 镜像/BSP：`tests/test-image-profile.sh`、相关 rootfs profile，以及实际镜像构建；
-- Web：目标项目的 lockfile 安装、test、typecheck 和 production build；
-- schema/协议：正向、边界、未知字段、截断、重放和版本不匹配测试；
-- 安全边界：失败路径、权限拒绝、symlink、大小/时间限制和原子恢复测试。
+- Rust: `cargo test -p <crate> --locked`, and Clippy with pinned Rust 1.85.1
+  when needed.
+- C/System Shell: the corresponding `tests/test-*.sh`, using the existing
+  compiler flags to check warnings.
+- Image/BSP: `tests/test-image-profile.sh`, the relevant rootfs profile, and an
+  actual image build.
+- Web: lockfile installation, tests, type checking, and a production build for
+  the target project.
+- Schemas/protocols: success, boundary, unknown-field, truncation, replay, and
+  version-mismatch tests.
+- Security boundaries: failure paths, permission denial, symlinks, size/time
+  limits, and atomic recovery.
 
-`make check` 中部分 Store 测试需要监听 `127.0.0.1`；受限沙箱可能返回 `EPERM`。应明确
-区分环境限制与产品失败，并在获准的环境重跑，不能把跳过或单测替代写成完整 PASS。
+Some Store tests in `make check` must listen on `127.0.0.1`; a restricted
+sandbox may return `EPERM`. Clearly distinguish environmental restrictions from
+product failures and rerun the tests in an approved environment. Do not report a
+skip or unit-test substitute as a complete PASS.
 
-以下验证不能相互替代：
+The following validations are not interchangeable:
 
-- host 静态门禁不能替代 V0.6 真机；
-- 单元测试不能替代成品 rootfs/镜像检查；
-- 短测不能替代 roadmap 指定的 24 小时稳定性或掉电测试；
-- mock/in-memory Store 测试不能替代 PostgreSQL、OIDC、HSM、CDN 等生产链路；
-- 一次成功启动不能关闭方向、色彩、内存、重启、断电和 recovery 等独立门禁。
+- Host static gates do not replace testing on a V0.6 physical device.
+- Unit tests do not replace inspection of the finished rootfs/image.
+- Short tests do not replace the roadmap's 24-hour stability or power-loss
+  tests.
+- Mock or in-memory Store tests do not replace production paths such as
+  PostgreSQL, OIDC, HSM, and CDN.
+- One successful boot does not close independent gates for orientation, color,
+  memory, restart, power-off, and recovery.
 
-## 8. 文档与完成定义
+## 8. Documentation and Completion Criteria
 
-实现改变产品行为、架构决策、构建输入或验收方法时，应同步更新最接近该事实的文档和
-测试。不要在多个文档复制易漂移的状态；roadmap 记录完成条件，ADR 记录长期决策，Phase
-文档记录实现和验收方法，带日期的报告记录一次审查或真机证据。
+When an implementation changes product behavior, an architecture decision,
+build input, or acceptance method, update the nearest authoritative document in
+both languages and update its tests. Do not duplicate mutable state across documents: roadmaps record
+completion criteria, ADRs record durable decisions, phase documents record
+implementation and acceptance methods, and dated reports record a particular
+review or physical-device evidence.
 
-任务只有在以下条件满足后才能标为完成：
+A task is complete only when:
 
-- 实现与明确需求一致，没有顺带改变无关行为；
-- 最终 diff 已复读，且未覆盖工作区中的既有修改；
-- 相关测试基于最终文件执行并记录结果；
-- 未执行项、环境限制和真机/生产残余风险已明确说明；
-- 文档、schema、测试和实现之间没有已知冲突；
-- handoff 给出了精确文件位置，使下一个 Agent 无需猜测即可继续。
+- The implementation matches the explicit requirement without changing
+  unrelated behavior.
+- The final diff has been reread and does not overwrite pre-existing workspace
+  changes.
+- Relevant tests have run against the final files and their results are
+  recorded.
+- Unexecuted items, environmental restrictions, and residual physical-device or
+  production risks are stated clearly.
+- No known conflict remains among documentation, schemas, tests, and
+  implementation.
+- The handoff gives exact file locations so the next agent can continue without
+  guessing.
 
-提交、推送、发布镜像、修改外部服务或关闭硬件验收项都需要用户明确授权；代码与 host
-门禁通过本身不构成这些授权。
+Committing, pushing, publishing an image, modifying external services, or
+closing hardware acceptance items all require explicit user authorization. Code
+and host gates passing do not constitute such authorization.

@@ -1,5 +1,8 @@
 # Media Controls
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 This SDK 1.0 example registers the foreground application as a media session
 and consumes the trusted System Shell's Play/Pause, Previous and Next actions.
 It does not play audio and therefore requests no permissions.

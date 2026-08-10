@@ -1,5 +1,8 @@
 # Phase 3L: Quota-enforced private storage
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3L-PRIVATE-STORAGE.zh-CN.md)
+
 Private application data is exposed only through the CardputerZero SDK. The
 Runtime no longer receives a writable bind mount of the host application data
 directory. Its `/data` directory is an empty namespace-local directory, and the

@@ -1,5 +1,8 @@
 # DevKit and Toolchain Distribution
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](distribution.zh-CN.md)
+
 ## Preferred order
 
 1. Use a released full-toolchain OCI image for the most reproducible setup.

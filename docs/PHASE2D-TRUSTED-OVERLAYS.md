@@ -1,5 +1,8 @@
 # Phase 2D: Trusted overlays and display policy
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE2D-TRUSTED-OVERLAYS.zh-CN.md)
+
 ## Compositor contract
 
 Version 3 of `cp0_system_shell_v1` makes the display policy explicit. Only the

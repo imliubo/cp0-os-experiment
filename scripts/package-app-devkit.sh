@@ -59,7 +59,7 @@ examples=(
 )
 for example in "${examples[@]}"; do
     mkdir -p "$bundle/examples/$example/src" "$bundle/examples/$example/assets"
-    for file in Cargo.toml Cargo.lock app.json README.md; do
+    for file in Cargo.toml Cargo.lock app.json README.md README.zh-CN.md; do
         install -m 0644 "$repo_root/examples/$example/$file" \
             "$bundle/examples/$example/"
     done
@@ -69,10 +69,15 @@ for example in "${examples[@]}"; do
         "$bundle/examples/$example/assets/"
 done
 install -m 0644 "$repo_root/docs/DEVELOPER-GUIDE.md" "$bundle/docs/"
+install -m 0644 "$repo_root/docs/DEVELOPER-GUIDE.zh-CN.md" "$bundle/docs/"
 install -m 0644 "$repo_root/docs/APP-DEVKIT-DISTRIBUTION.md" "$bundle/docs/"
+install -m 0644 "$repo_root/docs/APP-DEVKIT-DISTRIBUTION.zh-CN.md" "$bundle/docs/"
 install -m 0644 "$repo_root/docs/DEVELOPER-ACCESS.md" "$bundle/docs/"
+install -m 0644 "$repo_root/docs/DEVELOPER-ACCESS.zh-CN.md" "$bundle/docs/"
 install -m 0644 "$repo_root/docs/PHOTO-LIBRARY-V2.md" "$bundle/docs/"
+install -m 0644 "$repo_root/docs/PHOTO-LIBRARY-V2.zh-CN.md" "$bundle/docs/"
 install -m 0644 "$repo_root/docs/APP-ICON-SPEC-V1.md" "$bundle/docs/"
+install -m 0644 "$repo_root/docs/APP-ICON-SPEC-V1.zh-CN.md" "$bundle/docs/"
 install -m 0644 "$repo_root/schemas/app-manifest-v1.schema.json" "$bundle/schemas/"
 install -m 0644 "$repo_root/schemas/store-listing-v1.schema.json" "$bundle/schemas/"
 printf '%s\n' "$version" >"$bundle/VERSION"

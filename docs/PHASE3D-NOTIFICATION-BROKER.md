@@ -1,5 +1,8 @@
 # Phase 3D: notification capability broker
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3D-NOTIFICATION-BROKER.zh-CN.md)
+
 ## Request path
 
 The notification broker is the first typed SDK capability service. `appd` owns

@@ -1,5 +1,8 @@
 # Phase 5A: trusted installation, upgrades and rollback
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE5A-ATOMIC-INSTALL.zh-CN.md)
+
 ## Device trust policy
 
 Production installation requires both a valid developer signature and a valid

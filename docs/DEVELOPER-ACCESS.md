@@ -1,5 +1,8 @@
 # Developer access
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](DEVELOPER-ACCESS.zh-CN.md)
+
 ## Product contract
 
 A personally owned production device may run developer applications without

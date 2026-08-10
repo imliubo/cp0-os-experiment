@@ -1,5 +1,8 @@
 # Phase 3M: Isolated Intent Broker
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3M-INTENT-BROKER.zh-CN.md)
+
 Applications do not receive arbitrary inter-process sockets or target paths.
 Inter-application handoff is routed by appd using bounded, manifest-declared
 actions and the already authenticated Runtime broker connection.

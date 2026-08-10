@@ -1,25 +1,32 @@
-# ADR 0002：能力权限与双层沙箱
+# ADR 0002: Capability Permissions and Dual Sandboxes
 
-- 状态：Accepted
-- 日期：2026-07-30
+<!-- doc-locale: en -->
+> **English** | [简体中文](0002-capability-security.zh-CN.md)
 
-## 决策
+- Status: Accepted
+- Date: 2026-07-30
 
-应用默认没有网络、共享文件、媒体输入或硬件权限。应用只能通过 SDK host call 请求
-manifest 中声明的能力。WASM 运行时之外再使用 Linux UID、namespace、seccomp、
-cgroup 和最小挂载视图限制承载进程。
+## Decision
 
-系统根据已验证包 ID 和进程凭据识别调用者，不信任应用提交的身份字符串。设备节点
-只对硬件 broker 开放；共享文件只通过 Document Portal 的文件描述符传递。
+Applications have no network, shared-file, media-input, or hardware permissions
+by default. They may request only capabilities declared in their manifest, and
+only through SDK hostcalls. Outside the WASM runtime, Linux UID, namespaces,
+seccomp, cgroups, and a minimal mount view constrain each host process.
 
-## 理由
+The system identifies callers from a verified package ID and process
+credentials; it does not trust an identity string supplied by an application.
+Only hardware brokers can access device nodes. Shared files are passed only as
+file descriptors through the Document Portal.
 
-单独使用容器仍允许过大的 Linux syscall 面，单独使用 WASM 又会把运行时漏洞直接
-暴露给系统。两层边界可以降低任一实现缺陷造成完整突破的概率，并让权限控制统一
-落在少数可信服务中。
+## Rationale
 
-## 后果
+Containers alone retain too large a Linux syscall surface. WASM alone exposes
+runtime vulnerabilities directly to the system. Two independent boundaries
+reduce the chance that one implementation defect causes a complete breach and
+centralize privilege enforcement in a small set of trusted services.
 
-所有硬件功能都必须先设计 broker API。权限 API 变更属于 SDK 兼容性变更，需要
-版本化、审计和恶意调用测试。
+## Consequences
 
+Every hardware feature must begin with a broker API design. Permission API
+changes are SDK compatibility changes and require versioning, auditing, and
+malicious-call tests.

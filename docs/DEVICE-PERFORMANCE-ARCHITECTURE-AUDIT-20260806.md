@@ -1,5 +1,8 @@
 # V0.6 device performance and architecture audit
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](DEVICE-PERFORMANCE-ARCHITECTURE-AUDIT-20260806.zh-CN.md)
+
 ## Test identity
 
 - Date: 2026-08-06, Asia/Shanghai

@@ -1,5 +1,8 @@
 # Phase 3A: App Runtime and Linux sandbox
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3A-APP-RUNTIME.zh-CN.md)
+
 ## Scope
 
 Phase 3A establishes the executable isolation boundary below the SDK. Follow-up

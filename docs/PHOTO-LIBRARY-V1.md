@@ -1,5 +1,8 @@
 # CardputerZero Photo Library v1 (legacy)
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHOTO-LIBRARY-V1.zh-CN.md)
+
 Photo Library v1 used one `index.v1` record with at most 32 photo IDs and
 stored every 320x170 RGB565 frame as fourteen 8 KiB storage values. It is kept
 only as an on-device migration source.

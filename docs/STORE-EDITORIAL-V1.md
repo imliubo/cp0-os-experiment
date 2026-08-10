@@ -1,5 +1,8 @@
 # Store editorial collections v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-EDITORIAL-V1.zh-CN.md)
+
 S8A adds an audited control-plane path for the 320x170 Today page and carries
 the result to devices in signed Catalog v4. Operators can select content only
 from approved, currently published Releases. The device never trusts an

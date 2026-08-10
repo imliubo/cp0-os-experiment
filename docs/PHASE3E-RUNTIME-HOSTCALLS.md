@@ -1,5 +1,8 @@
 # Phase 3E: Runtime capability host calls
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3E-RUNTIME-HOSTCALLS.zh-CN.md)
+
 ## WAMR boundary
 
 The first implemented SDK import is:

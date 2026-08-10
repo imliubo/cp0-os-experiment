@@ -1,5 +1,8 @@
 # Key click asset
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 `key-click-soft-typing-s16le.pcm` is derived from UI SFX `soft/typing.ogg` at
 commit `2001f3dac2d1cf86ad99cbad5cef222c3a8b9082`:
 

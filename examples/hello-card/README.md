@@ -1,5 +1,8 @@
 # Hello Card
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Hello Card is the broad SDK capability demonstration included in the product
 image. The colored action block at the lower left reports success, denial,
 unavailability or an internal error; the lower-right block identifies the

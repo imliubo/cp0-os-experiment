@@ -1,5 +1,8 @@
 # CardputerZero LVGL 9 adapter
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 This optional C adapter connects LVGL 9 to the supported CardputerZero SDK ABI.
 It does not access DRM, evdev, Wayland or Linux devices. Display flushes use
 `cp0_present_rgb565`, keyboard input uses `cp0_poll_key_event`, and scheduling

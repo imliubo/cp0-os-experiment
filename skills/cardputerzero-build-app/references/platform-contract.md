@@ -1,5 +1,8 @@
 # CardputerZero App Platform Contract
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](platform-contract.zh-CN.md)
+
 ## Display and execution
 
 - Runtime: isolated WebAssembly under WAMR; no Linux/WASI compatibility layer.

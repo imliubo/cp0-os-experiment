@@ -1,5 +1,8 @@
 # Phase 6G: production access profile
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE6G-PRODUCTION-ACCESS.zh-CN.md)
+
 > The first-boot owner model in `FIRST-BOOT-PROVISIONING.md` and ADR 0007 is the
 > current production access contract.
 

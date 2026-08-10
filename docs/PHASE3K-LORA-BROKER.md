@@ -1,5 +1,8 @@
 # Phase 3K: Restricted LoRa broker
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3K-LORA-BROKER.zh-CN.md)
+
 CardputerZero V0.6 does not contain an onboard LoRa radio. This phase supports
 an external SX1276-family module on SPI0 chip select 1. The display remains on
 chip select 0; applications cannot select either endpoint.

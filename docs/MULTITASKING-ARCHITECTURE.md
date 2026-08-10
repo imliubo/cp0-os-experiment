@@ -1,5 +1,8 @@
 # Multitasking architecture
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](MULTITASKING-ARCHITECTURE.zh-CN.md)
+
 ## Product contract
 
 CardputerZero OS remains a single-foreground system. Exactly one application

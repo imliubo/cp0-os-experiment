@@ -1,5 +1,8 @@
 # Phase 4B: reproducible `.capp` packages and signatures
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE4B-CAPP-FORMAT.zh-CN.md)
+
 ## Security model
 
 A `.capp` contains only regular files. It cannot encode owners, modes, device

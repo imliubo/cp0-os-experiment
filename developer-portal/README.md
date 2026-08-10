@@ -1,5 +1,8 @@
 # CardputerZero Developer Portal
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Local S4 frontend MVP for the Store control plane. The Portal is a separate Web
 application and is never installed in the CardputerZero device image.
 

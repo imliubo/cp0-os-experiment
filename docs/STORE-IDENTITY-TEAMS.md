@@ -1,5 +1,8 @@
 # Store Identity and Teams
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-IDENTITY-TEAMS.zh-CN.md)
+
 S5K freezes the production authentication boundary and implements the first
 team-administration slice. The Store control server remains an OAuth resource
 server; it does not store passwords, passkey private material, recovery codes,

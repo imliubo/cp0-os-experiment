@@ -1,5 +1,8 @@
 # Store Submission
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](store-submission.zh-CN.md)
+
 Read this only when the user requests Store distribution. Developer submission
 ends at an immutable uploaded revision; review, Store signing and publication
 belong to independent operators.

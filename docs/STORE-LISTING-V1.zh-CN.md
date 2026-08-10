@@ -1,0 +1,96 @@
+# Store Listing v1
+
+<!-- doc-locale: zh-CN -->
+> [English](STORE-LISTING-V1.md) | **简体中文**
+
+`store-listing-v1` 是开发者提交应用时的公开元数据契约。建议 SDK 项目使用以下固定位置：
+
+```text
+my-app/
+  app.json
+  store/
+    listing.json
+    images/
+      icon.png
+      screen-1.png
+```
+
+`listing.json` 中的资源路径相对于 `store/` 目录。路径必须是安全的 ASCII 相对 PNG 路径，
+不能包含 `..`、反斜线或空组件。开发者私钥和 Store 签名不属于这个目录。
+
+## 示例
+
+```json
+{
+  "schema_version": 1,
+  "app_id": "dev.cardputerzero.notes",
+  "version": "1.2.0",
+  "default_locale": "zh-Hans-CN",
+  "category": "productivity",
+  "age_rating": "4+",
+  "privacy_url": "https://example.com/privacy",
+  "support_url": "https://example.com/support",
+  "icon": {
+    "path": "images/icon.png",
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "bytes": 4096,
+    "width": 48,
+    "height": 48
+  },
+  "screenshots": [
+    {
+      "path": "images/screen-1.png",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "bytes": 32000,
+      "width": 320,
+      "height": 170
+    }
+  ],
+  "localizations": [
+    {
+      "locale": "zh-Hans-CN",
+      "name": "便签",
+      "subtitle": "为小屏优化的快速便签",
+      "description": "记录和整理短便签。完全离线工作。",
+      "keywords": ["便签", "效率"],
+      "release_notes": "首个公开版本。"
+    }
+  ]
+}
+```
+
+## 冻结边界
+
+- Listing JSON 最大 32 KiB，拒绝未知字段。
+- `app_id` 和 `version` 必须与开发者签名 `.capp` 内的 manifest 完全一致。
+- locale 采用有界的规范 BCP 47 子集，例如 `en`、`en-US`、`zh-Hans-CN`、`es-419`。
+- 最多 8 个 locale；必须按 locale 排序且包含 `default_locale`。
+- 每个 locale 最多 8 个关键词；关键词必须唯一并按字典序排序。
+- 分类固定为 `developer-tools`、`education`、`entertainment`、`games`、`hardware`、
+  `media`、`productivity`、`utilities`。
+- 年龄分级固定为 `4+`、`9+`、`12+`、`17+`，开发者声明仍需审核确认。
+- 图标固定为 48x48 PNG、最大 64 KiB；1-5 张截图固定为 320x170 PNG、每张最大
+  512 KiB。
+- 隐私和支持链接必须使用 HTTPS，禁止凭据、fragment、空白和控制字符。
+
+JSON schema 位于 `schemas/store-listing-v1.schema.json`，共享严格验证器位于
+`cp0-store-metadata` crate。开发者签名包和 Listing 准备好后运行：
+
+```sh
+cp0ctl store validate dev.cardputerzero.notes-1.2.0.signed.capp store/listing.json
+```
+
+该命令验证开发者签名、包/Listing 身份、资源路径、PNG 结构与像素，并复算资源大小和
+SHA-256；它拒绝已经带有 Store 签名的提交。扫描 worker 仍会在隔离环境中独立重复验证
+并完整解码资源，再把 Listing、资源和包摘要绑定为一个 Submission revision。仅通过
+本地预检不能发布应用。
+
+Developer Portal 注册 App ID 后，可以通过 OAuth Device Flow 提交同一组文件：
+
+```sh
+cp0ctl store submit dev.cardputerzero.notes-1.2.0.signed.capp store/listing.json
+```
+
+授权说明写入 stderr；成功时 stdout 只输出包含 `submission_id`、`state`、`content_sha256`
+和 `portal_url` 的 JSON。上传按 256 KiB 分片重试，token 只保存在进程内存。正式端点固定为
+`https://developer.cardputerzero.dev`；开发环境可通过 `CP0_STORE_API` 指定另一个 HTTPS origin。

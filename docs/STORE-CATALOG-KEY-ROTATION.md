@@ -1,5 +1,8 @@
 # Store Catalog key rotation
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-CATALOG-KEY-ROTATION.zh-CN.md)
+
 This runbook defines the engineering boundary for rotating the Store Catalog
 signing key. It does not claim that a production HSM, operator quorum, CDN or
 fleet orchestration service exists.

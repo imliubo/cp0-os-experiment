@@ -1,5 +1,8 @@
 # Phase 6H: verified-update groundwork
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE6H-VERIFIED-UPDATE-GROUNDWORK.zh-CN.md)
+
 ## Scope
 
 This phase implements the parts of ADR 0006 that can be proved without

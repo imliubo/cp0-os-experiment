@@ -1,5 +1,8 @@
 # Storage Isolation Probe
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Storage Isolation Probe verifies that it cannot read the marker written by the
 Device Capability Probe under a different application identity. It is an
 acceptance payload, not a user application.

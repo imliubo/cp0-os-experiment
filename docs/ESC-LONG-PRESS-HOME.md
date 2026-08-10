@@ -1,5 +1,8 @@
 # ESC long-press Home
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](ESC-LONG-PRESS-HOME.zh-CN.md)
+
 The trusted Weston policy owns the ESC gesture. Applications never receive the
 binding key and do not run gesture timers. A press begins one compositor state
 machine:

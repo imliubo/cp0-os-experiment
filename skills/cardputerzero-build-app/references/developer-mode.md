@@ -1,5 +1,8 @@
 # Developer Mode Deployment
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](developer-mode.zh-CN.md)
+
 Read this before changing a physical device. Developer Mode is an
 owner-controlled, constrained deployment channel for signed SDK Apps. It is
 not an App permission, root access, sudo, a native package channel or a general

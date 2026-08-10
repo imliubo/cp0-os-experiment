@@ -1,5 +1,8 @@
 # Phase 2B: Trusted compositor policy
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE2B-COMPOSITOR-POLICY.zh-CN.md)
+
 ## Security contract
 
 The Phase 2B policy must preserve these invariants:

@@ -1,5 +1,8 @@
 # Store Workforce Identity v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-WORKFORCE-IDENTITY-V1.zh-CN.md)
+
 This document freezes the provider-neutral identity boundary shared by Review Console and Store
 Operations. It defines the BFF contract and the Store control-plane persistence invariants; it does
 not select or emulate a production identity provider.

@@ -1,5 +1,8 @@
 # Multitasking main integration report
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](MULTITASKING-MERGE-REPORT.zh-CN.md)
+
 ## Decision
 
 The multitasking branch is suitable for integration into `main` as a

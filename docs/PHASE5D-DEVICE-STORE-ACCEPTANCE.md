@@ -1,5 +1,8 @@
 # Phase 5D: Device Store acceptance
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE5D-DEVICE-STORE-ACCEPTANCE.zh-CN.md)
+
 This gate validates the complete production Store path on the CM0 device. It
 uses two SDK-only versions of the same application and never gives the device a
 package path, hash, version or signature override.

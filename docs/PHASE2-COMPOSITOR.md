@@ -1,5 +1,8 @@
 # Phase 2: Compositor bring-up
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE2-COMPOSITOR.zh-CN.md)
+
 ## Baseline
 
 CardputerZero OS pins Weston 14.0.2 at commit

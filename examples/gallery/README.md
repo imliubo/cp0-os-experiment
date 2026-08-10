@@ -1,5 +1,8 @@
 # Gallery
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Gallery reads photos through the shared photo-library capability. It never
 receives a filesystem path and can delete a photo only after an explicit
 confirmation.

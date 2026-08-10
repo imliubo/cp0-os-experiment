@@ -1,5 +1,8 @@
 # Phase 6E: internal security validation baseline
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE6E-SECURITY-VALIDATION.zh-CN.md)
+
 ## Delivered scope
 
 Phase 6E turns the existing component-level security tests into an explicit

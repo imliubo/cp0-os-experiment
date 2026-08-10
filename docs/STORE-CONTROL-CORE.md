@@ -1,5 +1,8 @@
 # Store Control Transaction Core
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-CONTROL-CORE.zh-CN.md)
+
 `cp0-store-control` is the first S5 backend slice. It is a framework-independent
 Rust domain core for the frozen Store Control API. It does not listen on a
 network port and is not linked into the device image.

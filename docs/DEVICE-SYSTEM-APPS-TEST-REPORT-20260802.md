@@ -1,5 +1,8 @@
 # CardputerZero V0.6 System Apps Device Test Report
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](DEVICE-SYSTEM-APPS-TEST-REPORT-20260802.zh-CN.md)
+
 ## Test identity
 
 - Date: 2026-08-02, Asia/Shanghai

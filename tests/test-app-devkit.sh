@@ -48,6 +48,7 @@ jq -e '.version == "1.1.0" and (.built_with.rust | startswith("rustc 1.85.1 "))'
 test -s "$devkit/schemas/store-listing-v1.schema.json"
 test -s "$devkit/schemas/app-manifest-v1.schema.json"
 test -s "$devkit/docs/DEVELOPER-ACCESS.md"
+test -s "$devkit/docs/DEVELOPER-ACCESS.zh-CN.md"
 jq -e '
     (.bundled | index("developer-access-doc") != null) and
     (.bundled | index("photo-library-doc") != null) and
@@ -55,7 +56,11 @@ jq -e '
 ' \
     "$devkit/devkit.json" >/dev/null
 test -s "$devkit/docs/PHOTO-LIBRARY-V2.md"
+test -s "$devkit/docs/PHOTO-LIBRARY-V2.zh-CN.md"
 test -s "$devkit/docs/APP-ICON-SPEC-V1.md"
+test -s "$devkit/docs/APP-ICON-SPEC-V1.zh-CN.md"
+test -s "$devkit/docs/DEVELOPER-GUIDE.zh-CN.md"
+test -s "$devkit/docs/APP-DEVKIT-DISTRIBUTION.zh-CN.md"
 grep -Fq '72x57 pixels' "$devkit/docs/APP-ICON-SPEC-V1.md"
 
 "$devkit/skills/cardputerzero-build-app/scripts/doctor.sh" "$devkit" rust >/dev/null
@@ -69,6 +74,7 @@ for example in \
     hello-card calculator neon-snake camera gallery media-controls music-player notes \
     stopwatch; do
     test -s "$devkit/examples/$example/README.md"
+    test -s "$devkit/examples/$example/README.zh-CN.md"
     test -s "$devkit/examples/$example/assets/screenshot.png"
     env RUSTUP_TOOLCHAIN=1.85.1 "$devkit/bin/cp0ctl" \
         build "$devkit/examples/$example" >/dev/null

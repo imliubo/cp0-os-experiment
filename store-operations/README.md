@@ -1,5 +1,8 @@
 # CardputerZero Store Operations
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Internal React/Vite client for the Store operator control plane. The runtime
 uses the Operations workforce BFF for session/login/logout and audience-scoped
 control-token exchange. It reads and writes the real bounded Today layout,

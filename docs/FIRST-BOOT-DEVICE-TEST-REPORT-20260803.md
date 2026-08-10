@@ -1,5 +1,8 @@
 # CardputerZero V0.6 first-boot device test report
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](FIRST-BOOT-DEVICE-TEST-REPORT-20260803.zh-CN.md)
+
 > Historical diagnostic report. The one-boot maintenance SSH and hot-update
 > mechanism used for this run was removed after Setup completed successfully.
 > Current product images expose SSH only after completion and explicit consent.

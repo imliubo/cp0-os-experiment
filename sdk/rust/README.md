@@ -1,5 +1,8 @@
 # CardputerZero Rust SDK 1.1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 This `no_std` crate is the supported Rust API for CardputerZero applications.
 Applications compile for `wasm32-unknown-unknown` and must not declare private
 Runtime imports directly.

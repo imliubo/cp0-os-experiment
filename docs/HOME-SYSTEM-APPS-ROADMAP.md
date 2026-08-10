@@ -1,5 +1,8 @@
 # Home System Apps Roadmap
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](HOME-SYSTEM-APPS-ROADMAP.zh-CN.md)
+
 ## Product boundary
 
 The five Home entries are trusted System Shell views. They are part of the OS

@@ -1,85 +1,105 @@
-# CardputerZero Store 产品与技术架构
+# CardputerZero Store Product and Technical Architecture
 
-## 1. 定位与边界
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-ARCHITECTURE.zh-CN.md)
 
-CardputerZero Store 的目标不是简单地把 `.capp` 文件放到一个下载页，而是建立一条
-从开发者身份、版本提交、自动检查、人工审核、Store 签名、目录发布，到设备端发现、
-搜索、下载、安装和更新的完整产品链路。体验标准参考 Apple App Store 的清晰度、
-可信度和一致性，但交互必须适配 320x170 屏幕、物理键盘、512 MB 内存和单前台模型。
+## 1. Positioning and Boundaries
 
-首个产品版本只支持免费应用，不引入购买、订阅、广告归因、用户评论或用户云账户。
-这些能力会显著扩大支付、隐私、反欺诈和合规边界，不能作为基础 Store 的隐含功能。
+The CardputerZero Store is not merely a download page for `.capp` files. It establishes an
+end-to-end product path from developer identity, version submission, automated checks,
+manual review, Store signing, and Catalog publication to on-device discovery, search,
+download, installation, and update. Its experience should have the clarity, trust, and
+consistency of the Apple App Store while fitting a 320x170 display, physical keyboard,
+512 MB of memory, and the single-foreground model.
 
-已经实现且继续复用的安全底座包括：
+The first product release supports free apps only. It does not include purchases,
+subscriptions, advertising attribution, user reviews, or user cloud accounts. Those
+features would substantially expand payment, privacy, anti-fraud, and compliance boundaries
+and must not be treated as implicit capabilities of the base Store.
 
-- 开发者和 Store 双 Ed25519 签名；
-- 确定性 `.capp`、静态 WASM/import/权限检查和精确审核记录；
-- 有序、限时、签名的静态 Catalog；
-- HTTPS 公网约束、目录防回滚、断点续传和摘要校验；
-- appd 二次验签、原子安装、严格升级和回滚；
-- 独立 `cp0-stored` 身份、缓存和设备端有界控制协议。
+The existing security foundation remains in use:
 
-## 2. 三层产品模型
+- separate Ed25519 signatures from the developer and Store;
+- deterministic `.capp` packages, static WASM/import/permission checks, and exact review
+  records;
+- ordered, expiring, signed static Catalogs;
+- public HTTPS restrictions, Catalog rollback protection, resumable downloads, and digest
+  verification;
+- appd signature revalidation, atomic installation, strict upgrades, and rollback;
+- a dedicated `cp0-stored` identity, cache, and bounded on-device control protocol.
 
-### 2.1 Web 前端
+## 2. Three-Layer Product Model
 
-Web 前端由三个站点组成，代码可以共享设计系统，但权限和部署必须分离。
+### 2.1 Web Frontends
+
+The web layer comprises three sites. They may share a design system, but authorization and
+deployment must remain separate.
 
 #### Developer Portal
 
-建议正式入口为 `developer.cardputerzero.dev`。它面向个人开发者和团队，提供：
+The proposed production entry point is `developer.cardputerzero.dev`. It serves individual
+developers and teams with:
 
-- 账户、团队、成员角色和双因素认证；
-- Developer ID、公钥登记、吊销和轮换；
-- App ID 申请与永久归属，禁止抢注和转移后复用；
-- 应用名称、简介、完整描述、分类、关键词、年龄分级、隐私说明、支持链接；
-- 图标和 320x170 截图的上传、裁剪预览和本地化；
-- 版本上传、自动检查结果、审核问题、回复和重新提交；
-- 手动发布、预约发布、分阶段发布、暂停和撤回；
-- 版本状态、安装量和崩溃率等最小化聚合指标。
+- accounts, teams, member roles, and two-factor authentication;
+- Developer ID public-key registration, revocation, and rotation;
+- App ID allocation and permanent ownership, preventing name squatting and reuse after
+  transfer;
+- app name, subtitle, full description, category, keywords, age rating, privacy statement,
+  and support link;
+- icon and 320x170 screenshot upload, crop preview, and localization;
+- version upload, automated check results, review questions, replies, and resubmission;
+- manual, scheduled, and phased release, plus pause and withdrawal;
+- minimal aggregate metrics such as version adoption, installation count, and crash rate.
 
-开发者推荐工作流：
+Recommended developer workflow:
 
-1. 使用 SDK 和 `cp0ctl new/build/run` 在本机开发；
-2. 使用 `cp0ctl package` 和开发者私钥签名；
-3. 使用 `cp0ctl store validate` 在上传前检查包和 Listing；
-4. 使用浏览器上传，或由 `cp0ctl store submit` 通过 OAuth Device Flow 上传；
-5. 在 Portal 查看自动检查和人工审核状态；
-6. 审核通过后选择发布时间，后端生成 Store 签名产物；
-7. 发布后查看版本覆盖率、失败率并管理更新。
+1. Develop locally with the SDK and `cp0ctl new/build/run`.
+2. Package with `cp0ctl package` and sign with the developer private key.
+3. Run `cp0ctl store validate` on the package and Listing before upload.
+4. Upload in the browser or with `cp0ctl store submit` through OAuth Device Flow.
+5. Inspect automated checks and manual-review status in the Portal.
+6. After approval, choose a publication time; the backend creates the Store-signed artifact.
+7. After publication, inspect adoption and failure rates and manage updates.
 
-私钥永远不上传 Portal。CLI 只上传开发者已签名的 `.capp`、Listing、资源和它们的
-摘要。Portal 登录会话不能代替包内开发者签名。
+The private key is never uploaded to the Portal. The CLI uploads only the developer-signed
+`.capp`, Listing, resources, and their digests. A Portal login session cannot replace the
+developer signature embedded in the package.
 
 #### Review Console
 
-建议内部入口为 `review.cardputerzero.dev`，只允许审核员和安全运营人员访问：
+The proposed internal entry point is `review.cardputerzero.dev`. Access is limited to
+reviewers and security-operations personnel. It provides:
 
-- 自动扫描结果、manifest 权限、WASM imports 和历史版本差异；
-- 应用实际运行截图、输入流程和权限触发记录；
-- metadata、隐私说明、年龄分级和功能一致性检查；
-- 结构化拒绝原因、补充材料请求、二次审核和升级处理；
-- 双人审批的高风险权限、Store key 操作和紧急下架；
-- 不可修改的审核事件时间线和审计导出。
+- automated scan results, manifest permissions, WASM imports, and historical-version diffs;
+- screenshots from actual execution, input flows, and permission-trigger records;
+- metadata, privacy-statement, age-rating, and functional-consistency checks;
+- structured rejection reasons, requests for more material, secondary review, and escalation;
+- two-person approval for high-risk permissions, Store-key operations, and emergency removal;
+- an immutable review-event timeline and audit export.
 
-Review Console 不直接持有 Store 私钥，也不能任意修改开发者提交。审核结论绑定提交包、
-Listing 和资源清单的精确 SHA-256。
+The Review Console does not hold the Store private key and cannot arbitrarily modify a
+developer submission. A decision binds to the exact SHA-256 of the package, Listing, and
+resource inventory.
 
 #### Store Operations
 
-运营后台负责 Today 推荐、专题集合、分类排序、版本可见范围和紧急处置。运营只能从
-已审核、未撤销的 Release 中选取内容，不能绕过审核发布任意包。每次变更生成新的有序
-Catalog snapshot，并进入可审计的发布队列。
+Store Operations manages Today recommendations, featured collections, category ordering,
+release visibility, and emergency response. Operators may select only reviewed,
+non-withdrawn Releases; they cannot bypass review to publish an arbitrary package. Every
+change creates a new ordered Catalog snapshot and enters an auditable publication queue.
 
-S8A 已实现 Today 的首个运营纵向切片：独立 operator 身份、2FA、`store.editorial` scope、
-强 ETag 和幂等写入共同保护 `GET/POST/PUT /v1/editorial/today`。布局固定为一个主推荐、
-1-2 个专题、每个专题 1-4 个应用；只能引用仍处于 published 且 Submission 仍 approved 的
-Release，并拒绝重复 Release 或 App。每次写入原子生成不可变 revision、audit 和绑定该
-revision 的 Catalog rebuild outbox；完整契约见 `STORE-EDITORIAL-V1.md`。
+S8A implements the first Today control-plane vertical slice. An independent operator
+identity, 2FA, the `store.editorial` scope, strong ETags, and idempotent writes protect
+`GET/POST/PUT /v1/editorial/today`. The layout is fixed to one lead recommendation and one
+or two collections containing one to four apps each. References must point to Releases that
+remain published and whose Submissions remain approved; duplicate Releases or Apps are
+rejected. Each write atomically creates an immutable revision, audit record, and Catalog
+rebuild outbox event bound to that revision. See `STORE-EDITORIAL-V1.md`.
 
-### 2.2 后端
+### 2.2 Backend
 
-后端分为控制面和不可变发布面。设备只访问发布面。
+The backend is split into a control plane and an immutable publication plane. Devices access
+only the publication plane.
 
 ```mermaid
 flowchart LR
@@ -101,153 +121,188 @@ flowchart LR
     Device --> Appd["appd atomic installer"]
 ```
 
-#### 控制面服务
+#### Control-Plane Services
 
-| 服务 | 职责 | 关键约束 |
+| Service | Responsibility | Key constraint |
 | --- | --- | --- |
-| Identity and Teams | 登录、团队和角色 | 2FA、短会话、细粒度 RBAC |
-| App Registry | App ID、名称和所有权 | ID 永不回收，所有权变更需审计 |
-| Submission Service | 分片上传和提交状态机 | 幂等、摘要绑定、对象不可变 |
-| Scan Workers | 包解析、WASM、权限、资源和恶意样本检查 | 无网络沙箱、有界 CPU/RAM/时间 |
-| Review Service | 人工审核、问题和决定 | append-only 事件、提交内容不可改 |
-| Release Service | 发布条件、版本和 rollout | 只接收 approved submission |
-| Editorial Service | Today、分类、榜单和专题 | 只能引用可发布 Release |
-| Catalog Builder | 构建签名目录和索引 | 确定性、单调 sequence、可重放 |
-| Transparency Log | 发布、撤回、key 事件 | append-only、定期签名 checkpoint |
+| Identity and Teams | Login, teams, and roles | 2FA, short sessions, fine-grained RBAC |
+| App Registry | App IDs, names, and ownership | IDs are never recycled; ownership changes are audited |
+| Submission Service | Chunked upload and submission state machine | Idempotency, digest binding, immutable objects |
+| Scan Workers | Package parsing, WASM, permissions, resources, and malicious-sample checks | No-network sandbox; bounded CPU, RAM, and time |
+| Review Service | Manual review, questions, and decisions | Append-only events; submission content is immutable |
+| Release Service | Publication conditions, versions, and rollout | Accepts approved Submissions only |
+| Editorial Service | Today, categories, rankings, and collections | References releasable Releases only |
+| Catalog Builder | Signed Catalogs and indexes | Deterministic, monotonic sequence, replayable |
+| Transparency Log | Publication, withdrawal, and key events | Append-only, periodically signed checkpoints |
 
-控制面 API 使用版本化 OpenAPI。写操作要求幂等键和乐观并发版本；所有状态变化记录
-actor、时间、旧状态、新状态、对象摘要和原因。服务之间通过事务性 outbox 发送事件，
-避免数据库提交成功而队列消息丢失。
+Control-plane APIs use versioned OpenAPI. Writes require idempotency keys and optimistic
+concurrency versions. Every state transition records the actor, time, old state, new state,
+object digest, and reason. Services publish events through transactional outboxes so a
+successful database commit cannot lose its queue message.
 
-#### 数据与存储
+#### Data and Storage
 
-- PostgreSQL：账户、团队、App、Submission、Review、Release、Editorial 和审计索引；
-- S3 兼容对象存储：原始 `.capp`、Listing、截图、扫描报告和已签名发布物；
-- 工作队列：扫描、截图、审核通知、Catalog 构建和 CDN 发布；
-- Redis 仅用于短期会话、限流和可重建缓存，不作为发布真相来源；
-- Warehouse：只接收去标识化聚合事件，不能反向授权安装。
+- PostgreSQL stores accounts, teams, Apps, Submissions, Reviews, Releases, Editorial state,
+  and audit indexes.
+- S3-compatible object storage holds original `.capp` files, Listings, screenshots, scan
+  reports, and signed publication artifacts.
+- Work queues carry scan, screenshot, review-notification, Catalog-build, and CDN-publication
+  jobs.
+- Redis is limited to short-lived sessions, rate limits, and rebuildable caches. It is not a
+  source of publication truth.
+- The warehouse accepts only de-identified aggregate events and cannot authorize an
+  installation in reverse.
 
-所有包、资源和 Catalog 都使用内容摘要命名。发布对象不覆盖，只创建新版本；下架通过
-新的 Catalog snapshot 表达。数据库备份不能替代对象版本和 transparency log。
+Packages, resources, and Catalogs are all named by content digest. Published objects are not
+overwritten; a new version creates a new object, and removal is represented by a later
+Catalog snapshot. Database backups do not replace object versioning or the transparency log.
 
-#### Store 签名服务
+#### Store Signing Service
 
-Store 签名是独立安全域：
+Store signing is an independent security domain:
 
-- 在线服务只提交“已审核对象摘要 + 发布授权”；
-- 私钥位于 HSM 或离线签名节点，不能被 Portal/Review Console 读取；
-- 签名请求要求 Release Service 和审核策略共同授权；
-- key rotation 使用新旧 Catalog 交叠和设备信任根更新窗口；
-- 紧急吊销仍生成有序 Catalog，不能回滚 sequence；
-- 每次签名写入不可变审计记录和 transparency checkpoint。
+- online services submit only an approved-object digest plus publication authorization;
+- the private key resides in an HSM or offline signing node and cannot be read by the Portal
+  or Review Console;
+- a signing request requires authorization from both Release Service and review policy;
+- key rotation overlaps old and new Catalogs with a device trust-root update window;
+- emergency revocation still creates an ordered Catalog and cannot roll its sequence back;
+- every signature creates an immutable audit record and transparency checkpoint.
 
-S5H 已实现该日志的首个有界纵向切片：每个 Catalog snapshot 原子写入 leaf 和签名
-checkpoint，Publisher 启动时重算全部完整前缀。compact consistency proof、外部 witness、
-gossip 和生产 HSM 仍是后续基础设施，详见 `STORE-TRANSPARENCY.md`。
+S5H implements the first bounded vertical slice of this log. Each Catalog snapshot
+atomically writes a leaf and signed checkpoint, and Publisher recalculates the complete
+prefix at startup. Compact consistency proofs, external witnesses, gossip, and a production
+HSM remain future infrastructure. See `STORE-TRANSPARENCY.md`.
 
-#### 发布面
+#### Publication Plane
 
-设备不调用控制面数据库 API。发布面只提供：
+Devices do not call control-plane database APIs. The publication plane exposes only:
 
-- 签名的 discovery/catalog 索引；
-- 按 app/version 固定路径发布的 Store 签名 `.capp`；
-- 带摘要和尺寸的图标、截图与专题资源；
-- 公钥轮换和撤销元数据；
-- `ETag`、`Range`、合理缓存头和多区域 CDN。
+- signed discovery and Catalog indexes;
+- Store-signed `.capp` files at fixed app/version paths;
+- icons, screenshots, and collection resources with digests and dimensions;
+- public-key rotation and revocation metadata;
+- `ETag`, `Range`, appropriate cache headers, and a multi-region CDN.
 
-S6E 保留不超过 64 项且编码不超过 48 KiB 的旧 Catalog；项目数或字节数先达到上限时，
-Publisher 切换为签名根索引和最多 16 个有界 shard。根签名绑定分类索引及每个 shard 的 URL、
-摘要、大小、数量、App ID 范围和 sequence；shard 另有独立签名域。设备必须完整验证整个
-generation 后才原子切换缓存，不接受 CDN 自行拼接的搜索或分类 JSON。
+S6E retains the legacy Catalog when it contains no more than 64 entries and encodes to no
+more than 48 KiB. When either limit is reached first, Publisher switches to a signed root
+index and at most 16 bounded shards. The root signature binds the category index and each
+shard's URL, digest, size, count, App ID range, and sequence; every shard also has an
+independent signature domain. The device validates the complete generation before atomically
+switching its cache. It does not accept search or category JSON assembled by the CDN.
 
-### 2.3 设备端
+### 2.3 Device
 
-设备端由可信 System Shell、`cp0-stored` 和 appd 三部分组成：
+The device layer consists of the trusted System Shell, `cp0-stored`, and appd:
 
-- System Shell：渲染 Store、接收键盘输入、展示权限和进度，不接触 URL 或包路径；
-- `cp0-stored`：验证 Catalog/资源、执行本地搜索、下载和断点续传；
-- appd：验证开发者和 Store 双签名，执行原子安装、升级、回滚和生命周期管理。
+- System Shell renders the Store, accepts keyboard input, and displays permissions and
+  progress without handling URLs or package paths.
+- `cp0-stored` validates Catalogs and resources, performs local search, and downloads and
+  resumes transfers.
+- appd verifies both developer and Store signatures and handles atomic install, upgrade,
+  rollback, and lifecycle operations.
 
-#### 320x170 信息架构
+#### 320x170 Information Architecture
 
-顶部保留 21 px 可信状态栏。Store 内容区使用固定的 18 px 分段导航和 4 行列表，不用
-卡片嵌套或大标题：
+The top 21 px remain a trusted status bar. The Store content area uses an 18 px segmented
+navigation row and a four-row list, with no nested cards or oversized headings:
 
-| 入口 | 内容 | 主要动作 |
+| Section | Content | Primary action |
 | --- | --- | --- |
-| Today | 一个主推荐、两个专题入口、新品提示 | Enter 查看详情 |
-| Apps | 分类、精选、全部应用 | Up/Down，Enter 进入 |
-| Search | 固定搜索框、最近搜索、即时结果 | 物理键盘输入，Enter 详情 |
-| Updates | 可用更新、进行中、最近更新 | Update All 或单项更新 |
+| Today | One lead recommendation, two collection entries, new-release indication | Enter opens details |
+| Apps | Categories, featured, and all apps | Up/Down, then Enter |
+| Search | Fixed search field, recent searches, and live results | Type on the physical keyboard; Enter opens details |
+| Updates | Available, active, and recent updates | Update All or update one app |
 
-320x170 上不永久显示底部 Tab Bar。F5/F6 或左右键在顶部四个分段间切换，焦点进入
-列表后左右键只执行页面明确显示的操作。Back 先退出输入/详情，再返回 Home。
+There is no permanent bottom tab bar at 320x170. F5/F6 or Left/Right switches among the four
+top segments. Once focus enters a list, Left/Right performs only actions visibly assigned by
+that page. Back leaves input or details first, then returns Home.
 
-#### 应用详情
+#### App Details
 
-详情页按扫描顺序提供：名称/开发者、GET/UPDATE/OPEN、版本和大小、简介、权限与隐私、
-截图、版本历史和支持链接。小屏每次显示一个区域；长文本按段分页，不做水平滚动。
-安装前必须显示新增权限差异。安装中按钮变为稳定宽度的百分比/阶段状态，避免布局跳动。
+Details are presented in scan order: name and developer; GET, UPDATE, or OPEN; version and
+size; summary; permissions and privacy; screenshots; version history; and support link. The
+small screen shows one region at a time. Long text paginates by paragraph and never scrolls
+horizontally. Installation must first show any newly requested permission. During install,
+the button changes to a stable-width percentage or phase label to prevent layout movement.
 
-#### 搜索
+#### Search
 
-设备拥有物理键盘，因此搜索是一级入口。输入先在已验证的本地 Catalog 上完成：
+The physical keyboard makes search a top-level destination. Queries first run against the
+verified local Catalog:
 
-- 查询最多 32 个 Unicode 字符和 96 字节；
-- 匹配 name、app_id、summary，后续加入签名 keywords；
-- 结果按精确名称、名称前缀、名称包含、summary/app_id 的稳定等级排序；
-- 每页最多 8 条，协议返回 total 和 next_offset；
-- 搜索不上传输入，也不需要登录；
-- stale Catalog 可以搜索和浏览，但不能授权安装。
+- at most 32 Unicode characters and 96 bytes;
+- matches `name`, `app_id`, and `summary`, with signed keywords added later;
+- stable ranking by exact name, name prefix, name substring, then summary/app_id;
+- at most eight results per page, with `total` and `next_offset` in the protocol;
+- query text is not uploaded and no login is required;
+- a stale Catalog can be searched and browsed but cannot authorize installation.
 
-当前 System Shell 使用物理键盘直接输入 ASCII 字母、数字、空格、点、连字符和下划线，
-最多 32 字符；协议继续保留 96 字节 UTF-8 边界，为后续可信输入法留出空间。最近查询只保存在
-Shell 进程内存中，重启即清空，不写入 SD 卡，也不发送到网络。每次请求严格绑定 query、
-offset 和 limit；结果页最多 8 条，Previous/Next 分页不会把完整 Catalog 复制到 UI。
+The current System Shell accepts up to 32 ASCII letters, digits, spaces, periods, hyphens,
+and underscores directly from the physical keyboard. The protocol retains the 96-byte UTF-8
+limit for a future trusted input method. Recent queries exist only in Shell process memory,
+are cleared on restart, are not written to the SD card, and are not sent over the network.
+Every request binds its query, offset, and limit. Previous/Next pagination displays at most
+eight entries and does not copy the complete Catalog into the UI.
 
-S6A 的 Catalog v2 已签名 developer、subtitle、category、keywords 和 age/privacy 元数据，
-`cp0-stored` 已将这些字段用于本地搜索。S6E 的 `browse` IPC/CLI 使用根中签名的分类计数，
-每页最多返回 8 项；旧 `list` 保留兼容并只返回第一个 64 项有界页面。
-Updates 仅在 Catalog 版本按 SemVer 严格高于 appd 报告的已安装版本时出现。旧版本、相同版本
-和 prerelease 降级都保持 `INSTALLED`，不会伪装成更新。
+S6A Catalog v2 signs developer, subtitle, category, keywords, and age/privacy metadata, and
+`cp0-stored` uses those fields for local search. S6E `browse` IPC/CLI uses category counts
+signed by the root and returns at most eight entries per page. Legacy `list` remains for
+compatibility and exposes only the bounded first page of up to 64 entries. Updates appear
+only when the Catalog version is strictly greater under SemVer than the installed version
+reported by appd. Older versions, equal versions, and prerelease downgrades remain
+`INSTALLED` and cannot masquerade as updates.
 
-S6B 的 Catalog v3 在此基础上摘要绑定 icon 和有界 details 清单，details 再绑定截图；Publisher
-已将这些资源放入包所在的不可变 generation。根 Catalog 不内联长 description 或截图数组，避免
-64 应用目录超出 48 KiB。S6C 已在 `cp0-stored` 加入 4 MiB icon、1 MiB details 和 8 MiB
-screenshot 独立缓存；所有对象按摘要命名、单任务下载、结构复验后原子提交，截图使用稳定 LRU。
-媒体失败与 Catalog/应用安装解耦。S6D 已通过严格 details/media IPC 将图标、描述、截图、
-权限差异和更新说明接入 System Shell。
+S6B Catalog v3 binds an icon and bounded details list in each summary, while the details
+bind screenshots. Publisher places all resources in the same immutable generation as the
+package. The root Catalog does not inline long descriptions or screenshot arrays, keeping a
+64-app Catalog below 48 KiB. S6C gives `cp0-stored` separate 4 MiB icon, 1 MiB details, and
+8 MiB screenshot caches. Objects are digest-named, downloaded by one job, structurally
+revalidated, and atomically committed; screenshots use a stable LRU. Media failure is
+isolated from Catalog and app installation. S6D connects icons, descriptions, screenshots,
+permission diffs, and release notes to System Shell through strict details/media IPC.
 
-S6E 在此基础上增加签名根索引、签名分类索引和独立 shard。Publisher 同时按应用数和实际
-签名编码字节装箱；PostgreSQL 的完成触发器要求 root/shard 数量和应用总数闭合。`cp0-stored`
-先顺序下载并验证全部 shard，再安装私有 generation 目录并最后原子替换根缓存；缺失、错序、
-截断、替换或同 sequence 不同内容都保留上一 generation。
+S6E adds a signed root index, signed category index, and independent shards. Publisher packs
+by both app count and actual signed encoded bytes; PostgreSQL's completion trigger requires
+the root and shard counts to close exactly over the total app count. `cp0-stored` downloads
+and validates every shard in order, installs a private generation directory, and only then
+atomically replaces the root cache. Missing, out-of-order, truncated, replaced, or
+same-sequence/different-content data leaves the prior generation active.
 
-S8A 的 Catalog v4 在 v3 上增加签名 editorial 投影，并将运营 rebuild job 精确绑定到不可变
-editorial resource version。Publisher 只有在所有引用 Release 仍可发布、产物身份匹配且应用
-存在于同一个 Catalog 时才发出 v4；暂停、下架、替换或缺失引用会安全退回无 editorial 的 v3。
-`cp0-stored` 通过独立 `today` IPC 返回同一 sequence 的有界完整应用摘要；Shell 在响应 sequence
-不一致、旧 Catalog、null 或解析错误时清空运营状态，避免混合两个快照。
+S8A Catalog v4 adds a signed editorial projection to v3 and binds each editorial rebuild job
+to an immutable editorial resource version. Publisher emits v4 only if every referenced
+Release remains publishable, artifact identity matches, and the App exists in the same
+Catalog. A paused, removed, replaced, or missing reference safely degrades to v3 without
+editorial content. `cp0-stored` returns bounded, complete app summaries from the same
+sequence through separate `today` IPC. System Shell clears editorial state on a sequence
+mismatch, stale Catalog, null response, or parse failure so it never combines two snapshots.
 
-S8B 增加与 Catalog 完全分离的可选聚合路径。`cp0-stored` 独占 mode 0600 的有界周状态，
-System Shell 只能读取状态和设置同意，appd 只能以 root 身份提交精确已安装版本的启动/崩溃计数。
-设备不保存或发送设备 ID、事件时间、搜索词、日志、退出状态或堆栈；只上传上一完整 UTC 周。
-随机 128-bit batch ID 在首次请求前持久化，只有 HTTPS 202 精确回显该 ID 后才删除本地周数据。
-后端用 15 天摘要收据去重，验证 published artifact，并在 20 个独立批次前隐藏公开聚合。
-完整契约见 `STORE-METRICS-V1.md`。
+S8B adds an optional aggregate path entirely separate from the Catalog. `cp0-stored`
+exclusively owns bounded weekly state at mode 0600. System Shell may only read status and set
+consent; appd, as root, may submit only launch/crash counts for an exact installed version.
+The device neither stores nor sends a device ID, event timestamp, search terms, logs, exit
+status, or stack trace, and uploads only the previous complete UTC week. It persists a random
+128-bit batch ID before the first request and deletes local weekly data only after an HTTPS
+202 response echoes that exact ID. The backend keeps digest receipts for 15 days to
+deduplicate, validates published artifacts, and withholds public aggregates until at least 20
+independent batches exist. See `STORE-METRICS-V1.md`.
 
-#### 下载与更新
+#### Download and Update
 
-- 同一时间只允许一个 Store 下载/安装任务，避免 CM0 内存和 SD 抖动；
-- 用户可离开 Store，可信状态区继续显示进度；
-- 网络中断保留经过边界检查的 `.part`，恢复必须验证 HTTP 206/Content-Range；
-- 下载完成后重新核对字节数、SHA-256、Store 签名和开发者签名；
-- 更新页只显示 appd 确认已安装且 Catalog 版本严格更高的应用；
-- 自动更新默认关闭，后续只能在充电、网络和策略条件同时满足时启用。
+- Only one Store download/install job may run at a time, avoiding CM0 memory and SD-card
+  contention.
+- Users may leave the Store while the trusted status area continues to show progress.
+- Network interruption retains a boundary-checked `.part`; resumption must validate HTTP 206
+  and `Content-Range`.
+- Completion rechecks byte length, SHA-256, Store signature, and developer signature.
+- Updates lists only apps appd confirms are installed and whose Catalog version is strictly
+  greater.
+- Automatic update is disabled by default and may later run only when power, network, and
+  policy conditions all permit it.
 
-## 3. 端到端状态机
+## 3. End-to-End State Machines
 
-### 3.1 Submission revision
+### 3.1 Submission Revision
 
 ```text
 DRAFT -> UPLOADING -> PROCESSING -> READY_FOR_REVIEW -> IN_REVIEW
@@ -255,8 +310,9 @@ DRAFT -> UPLOADING -> PROCESSING -> READY_FOR_REVIEW -> IN_REVIEW
                                             -> APPROVED
 ```
 
-`NEEDS_CHANGES`、`APPROVED`、`REJECTED` 和 `WITHDRAWN` 是 revision 终态。任何 package、
-Listing 或资源变化都创建新的递增 revision 并重新审核，不能在旧对象上原地改字。
+`NEEDS_CHANGES`, `APPROVED`, `REJECTED`, and `WITHDRAWN` are terminal for a revision. Any
+change to the package, Listing, or resources creates a new incremented revision and requires
+another review; an old object is never edited in place.
 
 ### 3.2 Release
 
@@ -266,42 +322,45 @@ READY -> SCHEDULED -> PUBLISHING -> PUBLISHED <-> PAUSED
       -> REMOVED
 ```
 
-Release 只能引用 `APPROVED` submission；发布、暂停、恢复和下架都生成更高 sequence 的
-Catalog。完整转换权限、并发和幂等契约见 `STORE-CONTROL-API-V1.md`。
+A Release can reference only an `APPROVED` Submission. Publishing, pausing, resuming, and
+removing each create a higher-sequence Catalog. See `STORE-CONTROL-API-V1.md` for the exact
+transition authorization, concurrency, and idempotency contract.
 
-### 3.3 设备安装
+### 3.3 Device Installation
 
 ```text
 AVAILABLE -> QUEUED -> DOWNLOADING -> VERIFYING -> INSTALLING -> INSTALLED
                                \-> FAILED / PAUSED
 ```
 
-协议必须把失败类型限制为稳定、用户可理解的类别；详细主机路径、TLS 库错误和内部
-命令不得暴露给 Shell。重试从安全检查点开始，不得跳过验证。
+The protocol limits failures to stable, user-comprehensible categories. Detailed host paths,
+TLS-library errors, and internal commands must not reach System Shell. Retry resumes only
+from a secure checkpoint and never skips verification.
 
-## 4. 核心数据模型
+## 4. Core Data Model
 
-| 实体 | 稳定标识 | 关键绑定 |
+| Entity | Stable identifier | Key binding |
 | --- | --- | --- |
-| Developer/Team | UUID | 登录身份、角色、2FA 状态 |
-| Developer Key | key_id | team、状态、创建/吊销时间 |
-| App | app_id | owner team、默认语言、策略状态 |
-| Listing Revision | digest | app/version、文案、分类、资源摘要 |
-| Submission | submission_id | `.capp` SHA-256、developer key、Listing digest |
-| Scan Report | report_id | submission digest、工具链版本、结论 |
-| Review Decision | decision_id | submission、reviewer、字段级原因 |
-| Release | release_id | approved submission、范围、发布时间 |
-| Editorial Revision | layout_id + resource_version | operator、approved published Releases、audit/outbox |
-| Catalog Snapshot | sequence | releases、editorial、资源摘要、签名 |
+| Developer/Team | UUID | Login identity, role, 2FA state |
+| Developer Key | key_id | Team, state, creation/revocation time |
+| App | app_id | Owner Team, default locale, policy state |
+| Listing Revision | digest | App/version copy, category, resource digests |
+| Submission | submission_id | `.capp` SHA-256, developer key, Listing digest |
+| Scan Report | report_id | Submission digest, toolchain version, decision |
+| Review Decision | decision_id | Submission, reviewer, field-level reasons |
+| Release | release_id | Approved Submission, scope, publication time |
+| Editorial Revision | layout_id + resource_version | Operator, approved published Releases, audit/outbox |
+| Catalog Snapshot | sequence | Releases, editorial projection, resource digests, signature |
 
-Listing v1 至少包含 `app_id`、`version`、locale、subtitle、description、category、
-keywords、age_rating、privacy_url、support_url、release_notes、icon 和截图资源清单。
-所有字符串和数组都有字符、字节、数量上限；URL 只允许 HTTPS 且禁止凭据和 fragment。
-冻结的字段、目录约定和资源边界见 `STORE-LISTING-V1.md`。
+Listing v1 contains at least `app_id`, `version`, locale, subtitle, description, category,
+keywords, age_rating, privacy_url, support_url, release_notes, icon, and screenshot resource
+inventory. Every string and array has character, byte, and count bounds. URLs require HTTPS
+and prohibit credentials and fragments. See `STORE-LISTING-V1.md` for the frozen fields,
+directory conventions, and resource bounds.
 
-## 5. API 边界
+## 5. API Boundary
 
-Developer API 首版建议：
+Initial Developer API surface:
 
 ```text
 POST   /v1/apps
@@ -319,52 +378,69 @@ POST   /v1/editorial/today
 PUT    /v1/editorial/today
 ```
 
-冻结的 OpenAPI 3.1 契约位于 `schemas/store-control-v1.openapi.json`；上表仅是入口摘要。
+The frozen OpenAPI 3.1 contract is `schemas/store-control-v1.openapi.json`; the table above
+is only an endpoint summary.
 
-大文件上传使用短期、单对象、限尺寸的 presigned URL。finalize 请求必须提交所有对象
-摘要；后端重新读取对象并校验，不信任浏览器报告的大小和 SHA。
+Large-object upload uses short-lived presigned URLs restricted to one object and a bounded
+size. A finalize request supplies every object digest; the backend rereads and verifies the
+objects and does not trust size or SHA values reported by the browser.
 
-设备协议不复用这些 HTTP API。Shell 只通过 Unix socket 发出 `list/today/search/refresh/install`
-等有界命令；`cp0-stored` 再读取已经签名的发布面对象。Today 响应必须与刚读取的 Catalog
-sequence 完全一致，Catalog v1-v3 返回 `editorial: null`。
+The device protocol does not reuse these HTTP APIs. System Shell sends bounded commands such
+as `list`, `today`, `search`, `refresh`, and `install` over a Unix socket. `cp0-stored` then
+reads signed publication-plane objects. A Today response must exactly match the Catalog
+sequence most recently read; Catalog v1 through v3 return `editorial: null`.
 
-## 6. 隐私、合规和运营质量
+## 6. Privacy, Compliance, and Operational Quality
 
-- 默认不收集搜索词、设备标识、SSID、IP 历史或应用私有数据；
-- 安装/崩溃指标采用明确同意、随机批次和最小粒度聚合；
-- Developer Portal 和 Review Console 的日志视为敏感审计数据；
-- 隐私标签由开发者声明并经审核，不会自动扩大运行时权限；
-- 年龄分级、出口管制、内容政策和下架申诉需要独立政策文档；
-- Catalog 发布目标：99.9% 可用，错误发布可在 15 分钟内通过更高 sequence 撤回；
-- 后端恢复演练必须证明数据库、对象、队列和签名审计可以一致恢复。
+- Search terms, device identifiers, SSID history, IP history, and app-private data are not
+  collected by default.
+- Install/crash metrics use explicit consent, random batches, and minimal aggregation.
+- Developer Portal and Review Console logs are sensitive audit data.
+- Developers declare privacy labels and reviewers verify them; labels do not expand runtime
+  permissions.
+- Age rating, export control, content policy, and removal appeals require separate policy
+  documents.
+- The Catalog publication target is 99.9% availability; an incorrect publication can be
+  withdrawn within 15 minutes through a higher sequence.
+- Backend recovery drills must prove consistent restoration of the database, objects,
+  queues, and signing audit.
 
-## 7. 当前实现与目标差距
+## 7. Current Implementation Gaps
 
-| 能力 | 当前状态 | 目标 |
+| Capability | Current state | Target |
 | --- | --- | --- |
-| 开发者发布 | 本地目录 + 手工 review JSON | Portal/CLI 上传、状态流、团队管理 |
-| 审核 | 精确静态记录 | 自动扫描 + Review Console + 审计事件 |
-| Catalog | v4 单文件含 discovery、资源摘要和 editorial | 超过 64 应用后的签名 shard |
-| 设备浏览 | Today/Apps/Search/Updates、富详情 | 分类索引和后续产品迭代 |
-| 搜索 | 本地协议、daemon、CLI 和 Shell 已实现 | 超过 64 应用后的签名 shard |
-| 资源 | 审核绑定、摘要校验、设备缓存和 Shell 展示 | CDN/缓存真机容量门禁 |
-| 下载 | 暂停/恢复、统一进度、更新队列和自动更新策略 | S9 真实断电/断网证据 |
-| 用户账户 | 无 | 首版保持无账户；未来另立安全设计 |
-| 商业化 | 无 | 不在首版范围 |
+| Developer publication | Local directory plus manual review JSON | Portal/CLI upload, state flow, Team management |
+| Review | Exact static records | Automated scan, Review Console, audit events |
+| Catalog | v4 single file with discovery, resource digests, and editorial | Signed shards above 64 apps |
+| Device browsing | Today/Apps/Search/Updates and rich details | Category index and later product iteration |
+| Search | Local protocol, daemon, CLI, and Shell implemented | Signed shards above 64 apps |
+| Resources | Review binding, digest checks, device cache, and Shell display | CDN/cache hardware-capacity gate |
+| Download | Pause/resume, unified progress, update queue, and automatic-update policy | S9 real power/network-loss evidence |
+| User account | None | Remain account-free in v1; future work requires a separate security design |
+| Commerce | None | Outside v1 scope |
 
-## 8. 架构决策
+## 8. Architecture Decisions
 
-1. 设备安装授权来自 Store 签名，不来自 Portal 登录或 CDN TLS。
-2. 控制面与发布面分离，设备不依赖数据库/API 在线可用。
-3. 首版搜索在签名 Catalog 上本地执行，保护隐私并适配最多 64 个应用。
-4. Listing、资源和包作为一个审核 revision 绑定，审批后不能原地修改。
-5. 首版只支持免费应用；支付和用户账户必须经过单独威胁模型与合规评审。
-6. 任何高质量视觉资源都必须有摘要、尺寸、格式和像素上限，不能直接信任 CDN 内容。
-7. 本地 Store socket 的搜索命令作为协议 v1 的可选增量：旧客户端不会收到未经请求的
-   搜索响应，新客户端连接旧服务会得到严格的 invalid-request；产品镜像仍统一升级
-   Shell、CLI、`cp0-stored` 和协议库，跨版本混用不作为受支持部署方式。
-8. 运营布局只引用 Release，设备只接收同一签名 Catalog 中的 App 投影；运营 mutation 绑定
-   不可变 revision，引用失效时退回 v3，绝不继续展示过期推荐。
+1. Device installation authority comes from the Store signature, not Portal login or CDN
+   TLS.
+2. The control and publication planes are separate; a device does not depend on database or
+   control-API availability.
+3. Initial search runs locally over a signed Catalog, preserving privacy and supporting up
+   to 64 apps.
+4. A review revision binds the Listing, resources, and package; approved content cannot be
+   modified in place.
+5. The first release supports free apps only. Payments and user accounts require a separate
+   threat model and compliance review.
+6. Every rich visual resource has digest, dimensions, format, and pixel bounds. CDN content
+   is never trusted directly.
+7. Local Store-socket `search` is an optional protocol-v1 extension. Old clients receive no
+   unsolicited search response, and new clients connected to an old service receive a strict
+   invalid-request result. Product images still upgrade System Shell, CLI, `cp0-stored`, and
+   protocol libraries together; cross-version mixing is unsupported.
+8. Editorial layouts reference Releases only, and devices accept only App projections from
+   the same signed Catalog. Editorial mutations bind immutable revisions; an invalid
+   reference degrades to v3 and never displays an expired recommendation.
 
-首版内容、隐私、审核、申诉和下架工程基线见 `STORE-POLICY-V1.md`；生产文本仍需产品、
-安全和法务签署。
+The initial engineering baseline for content, privacy, review, appeals, and removal is
+`STORE-POLICY-V1.md`. Production policy text still requires approval from product, security,
+and legal owners.

@@ -1,5 +1,8 @@
 # Phase 3B: appd lifecycle service
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3B-APPD-LIFECYCLE.zh-CN.md)
+
 ## Trust boundary
 
 `cp0-appd` is a root-owned, socket-activated daemon. A lifecycle request names

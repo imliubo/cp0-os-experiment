@@ -1,5 +1,8 @@
 # Store Discovery Catalog v2
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-DISCOVERY-CATALOG-V2.zh-CN.md)
+
 Catalog v2 adds signed discovery metadata without changing the package install
 trust chain. It is the first S6 slice toward an App Store-style browse and search
 experience on the 320x170 device.

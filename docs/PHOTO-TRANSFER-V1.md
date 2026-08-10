@@ -1,5 +1,8 @@
 # Owner Photo Transfer v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHOTO-TRANSFER-V1.zh-CN.md)
+
 This document records the original photo-only design. The authoritative
 implemented transport and security contract is now
 `OWNER-MEDIA-TRANSFER-V1.md`: a password-gated, isolated FAT32 USB exchange

@@ -1,5 +1,8 @@
 # Phase 3J: Restricted logical GPIO broker
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3J-GPIO-BROKER.zh-CN.md)
+
 ## Scope
 
 The V0.6 GPIO API exposes four logical connector outputs and no raw Linux GPIO

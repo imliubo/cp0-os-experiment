@@ -1,5 +1,8 @@
 # Phase 3I: Restricted camera broker
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3I-CAMERA-BROKER.zh-CN.md)
+
 ## Scope
 
 The camera APIs do not expose V4L2, Media Controller, dma-heap, VideoCore

@@ -1,5 +1,8 @@
 # Store Media Resources v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-MEDIA-RESOURCES-V1.zh-CN.md)
+
 S6B defines and publishes the immutable media objects used by Store browsing and
 application details. It keeps the signed root Catalog bounded for a 512 MB CM0
 while allowing screenshots to be fetched and verified on demand.

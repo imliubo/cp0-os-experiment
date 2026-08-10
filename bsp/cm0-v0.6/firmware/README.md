@@ -1,5 +1,8 @@
 # M5Stack boot-screen firmware
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 `start-m5stack-bootscreen.elf` is the retired opaque VideoCore firmware distributed
 by M5Stack's CardputerZero image builder. It retains the Raspberry Pi `start_x`
 camera feature set and adds early ST7789 splash rendering from

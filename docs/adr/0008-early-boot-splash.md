@@ -1,109 +1,145 @@
-# ADR 0008：V0.6 early boot splash 与静默启动
+# ADR 0008: V0.6 Early-Boot Splash and Silent Boot
 
-- 状态：Accepted
-- 日期：2026-08-06
+<!-- doc-locale: en -->
+> **English** | [简体中文](0008-early-boot-splash.zh-CN.md)
 
-## 决策
+- Status: Accepted
+- Date: 2026-08-06
 
-CM0 V0.6 product 镜像设置 `start_x=1`，使用 `raspi-firmware` 提供的
-`start_x.elf`/`fixup_x.dat`。initramfs 的 `init-top` 阶段首先运行静态、有界的
-`early-splash-spi`：它直接映射 BCM2837 的 `0x3f000000` peripheral window 中的
-SPI0/GPIO 寄存器，以与 V0.6 驱动一致的约
-20 MHz 时钟初始化 ST7789，并将固定的 108800-byte `splash.rgb565` 写入 panel RAM。
-这条路径不等待 DRM、udev、根分区、OverlayFS 或 systemd。随后启动非阻塞 framebuffer
-worker，在 Linux 驱动接管并可能重置 panel RAM 后重绘相同图片。最终 root 中的
-`cardputerzero-early-splash.service` 保留为 compositor 前的有界兜底。framebuffer
-worker 成功后会在 `/run/cardputerzero-early-splash/` 写入 boot-scoped marker；原子目录锁
-阻止 worker 与 systemd 兜底并发写屏，因此 DRM 接管后最多重绘一次。三层路径都不向 App
-暴露 framebuffer，失败时也不阻止 Home；recovery initramfs 不包含 helper、worker 或
-图片。
+## Decision
 
-peripheral base、SPI0 CS0、GPIO25 DC 和 35-line offset 来自 CardputerZero 官方
-`pi-gen` 的 `ci/early-splash` 分支提交
-`e05b81c80f1f5a8e589956937adba5b5d04f0ca9`。该实验原型只填充纯蓝色，使用的
-`MADCTL=0x60` 和最小初始化序列没有经过图片方向、gamma 或 display inversion 验证。
-2026-08-07 的 V0.6 真机复验确认它会使产品图片上下反转且颜色错误。direct-SPI helper
-现与固定 BSP `c3b254819307c177a34100b66fe19e52059ce8c4` 中
-`cardputerzero,st7789v_lcd.bin` 的控制器配置一致：使用 `MADCTL=0xa0`、完整
-power/gamma 参数和 display inversion，再将同一 RGB565_LE 产品图片按 MSB-first 写入。
+The CM0 V0.6 product image sets `start_x=1` and uses the
+`start_x.elf`/`fixup_x.dat` pair from `raspi-firmware`. During initramfs
+`init-top`, the static, bounded `early-splash-spi` helper runs first. It maps the
+BCM2837 peripheral window at `0x3f000000`, initializes ST7789 through SPI0/GPIO
+registers at approximately 20 MHz, and writes the fixed 108800-byte
+`splash.rgb565` into panel RAM.
 
-官方当前 `cardputerzero_v0.6` 镜像在 VideoCore `start.elf` 中显示 `splash.bmp`，因此
-能早于 ARM 内核出现；其固件 SHA256 仍为
-`d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd`。真机已经证明
-该固件强制 256/256 MB ARM/VideoCore 划分，不能为追求显示速度重新引入。本实现继续
-使用标准相机固件和 64/448 MB 预算，但把 SPI 发送改为有界的 TX/RX FIFO 流式泵送，
-不再每写一个字节就单独排空一次 RX FIFO；同时删除实验原型在 `DISPON` 后多出的
-20 ms 等待，因为固定 BSP 在该命令后会立即 flush。
+This path does not wait for DRM, udev, the root partition, OverlayFS, or
+systemd. It then starts a non-blocking framebuffer worker that redraws the same
+image after the Linux driver takes ownership and may reset panel RAM. In the
+final root, `cardputerzero-early-splash.service` remains as a bounded fallback
+before the compositor. A successful framebuffer worker writes a boot-scoped
+marker under `/run/cardputerzero-early-splash/`; an atomic directory lock stops
+the worker and systemd fallback from writing concurrently, so the image is
+redrawn at most once after DRM takeover. None of these three layers exposes the
+framebuffer to apps. Failure does not block Home. The recovery initramfs
+contains no helper, worker, or splash image.
 
-官方切换到该启动方式的参考提交是
-`CardputerZero/pi-gen@cc5a7375dfa903757b040e76a1e64e5b0dcf8e7f`。该提交只把
-U-Boot 替换成定制 `start.elf`，并安装 `splash.bmp`；它没有定义 Linux DRM、Weston
-和桌面之间的画面交接。保留在本仓库用于来源审计的二进制与该提交引入、后续
-`554544921c1659f39bf296b7986715fdeac898c8` 快照中未改变的文件哈希一致。
+The peripheral base, SPI0 CS0, GPIO25 DC, and 35-line offset come from commit
+`e05b81c80f1f5a8e589956937adba5b5d04f0ca9` on the official CardputerZero
+`pi-gen` `ci/early-splash` branch. That experimental prototype filled solid
+blue only. Its `MADCTL=0x60` and minimal initialization sequence were never
+validated for image orientation, gamma, or display inversion. Hardware
+revalidation on 2026-08-07 confirmed that it inverted the product image and
+produced incorrect colors. The direct-SPI helper now matches the controller
+configuration in `cardputerzero,st7789v_lcd.bin` from pinned BSP commit
+`c3b254819307c177a34100b66fe19e52059ce8c4`: `MADCTL=0xa0`, complete power and
+gamma values, display inversion, and MSB-first transfer of the RGB565_LE image.
 
-## 持续显示交接
+The current official `cardputerzero_v0.6` image displays `splash.bmp` from
+VideoCore `start.elf`, before the ARM kernel. Its firmware SHA-256 is
+`d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd`.
+Hardware proved that this firmware forces a 256/256 MB ARM/VideoCore split; it
+must not be reintroduced for a faster splash. This design retains the standard
+camera firmware and 64/448 MB split. Its SPI transfer uses a bounded TX/RX FIFO
+stream pump rather than draining RX after each byte. It also removes the
+experimental 20 ms delay after `DISPON`, because the fixed BSP flushes
+immediately after that command.
 
-product 启动不得在 direct-SPI、fbdev、Weston 和 Setup/Home 之间主动清屏。具体顺序为：
+The official reference for switching to the firmware splash is
+`CardputerZero/pi-gen@cc5a7375dfa903757b040e76a1e64e5b0dcf8e7f`. That commit
+only replaces U-Boot with a custom `start.elf` and installs `splash.bmp`; it does
+not define visual handoff among Linux DRM, Weston, and the desktop. Binaries
+kept in this repository for provenance auditing match the unchanged files
+introduced by that commit and its later
+`554544921c1659f39bf296b7986715fdeac898c8` snapshot.
 
-1. initramfs direct-SPI helper 尽早写入产品图片；
-2. DRM fbdev 出现后，后台 worker 用同一份 RGB565 图片重绘，以覆盖驱动 probe 对
-   panel RAM 的重置；
-3. `cardputerzero-display-retry.service` 只等待冷启动 LCD 稳定点，并在此期间保留
-   framebuffer 内容；它不得再停止或重启 Weston；
-4. Weston 只启动一次，并立即 autolaunch 由 `cp0-compositor` 运行的受信任
-   `os.cardputerzero.boot-splash` Wayland 客户端；
-5. `unblank-display.sh` 等待该 surface 的首个 frame callback，再恢复可能为 0 的背光；
-6. compositor policy 仅在完整的受信任 System Shell surface 已映射后隐藏 splash，
-   因而 Setup 或 Home 的第一帧直接替换同一张图片。
+## Continuous Visual Handoff
 
-Wayland splash 使用独立的 `WESTON_LAYER_POSITION_UI` layer，不注册为 App，也不进入
-Apps 或 Tasks。app-id 本身不是授权：policy 同时校验客户端必须属于
-`cp0-compositor` UID，普通应用不能伪装成启动画面。如果 System Shell 在启动交接时
-退出，policy 会重新显示仍存活的 splash，而不是暴露黑色背景或其他应用内容。
+Product boot must not intentionally clear the panel between direct SPI, fbdev,
+Weston, and Setup/Home. The sequence is:
 
-helper 是正常 initramfs 中的有界程序，读取经过哈希固定的产品图片，保留标准
-initramfs 的 root discovery、数据扩容和 OverlayFS 链路。它自身通过 `alarm(2)` 终止
-异常寄存器访问，调用脚本另有 BusyBox `timeout -s KILL 2` 兜底；SPI 空闲等待和 RX
-FIFO 轮询同样有次数上限，因此任何 LCD 失败都只能跳过 splash，不能阻断启动。
+1. The initramfs direct-SPI helper writes the product image as early as possible.
+2. After DRM fbdev appears, the background worker redraws the same RGB565 image
+   to cover any panel-RAM reset during driver probe.
+3. `cardputerzero-display-retry.service` waits only for the cold-boot LCD
+   stabilization point while retaining framebuffer contents. It must not stop
+   or restart Weston.
+4. Weston starts exactly once. `cp0-compositor` immediately autolaunches the
+   trusted `os.cardputerzero.boot-splash` Wayland client.
+5. `unblank-display.sh` waits for that surface's first frame callback and then
+   restores a backlight that may be at zero.
+6. Compositor policy hides the splash only after the complete trusted System
+   Shell surface is mapped, so the first Setup or Home frame directly replaces
+   the same image.
 
-不再打包 M5Stack `m5stack_bootscreen` 固件。其历史 SHA256
-`d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd`
-由构建阶段和最终 rootfs 门禁明确拒绝；标准固件版本则记录在每份镜像的软件包清单中。
+The Wayland splash uses a dedicated `WESTON_LAYER_POSITION_UI` layer. It is not
+registered as an app and never appears in Apps or Tasks. App ID alone is not
+authority: policy also requires the client to have the `cp0-compositor` UID, so
+an ordinary app cannot impersonate the boot splash. If System Shell exits
+during handoff, policy reveals the still-running splash instead of a black
+background or another app's content.
 
-product cmdline 使用 `quiet loglevel=3 logo.nologo`、
-`vt.global_cursor_default=0`、`fbcon=map:off`、`systemd.show_status=false` 和
-`rd.systemd.show_status=false`，且不启用 LCD console banner。recovery 镜像保留
-`loglevel=6 fbcon=map:1` 与启动摘要。运行时 Recovery Mode 通过固定 helper 将 tty1
-映射到 udev 管理的 `/dev/fb_lcd`，不依赖 HDMI/LCD 的 framebuffer 枚举顺序。
+The helper is a bounded program in the normal initramfs. It reads a hash-pinned
+product image and preserves the standard root-discovery, data-expansion, and
+OverlayFS chain. `alarm(2)` terminates abnormal register access, while the
+calling script adds BusyBox `timeout -s KILL 2`. SPI-idle and RX-FIFO polling
+also have fixed attempt limits. LCD failure can therefore skip the splash but
+cannot block boot.
 
-## 理由
+Do not package the M5Stack `m5stack_bootscreen` firmware. Build and final-rootfs
+gates explicitly reject its historical SHA-256
+`d1639763fa6714e2cd4544fb45b9d5e5d54e949eaa11d7e7057651b6d4d51efd`.
+Each image records its standard firmware version in the package inventory.
 
-供应商固件可以在 ARM 内核前初始化 ST7789，但 2026-08-06 真机证明它忽略
-`gpu_mem_512=64` 并强制 256 MB VideoCore，Linux 只获得约 227 MiB。这个代价破坏
-512 MB CM0 的 App 容量、性能门禁和 ADR 0003，不能接受。product 已用
-`quiet loglevel=3 logo.nologo fbcon=map:off` 隐藏内核和 console 输出，因此在 Linux
-直接 SPI helper 执行前保持黑屏，随后立即显示 splash，不会把启动日志暴露到 LCD，
-也不必等待 framebuffer、可写数据分区或用户空间服务。
+The product command line uses `quiet loglevel=3 logo.nologo`,
+`vt.global_cursor_default=0`, `fbcon=map:off`, `systemd.show_status=false`, and
+`rd.systemd.show_status=false`; it does not enable the LCD console banner. The
+recovery image retains `loglevel=6 fbcon=map:1` and the boot summary. Runtime
+Recovery Mode maps tty1 to the udev-managed `/dev/fb_lcd` through a fixed helper
+and does not depend on HDMI/LCD framebuffer enumeration order.
 
-Circle bare-metal splash 可以从源码构建，但当前稳定实现需要重命名内核、写 FAT32
-并二次重启。它增加冷启动时间和掉电窗口，不作为 product 默认链路。Linux initramfs
-直接 SPI helper 已进入 ARM 内核的 initramfs 阶段，仍晚于 VideoCore 固件方案，但早于
-任何 Linux 显示驱动；它保留标准可维护固件、正确内存划分和单次启动。后续 worker 在
-后台轮询，不能延迟 root discovery 或首次启动的数据分区扩容。
+## Rationale
 
-## 后果
+Supplier firmware can initialize ST7789 before the ARM kernel, but hardware on
+2026-08-06 showed that it ignores `gpu_mem_512=64`, assigns 256 MB to VideoCore,
+and leaves Linux about 227 MiB. That cost breaks app capacity, performance
+gates, and ADR 0003 on a 512 MB CM0. It is unacceptable.
 
-每次 `raspi-firmware` 更新仍须完成 V0.6 冷启动、无 HDMI/有 HDMI、IMX219、LCD
-方向与色彩、64/448 MB 划分、正常重启、意外掉电和 recovery console 验收。镜像门禁
-验证标准 `start_x` 选择、固件文件存在、旧供应商哈希不存在，以及 splash 的精确大小
-和哈希，并确认 `early-splash-spi` 为静态 ARM64 可执行文件且存在于 product initramfs、
-不存在于 recovery initramfs。
+Product boot hides kernel and console output with
+`quiet loglevel=3 logo.nologo fbcon=map:off`. The panel therefore remains black
+only until the Linux direct-SPI helper runs, after which the splash appears
+without exposing boot logs or waiting for framebuffer, writable data, or
+userspace services.
 
-product 的正常启动不再在 LCD 显示 IP、登录提示或内核错误。诊断依赖 Home、网络
-租约、mDNS、Owner 授权的 SSH，或显式 recovery 镜像/Recovery Mode。recovery 镜像
-仍保留完整可见控制台，避免 splash 策略消除本地修复路径。
+The Circle bare-metal splash can be built from source, but its current stable
+implementation requires renaming the kernel, writing FAT32, and rebooting a
+second time. This increases cold-boot latency and the power-loss window and is
+not part of the default product boot chain. The initramfs direct-SPI helper runs
+after the ARM kernel begins, later than a VideoCore firmware splash but before
+any Linux display driver. It retains maintainable standard firmware, the
+correct memory split, and one boot. Later workers poll in the background and
+must not delay root discovery or first-boot data-partition expansion.
 
-静态和构建门禁验证不存在 compositor restart/stop 启动路径、Wayland splash 的固定
-尺寸和资源路径、受信任 UID 检查、首帧 marker，以及 System Shell 的启动顺序。最终
-结论仍必须以 V0.6 冷启动录像或连续观测为准，因为 panel RAM、DRM atomic modeset 和
-背光控制之间的交接无法由 host 测试证明。
+## Consequences
+
+Every `raspi-firmware` update still requires V0.6 acceptance for cold boot with
+and without HDMI, IMX219, LCD orientation and color, the 64/448 MB split,
+normal restart, unexpected power loss, and recovery console. Image gates verify
+the standard `start_x` selection, firmware-file presence, absence of the old
+vendor hash, and the splash's exact size and hash. They also require a static
+ARM64 `early-splash-spi` in product initramfs and prohibit it from recovery
+initramfs.
+
+Normal product boot no longer displays the IP address, login prompt, or kernel
+errors on the LCD. Diagnostics rely on Home, the network lease, mDNS,
+Owner-authorized SSH, or explicit recovery media/Recovery Mode. The recovery
+image retains a fully visible console so the splash design does not eliminate
+local repair.
+
+Static and build gates prove the absence of compositor restart/stop boot paths,
+fixed Wayland splash dimensions and resource paths, trusted-UID checks,
+first-frame markers, and System Shell ordering. Final acceptance still requires
+V0.6 cold-boot video or continuous observation: host tests cannot prove handoff
+among panel RAM, DRM atomic modesetting, and backlight control.

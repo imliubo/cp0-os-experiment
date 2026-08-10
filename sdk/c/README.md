@@ -1,5 +1,8 @@
 # CardputerZero C/C++ SDK 1.1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Include `include/cardputerzero.h` from a freestanding Clang C11 or C++17
 project targeting `wasm32-unknown-unknown`. The header declares only the public
 CardputerZero Runtime imports; it does not expose WASI, Linux syscalls or native

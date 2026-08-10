@@ -1,5 +1,8 @@
 # Store content object garbage collection
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-OBJECT-GC.zh-CN.md)
+
 `cp0-store-object-gc` removes unreachable upload chunks and interrupted temporary
 files from the local content-addressed reference backend. It does not collect
 Publisher generations, device caches, or application packages, and it is not a

@@ -1,5 +1,8 @@
 # Store automatic application updates v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-AUTO-UPDATE-V1.zh-CN.md)
+
 S7F adds an explicitly enabled, fail-closed automatic update path for reviewed
 applications. It does not add unattended application installation: only an
 already installed application can be considered, and the default user
@@ -86,4 +89,3 @@ selection, version filtering, automatic appd handoff, and Store UID command
 isolation. C tests cover exact response shape and inconsistent status rejection.
 UI behavior and a 320x170 wait-power pixel snapshot are part of the normal
 System Shell gate. AArch64 compilation covers the Linux Netlink implementation.
-

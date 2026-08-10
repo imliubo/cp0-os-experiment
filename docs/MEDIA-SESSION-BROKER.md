@@ -1,5 +1,8 @@
 # Media-session broker
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](MEDIA-SESSION-BROKER.zh-CN.md)
+
 The media-session broker completes the global `Fn+Q`, `Fn+W` and `Fn+E`
 actions without giving the System Shell or applications general inter-process
 communication. It is coordination metadata, not an audio-device capability.

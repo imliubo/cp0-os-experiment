@@ -1,5 +1,8 @@
 # V0.6 boot splash assets
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 `splash.png` is the 320x170 source image. A bounded static initramfs helper
 initializes SPI0 and ST7789 before the Linux display driver loads, then sends
 `splash.rgb565` directly to panel RAM. The same asset is repainted through the

@@ -60,6 +60,7 @@ check: fmt
 	./tests/test-sdk-examples.sh
 	./tests/test-app-skill.sh
 	./tests/test-app-devkit.sh
+	./tests/test-document-localization.sh
 	./tests/test-simulator.sh
 	./tests/test-runtime-display.sh
 	./tests/test-device-diagnostics.sh

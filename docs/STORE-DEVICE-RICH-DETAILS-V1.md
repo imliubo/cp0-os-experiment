@@ -1,5 +1,8 @@
 # Store Device Rich Details v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](STORE-DEVICE-RICH-DETAILS-V1.zh-CN.md)
+
 S6D connects the signed Catalog v3 media hierarchy to the 320x170 System Shell
 without exposing private cache paths or placing image bytes in the bounded JSON
 frame.
@@ -56,4 +59,3 @@ app/version/index/dimension mismatches, truncated or duplicate descriptors,
 `FD_CLOEXEC`, real PNG decoding and fixed pixel output. System Shell tests cover
 all five pages, detail scrolling, screenshot navigation, stale Catalog install
 blocking and the 64 KiB UI-state budget with pixel snapshots.
-

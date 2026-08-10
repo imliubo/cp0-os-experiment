@@ -1,5 +1,8 @@
 # Store Acceptance v1
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Store Acceptance v1 is the initial 1.0.0 payload used by the deterministic
 Store install, interruption and upgrade acceptance flow. It has no controls or
 permissions and is not intended as a user application.

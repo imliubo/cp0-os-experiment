@@ -1,5 +1,8 @@
 # CardputerZero Review Console
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Internal React/Vite client for the bounded Store review API. The runtime uses
 the Review workforce BFF for session/login/logout and short-lived control-token
 exchange, then reads the real Review queue and Submission detail from Store

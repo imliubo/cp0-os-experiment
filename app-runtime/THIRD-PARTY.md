@@ -1,5 +1,8 @@
 # Third-party software
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](THIRD-PARTY.zh-CN.md)
+
 The CardputerZero App Runtime statically links WebAssembly Micro Runtime
 (WAMR) 2.4.5 from the Bytecode Alliance, pinned in `wamr.env`.
 

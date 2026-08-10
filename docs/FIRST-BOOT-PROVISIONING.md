@@ -1,5 +1,8 @@
 # CardputerZero OS first-boot provisioning plan
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](FIRST-BOOT-PROVISIONING.zh-CN.md)
+
 > Status: approved and implemented for host/image acceptance. Fresh-media V0.6
 > burn and hardware acceptance are still required before release or deployment.
 

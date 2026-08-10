@@ -1,5 +1,8 @@
 # CardputerZero OS threat model
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](THREAT-MODEL.zh-CN.md)
+
 ## Scope and claim
 
 This model covers the V0.6 CM0 device, the CardputerZero OS image, trusted

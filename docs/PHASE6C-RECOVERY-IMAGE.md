@@ -1,5 +1,8 @@
 # Phase 6C: independent recovery image profile
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE6C-RECOVERY-IMAGE.zh-CN.md)
+
 ## Purpose
 
 The recovery image is a separate maintenance artifact, not an alternate desktop

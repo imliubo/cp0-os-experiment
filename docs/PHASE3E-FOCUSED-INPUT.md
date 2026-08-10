@@ -1,5 +1,8 @@
 # Phase 3E: Focused application input
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](PHASE3E-FOCUSED-INPUT.zh-CN.md)
+
 ## Input boundary
 
 Applications never receive evdev or libinput descriptors. The trusted Runtime

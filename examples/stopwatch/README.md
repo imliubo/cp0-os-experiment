@@ -1,5 +1,8 @@
 # Stopwatch
 
+<!-- doc-locale: en -->
+> **English** | [简体中文](README.zh-CN.md)
+
 Stopwatch is a permission-free monotonic timer with tenth-of-a-second display
 precision and a bounded 99-hour presentation.
 
