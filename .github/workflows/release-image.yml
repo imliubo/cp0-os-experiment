@@ -3,51 +3,70 @@ name: release-image
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to build and upload
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   build-image:
-    runs-on: ubuntu-24.04
+    # pi-gen executes an ARM64 userspace for every image stage. Use the
+    # native public ARM runner so the release build does not depend on slow
+    # host-level QEMU emulation.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || inputs.release_tag }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
       - name: Install release dependencies
         run: |
-          sudo dpkg --add-architecture arm64
-          sudo find /etc/apt/sources.list.d -type f -name '*.sources' \
-            -exec sed -i '/^Components:/a Architectures: amd64' {} +
-          cat <<'EOF' | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          host_arch=$(dpkg --print-architecture)
+          case "$host_arch" in
+            amd64)
+              sudo dpkg --add-architecture arm64
+              sudo find /etc/apt/sources.list.d -type f -name '*.sources' \
+                -exec sed -i '/^Components:/a Architectures: amd64' {} +
+              cat <<'EOF' | sudo tee /etc/apt/sources.list.d/arm64-ports.list
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
           EOF
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            autoconf \
-            automake \
-            binfmt-support \
-            binutils-aarch64-linux-gnu \
-            build-essential \
-            cmake \
-            curl \
-            file \
-            g++-aarch64-linux-gnu \
-            gcc-aarch64-linux-gnu \
-            jq \
-            libcrypt-dev:arm64 \
-            libexpat1-dev \
-            libtool \
-            pkg-config \
-            qemu-user-static \
-            rsync \
+              ;;
+            arm64) ;;
+            *) echo "unsupported runner architecture: $host_arch" >&2; exit 1 ;;
+          esac
+          release_packages=(
+            autoconf
+            automake
+            binutils-aarch64-linux-gnu
+            build-essential
+            cmake
+            curl
+            file
+            g++-aarch64-linux-gnu
+            gcc-aarch64-linux-gnu
+            jq
+            libcrypt-dev:arm64
+            libexpat1-dev
+            libtool
+            pkg-config
+            rsync
             xz-utils
+          )
+          if [[ $host_arch == amd64 ]]; then
+            release_packages+=(binfmt-support qemu-user-static)
+          fi
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y "${release_packages[@]}"
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.85.1 --profile minimal \
@@ -75,12 +94,18 @@ jobs:
           pkg-config --exists expat
       - name: Register ARM64 binfmt
         run: |
-          sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc || true
-          sudo update-binfmts --enable qemu-aarch64
-          if [[ ! -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]]; then
-            sudo update-binfmts --display qemu-aarch64 || true
-            echo "error: qemu-aarch64 binfmt registration is unavailable" >&2
-            exit 1
+          if [[ $(dpkg --print-architecture) == amd64 ]]; then
+            sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc || true
+            sudo update-binfmts --enable qemu-aarch64
+            if [[ ! -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]]; then
+              sudo update-binfmts --display qemu-aarch64 || true
+              echo "error: qemu-aarch64 binfmt registration is unavailable" >&2
+              exit 1
+            fi
+          else
+            test "$(dpkg --print-architecture)" = arm64
+            test "$(uname -m)" = aarch64
+            echo "native ARM64 runner; binfmt registration is unnecessary"
           fi
       - name: Check DevKit release licensing
         id: devkit_license
@@ -114,7 +139,7 @@ jobs:
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-L/usr/lib/aarch64-linux-gnu
           CP0_ACCESS_PROFILE: production
-          CP0_IMAGE_NAME: cardputerzero-os-${{ github.event.release.tag_name }}
+          CP0_IMAGE_NAME: cardputerzero-os-${{ github.event.release.tag_name || inputs.release_tag }}
         run: make image
       - name: Verify image
         run: make verify-image
@@ -122,7 +147,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
+          gh release upload "${{ github.event.release.tag_name || inputs.release_tag }}" \
             deploy/*.img.xz deploy/*.info deploy/SHA256SUMS \
             --clobber
       - name: Upload App DevKit and Skill
@@ -130,7 +155,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
+          gh release upload "${{ github.event.release.tag_name || inputs.release_tag }}" \
             target/release-app-devkit/* \
             target/release-skill/* \
             --clobber

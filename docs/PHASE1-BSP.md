@@ -88,11 +88,11 @@ Docker is the default, supporting macOS and Linux. The daemon must run Linux
 arm64 containers. A Linux arm64 host may set `CP0_USE_DOCKER=0` for a native
 build.
 
-The GitHub release workflow runs on an x86_64 runner. It installs
-`binfmt-support` and `qemu-user-static`, then registers `qemu-aarch64` on the
-runner host before starting the privileged pi-gen container. This host-level
-registration is required for pi-gen to execute ARM64 stage commands; configuring
-the package only inside the container is insufficient.
+The GitHub release workflow runs on the public `ubuntu-24.04-arm` runner, so
+pi-gen executes its ARM64 stages natively instead of emulating them through
+QEMU. The workflow retains a host-level `qemu-aarch64` registration branch for
+an x86_64 fallback, because configuring the package only inside the privileged
+pi-gen container is insufficient.
 
 ```sh
 export CP0_FIRST_USER_PASSWORD='development-password'
