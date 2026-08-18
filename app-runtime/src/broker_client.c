@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include "broker_client.h"
 
 #include <errno.h>

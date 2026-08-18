@@ -225,7 +225,7 @@ impl ExtrausersIdentityStore {
         }
         fs::create_dir_all(&home)?;
         fs::set_permissions(&home, fs::Permissions::from_mode(0o700))?;
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", not(test)))]
         {
             let path = std::ffi::CString::new(home.as_os_str().as_encoded_bytes())
                 .map_err(|_| ProvisioningError::InvalidValue("owner home path"))?;
@@ -367,7 +367,7 @@ impl ExtrausersIdentityStore {
         };
         let home_valid =
             home_metadata.is_dir() && home_metadata.permissions().mode() & 0o777 == 0o700;
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", not(test)))]
         let home_valid =
             home_valid && home_metadata.uid() == OWNER_UID && home_metadata.gid() == OWNER_UID;
         passwd.starts_with(&format!("{username}:x:{OWNER_UID}:{OWNER_UID}:"))

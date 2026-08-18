@@ -969,12 +969,14 @@ mod tests {
         let data = paths.layout.data_root.join(&manifest.id);
         fs::create_dir_all(&data).unwrap();
         fs::write(data.join("state.bin"), vec![7; 123]).unwrap();
-        symlink("/dev/null", data.join("outside")).unwrap();
+        let outside = paths.layout.data_root.parent().unwrap().join("outside.bin");
+        fs::write(&outside, vec![0; 1024 * 1024]).unwrap();
+        symlink(&outside, data.join("outside")).unwrap();
 
         let usage = manager.app_usage(&manifest.id).unwrap();
         assert!(usage.package_bytes >= 4);
         assert!(usage.data_bytes >= 123);
-        assert!(usage.data_bytes < 4096);
+        assert!(usage.data_bytes < 1024 * 1024);
     }
 
     #[test]

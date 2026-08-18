@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include "seccomp.h"
 
 #include <errno.h>
