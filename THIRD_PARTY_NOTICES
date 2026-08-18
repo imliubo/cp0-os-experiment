@@ -49,13 +49,14 @@ Commit: 810f1adaf33521cc55fc510566efba2a1418174f
 License: MIT.
 
 libffi 3.5.2
-Source: https://github.com/libffi/libffi.git
-Commit: e2eda0cf72a0598b44278cc91860ea402273fa29
+Source: https://github.com/libffi/libffi/releases/download/v3.5.2/libffi-3.5.2.tar.gz
+SHA-256: f3a3082a23b37c293a4fcd1053147b371f2ff91fa7ea1b2a52e335676bac82dc
 License: MIT.
 
 The App Runtime statically links Wayland and libffi. Exact source pins are in
-app-runtime/wayland.env. The authoritative license text for each component is
-in its pinned source checkout.
+app-runtime/wayland.env. libffi uses its official release source archive so the
+host Autotools version does not regenerate its configure script. The authoritative
+license text for each component is in its pinned source checkout or release archive.
 
 Image construction and operating-system packages
 -------------------------------------------------

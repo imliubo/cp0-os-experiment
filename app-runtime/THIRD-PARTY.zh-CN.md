@@ -12,4 +12,4 @@ WAMR 采用 Apache 许可证 2.0 并附带 LLVM 例外。权威的许可文本�
 
 WAMR源代码中没有进行本地修改。CardputerZero 提供其自身的嵌入式可执行文件、构建配置和初始化后的 seccomp 策略。
 
-Runtime 还静态链接了 Wayland 1.23.1 和 libffi 3.5.2。xdg-shell 客户端协议是从 wayland-protocols 1.44 生成的。确切的仓库和提交被固定在 `wayland.env` 中；CardputerZero 源补丁没有修改这三个源树中的任何一个。
+Runtime 还静态链接了 Wayland 1.23.1 和 libffi 3.5.2。xdg-shell 客户端协议是从 wayland-protocols 1.44 生成的。Wayland 和 wayland-protocols 的仓库与提交固定在 `wayland.env` 中。libffi 使用官方 3.5.2 发布源码包，其 URL 和 SHA-256 固定在同一文件中，因此不会由宿主 Autotools 版本重新生成 `configure` 脚本。CardputerZero 源补丁没有修改这些源树。

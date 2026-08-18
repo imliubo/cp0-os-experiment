@@ -9,6 +9,7 @@ source_dir="$repo_root/target/vendor/wasm-micro-runtime"
 wayland_dir="$repo_root/target/vendor/wayland"
 wayland_protocols_dir="$repo_root/target/vendor/wayland-protocols"
 libffi_dir="$repo_root/target/vendor/libffi"
+libffi_archive="$repo_root/target/vendor/libffi-$LIBFFI_VERSION.tar.gz"
 libffi_build="$repo_root/target/libffi-aarch64"
 libffi_install="$libffi_build/install"
 scanner_build="$repo_root/target/wayland-scanner-host"
@@ -38,11 +39,22 @@ ensure_checkout "$WAYLAND_REPOSITORY" "$WAYLAND_COMMIT" \
     "$wayland_dir" Wayland
 ensure_checkout "$WAYLAND_PROTOCOLS_REPOSITORY" "$WAYLAND_PROTOCOLS_COMMIT" \
     "$wayland_protocols_dir" wayland-protocols
-ensure_checkout "$LIBFFI_REPOSITORY" "$LIBFFI_COMMIT" "$libffi_dir" libffi
 
 if [ ! -x "$libffi_dir/configure" ]; then
-    (cd "$libffi_dir" && ./autogen.sh)
+    mkdir -p "$(dirname "$libffi_dir")"
+    temporary_archive=$(mktemp "$repo_root/target/vendor/libffi.XXXXXX")
+    trap 'rm -f "$temporary_archive"' EXIT
+    curl --fail --location --retry 3 --output "$temporary_archive" \
+        "$LIBFFI_RELEASE_URL"
+    printf '%s  %s\n' "$LIBFFI_RELEASE_SHA256" "$temporary_archive" \
+        | sha256sum -c -
+    rm -rf "$libffi_dir"
+    tar -xzf "$temporary_archive" -C "$(dirname "$libffi_dir")"
+    mv "$(dirname "$libffi_dir")/libffi-$LIBFFI_VERSION" "$libffi_dir"
+    mv "$temporary_archive" "$libffi_archive"
+    trap - EXIT
 fi
+test -x "$libffi_dir/configure"
 mkdir -p "$libffi_build"
 if [ ! -f "$libffi_build/Makefile" ]; then
     build_triplet=$(sh "$libffi_dir/config.guess")
