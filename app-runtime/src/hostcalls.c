@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "hostcalls.h"
 #include "broker_client.h"
 #include "camera.h"

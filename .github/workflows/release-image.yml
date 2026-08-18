@@ -1,0 +1,79 @@
+name: release-image
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Install release dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y jq
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal --target wasm32-unknown-unknown
+          rustup override set 1.85.1
+      - name: Check DevKit release licensing
+        id: devkit_license
+        run: |
+          if [[ -s LICENSE && -s THIRD_PARTY_NOTICES ]]; then
+            echo "public_assets=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "public_assets=false" >>"$GITHUB_OUTPUT"
+            echo "DevKit and Skill assets require LICENSE and THIRD_PARTY_NOTICES."
+          fi
+      - name: Verify Skill
+        if: steps.devkit_license.outputs.public_assets == 'true'
+        run: ./tests/test-app-skill.sh
+      - name: Build App DevKit
+        if: steps.devkit_license.outputs.public_assets == 'true'
+        run: ./scripts/package-app-devkit.sh target/release-app-devkit
+      - name: Package Skill
+        if: steps.devkit_license.outputs.public_assets == 'true'
+        run: |
+          mkdir -p target/release-skill
+          tar -C skills -cJf target/release-skill/cardputerzero-build-app.tar.xz \
+            cardputerzero-build-app
+          (
+            cd target/release-skill
+            shasum -a 256 cardputerzero-build-app.tar.xz \
+              >cardputerzero-build-app.tar.xz.sha256
+          )
+      - name: Remove previous image outputs
+        run: rm -f deploy/*.img.xz deploy/*.info deploy/SHA256SUMS deploy/build*.log
+      - name: Build production image
+        env:
+          CP0_ACCESS_PROFILE: production
+          CP0_IMAGE_NAME: cardputerzero-os-${{ github.event.release.tag_name }}
+        run: make image
+      - name: Verify image
+        run: make verify-image
+      - name: Upload release image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            deploy/*.img.xz deploy/*.info deploy/SHA256SUMS \
+            --clobber
+      - name: Upload App DevKit and Skill
+        if: steps.devkit_license.outputs.public_assets == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            target/release-app-devkit/* \
+            target/release-skill/* \
+            --clobber

@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include "camera.h"
 #include "broker_client.h"
 

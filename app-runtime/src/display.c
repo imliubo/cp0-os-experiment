@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "display.h"
 #include "broker_client.h"
 #include "frame_pacing.h"

@@ -21,6 +21,21 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
+      - name: Ensure DevKit test dependencies
+        shell: bash
+        run: |
+          if command -v jq >/dev/null; then
+            exit 0
+          fi
+          if [[ $RUNNER_OS == Linux ]]; then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y jq
+          elif [[ $RUNNER_OS == macOS ]]; then
+            brew install jq
+          else
+            echo "error: jq is required for DevKit tests" >&2
+            exit 1
+          fi
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.85.1 --profile minimal --target wasm32-unknown-unknown

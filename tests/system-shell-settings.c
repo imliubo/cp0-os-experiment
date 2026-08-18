@@ -1,3 +1,6 @@
+#define _DARWIN_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
 #include "cp0_shell_settings.h"
 
 #include <assert.h>
@@ -8,11 +11,19 @@
 
 int main(void)
 {
-    char directory[] = "/tmp/cp0-shell-settings-XXXXXX";
+    const char *tmpdir = getenv("TMPDIR");
+    char directory[256];
     char path[256];
+    int directory_length;
     struct cp0_shell_settings settings;
     struct cp0_shell_settings loaded;
 
+    if (tmpdir == NULL || *tmpdir == '\0') {
+        tmpdir = "/tmp";
+    }
+    directory_length = snprintf(directory, sizeof(directory),
+                                "%s/cp0-shell-settings-XXXXXX", tmpdir);
+    assert(directory_length > 0 && (size_t)directory_length < sizeof(directory));
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(path, sizeof(path), "%s/settings.conf", directory) > 0);
     cp0_shell_settings_defaults(&settings);
