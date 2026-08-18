@@ -74,7 +74,11 @@ make -C "$libffi_build" --jobs "$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 
 test -f "$libffi_install/lib/libffi.a"
 
 mkdir -p "$scanner_build" "$protocol_build"
-${HOST_CC:-cc} -std=c11 -O2 -DHAVE_LIBXML=0 \
+# Wayland's scanner uses POSIX APIs such as strdup; keep the declaration
+# visible on strict C11 hosts and fail the build if it regresses to an
+# implicit declaration (which truncates the returned pointer on 64-bit hosts).
+${HOST_CC:-cc} -std=c11 -O2 -D_POSIX_C_SOURCE=200809L \
+    -Werror=implicit-function-declaration -DHAVE_LIBXML=0 \
     -I"$repo_root/app-runtime/protocol" \
     -I"$wayland_dir" \
     -I"$wayland_dir/src" \

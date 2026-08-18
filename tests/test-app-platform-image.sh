@@ -10,6 +10,11 @@ runtime_builder="$repo_root/scripts/build-app-runtime.sh"
 grep -q 'scripts/build-appd.sh' "$build"
 grep -q 'scripts/build-app-runtime.sh' "$build"
 grep -Fq 'build_triplet=$(sh "$libffi_dir/config.guess")' "$runtime_builder"
+grep -Fq -- '-D_POSIX_C_SOURCE=200809L' "$runtime_builder"
+grep -Fq -- '-Werror=implicit-function-declaration' "$runtime_builder"
+for source in broker_client.c camera.c display.c seccomp.c; do
+    grep -q '^#ifndef _GNU_SOURCE$' "$repo_root/app-runtime/src/$source"
+done
 grep -q 'scripts/build-example-app.sh' "$build"
 grep -q 'config/builtin-apps.tsv' "$build"
 grep -q 'builtin-apps.tsv' "$stage"
