@@ -100,6 +100,12 @@ export CP0_FIRST_USER_PASSWORD='development-password'
 make verify-image
 ```
 
+Exported artifacts use a stable product-first name. For example, a production
+release is named
+`cardputerzero-os-v0.1.0-rc.1-cp0-os-production.img.xz`; pi-gen's generated
+`image_<date>-` prefix is removed after the build. The adjacent `.info` file uses
+the same basename, and `SHA256SUMS` covers the normalized image name.
+
 `CP0_SSH_PUBLIC_KEY` may be set for a key-only development image. A production
 image must not contain a default password or default-enabled SSH.
 

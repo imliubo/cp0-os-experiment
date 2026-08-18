@@ -298,12 +298,51 @@ if [[ -n "$apt_proxy" ]]; then
     printf 'APT_PROXY=%q\n' "$apt_proxy" >>"$config_file"
 fi
 
+normalize_deploy_artifacts() {
+    # pi-gen prefixes exported images with image_<YYYY-MM-DD>-. Keep the
+    # release artifact name stable and make the product name the first
+    # component. The matching .info file uses the same suffix but omits the
+    # literal image_ prefix.
+    local artifact_prefix=${image_name:-cardputerzero-os}
+    local normalized_image_count=0
+    local generated_image generated_basename normalized_basename
+    local generated_info normalized_info
+
+    mkdir -p "$deploy_dir"
+    for generated_image in "$deploy_dir"/image_*.img.xz; do
+        [[ -f "$generated_image" ]] || continue
+        generated_basename=${generated_image##*/}
+        [[ $generated_basename == *-"$artifact_prefix"* ]] || continue
+        if [[ $generated_basename =~ ^image_[0-9]{4}-[0-9]{2}-[0-9]{2}-(.+\.img\.xz)$ ]]; then
+            normalized_basename=${BASH_REMATCH[1]}
+            generated_info="$deploy_dir/${generated_basename#image_}"
+            generated_info="${generated_info%.img.xz}.info"
+            normalized_info="$deploy_dir/${normalized_basename%.img.xz}.info"
+            mv -f "$generated_image" "$deploy_dir/$normalized_basename"
+            if [[ -f "$generated_info" ]]; then
+                mv -f "$generated_info" "$normalized_info"
+            fi
+            normalized_image_count=$((normalized_image_count + 1))
+        fi
+    done
+    if ((normalized_image_count == 0)); then
+        echo "error: pi-gen produced no image matching artifact prefix: $artifact_prefix" >&2
+        return 1
+    fi
+}
+
 if [[ $(uname -s) == Linux && ${CP0_USE_DOCKER:-1} == 0 ]]; then
     sed -i \
         "s|^STAGE_LIST=.*|STAGE_LIST=$(printf %q "$pi_gen_dir/stage0 $pi_gen_dir/stage1 $pi_gen_dir/stage-cardputerzero-os")|" \
         "$config_file"
     echo "Building CardputerZero OS natively with pi-gen $PI_GEN_COMMIT"
     "$pi_gen_dir/build.sh" -c "$config_file"
+    normalize_deploy_artifacts
+    (
+        cd "$deploy_dir"
+        shasum -a 256 -- *.img.xz >SHA256SUMS
+    )
+    ls -lh "$deploy_dir"
     exit 0
 fi
 
@@ -368,6 +407,8 @@ if ((build_status != 0)); then
     echo "error: image build failed; build containers were preserved" >&2
     exit "$build_status"
 fi
+
+normalize_deploy_artifacts
 
 if [[ ${CP0_KEEP_BUILD_CONTAINER:-0} != 1 ]]; then
     docker rm -v "$run_container_name" >/dev/null

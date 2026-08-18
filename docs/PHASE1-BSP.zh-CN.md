@@ -83,6 +83,11 @@ export CP0_FIRST_USER_PASSWORD='development-password'
 make verify-image
 ```
 
+导出的构件统一使用产品名优先的稳定命名。例如 production 版本的镜像为
+`cardputerzero-os-v0.1.0-rc.1-cp0-os-production.img.xz`；构建完成后会移除
+pi-gen 自动添加的 `image_<日期>-` 前缀。相邻的 `.info` 文件使用相同的基础名，
+`SHA256SUMS` 也针对规范化后的镜像名生成。
+
 也可设置 `CP0_SSH_PUBLIC_KEY`，生成只允许公钥登录的开发镜像。正式镜像不得设置
 默认密码或启用 SSH。
 
