@@ -32,6 +32,7 @@ jobs:
           sudo apt-get install --no-install-recommends -y \
             autoconf \
             automake \
+            binfmt-support \
             binutils-aarch64-linux-gnu \
             build-essential \
             cmake \
@@ -44,6 +45,7 @@ jobs:
             libexpat1-dev \
             libtool \
             pkg-config \
+            qemu-user-static \
             rsync \
             xz-utils
       - name: Install pinned Rust toolchain
@@ -71,6 +73,15 @@ jobs:
           rustup target list --installed | grep -Fx aarch64-unknown-linux-gnu
           rustup target list --installed | grep -Fx wasm32-unknown-unknown
           pkg-config --exists expat
+      - name: Register ARM64 binfmt
+        run: |
+          sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc || true
+          sudo update-binfmts --enable qemu-aarch64
+          if [[ ! -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]]; then
+            sudo update-binfmts --display qemu-aarch64 || true
+            echo "error: qemu-aarch64 binfmt registration is unavailable" >&2
+            exit 1
+          fi
       - name: Check DevKit release licensing
         id: devkit_license
         run: |

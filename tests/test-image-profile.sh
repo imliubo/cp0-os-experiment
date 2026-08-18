@@ -5,6 +5,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 stage="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/01-run.sh"
 packages="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/00-packages-nr"
 build_script="$repo_root/image/build-image.sh"
+release_workflow="$repo_root/.github/workflows/release-image.yml"
 smoke_script="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/device-smoke.sh"
 firmware_hook="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/cardputerzero-firmware.initramfs-hook"
 ssh_prepare="$repo_root/image/pi-gen/stage-cardputerzero-os/00-bsp/files/prepare-ssh.sh"
@@ -30,6 +31,10 @@ expected_splash_rgb565_sha256=75a53d81f5ec087536a030919698c595630d48296e07d5f5f3
 
 grep -q '^PI_GEN_BRANCH=arm64$' "$repo_root/image/pi-gen/upstream.env"
 grep -Eq '^PI_GEN_COMMIT=[0-9a-f]{40}$' "$repo_root/image/pi-gen/upstream.env"
+grep -q 'binfmt-support' "$release_workflow"
+grep -q 'qemu-user-static' "$release_workflow"
+grep -q 'sudo update-binfmts --enable qemu-aarch64' "$release_workflow"
+grep -q '/proc/sys/fs/binfmt_misc/qemu-aarch64' "$release_workflow"
 grep -q '^dtoverlay=vc4-kms-v3d,cma-64$' "$stage"
 grep -q '^camera_auto_detect=0$' "$stage"
 grep -q "'/^start_x=/d'" "$stage"

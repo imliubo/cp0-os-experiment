@@ -72,6 +72,11 @@ Setup/Home 首帧，最终冷启动门禁须在包含该改动的新镜像上完
 构建默认使用 Docker，因此支持 macOS 和 Linux。Docker daemon 必须提供 Linux arm64
 容器支持；Linux arm64 也可设置 `CP0_USE_DOCKER=0` 原生构建。
 
+GitHub Release workflow 运行在 x86_64 runner 上。它会安装
+`binfmt-support` 和 `qemu-user-static`，然后在启动特权 pi-gen 容器前向 runner
+主机注册 `qemu-aarch64`。pi-gen 执行 ARM64 阶段命令依赖这个主机级注册；只在容器内
+配置相关软件包是不够的。
+
 ```sh
 export CP0_FIRST_USER_PASSWORD='development-password'
 ./image/build-image.sh
