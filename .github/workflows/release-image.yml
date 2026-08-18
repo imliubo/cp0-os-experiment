@@ -21,6 +21,13 @@ jobs:
       - name: Install release dependencies
         run: |
           sudo dpkg --add-architecture arm64
+          sudo find /etc/apt/sources.list.d -type f -name '*.sources' \
+            -exec sed -i '/^Components:/a Architectures: amd64' {} +
+          cat <<'EOF' | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+          EOF
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             autoconf \
@@ -55,7 +62,11 @@ jobs:
             cmake docker file git make pkg-config rsync xz; do
             command -v "$command" >/dev/null
           done
-          test -f "$(aarch64-linux-gnu-gcc -print-file-name=libcrypt.so)"
+          test -f /usr/lib/aarch64-linux-gnu/libcrypt.so
+          printf 'int main(void) { return 0; }\n' \
+            | aarch64-linux-gnu-gcc -x c - \
+              -L/usr/lib/aarch64-linux-gnu -lcrypt \
+              -o "$RUNNER_TEMP/aarch64-libcrypt-check"
           rustup target list --installed | grep -Fx aarch64-unknown-linux-gnu
           rustup target list --installed | grep -Fx wasm32-unknown-unknown
           pkg-config --exists expat
@@ -89,6 +100,7 @@ jobs:
         run: rm -f deploy/*.img.xz deploy/*.info deploy/SHA256SUMS deploy/build*.log
       - name: Build production image
         env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-L/usr/lib/aarch64-linux-gnu
           CP0_ACCESS_PROFILE: production
           CP0_IMAGE_NAME: cardputerzero-os-${{ github.event.release.tag_name }}
         run: make image
