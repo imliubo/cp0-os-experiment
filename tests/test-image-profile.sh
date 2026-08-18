@@ -43,7 +43,7 @@ grep -q 'native ARM64 runner; binfmt registration is unnecessary' "$release_work
 grep -q 'artifact_prefix=\${image_name:-cardputerzero-os}' "$build_script"
 grep -q 'normalized_basename=\${BASH_REMATCH\[1\]}' "$build_script"
 grep -q 'pi-gen produced no image matching artifact prefix' "$build_script"
-test "$(grep -c '^normalize_deploy_artifacts$' "$build_script")" -ge 2
+test "$(grep -Ec '^[[:space:]]*normalize_deploy_artifacts$' "$build_script")" -ge 2
 grep -q '^dtoverlay=vc4-kms-v3d,cma-64$' "$stage"
 grep -q '^camera_auto_detect=0$' "$stage"
 grep -q "'/^start_x=/d'" "$stage"
