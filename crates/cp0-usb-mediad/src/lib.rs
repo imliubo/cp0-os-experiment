@@ -1064,10 +1064,15 @@ fn write_new_file(path: &Path, contents: &[u8]) -> Result<(), UsbMediaError> {
 }
 
 fn digest_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    use std::fmt::Write as _;
+
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest.iter() {
+        write!(&mut output, "{byte:02x}")
+            .expect("writing hexadecimal digest into String cannot fail");
+    }
+    output
 }
 
 fn lookup_user(name: &CStr) -> Result<(u32, u32), UsbMediaError> {

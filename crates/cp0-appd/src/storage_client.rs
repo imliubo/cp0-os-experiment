@@ -153,6 +153,8 @@ impl StorageClient {
         }
     }
 
+    // The argument order mirrors the versioned storage protocol request.
+    #[allow(clippy::too_many_arguments)]
     pub fn put_blob_chunk(
         &self,
         request_id: u64,

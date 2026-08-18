@@ -367,6 +367,9 @@ pub fn hex(bytes: &[u8]) -> String {
     result
 }
 
+// Unit errors are intentional: callers only need the validity result and map
+// the failure to their protocol-specific error.
+#[allow(clippy::result_unit_err)]
 pub fn decode_hex_32(value: &str) -> Result<[u8; 32], ()> {
     if value.len() != 64 {
         return Err(());
@@ -375,7 +378,7 @@ pub fn decode_hex_32(value: &str) -> Result<[u8; 32], ()> {
     for (index, byte) in output.iter_mut().enumerate() {
         let high = hex_nibble(value.as_bytes()[index * 2])?;
         let low = hex_nibble(value.as_bytes()[index * 2 + 1])?;
-        *byte = high << 4 | low;
+        *byte = (high << 4) | low;
     }
     Ok(output)
 }

@@ -488,7 +488,7 @@ impl AudioDevice for AlsaDevice {
         let mono = stereo_to_mono(&interleaved);
         let mut samples = Vec::with_capacity(frame_count * AUDIO_SAMPLE_BYTES);
         for mixed in mono {
-            samples.extend_from_slice(&(mixed as i16).to_le_bytes());
+            samples.extend_from_slice(&mixed.to_le_bytes());
         }
         Ok(samples)
     }

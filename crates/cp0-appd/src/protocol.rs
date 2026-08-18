@@ -17,6 +17,8 @@ pub const MAX_APP_LIST_PAGE: u8 = 8;
 pub const MAX_TASK_LIST_PAGE: u8 = 10;
 pub const MAX_LOG_LINES: u16 = 100;
 
+type ReceivedFrameWithFd = (Vec<u8>, Option<OwnedFd>);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppdRequest {
@@ -561,9 +563,7 @@ fn write_frame(writer: &mut impl Write, value: &impl Serialize) -> Result<(), Pr
     Ok(())
 }
 
-fn recv_frame_with_fd(
-    stream: &UnixStream,
-) -> Result<Option<(Vec<u8>, Option<OwnedFd>)>, ProtocolError> {
+fn recv_frame_with_fd(stream: &UnixStream) -> Result<Option<ReceivedFrameWithFd>, ProtocolError> {
     let mut frame = [0_u8; MAX_FRAME_BYTES];
     let mut length = 0_usize;
     let mut received_fd = None;

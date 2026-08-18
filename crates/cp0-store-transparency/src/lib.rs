@@ -327,7 +327,13 @@ pub fn verify_append_only_prefix(
 }
 
 pub fn lower_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    use std::fmt::Write as _;
+
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut output, "{byte:02x}").expect("writing hexadecimal into String cannot fail");
+    }
+    output
 }
 
 fn tree_hash(hashes: &[[u8; 32]]) -> [u8; 32] {

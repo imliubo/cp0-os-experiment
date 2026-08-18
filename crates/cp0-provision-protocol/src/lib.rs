@@ -156,6 +156,9 @@ pub struct ProvisioningResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "kebab-case", deny_unknown_fields)]
+// Keep the public protocol enum layout and match ergonomics stable; boxing
+// `State` would be a source-compatible API change for protocol consumers.
+#[allow(clippy::large_enum_variant)]
 pub enum ProvisioningOutcome {
     State {
         state: ProvisioningStatus,

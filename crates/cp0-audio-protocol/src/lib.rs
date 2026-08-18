@@ -401,9 +401,9 @@ pub fn encode_base64(input: &[u8]) -> String {
         let second = chunk.get(1).copied().unwrap_or(0);
         let third = chunk.get(2).copied().unwrap_or(0);
         output.push(ALPHABET[usize::from(first >> 2)] as char);
-        output.push(ALPHABET[usize::from((first & 0x03) << 4 | second >> 4)] as char);
+        output.push(ALPHABET[usize::from(((first & 0x03) << 4) | (second >> 4))] as char);
         output.push(if chunk.len() > 1 {
-            ALPHABET[usize::from((second & 0x0f) << 2 | third >> 6)] as char
+            ALPHABET[usize::from(((second & 0x0f) << 2) | (third >> 6))] as char
         } else {
             '='
         });
@@ -458,11 +458,11 @@ fn decode_bounded_samples(
             }
             Some(decode_digit(chunk[3])?)
         };
-        output.push(a << 2 | b >> 4);
+        output.push((a << 2) | (b >> 4));
         if let Some(c) = c {
-            output.push(b << 4 | c >> 2);
+            output.push((b << 4) | (c >> 2));
             if let Some(d) = d {
-                output.push(c << 6 | d);
+                output.push((c << 6) | d);
             }
         }
     }

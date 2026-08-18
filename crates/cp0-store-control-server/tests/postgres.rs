@@ -7432,10 +7432,15 @@ async fn count(pool: &PgPool, table: &str) -> i64 {
 }
 
 fn sha256_hex(value: &[u8]) -> String {
-    Sha256::digest(value)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    use std::fmt::Write as _;
+
+    let digest = Sha256::digest(value);
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest.iter() {
+        write!(&mut output, "{byte:02x}")
+            .expect("writing hexadecimal digest into String cannot fail");
+    }
+    output
 }
 
 fn submission_content_sha256_for_test(
@@ -7462,11 +7467,15 @@ fn submission_content_sha256_for_test(
                 .to_be_bytes(),
         );
     }
-    hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    use std::fmt::Write as _;
+
+    let digest = hasher.finalize();
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest.iter() {
+        write!(&mut output, "{byte:02x}")
+            .expect("writing hexadecimal digest into String cannot fail");
+    }
+    output
 }
 
 fn hash_field(hasher: &mut Sha256, value: &[u8]) {

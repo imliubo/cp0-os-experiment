@@ -1301,10 +1301,10 @@ impl AppdServer {
             );
         };
         let token = binding.token;
-        if !runtime
+        if runtime
             .sessions
             .get(&token)
-            .is_some_and(|session| session.app_id == app_id)
+            .is_none_or(|session| session.app_id != app_id)
         {
             return AppdResponse::error(
                 request_id,
