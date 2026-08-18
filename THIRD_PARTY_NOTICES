@@ -1,0 +1,109 @@
+CardputerZero OS Third-Party Notices
+=====================================
+
+This file records third-party software included in, linked by, or used to
+produce CardputerZero OS release artifacts. It accompanies the Apache-2.0
+license for CardputerZero-authored source in LICENSE. Third-party components
+remain subject to their own license terms; this file does not replace their
+license texts or modify their terms.
+
+Release scope
+-------------
+
+A CardputerZero OS release can contain these distinct artifacts:
+
+* A device image built with pi-gen. Its Debian, Raspberry Pi and other
+  distribution packages retain their package-specific copyright and license
+  material in the image, including /usr/share/doc/<package>/copyright where
+  provided by the package.
+* A host-native App DevKit archive. It contains CardputerZero source, a cp0ctl
+  binary built from the Rust workspace, SDK sources, simulator sources, sample
+  applications, documentation and the App development Skill.
+* A standalone archive of the CardputerZero App development Skill.
+
+The web control-plane applications and their npm dependency trees are not
+included in the device image, App DevKit, or standalone Skill archive. Their
+package-lock.json files are the authoritative dependency records when those
+applications are separately distributed.
+
+Pinned native components
+------------------------
+
+WebAssembly Micro Runtime (WAMR) 2.4.5
+Source: https://github.com/bytecodealliance/wasm-micro-runtime.git
+Commit: 25bd7eb63e828e4bd242cc9b38d260b4b31c6605
+License: Apache License 2.0 with LLVM Exceptions.
+
+The App Runtime statically links WAMR. The authoritative WAMR license text is
+in the pinned WAMR checkout at LICENSE. CardputerZero does not modify the WAMR
+source tree.
+
+Wayland 1.23.1
+Source: https://gitlab.freedesktop.org/wayland/wayland.git
+Commit: a9fec8dd65977c57f4039ced34327204d9b9d779
+License: MIT.
+
+Wayland Protocols 1.44
+Source: https://gitlab.freedesktop.org/wayland/wayland-protocols.git
+Commit: 810f1adaf33521cc55fc510566efba2a1418174f
+License: MIT.
+
+libffi 3.5.2
+Source: https://github.com/libffi/libffi.git
+Commit: e2eda0cf72a0598b44278cc91860ea402273fa29
+License: MIT.
+
+The App Runtime statically links Wayland and libffi. Exact source pins are in
+app-runtime/wayland.env. The authoritative license text for each component is
+in its pinned source checkout.
+
+Image construction and operating-system packages
+-------------------------------------------------
+
+pi-gen
+Source: https://github.com/RPi-Distro/pi-gen.git
+Commit: ca8aeed0ae300c2a89f55ce9617d5f96a27e99e5
+License: BSD 3-Clause.
+
+The image builder uses pi-gen only to construct the image. pi-gen's source
+license is in its pinned source checkout. Debian, Raspberry Pi OS, Linux kernel,
+firmware, Weston, systemd and every other package included by the resulting
+image have independent copyrights and license terms. Their exact versions are
+recorded in the built-image profile and their package-provided notices remain in
+the image filesystem.
+
+Rust dependencies
+-----------------
+
+The cp0ctl binary and device services are built from Rust crates locked by
+Cargo.lock. Cargo.lock is the authoritative name, version and checksum record
+for every crates.io dependency used by a release. Each dependency is distributed
+under the license declared in its published crate package; its authoritative
+license text is available from the crate package at the locked version.
+
+The CardputerZero release process must retain Cargo.lock and must not replace,
+remove or relicense third-party Rust dependency notices. Before publishing a
+binary artifact, release operators must generate and review a complete,
+versioned Rust dependency license report from Cargo.lock and include all license
+texts required by the resolved dependency set with the artifact.
+
+Other bundled content
+---------------------
+
+App DevKit and Skill archives contain CardputerZero-authored SDK, documentation,
+examples and Skill content under the repository Apache-2.0 license unless a
+file carries a different notice. They do not include private keys, tokens,
+passwords, proprietary Store data, or build-vendor source trees.
+
+The device image may include assets and packages with additional notices. The
+release pipeline must preserve package-level license and copyright information
+from the finished image and must not represent this file as a substitute for
+those notices.
+
+Source and maintenance
+----------------------
+
+Update this file whenever a shipped third-party component, pin, linkage mode or
+release payload changes. Do not add development-only dependencies unless they
+are included in a distributed artifact. See app-runtime/THIRD-PARTY.md for the
+Runtime-specific attribution record.
