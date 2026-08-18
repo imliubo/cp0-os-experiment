@@ -23,7 +23,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.release.tag_name || inputs.release_tag }}
+          # Release events build the immutable tag; manual runs build the
+          # workflow ref so naming and packaging fixes can be validated on an
+          # existing release without moving its tag.
+          ref: ${{ github.event.release.tag_name || github.ref_name }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
